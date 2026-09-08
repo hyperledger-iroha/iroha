@@ -27,14 +27,15 @@ impl norito::core::SerializePayload for Uptime {
         norito::core::SerializePayload::serialize(&pair, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for Uptime {
+impl norito::core::NoritoDeserialize<'_> for Uptime {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name("iroha_telemetry::metrics::Uptime")
     }
-
+}
+impl<'a> norito::core::DeserializePayload<'a> for Uptime {
     fn deserialize(archived: &'a norito::core::Archived<Uptime>) -> Self {
         let (secs, nanos): (u64, u32) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
+            norito::core::DeserializePayload::deserialize(archived.cast());
         Uptime(Duration::from_secs(secs) + Duration::from_nanos(u64::from(nanos)))
     }
 }

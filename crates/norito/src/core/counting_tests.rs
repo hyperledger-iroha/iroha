@@ -14,7 +14,7 @@ impl SerializePayload for Leaf<'_> {
     }
 }
 
-#[derive(crate::Encode)]
+#[derive(crate::SerializePayload)]
 struct Layer<T> {
     value: T,
 }
@@ -129,6 +129,7 @@ fn nested_buffer_and_checksum_writers_still_receive_real_bytes() {
 #[test]
 fn counting_nested_frames_preserves_streamed_checksums_and_layout_flags() {
     #[derive(crate::Encode, crate::Decode, Debug, PartialEq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     struct Inner {
         values: Vec<Vec<u16>>,
     }

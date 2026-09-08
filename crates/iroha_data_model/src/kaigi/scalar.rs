@@ -19,6 +19,8 @@ const PASTA_FP_MODULUS_LE: [u8; 32] = [
 /// Zero is valid; any relation-specific nonzero rule belongs to that relation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kaigi::scalar::KaigiAuthorizationScalarV1")]
 pub struct KaigiAuthorizationScalarV1([u8; 32]);
 
 impl KaigiAuthorizationScalarV1 {
@@ -71,7 +73,8 @@ impl norito::core::SerializePayload for KaigiAuthorizationScalarV1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for KaigiAuthorizationScalarV1 {
+impl norito::core::NoritoDeserialize<'_> for KaigiAuthorizationScalarV1 {}
+impl<'de> norito::core::DeserializePayload<'de> for KaigiAuthorizationScalarV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical Kaigi authorization scalar decode")
     }
@@ -79,7 +82,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for KaigiAuthorizationScalarV1 {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; Self::BYTES] as norito::core::NoritoDeserialize>::try_deserialize(
+        let bytes = <[u8; Self::BYTES] as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
         Self::from_le_bytes(bytes).ok_or_else(|| {
@@ -103,7 +106,6 @@ impl<'de> norito::core::DecodeFromSlice<'de> for KaigiAuthorizationScalarV1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for KaigiAuthorizationScalarV1 {
     fn write_json(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(self.as_bytes(), out);
@@ -117,7 +119,6 @@ impl norito::json::FastJsonWrite for KaigiAuthorizationScalarV1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for KaigiAuthorizationScalarV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -207,7 +208,6 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn json_requires_exact_canonical_byte_array_and_preserves_nested_values() {
         let scalar = KaigiAuthorizationScalarV1::from_le_bytes([0x24; 32]).unwrap();

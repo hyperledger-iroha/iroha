@@ -22,6 +22,8 @@ mod model {
     #[event_set(
         schema_name = "iroha_data_model::events::data::soradns::model::SoradnsDirectoryEventSet"
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::soradns::model::SoradnsDirectoryEvent")]
     pub enum SoradnsDirectoryEvent {
         /// A resolver directory draft was submitted.
         DraftSubmitted(crate::soradns::DirectoryDraftSubmittedEventV1),
@@ -39,3 +41,6 @@ mod model {
         PolicyUpdated(crate::soradns::DirectoryPolicyUpdatedEventV1),
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

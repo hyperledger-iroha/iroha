@@ -117,7 +117,7 @@ iroha_core = { workspace = true, default-features = false, features = ["app_api"
 iroha_config = { workspace = true }
 iroha_primitives = { workspace = true, features = ["simd-accel"] }
 iroha_logger = { workspace = true }
-iroha_data_model = { workspace = true, default-features = false, features = ["http", "json", "bridge"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["http", "bridge"] }
 iroha_executor_data_model = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_sccp = { path = "../iroha_sccp" }

@@ -25,7 +25,7 @@ use ivm::{
     sum::SumLayoutV1,
 };
 use norito::{
-    codec::{Decode, Encode},
+    codec::Encode,
     json::{self, Map, Value},
 };
 use std::str;
@@ -246,7 +246,7 @@ fn decode_canonical<T>(
     kind: &'static str,
 ) -> Result<T, EntrypointReturnDecodeError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_canonical_norito(payload).map_err(|error| EntrypointReturnDecodeError::InvalidValue {
         register,

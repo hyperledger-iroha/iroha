@@ -4,21 +4,21 @@
 //! and evaluated via JSON when enabled; selector projections remain minimal.
 #[cfg(feature = "ids_projection")]
 use crate::Identifiable;
-#[cfg(feature = "json")]
+
 use crate::query::json::{EqualsCondition, InCondition, PredicateJson};
 pub use crate::query::tx_predicate::CommittedTxPredicate;
 use crate::query::tx_predicate::{
     committed_tx_filters_from_predicate, committed_tx_predicate_from_filters,
     committed_tx_predicate_is_valid,
 };
-#[cfg(feature = "json")]
+
 use crate::query::tx_predicate::{
     committed_tx_predicate_from_canonical_json, committed_tx_predicate_from_predicate_json,
     committed_tx_predicate_from_value,
 };
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonSerialize, Value};
 #[cfg(feature = "ids_projection")]
 use std::any::TypeId as StdTypeId;
@@ -87,13 +87,13 @@ impl<T> IntoPredicate<T> for () {
         CompoundPredicate::PASS
     }
 }
-#[cfg(feature = "json")]
+
 /// Convert predicate values into Norito JSON values.
 pub trait IntoPredicateValue {
     /// Convert into a JSON value for predicate evaluation.
     fn into_value(self) -> Value;
 }
-#[cfg(feature = "json")]
+
 impl<T> IntoPredicateValue for T
 where
     T: JsonSerialize,
@@ -102,14 +102,14 @@ where
         json::to_value(&self).expect("predicate value serialize")
     }
 }
-#[cfg(feature = "json")]
+
 /// Builder for JSON predicate payloads.
 #[derive(Debug, Clone)]
 pub struct PredicateBuilder<T> {
     predicate: PredicateJson,
     marker: PhantomData<T>,
 }
-#[cfg(feature = "json")]
+
 impl<T> Default for PredicateBuilder<T> {
     fn default() -> Self {
         Self {
@@ -118,7 +118,7 @@ impl<T> Default for PredicateBuilder<T> {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl<T> PredicateBuilder<T> {
     /// Add an equality predicate on the provided field path.
     #[must_use]
@@ -151,7 +151,7 @@ impl<T> PredicateBuilder<T> {
         self
     }
 }
-#[cfg(feature = "json")]
+
 impl<T: 'static> IntoPredicate<T> for PredicateBuilder<T> {
     fn into_predicate(self) -> CompoundPredicate<T> {
         if self.predicate.is_empty() {
@@ -160,7 +160,7 @@ impl<T: 'static> IntoPredicate<T> for PredicateBuilder<T> {
         CompoundPredicate::from_predicate_json(&self.predicate)
     }
 }
-#[cfg(feature = "json")]
+
 impl<T: 'static> IntoPredicate<T> for PredicateJson {
     fn into_predicate(self) -> CompoundPredicate<T> {
         if self.is_empty() {
@@ -173,7 +173,7 @@ impl<T: 'static> IntoPredicate<T> for PredicateJson {
 #[derive(Debug, Copy, Clone)]
 /// Marker returned from selector builders to request ids-only projection.
 pub struct SelectorField<T>(PhantomData<T>);
-#[cfg(feature = "json")]
+
 impl<T> Prototype<PredicateMarker, BaseProjector<PredicateMarker, T>> {
     /// Start an equality predicate for the provided field path.
     #[must_use]
@@ -225,7 +225,6 @@ struct PredicateJsonPayload {
     raw: String,
 }
 impl PredicateJsonPayload {
-    #[cfg(feature = "json")]
     fn from_predicate(predicate: &PredicateJson) -> Self {
         let mut raw = String::new();
         JsonSerialize::json_serialize(predicate, &mut raw);
@@ -275,7 +274,6 @@ impl<T> CompoundPredicate<T> {
             (None, None) => Self::PASS,
             (None, Some(payload)) | (Some(payload), None) => Self::with_payload(payload),
             (Some(left), Some(right)) => {
-                #[cfg(feature = "json")]
                 if let (Some(left_json), Some(right_json)) = (
                     left.as_ref().downcast_ref::<PredicateJsonPayload>(),
                     right.as_ref().downcast_ref::<PredicateJsonPayload>(),
@@ -354,7 +352,7 @@ impl<T> CompoundPredicate<T> {
         let payload: Arc<dyn Any + Send + Sync + 'static> = Arc::new(payload);
         Ok(Self::with_payload(payload))
     }
-    #[cfg(feature = "json")]
+
     fn from_json_value(value: &Value) -> Result<Self, norito::json::Error>
     where
         T: 'static,
@@ -372,7 +370,7 @@ impl<T> CompoundPredicate<T> {
             Err(schema_error) => Err(norito::json::Error::Message(schema_error.to_string())),
         }
     }
-    #[cfg(feature = "json")]
+
     fn from_predicate_json(predicate: &PredicateJson) -> Self
     where
         T: 'static,
@@ -391,7 +389,6 @@ impl<T> CompoundPredicate<T> {
     where
         T: 'static,
     {
-        #[cfg(feature = "json")]
         {
             if core::any::TypeId::of::<T>()
                 == core::any::TypeId::of::<crate::query::CommittedTransaction>()
@@ -423,13 +420,6 @@ impl<T> CompoundPredicate<T> {
                     "predicate JSON payload must use canonical encoding".to_owned(),
                 ));
             }
-        }
-        #[cfg(not(feature = "json"))]
-        {
-            let _ = &raw;
-            return Err(norito::core::Error::Message(
-                "JSON predicate wire variant requires the `json` feature".to_owned(),
-            ));
         }
         let payload = PredicateJsonPayload::from_raw(raw);
         Self::try_with_owned_payload(payload)
@@ -481,7 +471,7 @@ impl<T> CompoundPredicate<T> {
             }
         })
     }
-    #[cfg(feature = "json")]
+
     /// Return the raw JSON payload embedded in this predicate, if the predicate originated from JSON.
     pub fn json_payload(&self) -> Option<&str> {
         self.payload
@@ -489,7 +479,7 @@ impl<T> CompoundPredicate<T> {
             .and_then(|p| p.downcast_ref::<PredicateJsonPayload>())
             .map(PredicateJsonPayload::as_str)
     }
-    #[cfg(feature = "json")]
+
     #[doc(hidden)]
     /// Parse the retained canonical JSON predicate inside the active resource scope.
     ///
@@ -506,7 +496,7 @@ impl<T> CompoundPredicate<T> {
             .map(Some)
             .map_err(|error| norito::core::Error::Message(error.to_string()))
     }
-    #[cfg(feature = "json")]
+
     #[doc(hidden)]
     /// Evaluate a previously parsed JSON predicate without reparsing it.
     pub fn applies_parsed_json(&self, predicate: &PredicateJson, input: &T) -> bool
@@ -611,7 +601,8 @@ impl<T> norito::core::SerializePayload for CompoundPredicate<T> {
         norito::core::SerializePayload::encoded_len_exact(&self.wire_ref())
     }
 }
-impl<'de, T: 'static> norito::core::NoritoDeserialize<'de> for CompoundPredicate<T> {
+impl<T: 'static> norito::core::NoritoDeserialize<'_> for CompoundPredicate<T> {}
+impl<'de, T: 'static> norito::core::DeserializePayload<'de> for CompoundPredicate<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("compound predicate wire should deserialize")
     }
@@ -619,13 +610,13 @@ impl<'de, T: 'static> norito::core::NoritoDeserialize<'de> for CompoundPredicate
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let wire_archived = archived.cast::<CompoundPredicateWire>();
-        let wire = <CompoundPredicateWire as norito::core::NoritoDeserialize>::try_deserialize(
+        let wire = <CompoundPredicateWire as norito::core::DeserializePayload>::try_deserialize(
             wire_archived,
         )?;
         Self::from_wire(wire)
     }
 }
-#[cfg(feature = "json")]
+
 impl<T: 'static> norito::json::JsonSerialize for CompoundPredicate<T> {
     fn json_serialize(&self, out: &mut String) {
         if core::any::TypeId::of::<T>()
@@ -685,7 +676,7 @@ impl<T: 'static> norito::json::JsonSerialize for CompoundPredicate<T> {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl<T: 'static> norito::json::JsonDeserialize for CompoundPredicate<T> {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -714,31 +705,27 @@ impl<T: 'static> IntoSchema for CompoundPredicate<T> {
         }));
     }
 }
-#[cfg(feature = "json")]
+
 fn predicate_json_from_raw(raw: &str) -> Option<PredicateJson> {
     crate::query::json::predicate_json_from_raw_for_execution(raw)
 }
-#[cfg(feature = "json")]
+
 fn committed_tx_predicate_from_json_payload(raw: &str) -> Option<CommittedTxPredicate> {
     predicate_json_from_raw(raw)
         .and_then(|predicate| committed_tx_predicate_from_predicate_json(&predicate).ok())
 }
-#[cfg(not(feature = "json"))]
-fn committed_tx_predicate_from_json_payload(_raw: &str) -> Option<CommittedTxPredicate> {
-    None
-}
-#[cfg(all(feature = "json", test))]
+#[cfg(test)]
 fn predicate_json_from_value(value: &Value) -> Option<PredicateJson> {
     PredicateJson::try_from_value(value).ok()
 }
-#[cfg(feature = "json")]
+
 fn merge_predicate_json(mut left: PredicateJson, right: PredicateJson) -> PredicateJson {
     left.equals.extend(right.equals);
     left.r#in.extend(right.r#in);
     left.exists.extend(right.exists);
     left
 }
-#[cfg(feature = "json")]
+
 fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     if path.is_empty() {
         return None;
@@ -757,7 +744,7 @@ fn predicate_value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value
     }
     Some(current)
 }
-#[cfg(feature = "json")]
+
 fn predicate_json_applies(predicate: &PredicateJson, value: &Value) -> bool {
     for cond in &predicate.equals {
         let Some(actual) = predicate_value_at_path(value, &cond.field) else {
@@ -815,7 +802,7 @@ pub trait EvaluatePredicate<U: ?Sized> {
         true
     }
 }
-#[cfg(feature = "json")]
+
 impl<T> EvaluatePredicate<T> for CompoundPredicate<T>
 where
     T: JsonSerialize,
@@ -834,12 +821,6 @@ where
             return false;
         };
         predicate_json_applies(&predicate, &value)
-    }
-}
-#[cfg(not(feature = "json"))]
-impl<U: ?Sized, T> EvaluatePredicate<U> for CompoundPredicate<T> {
-    fn applies(&self, _input: &U) -> bool {
-        self.payload.is_none()
     }
 }
 impl CompoundPredicate<crate::query::CommittedTransaction> {
@@ -971,7 +952,7 @@ impl<T> SelectorTuple<T> {
         matches!(self.0, SelectorMode::IdsOnly)
     }
 }
-#[cfg(feature = "json")]
+
 impl<T> norito::json::JsonSerialize for SelectorTuple<T> {
     fn json_serialize(&self, out: &mut String) {
         #[cfg(feature = "ids_projection")]
@@ -1005,7 +986,7 @@ impl<T> norito::json::JsonSerialize for SelectorTuple<T> {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl<T> norito::json::JsonDeserialize for SelectorTuple<T> {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1060,7 +1041,7 @@ mod tests {
         assert_eq!(selector.iter().count(), 0);
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod codec_tests {
     use super::*;
     use crate::{
@@ -1840,7 +1821,7 @@ mod codec_tests {
         ));
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod predicate_tests {
     use super::*;
     use crate::{
@@ -2110,7 +2091,7 @@ impl<T: 'static> EvaluateSelector<T> for () {
         ))
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod checked_json_tests {
     use super::*;
     fn assert_exact<T: norito::json::JsonSerialize>(value: &T) {

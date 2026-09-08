@@ -28,7 +28,6 @@ use ivm_abi::{
         ParsedProgramMetadata, ProgramMetadata, contract_code_hash, mode,
     },
 };
-use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::{NoritoSerialize, SerializePayload};
 use std::{error::Error as StdError, fmt, fmt::Write as _};
@@ -460,7 +459,7 @@ fn decode_literal_table(
 }
 fn decode_canonical_literal_payload<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_canonical_norito(payload).map_err(|_| VMError::InvalidMetadata)
 }

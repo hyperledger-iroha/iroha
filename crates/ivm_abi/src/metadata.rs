@@ -15,8 +15,8 @@ pub use iroha_data_model::smart_contract::{CONTRACT_CODE_HASH_DOMAIN, contract_c
 use norito::{
     Decode, Encode,
     core::{
-        Archived, DecodeFromSlice, DecodeLimits, Error as NoritoError, NoritoDeserialize,
-        NoritoSerialize, SerializePayload, serialize_to_buffer,
+        Archived, DecodeFromSlice, DecodeLimits, DeserializePayload, Error as NoritoError,
+        NoritoDeserialize, NoritoSerialize, SerializePayload, serialize_to_buffer,
     },
 };
 use std::io::Write;
@@ -1154,12 +1154,13 @@ impl SerializePayload for EmbeddedStateFieldDescriptor {
         encoded.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for EmbeddedStateFieldDescriptor {
+impl NoritoDeserialize<'_> for EmbeddedStateFieldDescriptor {}
+impl<'a> DeserializePayload<'a> for EmbeddedStateFieldDescriptor {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateFieldDescriptor decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
+        let encoded = <Vec<u8> as DeserializePayload>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_field_payload(&encoded)
     }
 }
@@ -1181,15 +1182,17 @@ impl SerializePayload for EmbeddedStateType {
         encoded.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for EmbeddedStateType {
+impl NoritoDeserialize<'_> for EmbeddedStateType {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
     }
+}
+impl<'a> DeserializePayload<'a> for EmbeddedStateType {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateType decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
+        let encoded = <Vec<u8> as DeserializePayload>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_type_payload(&encoded)
     }
 }

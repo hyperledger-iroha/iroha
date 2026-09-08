@@ -89,7 +89,7 @@ mod tests {
 
     use super::*;
     use crate::core::{
-        DecodeFlagsGuard, NoritoDeserialize, frame_bare_with_header_flags, from_bytes,
+        DecodeFlagsGuard, DeserializePayload, frame_bare_with_header_flags, from_bytes,
         header_flags, serialize_to_buffer,
     };
 
@@ -309,11 +309,13 @@ mod tests {
     }
 
     #[derive(crate::Encode, crate::Decode, Debug, PartialEq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     struct Wrapped {
         value: u16,
     }
 
     #[derive(crate::Encode, crate::Decode, Debug, PartialEq)]
+    #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
     struct WithRaw {
         wrapped: Wrapped,
         raw: [u8; 3],

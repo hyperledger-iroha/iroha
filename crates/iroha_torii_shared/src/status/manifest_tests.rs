@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::status::NexusLaneTeuStatus;
-use norito::{NoritoDeserialize, from_bytes, to_bytes};
+use norito::{DeserializePayload, from_bytes, to_bytes};
 
 #[test]
 fn manifest_validator_binding_status_has_exact_json_schema() {

@@ -655,6 +655,7 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
             destination = repo_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT_DIR / relative, destination)
+        copy_reviewed_rust_include_components(repo_root)
         return repo_root
 
     wire_mutants = (
@@ -707,7 +708,7 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
         repo_root = copy_fixture(case)
         mutate_rust_item_source_in_context(
             module,
-            repo_root / wire_path,
+            reviewed_rust_item_provider(module, repo_root, wire_path, wire_item),
             wire_item,
             test_context,
             old,
@@ -721,7 +722,10 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
     def remove_adapter_case(
         repo_root: Path, start: str, end: str
     ) -> None:
-        path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+        path = reviewed_rust_item_provider(
+            module, repo_root, Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            "locked_subject_reproposal_and_strict_higher_prepare_are_safe",
+        )
         source = path.read_text(encoding="utf-8")
         items = [
             item
@@ -729,7 +733,7 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
                 source,
                 "locked_subject_reproposal_and_strict_higher_prepare_are_safe",
             )
-            if item.brace_context == test_context
+            if item.brace_context == ()
         ]
         assert len(items) == 1
         item = items[0]
@@ -744,20 +748,20 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
     adapter_mutants = (
         (
             "adapter_omitted_rejection_removed",
-            "        let mut missing_repeated_high = prepared_proposal.clone();",
-            "        let mut invented_repeated_high = prepared_proposal.clone();",
+            "    let mut missing_repeated_high = prepared_proposal.clone();",
+            "    let mut invented_repeated_high = prepared_proposal.clone();",
             "adapter regression must reject omitted evidence at safe-value admission",
         ),
         (
             "adapter_invented_rejection_removed",
-            "        let mut invented_repeated_high = prepared_proposal.clone();",
-            "        let mut alternate_evidence = prepared_proposal.clone();",
+            "    let mut invented_repeated_high = prepared_proposal.clone();",
+            "    let mut alternate_evidence = prepared_proposal.clone();",
             "adapter regression must reject invented evidence at safe-value admission",
         ),
         (
             "adapter_alternate_evidence_rejection_removed",
-            "        let mut alternate_evidence = prepared_proposal.clone();",
-            "        let mut equal_rank = prepared_proposal.clone();",
+            "    let mut alternate_evidence = prepared_proposal.clone();",
+            "    let mut equal_rank = prepared_proposal.clone();",
             "adapter regression must reject same-reference alternate evidence at safe-value admission",
         ),
     )
@@ -791,12 +795,13 @@ def test_proposal_timeout_full_evidence_production_gates_are_source_bound(
             destination = repo_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT_DIR / relative, destination)
+        copy_reviewed_rust_include_components(repo_root)
         return repo_root
 
     production_mutants = (
         (
             "proposal_validate_reference_only",
-            Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/messages.rs"),
             "validate",
             (("impl", "Proposal"),),
             "selected_highest != timeout.highest_prepare_qc.as_ref()",
@@ -834,7 +839,7 @@ def test_proposal_timeout_full_evidence_production_gates_are_source_bound(
         repo_root = copy_fixture(case)
         mutate_rust_item_source_in_context(
             module,
-            repo_root / relative,
+            reviewed_rust_item_provider(module, repo_root, relative, item),
             item,
             context,
             old,

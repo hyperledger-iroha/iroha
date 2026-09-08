@@ -226,7 +226,7 @@ fn persisted_records_recursively_validate_decoded_packages_and_takedown_reasons(
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn governed_takedown_json_is_closed_and_uses_applied_height() {
     let manifest = release_manifest();
@@ -485,7 +485,7 @@ fn parliament_actions_validate_decoded_nested_identifiers() {
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn parliament_action_json_rejects_unknown_fields_recursively() {
     macro_rules! assert_unknown_rejected {
@@ -599,7 +599,7 @@ fn governance_decision_consumption_binds_execution_boundary_and_roundtrips() {
     malformed.decision.decision_id = [0; 32];
     assert!(malformed.validate().is_err());
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn governance_decision_consumption_json_rejects_bare_and_unknown_forms() {
     let consumption = MusubiGovernanceDecisionConsumptionV1 {
@@ -1087,7 +1087,7 @@ fn resolver_next_cursor_may_bind_a_nonempty_byte_budgeted_short_page() {
     };
     page.validate_for(&query)
         .expect("resolver byte budgeting may truncate before the requested item limit");
-    #[cfg(feature = "json")]
+
     assert!(
         norito::json::to_json(&page)
             .expect("resolver page JSON")
@@ -1215,7 +1215,7 @@ fn sorafs_reverse_references_bind_complete_archives_and_provider_prefixes() {
         .validate()
         .expect("valid provider reverse key");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn v1_query_request_json_rejects_unknown_secret_fields() {
     macro_rules! assert_closed_json {
@@ -1308,7 +1308,7 @@ fn v1_query_request_json_rejects_unknown_secret_fields() {
         }
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn archive_retention_json_rejects_unknown_fields_recursively() {
     macro_rules! assert_unknown_rejected {

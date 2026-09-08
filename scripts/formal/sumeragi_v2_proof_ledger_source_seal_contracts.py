@@ -669,6 +669,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'user/runtime_tail_tests.rs',
     ),
     'crates/iroha_data_model/src/block/consensus_v2.rs': (
+        'consensus_v2/messages.rs',
         'consensus_v2_tests.rs',
     ),
     'crates/iroha_data_model/src/block/consensus_v2_tests.rs': (

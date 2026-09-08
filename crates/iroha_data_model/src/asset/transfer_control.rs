@@ -1,6 +1,6 @@
 //! Asset transfer control records used for account-scoped on-chain asset policy.
 use crate::asset::AssetDefinitionId;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
@@ -50,11 +50,22 @@ pub fn validate_asset_transfer_availability_reason(
 /// This policy does not govern supply operations such as mint or burn. Holding
 /// limits independently govern every native credit, including mint.
 #[derive(
-    Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    Debug,
+    Clone,
+    Copy,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "state", content = "value")]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferAvailability")]
 pub enum AssetTransferAvailability {
@@ -72,10 +83,22 @@ impl AssetTransferAvailability {
     }
 }
 /// Calendar window used for outbound transfer caps.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "window", content = "value")]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlWindow")]
 pub enum AssetTransferControlWindow {
@@ -116,9 +139,20 @@ impl core::fmt::Display for AssetTransferControlWindow {
     }
 }
 /// Configured cap for a specific calendar window.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferLimit")]
 pub struct AssetTransferLimit {
@@ -129,9 +163,20 @@ pub struct AssetTransferLimit {
     pub cap_amount: Option<Quantity>,
 }
 /// Usage bucket tracking actual spent amount in a UTC calendar window.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferUsageBucket")]
 pub struct AssetTransferUsageBucket {
@@ -143,9 +188,20 @@ pub struct AssetTransferUsageBucket {
     pub spent_amount: Quantity,
 }
 /// Control state for one `(account_id, asset_definition_id)` pair.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlRecord")]
 pub struct AssetTransferControlRecord {
@@ -313,9 +369,21 @@ mod availability_tests {
     }
 }
 /// Account-scoped store of asset-transfer control entries.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::asset::transfer_control::AssetTransferControlStoreV1")]
 pub struct AssetTransferControlStoreV1 {

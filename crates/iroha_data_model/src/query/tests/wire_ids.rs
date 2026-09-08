@@ -169,3 +169,63 @@ fn installed_query_registry_rejects_alternate_id_for_builtin_type() {
     let installed = QueryRegistry::new().register_with_id::<DomainQuery>("installed.domain");
     builtin.assert_compatible_with(&installed);
 }
+
+// A registered query is a bare payload inside the registry envelope. It need not
+// expose a typed frame serializer or consult a frame schema during decoding.
+#[derive(Debug, PartialEq)]
+struct PayloadOnlyQuery(u32);
+
+impl seal::Query for PayloadOnlyQuery {}
+
+impl Query for PayloadOnlyQuery {
+    type Item = QueryOutputBatchBox;
+}
+
+impl norito::core::SerializePayload for PayloadOnlyQuery {
+    fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
+        norito::core::SerializePayload::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        Some(4)
+    }
+}
+
+impl norito::core::NoritoDeserialize<'_> for PayloadOnlyQuery {
+    fn schema_hash() -> [u8; 16] {
+        panic!("bare query decoding must not request a frame schema")
+    }
+}
+impl<'de> norito::core::DeserializePayload<'de> for PayloadOnlyQuery {
+    fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
+        Self::try_deserialize(archived).expect("validated query payload")
+    }
+
+    fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
+        u32::try_deserialize(archived.cast()).map(Self)
+    }
+}
+
+#[test]
+fn registry_preserves_bare_query_encoding_without_a_frame_serializer() {
+    const WIRE_ID: &str = "test.bare-query.v1";
+    let query = PayloadOnlyQuery(0x1020_3040);
+    let payload = query.encode();
+    let registry = QueryRegistry::new().register_with_id::<PayloadOnlyQuery>(WIRE_ID);
+    let decoded = registry.decode(WIRE_ID, &payload).unwrap().unwrap();
+    assert_eq!(decoded.erased_as_any().downcast_ref(), Some(&query));
+    assert_eq!(decoded.encode_bytes(), payload);
+    assert_eq!(decoded.encoded_payload_len_exact(), Some(payload.len()));
+    let mut streamed = Vec::new();
+    let used = decoded
+        .encode_payload_to(&mut norito::core::Encoder::new(&mut streamed))
+        .unwrap();
+    assert_eq!(used, payload.len());
+    assert_eq!(streamed, payload);
+    let mut malformed = payload;
+    malformed.push(0xff);
+    assert!(matches!(
+        registry.decode(WIRE_ID, &malformed).unwrap(),
+        Err(norito::Error::LengthMismatch)
+    ));
+}

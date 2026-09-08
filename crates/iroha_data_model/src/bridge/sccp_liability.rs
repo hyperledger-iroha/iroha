@@ -1,6 +1,5 @@
 //! Canonical SORA-side SCCP route liability accounting.
 
-#[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -10,9 +9,22 @@ use norito::codec::{Decode, Encode};
 /// The value is expressed in the route's canonical unsigned payload units. A
 /// persisted row must therefore be nonzero; routes with no liability omit the
 /// row entirely.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]

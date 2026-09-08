@@ -32,7 +32,6 @@ cli = [
     "offline-visual-codecs",
     "iroha_core/node",
     "iroha_crypto/consensus",
-    "iroha_data_model/json",
     "norito/node-codec",
 ]
 dev-tools = ["cli"]

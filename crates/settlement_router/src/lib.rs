@@ -26,7 +26,7 @@
     clippy::missing_panics_doc
 )]
 use norito::{
-    Archived, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    Archived, DeserializePayload, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::DecodeFromSlice,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
 };
@@ -90,7 +90,8 @@ impl SerializePayload for TimestampMs {
         self.as_unix_millis().serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for TimestampMs {
+impl NoritoDeserialize<'_> for TimestampMs {}
+impl<'a> DeserializePayload<'a> for TimestampMs {
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let ptr = std::ptr::from_ref(archived).cast::<u8>();
         let (base, total) = norito::core::payload_ctx().ok_or(Error::MissingPayloadContext)?;
@@ -168,7 +169,8 @@ impl SerializePayload for DurationSeconds {
         self.0.whole_seconds().serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for DurationSeconds {
+impl NoritoDeserialize<'_> for DurationSeconds {}
+impl<'a> DeserializePayload<'a> for DurationSeconds {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         let seconds_arch: &Archived<i64> = archived.cast();
         let seconds = i64::deserialize(seconds_arch);

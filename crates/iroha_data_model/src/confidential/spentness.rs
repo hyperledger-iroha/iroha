@@ -75,7 +75,7 @@ macro_rules! define_spentness_digest {
             }
         }
 
-        #[cfg(feature = "json")]
+
         impl norito::json::FastJsonWrite for $name {
             fn write_json(&self, output: &mut String) {
                 norito::json::FastJsonWrite::write_json(&self.0, output);
@@ -89,7 +89,7 @@ macro_rules! define_spentness_digest {
             }
         }
 
-        #[cfg(feature = "json")]
+
         impl norito::json::JsonDeserialize for $name {
             fn json_deserialize(
                 parser: &mut norito::json::Parser<'_>,
@@ -179,7 +179,6 @@ impl ConfidentialSpentnessPathV1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ConfidentialSpentnessPathV1 {
     fn write_json(&self, output: &mut String) {
         output.push('[');
@@ -210,7 +209,6 @@ impl norito::json::FastJsonWrite for ConfidentialSpentnessPathV1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for ConfidentialSpentnessPathV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -248,15 +246,21 @@ impl norito::json::JsonDeserialize for ConfidentialSpentnessPathV1 {
 }
 
 /// Closed state tag committed at one confidential spentness leaf.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "state", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "state", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessStateKindV1"
@@ -273,12 +277,21 @@ pub enum ConfidentialSpentnessStateKindV1 {
 /// Unspent leaves canonically carry a zero transaction digest and height zero;
 /// spent leaves carry both non-zero fields. Keeping both fields present avoids
 /// a size-skewed enum and gives every leaf one unambiguous wire shape.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessStateV1")]
 pub struct ConfidentialSpentnessStateV1 {
@@ -357,12 +370,20 @@ impl ConfidentialSpentnessStateV1 {
 }
 
 /// One immutable consensus checkpoint for an asset's permanent spentness tree.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessCheckpointV1"
@@ -493,12 +514,20 @@ impl ConfidentialSpentnessCheckpointV1 {
 }
 
 /// Exact point proof against one permanent spentness checkpoint.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessProofV1")]
 pub struct ConfidentialSpentnessProofV1 {
@@ -927,7 +956,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn json_path_requires_exactly_256_canonical_digests() {
         let path = path();

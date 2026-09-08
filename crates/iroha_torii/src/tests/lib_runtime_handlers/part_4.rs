@@ -594,13 +594,23 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
     let (app, request) =
         incoming_proxy_submit_fixture(0xee, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let final_authority = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
-    let forwarding_authority = checked_torii_test_peer_id(
-        0xef,
-        "derive QueuePlanSynced forwarding-authority fixture key",
+    let forwarding_authority = PeerId::new(
+        checked_torii_test_keypair_from_seed_byte(
+            0xf0,
+            Algorithm::BlsNormal,
+            "third bound authority relays another pair's quorum",
+        )
+        .public_key()
+        .clone(),
     );
     assert_ne!(forwarding_authority, final_authority);
+    let second_signer = checked_torii_test_keypair_from_seed_byte(
+        0xef,
+        Algorithm::BlsNormal,
+        "second durable authority in forwarded quorum",
+    );
     let final_authority_snapshot =
-        exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
+        exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let forwarding_authority_for_closure = forwarding_authority.clone();
     let response = super::execute_torii_proxy_request_across_candidates(
         vec![
@@ -638,16 +648,21 @@ async fn queue_plan_synced_accepts_a_reforwarded_certificate_from_an_authoritati
     let body = torii_body_bytes(response, "read reforwarded strict receipt").await;
     let certificate: QueuePlanAdmissionCertificateV1 =
         norito::decode_from_bytes(&body).expect("decode reforwarded strict certificate");
-    let attestation = certificate
-        .attestations
-        .first()
-        .expect("reforwarded strict certificate must contain one attestation");
     let coordinator = certificate
         .binding
         .admission_context
         .route_incarnations
         .first()
         .expect("reforwarded certificate coordinator context");
+    assert!(coordinator.validator_set.contains(&forwarding_authority));
+    assert_eq!(certificate.attestations.len(), 2);
+    let attestation = certificate
+        .attestations
+        .iter()
+        .find(|attestation| {
+            coordinator.validator_set[usize::from(attestation.validator_index)] == final_authority
+        })
+        .expect("the relayed quorum must retain the final authority's attestation");
     assert_eq!(
         coordinator.validator_set[usize::from(attestation.validator_index)],
         final_authority
@@ -770,7 +785,13 @@ async fn queue_plan_synced_accepts_only_exact_durable_acceptance_evidence() {
         incoming_proxy_submit_fixture(0xaf, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     let peer_id = PeerId::from(app.torii_proxy_bridge_signer.public_key().clone());
     let expected_hash_literal = accepted_queue_hash_for_proxy_submit(&app, &request).to_string();
-    let valid_snapshot = exact_queue_plan_synced_acceptance_snapshot(&app, &request).await;
+    let second_signer = checked_torii_test_keypair_from_seed_byte(
+        0xb0,
+        Algorithm::BlsNormal,
+        "second authority in exact durable evidence fixture",
+    );
+    let valid_snapshot =
+        exact_queue_plan_synced_quorum_snapshot(&app, &request, &second_signer).await;
     let response =
             super::execute_torii_proxy_request_across_candidates(
                 vec![ToriiProxyCandidate::P2p(peer_id.clone())],
@@ -1082,10 +1103,7 @@ async fn queue_plan_synced_p2p_closed_actor_is_pre_dispatch_and_cleans_pending()
     ));
     assert!(!error.may_have_reached_authority());
     assert!(
-        !app.torii_proxy_pending
-            .lock()
-            .await
-            .contains_key(&pending_key),
+        !app.torii_proxy_pending.lock().contains_key(&pending_key),
         "failed exact admission must remove the response waiter"
     );
 }
@@ -1128,8 +1146,7 @@ async fn backpressured_busy_rejection_cannot_block_proxy_response_dispatch() {
         tx,
         1024,
         false,
-    )
-    .await;
+    );
     super::process_incoming_torii_proxy_response(
         &app,
         responder_peer_id,

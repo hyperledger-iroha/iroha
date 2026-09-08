@@ -1,5 +1,5 @@
 //! Norito JSON regression tests for identifier types.
-#![cfg(feature = "json")]
+
 use iroha_data_model::account::AccountId;
 use iroha_data_model::asset::{AssetDefinitionId, AssetId};
 const SIGNATORY: &str = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";

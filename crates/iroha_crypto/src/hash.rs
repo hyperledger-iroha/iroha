@@ -25,6 +25,8 @@ use zeroize::Zeroize;
 #[display("{}", hex::encode(self.as_ref()))]
 #[debug("{}", hex::encode(self.as_ref()))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::hash::Hash")]
 pub struct Hash([u8; Self::LENGTH]);
 impl Zeroize for Hash {
     fn zeroize(&mut self) {
@@ -49,7 +51,7 @@ impl Hash {
     fn decode_archived(
         archived: &norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; Self::LENGTH] as norito::core::NoritoDeserialize>::try_deserialize(
+        let bytes = <[u8; Self::LENGTH] as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
         Self::from_marked_bytes(bytes)
@@ -303,7 +305,8 @@ impl norito::core::SerializePayload for Hash {
         Some(Self::LENGTH)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for Hash {
+impl norito::core::NoritoDeserialize<'_> for Hash {}
+impl<'de> norito::core::DeserializePayload<'de> for Hash {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Hash decode")
     }
@@ -426,7 +429,8 @@ impl<T> norito::core::SerializePayload for HashOf<T> {
         Some(Hash::LENGTH)
     }
 }
-impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
+impl<T> norito::core::NoritoDeserialize<'_> for HashOf<T> {}
+impl<'de, T> norito::core::DeserializePayload<'de> for HashOf<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("HashOf decode")
     }
@@ -434,7 +438,7 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let hash =
-            <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived.cast::<Hash>())?;
+            <Hash as norito::core::DeserializePayload>::try_deserialize(archived.cast::<Hash>())?;
         Ok(Self(hash, PhantomData))
     }
 }
@@ -727,7 +731,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
-            let err = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            let err = <Hash as norito::core::DeserializePayload>::try_deserialize(archived)
                 .expect_err("invalid lsb");
             assert!(matches!(err, norito::core::Error::Message(_)));
         }
@@ -740,7 +744,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
-            let result = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived);
+            let result = <Hash as norito::core::DeserializePayload>::try_deserialize(archived);
             if final_byte & 1 == 1 {
                 assert_eq!(
                     <[u8; Hash::LENGTH]>::from(result.expect("marked hash")),
@@ -780,7 +784,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<HashOf<()>>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<HashOf<()>>(&framed).expect("archive");
-            let err = <HashOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            let err = <HashOf<()> as norito::core::DeserializePayload>::try_deserialize(archived)
                 .expect_err("invalid lsb");
             assert!(matches!(err, norito::core::Error::Message(_)));
         }

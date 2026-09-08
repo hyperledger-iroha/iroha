@@ -687,6 +687,11 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, first_b) =
         autonomous_lane_payload_for_kura(lane.lane_id, lane.dataspace_id, 1, &signer);
+    let first_b = lifecycle_terminal_bound_payload_for_test(
+        &first_b,
+        historical_capacity_lifecycle_context(&first_b),
+        &signer,
+    );
     let incarnation_b = first_b.origin_proposal.descriptor.lane_incarnation;
     let rebound_a = rebind_autonomous_lane_payload_for_kura(
         &first_b,
@@ -698,6 +703,11 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
     );
     let incarnation_a = rebound_a.origin_proposal.descriptor.lane_incarnation;
     let incarnation_a_payload = repropose_autonomous_lane_payload_for_kura(&rebound_a, 84, &signer);
+    let incarnation_a_payload = lifecycle_terminal_bound_payload_for_test(
+        &incarnation_a_payload,
+        historical_capacity_lifecycle_context(&incarnation_a_payload),
+        &signer,
+    );
     let rebound_b = rebind_autonomous_lane_payload_for_kura(
         &incarnation_a_payload,
         lane.lane_id,
@@ -707,6 +717,11 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         &signer,
     );
     let recreated_b = repropose_autonomous_lane_payload_for_kura(&rebound_b, 126, &signer);
+    let recreated_b = lifecycle_terminal_bound_payload_for_test(
+        &recreated_b,
+        historical_capacity_lifecycle_context(&recreated_b),
+        &signer,
+    );
     assert_ne!(incarnation_a, incarnation_b);
     assert_eq!(
         recreated_b.origin_proposal.descriptor.lane_incarnation, incarnation_b,
@@ -748,8 +763,8 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         );
     let (recreated_b_session, recreated_b_pops) =
         committed_lane_block_session_for_kura_proposal(&recreated_b.origin_proposal, &signer);
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
+    let (kura, _) = open_historical_recovery_fixture(&config, &lane_config).expect("Kura");
+    install_autonomous_lane_marker_for_kura(&kura, &lane_config, &first_b);
     let recreate_lane_storage = |stage: &str| {
         kura.reconcile_lane_segments_for_testing(&[], &[], &[(lane, lane)])
             .unwrap_or_else(|error| panic!("provision {stage} lane storage: {error:?}"));
@@ -789,6 +804,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             .expect("read first incarnation-B marker"),
         (incarnation_b, 0),
     );
+    persist_historical_capacity_payload_fixture(&kura, &first_b, &signer);
     assert_eq!(
         kura.persist_historical_autonomous_lane_recovery_record(&first_b_record)
             .expect("persist first-B historical recovery"),
@@ -827,6 +843,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             .expect("read incarnation-A marker"),
         (incarnation_a, 60),
     );
+    persist_historical_capacity_payload_fixture(&kura, &incarnation_a_payload, &signer);
     assert_eq!(
         kura.persist_historical_autonomous_lane_recovery_record(&incarnation_a_record)
             .expect("persist incarnation-A historical recovery"),
@@ -865,6 +882,7 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
             .expect("read recreated-B marker"),
         (incarnation_b, 100),
     );
+    persist_historical_capacity_payload_fixture(&kura, &recreated_b, &signer);
     assert_eq!(
         kura.persist_historical_autonomous_lane_recovery_record(&recreated_b_record)
             .expect("persist recreated-B historical recovery"),
@@ -966,8 +984,8 @@ fn historical_autonomous_recovery_is_safe_across_same_lane_b_a_b_recreation() {
         recreated_b.origin_proposal,
     );
     drop(kura);
-    let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
-        .expect("reopen recreated-B Kura");
+    let (reopened, _) =
+        open_historical_recovery_fixture(&config, &lane_config).expect("reopen recreated-B Kura");
     assert_eq!(
         reopened
             .historical_autonomous_lane_recovery_records_bounded(3)
@@ -1084,7 +1102,8 @@ fn historical_autonomous_recovery_record_for_kura(
         }
     }
     roster.sort_by(|left, right| left.validator.cmp(&right.validator));
-    let network_id = crate::sumeragi::synthetic_network_id("kura-autonomous-chain");
+    // Bind the recovery context and its derived mint roster to the signed payload.
+    let network_id = payload.network_id;
     let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
         crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
             network_id,

@@ -26,26 +26,32 @@ macro_rules! record {
     ($(#[$meta:meta])* pub struct $name:ident { $($(#[$fm:meta])* pub $field:ident: $ty:ty,)* }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-        #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+        #[norito (deny_unknown_fields)]
         pub struct $name { $($(#[$fm])* pub $field: $ty,)* }
     };
 }
 
 /// Closed custody policy. Wins, ties and forfeits never change the recipient.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "kind",
-        content = "value",
-        rename_all = "snake_case",
-        deny_unknown_fields
-    )
+#[norito(
+    tag = "kind",
+    content = "value",
+    rename_all = "snake_case",
+    deny_unknown_fields
 )]
 pub enum GameResourceReturnPolicyV1 {
     /// Release only with a legal terminal session transition, to the original owner.
@@ -467,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "json")]
+
     fn closed_resource_policy_requires_exact_native_json_unit_content() {
         let policy = norito::json::from_str::<GameResourceReturnPolicyV1>(
             r#"{"kind":"return_to_original_owner_at_terminal","value":null}"#,

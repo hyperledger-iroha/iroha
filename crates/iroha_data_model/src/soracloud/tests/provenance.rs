@@ -975,7 +975,7 @@ fn agent_wallet_request_ids_are_canonical_in_persisted_state() {
         .validate()
         .expect_err("wallet audit event without amount must fail closed");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn canonical_agent_hosting_records_require_explicit_null_and_empty_keys() {
     macro_rules! assert_required_keys {
@@ -1720,7 +1720,7 @@ fn runtime_receipt_requires_an_exact_selected_validator_peer_id() {
         .validate()
         .expect_err("runtime receipt service-version aliases must fail closed");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn service_world_records_are_closed_and_require_explicit_nullable_keys() {
     macro_rules! assert_closed_and_required_nullable {
@@ -1856,7 +1856,7 @@ fn sample_host_config_response_envelope() -> SoracloudHostResponseEnvelopeV1 {
         }),
     )
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
     macro_rules! assert_unknown_rejected {
@@ -2020,7 +2020,7 @@ fn host_protocol_v1_json_rejects_unknown_fields_across_the_direct_graph() {
         "read secret envelope response"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
     macro_rules! assert_required_fields {
@@ -2142,7 +2142,7 @@ fn host_protocol_v1_json_requires_explicit_null_and_empty_keys() {
         "read secret envelope response"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn signed_fhe_request_model_v1_json_is_closed_and_requires_canonical_keys() {
     macro_rules! assert_closed {
@@ -2337,7 +2337,7 @@ fn signed_fhe_request_model_v1_json_is_closed_and_requires_canonical_keys() {
         "ciphertext query specification"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn ciphertext_query_response_v1_json_is_closed_and_requires_null_and_empty_keys() {
     macro_rules! assert_closed {
@@ -2506,7 +2506,7 @@ fn canonical_request_witness_roundtrips_through_norito() {
         norito::decode_from_bytes(&encoded).expect("decode witness");
     assert_eq!(decoded, witness);
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn canonical_request_witness_v1_json_requires_explicit_signatures_and_closed_fields() {
     let witness = CanonicalRequestWitnessV1 {

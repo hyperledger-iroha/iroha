@@ -363,9 +363,9 @@ case|local_body_replay_authority_is_linear_nondecode_and_closed_to_fixed_joins
 region|production|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|local|replay_authority|after|pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1|before|/// Selector-authenticated origin awaiting one exact durable body-frame binding.
 region|derive_local_pre_intent|replay_authority|last|#[derive(|before|pub(in crate::sumeragi) struct LocalBodyPreIntentReplaySealV1 {
-region|protected_lock_reseed_source|replay_authority_certified_body|at|pub(in crate::sumeragi) fn from_exact_protected_lock_validate(|before|/// Report whether this closed test-only carrier may project a local-proposal handoff.
+region|protected_lock_reseed_source|replay_authority_certified_body|at|pub(in crate::sumeragi) fn from_exact_protected_body_validate(|before|/// Report whether this closed test-only carrier may project a local-proposal handoff.
 region|protected_lock_standalone_auth|replay_authority_certified_body|at|fn authenticated_refined_proposal_standalone_source(|before|fn standalone_validate_effect(
-region|protected_lock_pre_admission|registry|at|pub(in crate::sumeragi) fn seal_exact_protected_lock_validate(|before|/// Consume the exact local Validate owner and its Store-projected replay seal.
+region|protected_lock_pre_admission|registry|at|pub(in crate::sumeragi) fn seal_exact_protected_body_validate(|before|/// Consume the exact local Validate owner and its Store-projected replay seal.
 region|protected_lock_validate_certificate|effects|at|fn exact_remote_proposal_validate_authority_certificate(|before|fn preflight_authenticated_genesis_store_completion(
 region|protected_lock_validate_reseed|effects|at|// A TC may promote an older PrepareQC|before|        let authority_certificate =\n            self.exact_remote_proposal_validate_authority_certificate
 region|runtime|runtime|begin|-|before|\n#[cfg(test)]\npub(in crate::sumeragi) mod tests {
@@ -382,14 +382,16 @@ required|local|exactly_matches_proposal_intent(|local replay authority omitted e
 required|local|exactly_matches_proposal_intent_effect(|local replay authority omitted exactly_matches_proposal_intent_effect(
 required|local|fn bind_proposal_intent(|local replay authority omitted fn bind_proposal_intent(
 required|local|BodyPipelineOriginV1::LocalBody(manifest.clone())|local replay authority omitted BodyPipelineOriginV1::LocalBody(manifest.clone())
-required|protected_lock_reseed_source|certificate.phase != wire::GlobalPhase::Prepare|protected-lock Validate reseed stopped requiring a full PrepareQC
+required|protected_lock_reseed_source|statement.phase() != Some(certificate.phase)|protected body Validate reseed stopped requiring the exact QC phase
+required|protected_lock_reseed_source|certificate.round != *round|protected body Validate reseed stopped requiring the exact certificate round
+required|protected_lock_reseed_source|certificate.proposal_round != *round|protected body Validate reseed stopped binding the immutable proposal round
 required|protected_lock_reseed_source|statement.execution_commitment() != Some(certificate.execution_commitment)|protected-lock Validate reseed stopped binding the runtime statement to the QC commitment
 required|protected_lock_reseed_source|fetch_manifest_present: true|protected-lock Validate reseed lost its persisted manifest discriminator
 required|protected_lock_reseed_source|certified_sources: Vec::new()|protected-lock Validate reseed became indistinguishable from a generic certified Fetch
 required|protected_lock_reseed_source|exact_certified_body_pipeline_family(&coordinates, receipt)?|protected-lock Validate reseed stopped binding the recovered manifest and durable receipt
 required|protected_lock_reseed_source|LifecycleStageKind::ValidateBody|protected-lock reseed stopped remaining an exact Validate-only source
-required|protected_lock_reseed_source|AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedLock(family)|protected-lock reseed stopped retaining its closed authenticated-certified subtype
-count|protected_lock_reseed_source|from_exact_protected_lock_validate(|1|protected-lock Validate replay evidence must have one closed constructor
+required|protected_lock_reseed_source|AuthenticatedCertifiedLocalValidateFamilyV1::ProtectedBody(family)|protected-lock reseed stopped retaining its closed authenticated-certified subtype
+count|protected_lock_reseed_source|from_exact_protected_body_validate(|1|protected-lock Validate replay evidence must have one closed constructor
 forbidden|protected_lock_reseed_source|LifecycleStageKind::FetchBody|protected-lock Validate replay evidence must not mint generic Fetch authority
 forbidden|protected_lock_reseed_source|LifecycleStageKind::StoreBody|protected-lock Validate replay evidence must not mint a Store shortcut
 forbidden|protected_lock_reseed_source|LocalProposalReady|protected-lock Validate replay evidence must not project local proposal readiness
@@ -397,7 +399,7 @@ required|protected_lock_standalone_auth|certified_sources.is_empty()|standalone 
 required|protected_lock_standalone_auth|certificate.validate(context).is_ok()|standalone protected-lock replay stopped validating the complete QC structure
 required|protected_lock_standalone_auth|verified.verify_quorum_certificate(certificate).is_ok()|standalone protected-lock replay stopped authenticating the full PrepareQC against the frozen roster
 required|protected_lock_pre_admission|ownership.exact_pending_adapter_effect_binding(&effect)|protected-lock Validate pre-admission stopped consuming the exact runtime binding
-required|protected_lock_pre_admission|LocalValidateReplayEvidenceV1::from_exact_protected_lock_validate(|protected-lock Validate pre-admission stopped delegating to the closed replay constructor
+required|protected_lock_pre_admission|LocalValidateReplayEvidenceV1::from_exact_protected_body_validate(|protected-lock Validate pre-admission stopped delegating to the closed replay constructor
 required|protected_lock_pre_admission|if !prepared.validates()|protected-lock Validate pre-admission stopped rechecking the assembled carrier
 count|protected_lock_pre_admission|ownership.exact_pending_adapter_effect_binding(&effect)|2|protected-lock Validate pre-admission must derive both installed and replay bindings from the exact owner
 forbidden|protected_lock_pre_admission|PreparedCertifiedFetchReplayPreAdmission|protected-lock Validate pre-admission must not route through generic certified Fetch
@@ -411,19 +413,19 @@ required|protected_lock_validate_certificate|self.protected_lock\n              
 required|protected_lock_validate_certificate|if !protected {|protected-lock Validate stopped failing closed on ordinary or foreign quorum authority
 forbidden|protected_lock_validate_certificate|replayed_highest_prepare_certificate_ref|cleanup-only durable high must not substitute for the protected full PrepareQC
 required|protected_lock_validate_reseed|exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?|historical protected-lock Validate stopped authenticating its complete runtime QC
-required|protected_lock_validate_reseed|.filter(\pcertificate\p certificate.phase == wire::GlobalPhase::Prepare)|historical protected-lock Validate stopped requiring Prepare authority
+required|protected_lock_validate_reseed|let Some(certificate) = authority_certificate else {|historical protected body Validate stopped requiring protected full-QC authority
 required|protected_lock_validate_reseed|.recovered_bodies|historical protected-lock Validate stopped sourcing its manifest and receipt from recovered durable storage
 required|protected_lock_validate_reseed|if recovered_receipt != receipt|historical protected-lock Validate stopped comparing the exact recovered durable receipt
 required|protected_lock_validate_reseed|DurableStoreTerminalRetrySealV1::seal_validate_predecessor(|historical protected-lock Validate stopped recovering its inert Store predecessor from the exact Validate owner
-required|protected_lock_validate_reseed|protected-lock ValidateBody could not seal its exact Store predecessor|historical protected-lock Validate stopped failing closed when its Store predecessor cannot be reconstructed
-required|protected_lock_validate_reseed|PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(|historical protected-lock Validate stopped using the closed typed reseed
+required|protected_lock_validate_reseed|protected-body ValidateBody could not seal its exact Store predecessor|historical protected-lock Validate stopped failing closed when its Store predecessor cannot be reconstructed
+required|protected_lock_validate_reseed|PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(|historical protected-lock Validate stopped using the closed typed reseed
 required|protected_lock_validate_reseed|self.install_pending_durable_validate_admission(|historical protected-lock Validate stopped entering the normal lifecycle admission transaction
 required|protected_lock_validate_reseed|prepared.into_pending_durable_validate_admission()|historical protected-lock Validate stopped consuming the typed carrier into normal durable admission
 required|protected_lock_validate_reseed|Some(store_terminal)|historical protected-lock Validate admission stopped retaining its inert Store predecessor
-count|protected_lock_validate_reseed|seal_exact_protected_lock_validate(|1|historical protected-lock Validate must have one typed reseed call
+count|protected_lock_validate_reseed|seal_exact_protected_body_validate(|1|historical protected-lock Validate must have one typed reseed call
 count|protected_lock_validate_reseed|seal_validate_predecessor(|1|historical protected-lock Validate must reconstruct exactly one inert Store predecessor
 count|protected_lock_validate_reseed|install_pending_durable_validate_admission(|1|historical protected-lock Validate must have one normal admission install
-order|protected_lock_validate_reseed|6|if recovered_receipt != receipt|let validate_ownership = ownership;|DurableStoreTerminalRetrySealV1::seal_validate_predecessor(|PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(|self.install_pending_durable_validate_admission(|Some(store_terminal)|historical protected-lock Validate must verify durability, reconstruct its predecessor, reseal replay, and install both atomically
+order|protected_lock_validate_reseed|6|if recovered_receipt != receipt|let validate_ownership = ownership;|DurableStoreTerminalRetrySealV1::seal_validate_predecessor(|PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(|self.install_pending_durable_validate_admission(|Some(store_terminal)|historical protected-lock Validate must verify durability, reconstruct its predecessor, reseal replay, and install both atomically
 forbidden|protected_lock_validate_reseed|PreparedCertifiedFetchReplayPreAdmission|historical protected-lock Validate must not manufacture generic certified Fetch authority
 forbidden|protected_lock_validate_reseed|pending_durable_validate_admissions.insert|historical protected-lock Validate must not bypass the normal admission installer
 forbidden|protected_lock_validate_reseed|AdapterEffect::FetchBody|historical protected-lock Validate must not synthesize a Fetch effect

@@ -1460,7 +1460,7 @@ mod tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn structured_json_rejects_retired_confidential_dispatch() {
         for name in [

@@ -257,7 +257,10 @@ async fn execute_torii_trusted_internal_read_for_resolved_routes<T>(
     response_label: &'static str,
 ) -> Response
 where
-    T: JsonSerialize + norito::codec::Decode + norito::core::NoritoSerialize + 'static,
+    T: JsonSerialize
+        + for<'de> norito::core::NoritoDeserialize<'de>
+        + norito::core::NoritoSerialize
+        + 'static,
 {
     execute_torii_trusted_internal_read_for_supported_routes::<T>(
         app,
@@ -281,7 +284,10 @@ async fn execute_torii_trusted_internal_read_for_supported_routes<T>(
     response_label: &'static str,
 ) -> Response
 where
-    T: JsonSerialize + norito::codec::Decode + norito::core::NoritoSerialize + 'static,
+    T: JsonSerialize
+        + for<'de> norito::core::NoritoDeserialize<'de>
+        + norito::core::NoritoSerialize
+        + 'static,
 {
     let reservation = match try_acquire_query_fanout_memory(app) {
         Ok(reservation) => reservation,
@@ -334,7 +340,10 @@ async fn execute_torii_trusted_internal_read_for_resolved_routes_admitted<T>(
     response_label: &'static str,
 ) -> Response
 where
-    T: JsonSerialize + norito::codec::Decode + norito::core::NoritoSerialize + 'static,
+    T: JsonSerialize
+        + for<'de> norito::core::NoritoDeserialize<'de>
+        + norito::core::NoritoSerialize
+        + 'static,
 {
     if routes.is_empty() {
         return with_torii_fanout_headers(

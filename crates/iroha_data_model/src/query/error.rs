@@ -4,7 +4,7 @@
 pub use self::model::*;
 use super::*;
 use crate::prelude::*;
-#[cfg(feature = "json")]
+
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
@@ -26,13 +26,11 @@ mod model {
         Decode,
         Encode,
         IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// High-level failure reasons for query execution.
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
     #[derive(thiserror::Error)]
     pub enum QueryExecutionFail {
         /// {0}
@@ -69,13 +67,20 @@ mod model {
     /// A canonical block-history body is unavailable or contradicts the
     /// committed world-state hash journal.
     #[derive(
-        Debug, displaydoc::Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode,
+        Debug,
+        displaydoc::Display,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
     #[derive(thiserror::Error)]
     pub enum CanonicalHistoryError {
         /// Canonical history height {height} is outside the committed snapshot ending at `{committed_height}`
@@ -117,17 +122,26 @@ mod model {
         },
     }
     /// Stable identity carried by a missing chain-authoritative `SoraFS` proof outcome.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct SorafsProofOutcomeFindErrorV1 {
         /// Proof protocol namespace.
         pub kind: crate::sorafs::proof_ledger::ProofOutcomeKindV1,
         /// Protocol-scoped challenge or request identity.
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito(json = "crate::json_helpers::fixed_bytes")]
         pub identity_digest: [u8; 32],
     }
     /// Type assertion error
@@ -142,12 +156,10 @@ mod model {
         Decode,
         Encode,
         IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
     #[derive(thiserror::Error)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     /// Item-level errors returned when resolving query inputs.
@@ -458,7 +470,6 @@ mod tests {
             norito::decode_from_bytes(&bytes).expect("decode canonical-history query failure");
         assert_eq!(decoded, failure);
 
-        #[cfg(feature = "json")]
         {
             let json = norito::json::to_json(&failure)
                 .expect("encode canonical-history query failure JSON");

@@ -7,7 +7,6 @@ fn captured_codec_schema_identities() {
     );
 }
 
-#[cfg(feature = "json")]
 pub(in crate::query::tx_predicate) fn generic_membership_identity_records()
 -> Vec<norito::json::Value> {
     use super::{HashOf, Json, MembershipDecodeBudgetGuard, MembershipValues};
@@ -73,7 +72,6 @@ fn membership_frame_decode_requires_its_existing_predicate_budget() {
     assert!(norito::decode_from_bytes::<MembershipValues<u64>>(&bytes).is_err());
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn membership_identity_uses_marker_identity_without_a_payload_codec() {
     use norito::NoritoSchema;

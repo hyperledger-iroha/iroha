@@ -14,7 +14,7 @@ use super::{
     KagemushaRetailEnrollmentSubjectV1, kagemusha_verify_device_response_v1,
 };
 use crate::name::Name;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Algorithm, SignatureOf};
 use iroha_schema::IntoSchema;
@@ -35,8 +35,17 @@ const ACCOUNT_DOMAIN: &str = "iroha:kagemusha:v1:retail-enrollment-account-posse
 const EVIDENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:retail-enrollment-ceremony-evidence";
 
 /// Exact server-created challenge. Decoding grants no issuer or outstanding-challenge authority.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-challenge")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentChallengeV1 {
@@ -62,8 +71,17 @@ pub struct KagemushaRetailEnrollmentChallengeV1 {
 }
 
 /// Account-controller signing payload with a separate purpose domain.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-account-proof")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentAccountProofV1 {
@@ -74,8 +92,17 @@ pub struct KagemushaRetailEnrollmentAccountProofV1 {
 }
 
 /// Complete dual-possession proof; the challenge must match the server's retained bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-possession-proof")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentPossessionProofV1 {
@@ -1151,7 +1178,7 @@ mod tests {
             changed.issued_at_ms + KAGEMUSHA_RETAIL_ENROLLMENT_CHALLENGE_LIFETIME_MS_V1 + 1;
         assert!(changed.canonical_bytes().is_err());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_unknown_fields_at_challenge_and_proof_boundaries_are_rejected() {
         let f = Fixture::new(1);

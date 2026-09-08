@@ -6,10 +6,19 @@ use norito::codec::{Decode, Encode};
 /// Sequence of data trigger execution steps.
 pub type DataTriggerSequence = Vec<DataTriggerStep>;
 /// Single execution step of the data trigger.
-#[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Display,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[display("DataTriggerStep")]
 #[cfg_attr(

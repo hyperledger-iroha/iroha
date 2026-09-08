@@ -175,7 +175,7 @@ impl iroha_version::codec::DecodeVersioned for SignedQuery {
     }
 }
 /// Norito-compatible JSON representations for query payloads.
-#[cfg(all(feature = "json", not(doc)))]
+#[cfg(not(doc))]
 pub mod json_wrappers {
     use super::*;
     /// Failure to reconstruct the native request carried by a JSON wrapper.
@@ -197,10 +197,8 @@ pub mod json_wrappers {
     ///
     /// Carries the canonical iterable-query item discriminator, encoded query
     /// components, and query parameters alongside the request.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug, Clone, PartialEq, Eq, crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct QueryWithParamsJson {
@@ -216,10 +214,8 @@ pub mod json_wrappers {
         pub selector_b64: String,
     }
     /// JSON wrapper for `QueryRequest` enum.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug, Clone, PartialEq, Eq, crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize,
     )]
     #[norito(tag = "kind", content = "content", deny_unknown_fields)]
     pub enum QueryRequestJson {
@@ -231,10 +227,8 @@ pub mod json_wrappers {
         Continue(parameters::ForwardCursor),
     }
     /// JSON wrapper for `QueryRequestWithAuthority`.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug, Clone, PartialEq, Eq, crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct QueryRequestWithAuthorityJson {
@@ -247,19 +241,14 @@ pub mod json_wrappers {
         /// Mandatory nonzero request lifetime in milliseconds.
         pub time_to_live_ms: NonZeroU64,
         /// Caller-generated one-shot replay nonce.
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::fixed_bytes_hex")
-        )]
+        #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
         pub nonce: [u8; 32],
         /// Request being authorised.
         pub request: QueryRequestJson,
     }
     /// JSON wrapper for the canonical `SignedQuery` form.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug, Clone, PartialEq, Eq, crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct SignedQueryCanonicalJson {
@@ -271,15 +260,10 @@ pub mod json_wrappers {
     /// JSON wrapper for versioned `SignedQuery`.
     ///
     /// Version is a string per common versioned JSON conventions elsewhere.
-    #[derive(Debug, Clone, PartialEq, Eq)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug, Clone, PartialEq, Eq, crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(
-        feature = "json",
-        norito(tag = "version", content = "content", deny_unknown_fields)
-    )]
+    #[norito(tag = "version", content = "content", deny_unknown_fields)]
     pub enum SignedQueryJson {
         /// Canonical JSON representation of a signed query.
         #[norito(rename = "canonical")]
@@ -546,7 +530,7 @@ pub mod json_wrappers {
     }
 }
 /// JSON utilities for assembling and parsing queries.
-#[cfg(feature = "json")]
+
 #[doc = "JSON conversion helpers used by query APIs."]
 pub mod json;
 // NOTE: Additional encode instrumentation for queries lives in iroha_crypto (SignatureOf::new, HashOf::new).
@@ -614,7 +598,7 @@ pub trait Query: seal::Query + Send + Sync + 'static {
     #[doc(hidden)]
     fn dyn_encoded_len_exact(&self) -> Option<usize>
     where
-        Self: Sized + norito::core::NoritoSerialize,
+        Self: Sized + norito::core::SerializePayload,
     {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         norito::core::SerializePayload::encoded_len_exact(self)
@@ -626,7 +610,7 @@ pub trait Query: seal::Query + Send + Sync + 'static {
         writer: &mut norito::core::Encoder<'_>,
     ) -> Result<usize, norito::core::Error>
     where
-        Self: Sized + norito::core::NoritoSerialize,
+        Self: Sized + norito::core::SerializePayload,
     {
         norito::codec::encode_adaptive_into(self, writer)
     }
@@ -960,7 +944,7 @@ mod model {
     }
     impl<T, Q> ErasedQuery<T> for Q
     where
-        Q: Query<Item = T> + ErasedEncode + Any + Send + Sync + norito::core::NoritoSerialize,
+        Q: Query<Item = T> + ErasedEncode + Any + Send + Sync + norito::core::SerializePayload,
     {
         fn erased_as_any(&self) -> &dyn Any {
             self
@@ -984,6 +968,20 @@ mod model {
     }
     /// Type alias used for ergonomic query handling.
     pub type QueryBox<T> = Box<dyn ErasedQuery<T> + Send + Sync>;
+    impl norito::NoritoSchema for QueryBox<QueryOutputBatchBox> {
+        fn nominal_name() -> String {
+            let query = norito::schema::identity::generic_name(
+                "iroha_data_model::query::model::ErasedQuery",
+                &[<QueryOutputBatchBox as norito::NoritoSchema>::nominal_name()],
+            );
+            norito::schema::identity::generic_name(
+                "alloc::boxed::Box",
+                &[format!(
+                    "dyn {query} + core::marker::Send + core::marker::Sync"
+                )],
+            )
+        }
+    }
     pub(super) const QUERY_BOX_PACKED_STRUCT_ERROR: &str = "packed-struct QueryBox layout";
     fn query_box_tuple_flags() -> Result<u8, norito::core::Error> {
         let flags = norito::core::effective_decode_flags()
@@ -1073,7 +1071,8 @@ mod model {
             query_box_encoded_len(name, query.encoded_payload_len_exact()?, flags)
         }
     }
-    impl<'a> norito::core::NoritoDeserialize<'a> for QueryBox<QueryOutputBatchBox> {
+    impl norito::core::NoritoDeserialize<'_> for QueryBox<QueryOutputBatchBox> {}
+    impl<'a> norito::core::DeserializePayload<'a> for QueryBox<QueryOutputBatchBox> {
         fn deserialize(
             archived: &'a norito::core::Archived<QueryBox<QueryOutputBatchBox>>,
         ) -> Self {
@@ -1086,7 +1085,7 @@ mod model {
         ) -> Result<Self, norito::core::Error> {
             query_box_tuple_flags()?;
             let (name, bytes): (String, Vec<u8>) =
-                norito::core::NoritoDeserialize::try_deserialize(archived.cast())?;
+                norito::core::DeserializePayload::try_deserialize(archived.cast())?;
             decode_registered_query(&name, &bytes).ok_or_else(|| {
                 norito::core::Error::Message("unknown query wire identifier".to_owned())
             })?
@@ -1095,13 +1094,22 @@ mod model {
     /// An enum of all possible iterable query batches.
     ///
     /// We have an enum of batches instead of individual elements, because it makes it easier to check that the batches have elements of the same type and reduces serialization overhead.
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, FromVariant)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        FromVariant,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// Boxed batch of query output items.
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryOutputBatchBox")]
     pub enum QueryOutputBatchBox {
         /// Batch of public keys.
         PublicKey(Vec<PublicKey>),
@@ -1196,21 +1204,31 @@ mod model {
         /// Batch of fee sponsor program identifiers.
         FeeSponsorProgramId(Vec<crate::nexus::FeeSponsorProgramId>),
     }
-    #[derive(Debug, Clone, PartialEq, Eq, Encode, IntoSchema)]
-    #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
+    #[derive(Debug, Clone, PartialEq, Eq, Encode, IntoSchema, crate :: DeriveJsonSerialize)]
     /// Helper tuple to materialise batches into Norito collections.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryOutputBatchBoxTuple")]
     pub struct QueryOutputBatchBoxTuple {
         /// Sequence of batches produced by an iterable query.
         pub(super) tuple: Vec<QueryOutputBatchBox>,
     }
     /// An enum of all possible singular queries
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, FromVariant)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        FromVariant,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// Boxed trait-object for singular queries.
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::SingularQueryBox")]
     pub enum SingularQueryBox {
         /// Fetch the current executor data model definition.
         FindExecutorDataModel(FindExecutorDataModel),
@@ -1435,13 +1453,22 @@ mod model {
         FindNftSaleOfferById(nft_market::FindNftSaleOfferById),
     }
     /// An enum of all possible singular query outputs
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, FromVariant)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        FromVariant,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// Boxed output of a singular query.
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::SingularQueryOutputBox")]
     pub enum SingularQueryOutputBox {
         /// Executor data model payload.
         ExecutorDataModel(crate::executor::ExecutorDataModel),
@@ -1651,12 +1678,20 @@ mod model {
         NftSaleRecord(crate::nft_market::NftSaleRecordV1),
     }
     /// The results of a single iterable query request.
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// Materialised batch of query results with pagination metadata.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryOutput")]
     pub struct QueryOutput {
         /// A single batch of results
         pub batch: QueryOutputBatchBoxTuple,
@@ -1669,7 +1704,8 @@ mod model {
         pub continue_cursor: Option<ForwardCursor>,
     }
     /// A canonical iterable-query envelope with all parameters needed to execute it.
-    #[derive(Decode, Encode)]
+    #[derive(Decode, Encode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryWithParams")]
     pub struct QueryWithParams {
         /// Unit marker preserving the canonical query envelope layout.
         pub query: (),
@@ -1773,13 +1809,22 @@ mod model {
         }
     }
     /// Wire discriminator identifying an iterable query or its target item type.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// Categories of iterable queries used for dispatch, pagination, and filtering.
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryItemKind")]
     pub enum QueryItemKind {
         /// Domain items.
         Domain,
@@ -2021,7 +2066,8 @@ mod model {
     /// A query request that can be sent to an Iroha peer.
     ///
     /// In case of HTTP API, the query request must also be signed (see [`QueryRequestWithAuthority`] and [`SignedQuery`]).
-    #[derive(Decode, Encode, IntoSchema)]
+    #[derive(Decode, Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryRequest")]
     pub enum QueryRequest {
         /// Singular query (non-iterable) request.
         Singular(SingularQueryBox),
@@ -2040,13 +2086,21 @@ mod model {
         Iterable(QueryWithParams),
     }
     /// A response to a [`QueryRequest`] from an Iroha peer
-    #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// Result returned by Torii in response to a query.
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryResponse")]
     pub enum QueryResponse {
         /// Singular query output.
         Singular(SingularQueryOutputBox),
@@ -2054,7 +2108,8 @@ mod model {
         Iterable(QueryOutput),
     }
     /// A [`QueryRequest`], combined with an authority that wants to execute the query
-    #[derive(Decode, Encode, IntoSchema)]
+    #[derive(Decode, Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::QueryRequestWithAuthority")]
     pub struct QueryRequestWithAuthority {
         /// Exact genesis-lineage identity for the target network.
         pub network_id: NetworkId,
@@ -2065,10 +2120,7 @@ mod model {
         /// Mandatory nonzero request lifetime in milliseconds.
         pub time_to_live_ms: NonZeroU64,
         /// Caller-generated one-shot replay nonce.
-        #[cfg_attr(
-            feature = "json",
-            norito(json = "crate::json_helpers::fixed_bytes_hex")
-        )]
+        #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
         pub nonce: [u8; 32],
         /// Query payload.
         pub request: QueryRequest,
@@ -2077,6 +2129,14 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, IntoSchema)]
     /// Container type for `QuerySignature(pub` query data.
     pub struct QuerySignature(pub SignatureOf<QueryRequestWithAuthority>);
+    impl norito::NoritoSchema for QuerySignature {
+        fn nominal_name() -> String {
+            "iroha_data_model::query::model::QuerySignature".to_owned()
+        }
+        fn frame_name() -> String {
+            <SignatureOf<QueryRequestWithAuthority> as norito::NoritoSchema>::frame_name()
+        }
+    }
     #[cfg(not(feature = "ffi_import"))]
     impl<'a> norito::core::DecodeFromSlice<'a> for QuerySignature {
         fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
@@ -2109,25 +2169,28 @@ mod model {
         }
     }
     #[cfg(not(feature = "ffi_import"))]
-    impl<'de> norito::core::NoritoDeserialize<'de> for QuerySignature {
+    impl norito::core::NoritoDeserialize<'_> for QuerySignature {
         fn schema_hash() -> [u8; 16] {
             <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::schema_hash(
             )
         }
+    }
+    #[cfg(not(feature = "ffi_import"))]
+    impl<'de> norito::core::DeserializePayload<'de> for QuerySignature {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             let as_sig = archived.cast::<SignatureOf<QueryRequestWithAuthority>>();
-            let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::deserialize(as_sig);
+            let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::DeserializePayload>::deserialize(as_sig);
             QuerySignature(sig)
         }
         fn try_deserialize(
             archived: &'de norito::core::Archived<Self>,
         ) -> Result<Self, norito::core::Error> {
             let as_sig = archived.cast::<SignatureOf<QueryRequestWithAuthority>>();
-            let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::NoritoDeserialize>::try_deserialize(as_sig)?;
+            let sig = <SignatureOf<QueryRequestWithAuthority> as norito::core::DeserializePayload>::try_deserialize(as_sig)?;
             Ok(QuerySignature(sig))
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::FastJsonWrite for QuerySignature {
         fn write_json(&self, out: &mut String) {
             let encoded = super::json_wrappers::base64_encode(self.0.payload());
@@ -2140,7 +2203,7 @@ mod model {
             super::json_wrappers::base64_encode_to(self.0.payload(), out)
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::JsonDeserialize for QuerySignature {
         fn json_deserialize(
             parser: &mut norito::json::Parser<'_>,
@@ -2168,16 +2231,25 @@ mod model {
         }
     }
     /// A signed and authorized query request
-    #[derive(Encode, IntoSchema)]
+    #[derive(Encode, IntoSchema, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::query::model::SignedQuery")]
     pub struct SignedQuery {
         pub signature: QuerySignature,
         pub payload: QueryRequestWithAuthority,
     }
     /// Verifiable source metadata for a transaction committed through a merge carrier.
-    #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialOrd,
+        Ord,
+        PartialEq,
+        Eq,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     /// Proof context for an entrypoint/result pair ordered through a certified merge sidecar.
@@ -2200,10 +2272,19 @@ mod model {
         pub result_merkle_root: HashOf<MerkleTree<TransactionResult>>,
     }
     /// Response returned by [`FindTransactions`] query.
-    #[derive(Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialOrd,
+        Ord,
+        PartialEq,
+        Eq,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -2885,7 +2966,7 @@ impl QueryOutputBatchBox {
         self.len() == 0
     }
 }
-#[derive(Decode, Encode)]
+#[derive(norito::SerializePayload, norito::DeserializePayload)]
 struct QueryOutputBatchBoxTupleCandidate {
     tuple: Vec<QueryOutputBatchBox>,
 }
@@ -2894,10 +2975,12 @@ impl QueryOutputBatchBoxTupleCandidate {
         QueryOutputBatchBoxTuple::new(self.tuple)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for QueryOutputBatchBoxTuple {
+impl norito::core::NoritoDeserialize<'_> for QueryOutputBatchBoxTuple {
     fn schema_hash() -> [u8; 16] {
         <Self as norito::core::NoritoSerialize>::schema_hash()
     }
+}
+impl<'de> norito::core::DeserializePayload<'de> for QueryOutputBatchBoxTuple {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("valid QueryOutputBatchBoxTuple archive must satisfy column invariants")
@@ -2906,7 +2989,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for QueryOutputBatchBoxTuple {
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let candidate =
-            <QueryOutputBatchBoxTupleCandidate as norito::core::NoritoDeserialize>::try_deserialize(
+            <QueryOutputBatchBoxTupleCandidate as norito::core::DeserializePayload>::try_deserialize(
                 archived.cast(),
             )?;
         candidate
@@ -2924,7 +3007,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for QueryOutputBatchBoxTuple {
         Ok((batch, used))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for QueryOutputBatchBoxTuple {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -3256,7 +3339,7 @@ impl SignedQuery {
 }
 mod candidate {
     use super::*;
-    #[derive(Encode, Decode)]
+    #[derive(norito::SerializePayload, norito::DeserializePayload)]
     struct SignedQueryCandidate {
         signature: QuerySignature,
         payload: QueryRequestWithAuthority,
@@ -3280,9 +3363,10 @@ mod candidate {
             Ok((candidate.into_signed(), used))
         }
     }
-    impl<'de> norito::core::NoritoDeserialize<'de> for SignedQuery {
+    impl norito::core::NoritoDeserialize<'_> for SignedQuery {}
+    impl<'de> norito::core::DeserializePayload<'de> for SignedQuery {
         fn deserialize(archived: &'de norito::core::Archived<SignedQuery>) -> Self {
-            let candidate = <SignedQueryCandidate as norito::core::NoritoDeserialize>::deserialize(
+            let candidate = <SignedQueryCandidate as norito::core::DeserializePayload>::deserialize(
                 archived.cast(),
             );
             candidate.into_signed()
@@ -3291,7 +3375,7 @@ mod candidate {
             archived: &'de norito::core::Archived<SignedQuery>,
         ) -> Result<Self, norito::core::Error> {
             let candidate =
-                <SignedQueryCandidate as norito::core::NoritoDeserialize>::try_deserialize(
+                <SignedQueryCandidate as norito::core::DeserializePayload>::try_deserialize(
                     archived.cast(),
                 )?;
             Ok(candidate.into_signed())
@@ -3308,10 +3392,10 @@ mod candidate {
             },
         };
         use iroha_crypto::KeyPair;
-        #[cfg(feature = "json")]
+
         use norito::json;
         use std::sync::LazyLock;
-        #[cfg(feature = "json")]
+
         #[test]
         fn query_with_params_json_requires_canonical_fields_and_rejects_retired_fields() {
             let params = parameters::QueryParams::default();
@@ -3681,7 +3765,7 @@ mod json_roundtrip_tests {
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive multisig query fixture");
         let decoded =
-            <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+            <SignedQuery as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
                 .expect("structural archived decode must not perform authorization");
         assert_eq!(
             decoded.verify_signature(),
@@ -3741,7 +3825,7 @@ mod json_roundtrip_tests {
             Err(SignedQueryValidationError::AuthorityNotSingleKey)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn signed_query_json_requires_every_replay_context_field() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -3763,7 +3847,7 @@ mod json_roundtrip_tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn signed_query_json_rejects_unknown_envelope_fields_at_every_level() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -3814,7 +3898,7 @@ mod json_roundtrip_tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn signed_query_json_rejects_zero_time_to_live() {
         let signed = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters))
@@ -3848,11 +3932,12 @@ mod json_roundtrip_tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
-        let err =
-            match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
-                Ok(_) => panic!("empty signed query signature must fail closed"),
-                Err(err) => err,
-            };
+        let err = match <SignedQuery as norito::core::DeserializePayload<'_>>::try_deserialize(
+            archived,
+        ) {
+            Ok(_) => panic!("empty signed query signature must fail closed"),
+            Err(err) => err,
+        };
         let message = err.to_string();
         assert!(
             message.contains("empty") || message.contains("length mismatch"),
@@ -3886,11 +3971,12 @@ mod json_roundtrip_tests {
         let encoded = norito::to_bytes(&invalid).expect("encode invalid signed query fixture");
         let archived =
             norito::from_bytes::<SignedQuery>(&encoded).expect("archive invalid signed query");
-        let err =
-            match <SignedQuery as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived) {
-                Ok(_) => panic!("all-zero signed query signature must fail closed"),
-                Err(err) => err,
-            };
+        let err = match <SignedQuery as norito::core::DeserializePayload<'_>>::try_deserialize(
+            archived,
+        ) {
+            Ok(_) => panic!("all-zero signed query signature must fail closed"),
+            Err(err) => err,
+        };
         let message = err.to_string();
         assert!(
             message.contains("all zero"),
@@ -4625,10 +4711,7 @@ macro_rules! queries {
             use norito::codec::{Decode, Encode}; $(
             #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
             #[derive(Decode, Encode)]
-            #[cfg_attr(
-                feature = "json",
-                derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-            )]
+            #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
             #[derive(derive_more::Constructor)]
             #[derive(iroha_schema::IntoSchema)]
             #[derive(norito::NoritoSchema)]
@@ -4792,5 +4875,5 @@ pub mod prelude {
 }
 include!("query_tail_tests.rs");
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod generic_identity_tests;

@@ -347,6 +347,12 @@ macro_rules! hybrid_recovery_test {
                 original, restored,
                 "hybrid compact reload preserves exact recovery bytes"
             );
+            let different_seed = make(
+                &key,
+                &other_seed,
+                KagemushaProofRecoveryPhaseV1::StateCarrier,
+            );
+            let different_phase = make(&key, &seed, KagemushaProofRecoveryPhaseV1::StateTransport);
             let consuming = $consume::<_, KAGEMUSHA_ONE_CARRIER_INSTANCE_MASK_V1>(
                 &parameters,
                 recovered,
@@ -360,12 +366,6 @@ macro_rules! hybrid_recovery_test {
                 original, consuming,
                 "consuming compact key preserves seeded hybrid transcript"
             );
-            let different_seed = make(
-                &key,
-                &other_seed,
-                KagemushaProofRecoveryPhaseV1::StateCarrier,
-            );
-            let different_phase = make(&key, &seed, KagemushaProofRecoveryPhaseV1::StateTransport);
             assert_ne!(original, different_seed);
             assert_ne!(original, different_phase);
             verify_lookup_cases::<$curve, KAGEMUSHA_ONE_CARRIER_INSTANCE_MASK_V1>(

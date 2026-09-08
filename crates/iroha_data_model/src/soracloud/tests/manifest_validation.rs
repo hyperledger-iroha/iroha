@@ -150,7 +150,7 @@ fn service_validate_accepts_valid_manifest() {
     let manifest = sample_service(vec![sample_binding("session"), sample_binding("profiles")]);
     assert!(manifest.validate().is_ok(), "valid manifest should pass");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn staged_service_and_container_v1_records_reject_unknown_fields() {
     macro_rules! assert_unknown_rejected {
@@ -284,7 +284,7 @@ fn capability_policy_norito_rejects_retired_wallet_signing_layout() {
         "first-release capability policy must reject the retired wallet-signing Norito layout"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn capability_policy_json_rejects_retired_wallet_signing_field() {
     let mut value = norito::json::to_value(&sample_container().capabilities)
@@ -296,7 +296,7 @@ fn capability_policy_json_rejects_retired_wallet_signing_field() {
     norito::json::from_value::<SoraCapabilityPolicyV1>(value)
         .expect_err("first-release capability policy must reject wallet-signing compatibility");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn staged_service_and_container_v1_records_require_nullable_keys() {
     macro_rules! assert_missing_rejected {
@@ -1363,7 +1363,7 @@ fn inrou_manifest_validate_rejects_empty_guest_image_map() {
         .expect_err("at least one native guest image must be published");
     assert_soracloud_invalid_field(error, "guest_images");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_manifest_json_deserialize_rejects_flat_guest_images() {
     let manifest_json = r#"{
@@ -1380,7 +1380,7 @@ fn inrou_manifest_json_deserialize_rejects_flat_guest_images() {
         json::Error::MissingField { ref field } if field == "guest_images"
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_manifest_json_deserialize_accepts_published_guest_image_artifact() {
     let x86_content_cid = encode_lowercase_multibase_base32(
@@ -1420,7 +1420,7 @@ fn inrou_manifest_json_deserialize_accepts_published_guest_image_artifact() {
     assert_eq!(artifact.content_cid, x86_content_cid);
     assert!(manifest.validate().is_ok());
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_manifest_json_deserialize_rejects_flat_guest_image_overlays() {
     let mut value = norito::json::to_value(&sample_inrou_manifest())
@@ -1441,7 +1441,7 @@ fn inrou_manifest_json_deserialize_rejects_flat_guest_image_overlays() {
         json::Error::UnknownField { ref field } if field == "kernel_image_path"
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_manifest_json_serialize_omits_flat_guest_image_fields() {
     let manifest = sample_inrou_manifest();
@@ -1451,7 +1451,7 @@ fn inrou_manifest_json_serialize_omits_flat_guest_image_fields() {
     assert!(value.get("initrd_image_path").is_none());
     assert!(value.get("guest_images").is_some());
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_manifest_json_serialize_emits_valid_string_keyed_guest_images() {
     let manifest = sample_inrou_manifest();
@@ -1471,7 +1471,7 @@ fn inrou_manifest_json_serialize_emits_valid_string_keyed_guest_images() {
         vec!["aarch64".to_owned(), "x86_64".to_owned()]
     );
 }
-#[cfg(feature = "json")]
+
 fn assert_inrou_manifest_field_is_required(canonical: &Value, field: &str) {
     let mut value = canonical.clone();
     assert!(
@@ -1489,7 +1489,6 @@ fn assert_inrou_manifest_field_is_required(canonical: &Value, field: &str) {
     );
 }
 
-#[cfg(feature = "json")]
 fn assert_inrou_guest_image_field_is_required(canonical: &Value, field: &str) {
     let mut value = canonical.clone();
     let guest = value
@@ -1507,7 +1506,6 @@ fn assert_inrou_guest_image_field_is_required(canonical: &Value, field: &str) {
     );
 }
 
-#[cfg(feature = "json")]
 fn assert_inrou_published_artifact_field_is_required(published: &Value, field: &str) {
     let mut value = published.clone();
     let artifact = value
@@ -1526,7 +1524,6 @@ fn assert_inrou_published_artifact_field_is_required(published: &Value, field: &
     );
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn inrou_v1_tagged_enum_envelopes_reject_unknown_fields() {
     macro_rules! assert_unknown_rejected {
@@ -1646,7 +1643,7 @@ fn inrou_v1_tagged_enum_envelopes_reject_unknown_fields() {
         "Soracloud BFV ciphertext bound mode"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_manifest_json_requires_the_exact_v1_shape() {
     let manifest = sample_inrou_manifest();
@@ -1726,7 +1723,7 @@ fn inrou_manifest_json_requires_the_exact_v1_shape() {
     norito::json::from_value::<SoraInrouManifestV1>(unknown_artifact)
         .expect_err("first-release published artifacts must reject retired storage identifiers");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_manifest_json_rejects_null_for_non_optional_v1_fields() {
     let canonical = norito::json::to_value(&sample_inrou_manifest())
@@ -1757,7 +1754,7 @@ fn inrou_manifest_json_rejects_null_for_non_optional_v1_fields() {
             .expect_err("non-optional first-release guest-image fields must not accept null");
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_json_deserialize_accepts_null_inrou() {
     let json = r#"{
@@ -1804,7 +1801,7 @@ fn container_manifest_json_deserialize_accepts_null_inrou() {
     assert_eq!(manifest.runtime, SoraContainerRuntimeV1::Ivm);
     assert!(manifest.inrou.is_none());
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_json_deserialize_accepts_inrou_guest_images() {
     let json = r#"{
@@ -2238,7 +2235,7 @@ fn deployment_bundle_validate_accepts_present_required_service_materials() {
         "required materials present in the effective deployment state must pass"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn secret_envelope_v1_requires_explicit_nullable_aad_and_closed_fields() {
     let envelope = SecretEnvelopeV1 {
@@ -2290,7 +2287,7 @@ fn secret_envelope_v1_requires_explicit_nullable_aad_and_closed_fields() {
         "unexpected secret-envelope unknown-field rejection: {error}"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn service_state_entry_v1_requires_explicit_nullable_fhe_metadata_and_closed_fields() {
     let entry = sample_state_entry();
@@ -2691,7 +2688,6 @@ fn hosted_minimum_prepaid_multiplies_storage_by_replica_count() {
     assert_soracloud_invalid_field(error, "economics.prepaid_runtime_balance");
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn service_lease_v1_json_requires_explicit_null_empty_and_closed_fields() {
     let lease = sample_hosted_service_lease(1);
@@ -3215,7 +3211,6 @@ fn service_deployment_state_validate_requires_exact_active_canary_relation() {
         .validate()
         .expect("exact active canary relation must pass");
 
-    #[cfg(feature = "json")]
     {
         let canonical = norito::json::to_value(&deployment).expect("serialize deployment state");
         for field in [
@@ -3791,7 +3786,7 @@ zero_prehash_field_rejection_test! {
     checkpoint_artifact_hash = Some(zero_digest) =>
         ("checkpoint_artifact_hash", "checkpoint artifact placeholder hash must fail admission");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn runtime_receipt_host_attribution_rejects_unknown_fields() {
     let mut value = norito::json::to_value(&sample_runtime_receipt())
@@ -3847,7 +3842,7 @@ fn agent_apartment_manifest_rejects_noncanonical_text_fields() {
         .expect_err("allowlist host whitespace must not be normalized");
     assert_soracloud_invalid_field(error, "network_egress");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn signed_agent_deploy_and_service_handler_v1_json_is_closed_and_requires_collections() {
     macro_rules! assert_unknown_rejected {
@@ -3977,7 +3972,6 @@ fn agent_apartment_record_validation_accepts_consistent_state() {
     );
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn agent_apartment_record_json_rejects_removed_persisted_status() {
     let mut value = norito::json::to_value(&sample_agent_apartment_record())

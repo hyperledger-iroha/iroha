@@ -3,14 +3,14 @@
 //! JSON is accepted only at client-facing boundaries. The compiler embeds these
 //! schemas in the signed contract interface so hosts can bind argument records
 //! and return registers to one canonical, recursively typed ABI description.
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
 };
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
-use norito::{Decode, Encode, NoritoDeserialize};
+use norito::{Decode, DeserializePayload, Encode, NoritoDeserialize};
 // BEGIN GENERATED: kotodama-v1-source-identifier-policy
 /// Exact identifier spellings forbidden in every Kotodama V1 source position.
 const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];
@@ -81,9 +81,22 @@ pub const DECODED_ARGUMENT_TABLE_OFFSET: i16 = 8;
 /// Width of one decoded argument word in the returned table.
 pub const DECODED_ARGUMENT_WORD_BYTES: i16 = 8;
 /// Leaf representation used at a public Kotodama boundary.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum EntrypointValueKindV1 {
     /// Canonical signed 512-bit integer pointer.
@@ -123,9 +136,21 @@ impl EntrypointValueKindV1 {
     }
 }
 /// Named product metadata carried by a [`EntrypointValueTypeNodeV1::Struct`] node.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointStructTypeNodeV1 {
     /// Source type name, included in the schema identity.
@@ -138,18 +163,43 @@ pub struct EntrypointStructTypeNodeV1 {
 /// The exact element subtree immediately follows this node in the enclosing preorder tape. Keeping
 /// every aggregate in one flat tape makes decoding, validation, cloning, comparison, and
 /// destruction bounded by the explicit V1 node budget rather than the native call stack.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointListTypeNodeV1 {
     /// Compile-time capacity in the inclusive range 1 through 64.
     pub capacity: u8,
 }
 /// One preorder node in an exact public boundary type.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(tag = "kind", content = "value", deny_unknown_fields)]
 pub enum EntrypointValueTypeNodeV1 {
     /// Named product represented by an exact JSON object.
@@ -170,9 +220,10 @@ pub enum EntrypointValueTypeNodeV1 {
 }
 /// Flat, compiler-emitted recursive value type schema.
 #[repr(transparent)]
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema, crate :: DeriveJsonSerialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1")]
 pub struct EntrypointValueTypeV1 {
@@ -182,9 +233,8 @@ pub struct EntrypointValueTypeV1 {
 /// Decode-only wire twin retaining the derive-generated V1 layout while the
 /// public type validates the decoded schema before returning it.
 #[repr(transparent)]
-#[derive(Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(Decode, IntoSchema, crate :: DeriveJsonDeserialize)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -193,10 +243,12 @@ pub struct EntrypointValueTypeV1 {
 struct DecodedEntrypointValueTypeV1 {
     nodes: Vec<EntrypointValueTypeNodeV1>,
 }
-impl<'de> NoritoDeserialize<'de> for EntrypointValueTypeV1 {
+impl NoritoDeserialize<'_> for EntrypointValueTypeV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::type_name_schema_hash::<Self>()
     }
+}
+impl<'de> DeserializePayload<'de> for EntrypointValueTypeV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .unwrap_or_else(|error| panic!("invalid V1 entrypoint value schema: {error}"))
@@ -206,7 +258,7 @@ impl<'de> NoritoDeserialize<'de> for EntrypointValueTypeV1 {
         // archived layouts are identical. The private twin exists solely to
         // reuse the derive-generated wire decoder.
         let decoded =
-            <DecodedEntrypointValueTypeV1 as NoritoDeserialize>::try_deserialize(archived.cast())?;
+            <DecodedEntrypointValueTypeV1 as DeserializePayload>::try_deserialize(archived.cast())?;
         let value = Self {
             nodes: decoded.nodes,
         };
@@ -218,7 +270,7 @@ impl<'de> NoritoDeserialize<'de> for EntrypointValueTypeV1 {
         Ok(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for EntrypointValueTypeV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -237,7 +289,7 @@ impl norito::json::JsonDeserialize for EntrypointValueTypeV1 {
         Self::from_decoded_json(decoded)
     }
 }
-#[cfg(feature = "json")]
+
 impl<'a> norito::json::FastFromJson<'a> for EntrypointValueTypeV1 {
     fn parse(
         walker: &mut norito::json::TapeWalker<'a>,
@@ -449,7 +501,6 @@ fn take_rendered_entrypoint_children(
     Some(children)
 }
 impl EntrypointValueTypeV1 {
-    #[cfg(feature = "json")]
     fn from_decoded_json(
         decoded: DecodedEntrypointValueTypeV1,
     ) -> Result<Self, norito::json::Error> {
@@ -778,9 +829,21 @@ pub struct EntrypointReturnRecordV1 {
     pub atoms: Vec<EntrypointValueAtomV1>,
 }
 /// One named field in a public entrypoint argument record.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointArgumentFieldV1 {
     /// Source-level parameter name used as the boundary object key.
@@ -789,9 +852,21 @@ pub struct EntrypointArgumentFieldV1 {
     pub ty: EntrypointValueTypeV1,
 }
 /// Compiler-emitted schema for one public entrypoint invocation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveFast,
+    DeriveJsonSer,
+    DeriveJsonDe,
+)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct EntrypointArgumentSchemaV1 {
     /// Fields in source declaration and ABI register order.
@@ -1251,7 +1326,7 @@ mod tests {
             assert!(!invalid.validate());
             assert_eq!(invalid.subtree_nodes(0), None);
         }
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_string(&nested).expect("encode flat list schema JSON");
             assert!(json.contains("capacity"));
@@ -1291,7 +1366,7 @@ mod tests {
                 Err(norito::Error::Message(message))
                     if message == "invalid V1 entrypoint value schema"
             ));
-            #[cfg(feature = "json")]
+
             {
                 let json =
                     norito::json::to_string(&schema).expect("encode malformed flat schema JSON");
@@ -1517,7 +1592,7 @@ mod tests {
             Err(norito::Error::Message(message))
                 if message == "invalid V1 entrypoint value schema"
         ));
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_string(&over_limit).expect("encode over-node-budget JSON");
             assert!(norito::json::from_str::<EntrypointValueTypeV1>(&json).is_err());
@@ -1565,7 +1640,7 @@ mod tests {
         norito::decode_from_bytes::<EntrypointValueTypeV1>(&leaf_bytes)
             .expect("failed flat-schema validation must not poison later decodes");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_schema_decode_enforces_recursive_and_structural_limits() {
         let at_limit = nested_list_schema(MAX_ENTRYPOINT_ARGUMENT_TYPE_DEPTH - 1);
@@ -1606,7 +1681,7 @@ mod tests {
         norito::json::from_value::<EntrypointValueTypeV1>(leaf_value)
             .expect("failed from_value validation must not poison later decodes");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn manual_fast_json_schema_decode_enforces_complete_document_depth() {
         let wrappers = norito::json::MAX_JSON_VALUE_NESTING_DEPTH - 1;

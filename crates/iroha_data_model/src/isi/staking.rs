@@ -12,10 +12,7 @@ use iroha_primitives::numeric::Quantity;
 use std::string::String;
 isi! {
     /// Activate a pending validator for a public Nexus lane.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::ActivatePublicLaneValidator")]
     pub struct ActivatePublicLaneValidator {
         /// Lane that the validator targets.
@@ -45,10 +42,7 @@ isi! {
 }
 isi! {
     /// Register a validator for a public Nexus lane and bond validator-owned initial stake.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::RegisterPublicLaneValidator")]
     pub struct RegisterPublicLaneValidator {
         /// Lane that the validator targets.
@@ -88,10 +82,7 @@ impl RegisterPublicLaneValidator {
 }
 isi! {
     /// Rebind an existing public-lane validator to a new consensus peer identity.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::staking::RebindPublicLaneValidatorPeer")]
     pub struct RebindPublicLaneValidatorPeer {
         /// Lane that the validator targets.

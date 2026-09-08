@@ -157,7 +157,7 @@ fn norito_decode_rejects_all_truncated_prefixes_and_trailing_bytes() {
         "decoded payload with trailing bytes"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn json_query_output_rejects_hostile_columns() {
     let nonempty = norito::json::to_value(&numeric(&[1])).expect("serialize batch column");

@@ -1478,6 +1478,8 @@ mod sm_accel {
 /// Digest helper for SM3 hashes.
 #[derive(Clone, Copy, PartialEq, Eq, Deref, DerefMut, TypeId)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::sm::Sm3Digest")]
 pub struct Sm3Digest([u8; 32]);
 impl Sm3Digest {
     /// Length of an SM3 digest in bytes.
@@ -1554,10 +1556,11 @@ impl norito::core::SerializePayload for Sm3Digest {
         Some(Self::LENGTH)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for Sm3Digest {
+impl norito::core::NoritoDeserialize<'_> for Sm3Digest {}
+impl<'de> norito::core::DeserializePayload<'de> for Sm3Digest {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         let archived_bytes: &norito::core::Archived<[u8; Sm3Digest::LENGTH]> = archived.cast();
-        let bytes = <[u8; Sm3Digest::LENGTH] as norito::core::NoritoDeserialize>::deserialize(
+        let bytes = <[u8; Sm3Digest::LENGTH] as norito::core::DeserializePayload>::deserialize(
             archived_bytes,
         );
         Sm3Digest(bytes)

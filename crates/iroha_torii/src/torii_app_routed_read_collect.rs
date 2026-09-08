@@ -8,7 +8,8 @@
 /// their reservations are discarded without polling or copying them.
 #[cfg(feature = "app_api")]
 fn summarize_skipped_torii_route_response(response: Response) -> Response {
-    let (status, code, message) = if torii_response_has_reject_code(&response, "permission_denied") {
+    let (status, code, message) = if torii_response_has_reject_code(&response, "permission_denied")
+    {
         (
             StatusCode::FORBIDDEN,
             "permission_denied",
@@ -691,7 +692,7 @@ async fn torii_norito_body<T>(
     budget: &mut ToriiRoutedReadMemoryBudget,
 ) -> Result<ToriiBoundedNoritoPayload<T>, Response>
 where
-    T: norito::codec::Decode + norito::core::NoritoSerialize,
+    T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::NoritoSerialize,
 {
     let status = response.status();
     if !status.is_success() {

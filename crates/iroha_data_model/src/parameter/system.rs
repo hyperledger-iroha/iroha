@@ -1,6 +1,6 @@
 //! Built-in parameter definitions and validation logic.
 pub use self::model::*;
-#[cfg(feature = "json")]
+
 use super::custom::json_helpers;
 use super::custom::{CustomParameter, CustomParameterId, CustomParameters};
 use core::{
@@ -11,9 +11,9 @@ use core::{
 use iroha_crypto::Algorithm;
 use iroha_data_model_derive::model;
 use iroha_primitives::{json::Json, numeric::Quantity};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-#[cfg(feature = "json")]
+
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 /// Maximum governed IVM heap size in bytes for ABI V1.
@@ -64,10 +64,8 @@ impl core::fmt::Display for ConsensusFingerprint {
     norito::codec::Encode,
     norito::codec::Decode,
     iroha_schema::IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+    norito :: derive :: JsonSerialize,
+    norito :: derive :: JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaMintFinalityNextEpochParameterV1 {
@@ -112,7 +110,7 @@ impl KagemushaMintFinalityNextEpochParameterV1 {
         Some(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for ConsensusFingerprint {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(&format!("0x{}", hex::encode(self.0)), out);
@@ -124,7 +122,7 @@ impl JsonSerialize for ConsensusFingerprint {
         json::write_json_string_to(&format!("0x{}", hex::encode(self.0)), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for ConsensusFingerprint {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let encoded = String::json_deserialize(parser)?;
@@ -206,7 +204,7 @@ impl ConsensusHandshakeMetadata {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 mod json_support {
     use super::*;
     use std::string::String;
@@ -304,7 +302,7 @@ mod json_support {
         T::json_deserialize(&mut parser)
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_custom_parameters_value(value: json::Value) -> Result<CustomParameters, json::Error> {
     let map = json_support::expect_object(value, "Parameters.custom")?;
     let value = json::Value::Object(map);
@@ -774,7 +772,7 @@ impl core::fmt::Display for Parameter {
         }
     }
 }
-#[cfg(feature = "json")]
+
 #[derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct SumeragiNposParametersJson {
@@ -791,7 +789,7 @@ struct SumeragiNposParametersJson {
     slashing_delay_blocks: u64,
     epoch_length_blocks: NonZeroU64,
 }
-#[cfg(feature = "json")]
+
 impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
     fn from(value: SumeragiNposParameters) -> Self {
         Self {
@@ -810,7 +808,7 @@ impl From<SumeragiNposParameters> for SumeragiNposParametersJson {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
     fn from(value: SumeragiNposParametersJson) -> Self {
         Self {
@@ -829,7 +827,7 @@ impl From<SumeragiNposParametersJson> for SumeragiNposParameters {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for SumeragiNposParameters {
     fn json_serialize(&self, out: &mut String) {
         SumeragiNposParametersJson::from(self.clone()).json_serialize(out);
@@ -898,7 +896,7 @@ impl JsonSerialize for SumeragiNposParameters {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for SumeragiNposParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = Self::from(SumeragiNposParametersJson::json_deserialize(parser)?);
@@ -911,7 +909,7 @@ impl JsonDeserialize for SumeragiNposParameters {
         Ok(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for Parameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -986,7 +984,7 @@ impl JsonSerialize for Parameter {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for Parameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -1024,7 +1022,7 @@ impl JsonDeserialize for Parameter {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for SumeragiConsensusMode {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
@@ -1044,7 +1042,7 @@ impl JsonSerialize for SumeragiConsensusMode {
         json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for SumeragiConsensusMode {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -1086,7 +1084,7 @@ impl SumeragiParameters {
         Duration::from_millis(self.block_cadence_ms.get())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for SumeragiParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -1115,7 +1113,7 @@ impl JsonSerialize for SumeragiParameter {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for SumeragiParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -1139,7 +1137,7 @@ impl JsonDeserialize for SumeragiParameter {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for SumeragiParameters {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -1220,7 +1218,7 @@ impl JsonSerialize for SumeragiParameters {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for SumeragiParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -1404,7 +1402,7 @@ impl Default for BlockParameters {
         Self::new(defaults::block::max_transactions())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for BlockParameters {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -1425,7 +1423,7 @@ impl JsonSerialize for BlockParameters {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for BlockParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -1591,7 +1589,7 @@ pub mod ivm_metadata {
         PUBLIC_INPUTS_ID.clone()
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for Parameters {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -1626,7 +1624,7 @@ impl JsonSerialize for Parameters {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for Parameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -1707,7 +1705,7 @@ impl BlockParameters {
         [BlockParameter::MaxTransactions(self.max_transactions)].into_iter()
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for BlockParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -1736,7 +1734,7 @@ impl JsonSerialize for BlockParameter {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for BlockParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -1832,7 +1830,7 @@ impl TransactionParameters {
         .into_iter()
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for TransactionParameters {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -1919,7 +1917,7 @@ impl JsonSerialize for TransactionParameters {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for TransactionParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -1993,7 +1991,7 @@ impl JsonDeserialize for TransactionParameters {
         .with_ingress_enforcement(require_height_ttl, require_sequence))
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for TransactionParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -2095,7 +2093,7 @@ impl JsonSerialize for TransactionParameter {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for TransactionParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -2170,7 +2168,7 @@ impl SmartContractParameters {
         .into_iter()
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for SmartContractParameters {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -2199,7 +2197,7 @@ impl JsonSerialize for SmartContractParameters {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for SmartContractParameters {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -2239,7 +2237,7 @@ impl JsonDeserialize for SmartContractParameters {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for SmartContractParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -2305,7 +2303,7 @@ impl JsonSerialize for SmartContractParameter {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for SmartContractParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;
@@ -2398,7 +2396,7 @@ mod tests {
         let decoded =
             Parameters::decode_all(&mut bytes.as_slice()).expect("decode governed parameters");
         assert_eq!(decoded, params);
-        #[cfg(feature = "json")]
+
         {
             let json = norito::json::to_json(&params.smart_contract())
                 .expect("serialize smart-contract parameters");
@@ -2408,7 +2406,7 @@ mod tests {
             assert_eq!(decoded.max_output_bytes(), max_bytes);
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn smart_contract_output_limits_reject_zero() {
         let json = r#"{"max_output_items":0}"#;
@@ -2436,20 +2434,20 @@ mod tests {
         assert_eq!(params, dec);
         // Skip bare codec path; headerful Norito is the canonical test path
         // JSON path: ensure defaults parse and roundtrip
-        #[cfg(feature = "json")]
+
         {
             let j = norito::json::to_json(&params).expect("json ser");
             let parsed: SumeragiParameters = norito::json::from_str(&j).expect("json de");
             assert_eq!(params, parsed);
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn sumeragi_parameters_json_rejects_zero_cadence() {
         let json = r#"{"block_cadence_ms":0}"#;
         norito::json::from_str::<SumeragiParameters>(json).expect_err("zero cadence must fail");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn sumeragi_parameters_json_rejects_every_retired_field() {
         for field in [
@@ -2641,7 +2639,7 @@ mod tests {
             "all-zero signed epoch seed must fail"
         );
     }
-    #[cfg(feature = "json")]
+
     fn handshake_metadata_fixture() -> ConsensusHandshakeMetadata {
         ConsensusHandshakeMetadata {
             mode: SumeragiConsensusMode::Permissioned,
@@ -2653,7 +2651,7 @@ mod tests {
             sumeragi_v2: crate::block::consensus_v2::test_genesis_context_parameters(),
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn handshake_metadata_rejects_arbitrary_bls_domain() {
         let mut value = norito::json::to_value(&handshake_metadata_fixture())
@@ -2665,7 +2663,7 @@ mod tests {
         norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
             .expect_err("BLS domain is mode-derived and must not be accepted from genesis");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn handshake_metadata_requires_kagemusha_genesis_authority() {
         let mut value = norito::json::to_value(&handshake_metadata_fixture())
@@ -2677,7 +2675,7 @@ mod tests {
         norito::json::value::from_value::<ConsensusHandshakeMetadata>(value)
             .expect_err("signed KAGEMUSHA genesis authority must be mandatory");
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn handshake_metadata_validation_is_strict() {
         let baseline = handshake_metadata_fixture();
@@ -2693,7 +2691,7 @@ mod tests {
         bad_kagemusha.kagemusha_mint_finality.epoch_roster.epoch = 1;
         assert!(bad_kagemusha.validate().is_err());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn handshake_metadata_rejects_legacy_and_noncanonical_fingerprint_shapes() {
         let baseline = handshake_metadata_fixture();

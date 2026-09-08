@@ -7,7 +7,7 @@ use core::borrow::Borrow;
 use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::vec::Vec;
@@ -126,9 +126,13 @@ impl<T: SerializePayload> SerializePayload for UniqueVec<T> {
         self.0.serialize(writer)
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for UniqueVec<T>
+impl<T> NoritoDeserialize<'_> for UniqueVec<T> where
+    T: SerializePayload + PartialEq + for<'de> NoritoDeserialize<'de>
+{
+}
+impl<'a, T> DeserializePayload<'a> for UniqueVec<T>
 where
-    T: NoritoSerialize + PartialEq + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + PartialEq + for<'de> DeserializePayload<'de>,
 {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         let vec = Vec::<T>::deserialize(archived.cast::<Vec<T>>());

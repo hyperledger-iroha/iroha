@@ -9,7 +9,9 @@ use core::ops::Deref;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, VecMeta};
 #[cfg(feature = "json")]
 use norito::json::{self, JsonDeserialize, JsonSerialize};
-use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore};
+use norito::{
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
+};
 use std::{boxed::Box, format, string::String, vec::Vec};
 ffi::ffi_item! {
     /// Stores bytes that are not supposed to change during the runtime of the
@@ -184,7 +186,7 @@ impl<T: SerializePayload> SerializePayload for ConstVec<T> {
 }
 impl<'a, T> ncore::DecodeFromSlice<'a> for ConstVec<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
         let (items, used) = ncore::decode_element_sequence_from_slice_serial::<T>(bytes)?;
@@ -194,7 +196,7 @@ where
 
 fn decode_const_vec_exact<T>(bytes: &[u8]) -> Result<ConstVec<T>, ncore::Error>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     let (items, used) = ncore::decode_element_sequence_from_slice_serial::<T>(bytes)?;
     if used != bytes.len() {
@@ -203,9 +205,13 @@ where
     Ok(ConstVec::from(items))
 }
 
-impl<'a, T> NoritoDeserialize<'a> for ConstVec<T>
+impl<T> NoritoDeserialize<'_> for ConstVec<T> where
+    T: for<'de> NoritoDeserialize<'de> + SerializePayload
+{
+}
+impl<'a, T> DeserializePayload<'a> for ConstVec<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).unwrap_or_else(|error| {
@@ -278,7 +284,7 @@ impl<T: Clone> ToConstVec for [T] {
 mod tests {
     use super::{ConstVec, ToConstVec, decode_const_vec_exact, ncore};
     use norito::{
-        NoritoDeserialize, NoritoSerialize, SerializePayload,
+        DeserializePayload, NoritoSerialize, SerializePayload,
         codec::{self, Decode, Encode},
     };
     use std::cell::Cell;
@@ -487,7 +493,7 @@ mod tests {
         let framed = norito::core::to_bytes(&value).expect("frame const vec");
         let archived = norito::core::from_bytes::<ConstVec<u8>>(&framed).expect("decode header");
         let _payload_ctx = ncore::PayloadCtxGuard::enter_with_len(framed.as_slice(), 0);
-        let error = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived)
+        let error = <ConstVec<u8> as DeserializePayload>::try_deserialize(archived)
             .expect_err("an empty logical payload cannot contain a sequence count");
         assert!(matches!(error, ncore::Error::LengthMismatch));
     }
@@ -559,7 +565,7 @@ mod tests {
             ncore::archived_from_slice::<ConstVec<u8>>(&payload).expect("archived const vec");
         let _payload_ctx = ncore::PayloadCtxGuard::enter(&payload);
         let _flags = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
-        let decoded = <ConstVec<u8> as NoritoDeserialize>::try_deserialize(archived.as_ref())
+        let decoded = <ConstVec<u8> as DeserializePayload>::try_deserialize(archived.as_ref())
             .expect("compact unpacked byte const vec should decode");
         assert_eq!(decoded.as_ref(), bytes.as_slice());
     }

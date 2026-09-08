@@ -16087,17 +16087,11 @@ impl V2LaneWorkAdapter {
             if !self
                 .consensus_storage_read(
                     self.state
-                        .certified_autonomous_lane_block_is_globally_applied(proposal),
+                        .certified_autonomous_lane_block_or_predecessor_is_globally_applied(
+                            proposal,
+                        ),
                 )
                 .map_err(|error| error.to_string())?
-                && !self
-                    .consensus_storage_read(
-                        self.state
-                            .certified_autonomous_lane_block_predecessor_is_globally_applied(
-                                proposal,
-                            ),
-                    )
-                    .map_err(|error| error.to_string())?
             {
                 return Err(
                     "finalized autonomous carrier has neither exact application nor an applied predecessor"

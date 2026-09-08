@@ -30,7 +30,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SamplePayload {
             let slice = slice::from_raw_parts(ptr, bytes.len());
             let _guard = norito::core::PayloadCtxGuard::enter(slice);
             let archived = &*(ptr as *const norito::core::Archived<SamplePayload>);
-            let value = <SamplePayload as norito::NoritoDeserialize>::deserialize(archived);
+            let value = <SamplePayload as norito::DeserializePayload>::deserialize(archived);
             dealloc(ptr, layout);
             Ok((value, bytes.len()))
         }

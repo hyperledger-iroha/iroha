@@ -52,7 +52,7 @@ fn packed_bitset_alignment_for_u64_signatureof() {
     let bytes = norito::core::to_bytes(&value).expect("encode");
     // Header flags live in the last header byte; PACKED_STRUCT is bit 0x04
     let archived = norito::core::from_bytes::<USig>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
 #[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
@@ -67,7 +67,7 @@ fn packed_bitset_alignment_for_u64_signature() {
     let value = USignature { a: 7, b: sig };
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<USignature>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
 #[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
@@ -79,7 +79,7 @@ fn packed_bitset_alignment_for_tuple_u64_signatureof() {
     let value = TupSigOf(1, sig);
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<TupSigOf>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
 #[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
@@ -91,7 +91,7 @@ fn packed_bitset_alignment_for_tuple_signature_u64() {
     let value = TupSig(sig, 2);
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<TupSig>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
 #[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
@@ -106,6 +106,6 @@ fn packed_bitset_alignment_for_signatureof_u64_named() {
     let value = SigOfUNamed { b: sig, a: 3 };
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<SigOfUNamed>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }

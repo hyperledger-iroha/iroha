@@ -1,0 +1,422 @@
+[
+  {
+    "deserialize_hash": "6cbfe2bdf8ae7d9d62c431b28a694773",
+    "nominal": "norito::streaming::ProfileId",
+    "serialize_hash": "6cbfe2bdf8ae7d9d62c431b28a694773"
+  },
+  {
+    "deserialize_hash": "66520c530a22023585f051386615f499",
+    "nominal": "norito::streaming::EntropyMode",
+    "serialize_hash": "66520c530a22023585f051386615f499"
+  },
+  {
+    "deserialize_hash": "c5d50fd3d458bd0450c90f4d79d256f4",
+    "nominal": "norito::streaming::RdoMode",
+    "serialize_hash": "c5d50fd3d458bd0450c90f4d79d256f4"
+  },
+  {
+    "deserialize_hash": "69a57ee8372c1c4b0e3ea1c0070ae82e",
+    "nominal": "norito::streaming::CapabilityFlags",
+    "serialize_hash": "69a57ee8372c1c4b0e3ea1c0070ae82e"
+  },
+  {
+    "deserialize_hash": "143ea5b154a58f440507c1206d1a638b",
+    "nominal": "norito::streaming::BundleAcceleration",
+    "serialize_hash": "143ea5b154a58f440507c1206d1a638b"
+  },
+  {
+    "deserialize_hash": "4c5a75aa3d1f7be1384e8d5674656be7",
+    "nominal": "norito::streaming::PrivacyCapabilities",
+    "serialize_hash": "4c5a75aa3d1f7be1384e8d5674656be7"
+  },
+  {
+    "deserialize_hash": "4a92d4f07305b87664da80ea282d03c4",
+    "nominal": "norito::streaming::FecParameters",
+    "serialize_hash": "4a92d4f07305b87664da80ea282d03c4"
+  },
+  {
+    "deserialize_hash": "f1af6e37a4ab921059fddfdf0acce6de",
+    "nominal": "norito::streaming::LayerFeedback",
+    "serialize_hash": "f1af6e37a4ab921059fddfdf0acce6de"
+  },
+  {
+    "deserialize_hash": "dc4e4dfcc314009fd269f70de1b06d76",
+    "nominal": "norito::streaming::FeedbackHint",
+    "serialize_hash": "dc4e4dfcc314009fd269f70de1b06d76"
+  },
+  {
+    "deserialize_hash": "292b1376981b2ff2758983caecc8099f",
+    "nominal": "norito::streaming::HpkeSuite",
+    "serialize_hash": "292b1376981b2ff2758983caecc8099f"
+  },
+  {
+    "deserialize_hash": "fa068783f10ebda409e730b18ee11e1d",
+    "nominal": "norito::streaming::HpkeSuiteMask",
+    "serialize_hash": "fa068783f10ebda409e730b18ee11e1d"
+  },
+  {
+    "deserialize_hash": "a8725701423ec3af0e509546c8a2d332",
+    "nominal": "norito::streaming::PrivacyBucketGranularity",
+    "serialize_hash": "a8725701423ec3af0e509546c8a2d332"
+  },
+  {
+    "deserialize_hash": "db02050aa28049ec28da0d11facbdb83",
+    "nominal": "norito::streaming::TransportCapabilities",
+    "serialize_hash": "db02050aa28049ec28da0d11facbdb83"
+  },
+  {
+    "deserialize_hash": "5ff58163ed6db87cdbffe6938dd3eefe",
+    "nominal": "norito::streaming::StorageClass",
+    "serialize_hash": "5ff58163ed6db87cdbffe6938dd3eefe"
+  },
+  {
+    "deserialize_hash": "08c89c2272b57937ab07934a222e57d0",
+    "nominal": "norito::streaming::FecScheme",
+    "serialize_hash": "08c89c2272b57937ab07934a222e57d0"
+  },
+  {
+    "deserialize_hash": "9242d115d90dd09c43f615202123b54a",
+    "nominal": "norito::streaming::EncryptionSuite",
+    "serialize_hash": "9242d115d90dd09c43f615202123b54a"
+  },
+  {
+    "deserialize_hash": "35cadefd7032efb00721cf3b6a5dfbf3",
+    "nominal": "norito::streaming::StreamMetadata",
+    "serialize_hash": "35cadefd7032efb00721cf3b6a5dfbf3"
+  },
+  {
+    "deserialize_hash": "b22c78e1e4c2dcfb50bacfd53050cd2b",
+    "nominal": "norito::streaming::PrivacyRelay",
+    "serialize_hash": "b22c78e1e4c2dcfb50bacfd53050cd2b"
+  },
+  {
+    "deserialize_hash": "17d5d1f39fe2d55eea08979fdff3121d",
+    "nominal": "norito::streaming::SoranetAccessKind",
+    "serialize_hash": "17d5d1f39fe2d55eea08979fdff3121d"
+  },
+  {
+    "deserialize_hash": "500c1ed0d10c1f03b2725b6e9776357e",
+    "nominal": "norito::streaming::SoranetStreamTag",
+    "serialize_hash": "500c1ed0d10c1f03b2725b6e9776357e"
+  },
+  {
+    "deserialize_hash": "2f0b926e21e0c907d782b8d02ea5d16f",
+    "nominal": "norito::streaming::SoranetChannelId",
+    "serialize_hash": "2f0b926e21e0c907d782b8d02ea5d16f"
+  },
+  {
+    "deserialize_hash": "5295ec4315f993846d4fddbb9ff75976",
+    "nominal": "norito::streaming::SoranetRoute",
+    "serialize_hash": "5295ec4315f993846d4fddbb9ff75976"
+  },
+  {
+    "deserialize_hash": "ac53736d59c313179b377f8d6ad51825",
+    "nominal": "norito::streaming::PrivacyRoute",
+    "serialize_hash": "ac53736d59c313179b377f8d6ad51825"
+  },
+  {
+    "deserialize_hash": "aecf44db35a72cf451672f67568a06a9",
+    "nominal": "norito::streaming::NeuralBundle",
+    "serialize_hash": "aecf44db35a72cf451672f67568a06a9"
+  },
+  {
+    "deserialize_hash": "c6042bd852411b97d3130eb4e25b9707",
+    "nominal": "norito::streaming::TicketCapabilities",
+    "serialize_hash": "c6042bd852411b97d3130eb4e25b9707"
+  },
+  {
+    "deserialize_hash": "97e7bc5c99bdda77be1db8c4636dfc08",
+    "nominal": "norito::streaming::TicketPolicy",
+    "serialize_hash": "97e7bc5c99bdda77be1db8c4636dfc08"
+  },
+  {
+    "deserialize_hash": "3ceb13be2259a1e6a9ede8a0db8feb1c",
+    "nominal": "norito::streaming::StreamingTicket",
+    "serialize_hash": "3ceb13be2259a1e6a9ede8a0db8feb1c"
+  },
+  {
+    "deserialize_hash": "c24c0578425118f84dabe7eac78922f6",
+    "nominal": "norito::streaming::TicketRevocation",
+    "serialize_hash": "c24c0578425118f84dabe7eac78922f6"
+  },
+  {
+    "deserialize_hash": "0c4ca131ad09f90efe9e6a906a1519c6",
+    "nominal": "norito::streaming::ManifestV1",
+    "serialize_hash": "0c4ca131ad09f90efe9e6a906a1519c6"
+  },
+  {
+    "deserialize_hash": "137de2ac43c7d7d6645b153445f93b2a",
+    "nominal": "norito::streaming::SegmentHeader",
+    "serialize_hash": "137de2ac43c7d7d6645b153445f93b2a"
+  },
+  {
+    "deserialize_hash": "0a0a6e106461c1932803946d4880f7e5",
+    "nominal": "norito::streaming::ChunkDescriptor",
+    "serialize_hash": "0a0a6e106461c1932803946d4880f7e5"
+  },
+  {
+    "deserialize_hash": "6dd47801d18d2b5da952d1991b386d35",
+    "nominal": "norito::streaming::MerkleProof",
+    "serialize_hash": "6dd47801d18d2b5da952d1991b386d35"
+  },
+  {
+    "deserialize_hash": "076648bc12b9c8e7ec9499221cb794f2",
+    "nominal": "norito::streaming::DataAvailabilityProof",
+    "serialize_hash": "076648bc12b9c8e7ec9499221cb794f2"
+  },
+  {
+    "deserialize_hash": "ff7de0bf7dcde0f2578da526b01f1465",
+    "nominal": "norito::streaming::ControlFrame",
+    "serialize_hash": "ff7de0bf7dcde0f2578da526b01f1465"
+  },
+  {
+    "deserialize_hash": "427f574720c6b2944605b15ebd020bdc",
+    "nominal": "norito::streaming::ErrorCode",
+    "serialize_hash": "427f574720c6b2944605b15ebd020bdc"
+  },
+  {
+    "deserialize_hash": "1c3732bd6d8b9f81d6459624f1cdae06",
+    "nominal": "norito::streaming::KeyUpdate",
+    "serialize_hash": "1c3732bd6d8b9f81d6459624f1cdae06"
+  },
+  {
+    "deserialize_hash": "6aed420fb94fd470b7ed72236d419ea5",
+    "nominal": "norito::streaming::ContentKeyUpdate",
+    "serialize_hash": "6aed420fb94fd470b7ed72236d419ea5"
+  },
+  {
+    "deserialize_hash": "24cf34bbed15a73e6abd8161088b2dd4",
+    "nominal": "norito::streaming::PrivacyRouteUpdate",
+    "serialize_hash": "24cf34bbed15a73e6abd8161088b2dd4"
+  },
+  {
+    "deserialize_hash": "8c6eaa7354deabebad412f698f398b58",
+    "nominal": "norito::streaming::CapabilityReport",
+    "serialize_hash": "8c6eaa7354deabebad412f698f398b58"
+  },
+  {
+    "deserialize_hash": "b40365620e68a70994abeacca23e0756",
+    "nominal": "norito::streaming::CapabilityAck",
+    "serialize_hash": "b40365620e68a70994abeacca23e0756"
+  },
+  {
+    "deserialize_hash": "9b4621866d0692ac57157f3908f7e046",
+    "nominal": "norito::streaming::CapabilityRole",
+    "serialize_hash": "9b4621866d0692ac57157f3908f7e046"
+  },
+  {
+    "deserialize_hash": "236d70ca05d4502f7681d62e2d0b9e52",
+    "nominal": "norito::streaming::AudioCapability",
+    "serialize_hash": "236d70ca05d4502f7681d62e2d0b9e52"
+  },
+  {
+    "deserialize_hash": "07bc25a8364854f129d80e5aace387d6",
+    "nominal": "norito::streaming::Resolution",
+    "serialize_hash": "07bc25a8364854f129d80e5aace387d6"
+  },
+  {
+    "deserialize_hash": "a02467f6cb511c6b37424c8ec0a3fb04",
+    "nominal": "norito::streaming::AudioLayout",
+    "serialize_hash": "a02467f6cb511c6b37424c8ec0a3fb04"
+  },
+  {
+    "deserialize_hash": "360225a97660ff27d9958ac409f8b36d",
+    "nominal": "norito::streaming::AudioFrame",
+    "serialize_hash": "360225a97660ff27d9958ac409f8b36d"
+  },
+  {
+    "deserialize_hash": "05264648d2252502ccb0dc01fd37e975",
+    "nominal": "norito::streaming::AudioTrackSummary",
+    "serialize_hash": "05264648d2252502ccb0dc01fd37e975"
+  },
+  {
+    "deserialize_hash": "e480942316497a324e0708315e2ccf72",
+    "nominal": "norito::streaming::SegmentAudio",
+    "serialize_hash": "e480942316497a324e0708315e2ccf72"
+  },
+  {
+    "deserialize_hash": "c27c1c427a42a7f5664a44103b5608d8",
+    "nominal": "norito::streaming::FeedbackHintFrame",
+    "serialize_hash": "c27c1c427a42a7f5664a44103b5608d8"
+  },
+  {
+    "deserialize_hash": "8b7815925cde91d14098b19518f20788",
+    "nominal": "norito::streaming::ReceiverReport",
+    "serialize_hash": "8b7815925cde91d14098b19518f20788"
+  },
+  {
+    "deserialize_hash": "ecf1e50cb9187ac44b385d1d9317e005",
+    "nominal": "norito::streaming::TelemetryAuditOutcome",
+    "serialize_hash": "ecf1e50cb9187ac44b385d1d9317e005"
+  },
+  {
+    "deserialize_hash": "015b7ad497896dc684946fb7c351486a",
+    "nominal": "norito::streaming::TelemetryEvent",
+    "serialize_hash": "015b7ad497896dc684946fb7c351486a"
+  },
+  {
+    "deserialize_hash": "f7b20d9ab42d946c2b378f94330f9957",
+    "nominal": "norito::streaming::ManifestAnnounceFrame",
+    "serialize_hash": "f7b20d9ab42d946c2b378f94330f9957"
+  },
+  {
+    "deserialize_hash": "06afdc133599f41db3772f3a631b2b89",
+    "nominal": "norito::streaming::ChunkRequestFrame",
+    "serialize_hash": "06afdc133599f41db3772f3a631b2b89"
+  },
+  {
+    "deserialize_hash": "3f4b01dee571b8aa73d0942cd752973b",
+    "nominal": "norito::streaming::ChunkAcknowledgeFrame",
+    "serialize_hash": "3f4b01dee571b8aa73d0942cd752973b"
+  },
+  {
+    "deserialize_hash": "07c5d93466a4a5bc4806b4c16dbad10e",
+    "nominal": "norito::streaming::TransportCapabilitiesFrame",
+    "serialize_hash": "07c5d93466a4a5bc4806b4c16dbad10e"
+  },
+  {
+    "deserialize_hash": "06b3ba83797b38d5d9ebd03074038570",
+    "nominal": "norito::streaming::PrivacyRouteAckFrame",
+    "serialize_hash": "06b3ba83797b38d5d9ebd03074038570"
+  },
+  {
+    "deserialize_hash": "85b5ec2b6c9393ce53ca76c8a3cd3a4a",
+    "nominal": "norito::streaming::ControlErrorFrame",
+    "serialize_hash": "85b5ec2b6c9393ce53ca76c8a3cd3a4a"
+  },
+  {
+    "deserialize_hash": "6bf05909c154dcba56f383b5b3df821c",
+    "nominal": "norito::streaming::ResolutionCustom",
+    "serialize_hash": "6bf05909c154dcba56f383b5b3df821c"
+  },
+  {
+    "deserialize_hash": "972bd865cb8cf74f47729322256445f9",
+    "nominal": "norito::streaming::TelemetryEncodeStats",
+    "serialize_hash": "972bd865cb8cf74f47729322256445f9"
+  },
+  {
+    "deserialize_hash": "8a3cf6483adcacc007edaf6b50e85cac",
+    "nominal": "norito::streaming::TelemetryDecodeStats",
+    "serialize_hash": "8a3cf6483adcacc007edaf6b50e85cac"
+  },
+  {
+    "deserialize_hash": "d022b08605bf345f4904ffe5fb887677",
+    "nominal": "norito::streaming::TelemetryNetworkStats",
+    "serialize_hash": "d022b08605bf345f4904ffe5fb887677"
+  },
+  {
+    "deserialize_hash": "2fa0ecf0461ab9d722f50ac52de6823f",
+    "nominal": "norito::streaming::SyncDiagnostics",
+    "serialize_hash": "2fa0ecf0461ab9d722f50ac52de6823f"
+  },
+  {
+    "deserialize_hash": "61db6eddf78c45952e05c2261a1540b4",
+    "nominal": "norito::streaming::TelemetrySecurityStats",
+    "serialize_hash": "61db6eddf78c45952e05c2261a1540b4"
+  },
+  {
+    "deserialize_hash": "d744bcf3846d2236694a18346fa28c23",
+    "nominal": "norito::streaming::TelemetryEnergyStats",
+    "serialize_hash": "d744bcf3846d2236694a18346fa28c23"
+  },
+  {
+    "deserialize_hash": "243e71f115d108760a52684fd06a2779",
+    "nominal": "norito::streaming::RansGroupTableV1",
+    "serialize_hash": "243e71f115d108760a52684fd06a2779"
+  },
+  {
+    "deserialize_hash": "af3b700527b60bf0d82c4a31c9308358",
+    "nominal": "norito::streaming::RansTablesBodyV1",
+    "serialize_hash": "af3b700527b60bf0d82c4a31c9308358"
+  },
+  {
+    "deserialize_hash": "eb1dc71879953a9690959ed761a626f2",
+    "nominal": "norito::streaming::RansTablesV1",
+    "serialize_hash": "eb1dc71879953a9690959ed761a626f2"
+  },
+  {
+    "deserialize_hash": "b084129bb0702905e82156ba4fa1ce51",
+    "nominal": "norito::streaming::SignatureAlgorithm",
+    "serialize_hash": "b084129bb0702905e82156ba4fa1ce51"
+  },
+  {
+    "deserialize_hash": "174ce3ee5039d2a59f6e9f0d6ad3fdcb",
+    "nominal": "norito::streaming::RansTablesSignatureV1",
+    "serialize_hash": "174ce3ee5039d2a59f6e9f0d6ad3fdcb"
+  },
+  {
+    "deserialize_hash": "46f321bbd9e5c26874f14e168aba1293",
+    "nominal": "norito::streaming::SignedRansTablesV1",
+    "serialize_hash": "46f321bbd9e5c26874f14e168aba1293"
+  },
+  {
+    "deserialize_hash": "aaabed1c45eebd78ea79de39991ce312",
+    "nominal": "norito::streaming::codec::SegmentBundle",
+    "serialize_hash": "aaabed1c45eebd78ea79de39991ce312"
+  },
+  {
+    "deserialize_hash": "88c9c0db505483ba33528e2b4b30adb1",
+    "nominal": "norito::streaming::codec::FrameDimensions",
+    "serialize_hash": "88c9c0db505483ba33528e2b4b30adb1"
+  },
+  {
+    "deserialize_hash": "f5f188e10a7f1fbb6b83eaa81011372f",
+    "nominal": "norito::streaming::codec::Chroma420Frame",
+    "serialize_hash": "f5f188e10a7f1fbb6b83eaa81011372f"
+  },
+  {
+    "deserialize_hash": "d4553046ba7fd3b6766cdc39f5c07288",
+    "nominal": "norito::streaming::codec::BundledStats",
+    "serialize_hash": "d4553046ba7fd3b6766cdc39f5c07288"
+  },
+  {
+    "deserialize_hash": "835c794a832d890d6e22599a61c98238",
+    "nominal": "norito::streaming::codec::RdoTelemetry",
+    "serialize_hash": "835c794a832d890d6e22599a61c98238"
+  },
+  {
+    "deserialize_hash": "f3d71c3fe2e4a9d74749d42acadaa05c",
+    "nominal": "norito::streaming::codec::ContextFrequency",
+    "serialize_hash": "f3d71c3fe2e4a9d74749d42acadaa05c"
+  },
+  {
+    "deserialize_hash": "8a2a69a05b9b6f006a1489cbb028a2bd",
+    "nominal": "norito::streaming::codec::ContextRemapSummary",
+    "serialize_hash": "8a2a69a05b9b6f006a1489cbb028a2bd"
+  },
+  {
+    "deserialize_hash": "74ef6c0ec8e0184bb3edd373f10496ab",
+    "nominal": "norito::streaming::codec::BundledTelemetry",
+    "serialize_hash": "74ef6c0ec8e0184bb3edd373f10496ab"
+  },
+  {
+    "deserialize_hash": "e933e38df2ac8de63ccca751fbead74a",
+    "nominal": "norito::streaming::codec::BundledToken",
+    "serialize_hash": "e933e38df2ac8de63ccca751fbead74a"
+  },
+  {
+    "deserialize_hash": "af51064a782867c5364b4ebc8487bb6e",
+    "nominal": "norito::streaming::codec::BundleType",
+    "serialize_hash": "af51064a782867c5364b4ebc8487bb6e"
+  },
+  {
+    "deserialize_hash": "298f6046cf29818ac3ff8aeb5ac67c15",
+    "nominal": "norito::streaming::codec::BundleFlushReason",
+    "serialize_hash": "298f6046cf29818ac3ff8aeb5ac67c15"
+  },
+  {
+    "deserialize_hash": "5a4fd8ce92fe1c549b9964014bf150db",
+    "nominal": "norito::streaming::codec::BundleContextId",
+    "serialize_hash": "5a4fd8ce92fe1c549b9964014bf150db"
+  },
+  {
+    "deserialize_hash": "51d5fcb9d4ebe188d583d0808c50bd74",
+    "nominal": "norito::streaming::codec::BundleRecord",
+    "serialize_hash": "51d5fcb9d4ebe188d583d0808c50bd74"
+  },
+  {
+    "deserialize_hash": "9462c6c528e22b2b8bf32b8d838db276",
+    "nominal": "norito::streaming::codec::BundleContextStats",
+    "serialize_hash": "9462c6c528e22b2b8bf32b8d838db276"
+  }
+]

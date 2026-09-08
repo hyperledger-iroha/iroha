@@ -9,7 +9,7 @@ use super::{
     KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
     KagemushaHardwareProfileV1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -186,8 +186,18 @@ pub fn kagemusha_verify_device_response_v1<'a>(
 }
 
 /// Existing exact operation-1 command; it has no account or enrollment fields.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.device.v1.read-active-hardware-credential-command")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaDeviceReadCredentialCommandV1 {
@@ -211,8 +221,17 @@ impl KagemushaDeviceReadCredentialCommandV1 {
 }
 
 /// Existing operation-1 body; signature/catalog/freshness authority are separate checks.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.device.v1.active-hardware-credential-reply")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaDeviceQualificationReplyV1 {

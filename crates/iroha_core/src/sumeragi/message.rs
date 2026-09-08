@@ -14,7 +14,7 @@ use iroha_data_model::{
 };
 use iroha_macro::*;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -295,7 +295,8 @@ impl SerializePayload for BlockMessageWire {
         Ok(())
     }
 }
-impl<'a> NoritoDeserialize<'a> for BlockMessageWire {
+impl NoritoDeserialize<'_> for BlockMessageWire {}
+impl<'a> DeserializePayload<'a> for BlockMessageWire {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode canonical Sumeragi block message")
     }

@@ -1,12 +1,8 @@
-//! Iroha Data Model contains structures for Domains, Peers, Accounts and Assets with simple,
-//! non-specific functions like serialization.
+//! Ledger identities, transactions, instructions, events, queries and protocol records.
 //!
-//! ## Note about IVM and deserialization
-//! Some structs perform validation during deserialization (e.g.
-//! `transaction::candidate::SignedTransactionCandidate`). However, when targeting the Iroha Virtual
-//! Machine (IVM), this validation is disabled. Validation inside the IVM is not necessary because
-//! it has already been performed on the host side, which is a trusted entity. This gives about 50%
-//! performance boost, see #4995.
+//! Binary and JSON codecs are part of the aggregate protocol model. JSON carries
+//! admission policies, consensus parameters and retained state, so its validation
+//! and canonical representations are available in every feature selection.
 #![allow(unexpected_cfgs)]
 #![allow(semicolon_in_expressions_from_macros)]
 #![cfg_attr(
@@ -27,9 +23,9 @@ use crate::name::Name;
 pub use iroha_crypto::PublicKey;
 pub use iroha_data_model_derive::model;
 pub use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 pub use norito::json::{JsonDeserialize, JsonSerialize};
-#[cfg(feature = "json")]
+
 pub use norito_derive::{
     FastJson as DeriveFastJson, FastJsonWrite as DeriveFastJsonWrite,
     JsonDeserialize as DeriveJsonDeserialize, JsonSerialize as DeriveJsonSerialize,
@@ -116,9 +112,9 @@ pub mod ipfs;
 /// Instruction-set interface (ISI) data types.
 pub mod isi;
 mod json_helpers;
-#[cfg(feature = "json")]
+
 mod json_key_codec;
-#[cfg(feature = "json")]
+
 mod json_object_key;
 /// Jurisdiction Data Guardian attestations and committee types.
 pub mod jurisdiction;
@@ -241,7 +237,7 @@ include!(concat!(
 // Slice-based Norito decoders for model types used in packed sequences and
 // options. These forward to the archived Norito representation to avoid
 // duplicating decoding logic.
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod base_wire_fixtures;
 mod norito_slice_decode;
 /// Private module defining sealing traits for `iroha_data_model`.
@@ -407,8 +403,14 @@ pub mod prelude {
 #[cfg(test)]
 mod captured_schema_tests;
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod generic_identity_tests;
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod concrete_identity_tests;
+
+#[cfg(test)]
+mod manual_schema_identity;
+
+#[cfg(test)]
+mod registration_identity_tests;

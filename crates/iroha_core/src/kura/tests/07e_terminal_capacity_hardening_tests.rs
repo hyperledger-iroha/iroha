@@ -39,7 +39,7 @@ macro_rules! signed_lifecycle_attempt_fixture {
         .expect(concat!($context, ": bind reservation group"));
         let $binding = AutonomousLifecycleAttemptBindingV1::from_payload(
             $height_context_id,
-            1,
+            $payload.origin_proposal.descriptor.lane_block_height,
             &$payload,
             $reservation_group,
             &$local_peer,
@@ -765,7 +765,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let terminal_source_temp_dir = TempDir::new().expect("terminal source temp dir");
     let terminal_source_config = kura_config_for_dir(&terminal_source_temp_dir, BLOCKS_IN_MEMORY);
     let (terminal_source_kura, _) =
-        test_kura_with_default_lane_markers(&terminal_source_config, &lane_config);
+        open_authenticated_temp_recovery_kura(&terminal_source_config, &lane_config, &catalog)
+            .expect("open terminal source before publishing its exact signed lane identity");
     install_autonomous_lane_marker_for_kura(&terminal_source_kura, &lane_config, &payload);
     let terminal_execution =
         canonical_terminal_merge_execution_for_test(&terminal_source_kura, &payload, &signer);
@@ -783,7 +784,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         let terminal_temp_dir = TempDir::new().expect("terminal bootstrap temp dir");
         let terminal_config = kura_config_for_dir(&terminal_temp_dir, BLOCKS_IN_MEMORY);
         let (terminal_kura, _) =
-            test_kura_with_default_lane_markers(&terminal_config, &lane_config);
+            open_authenticated_temp_recovery_kura(&terminal_config, &lane_config, &catalog)
+                .expect("open terminal target before publishing its exact signed lane identity");
         terminal_kura
             .bind_local_peer_id(local_peer.clone())
             .expect("bind terminal-bootstrap local peer");

@@ -1,19 +1,18 @@
 //! Validate canonical V1 multisig identities at every binary and JSON decode boundary.
 
-use super::{MultisigMember, MultisigPolicy, PublicKey};
+use super::PublicKey;
+use super::{MultisigMember, MultisigPolicy};
 
-#[derive(norito::Decode)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields, no_fast_from_json))]
+#[derive(crate::DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields, no_fast_from_json)]
 struct PolicyFields {
     version: u8,
     threshold: u16,
     members: Vec<MultisigMember>,
 }
 
-#[derive(norito::Decode)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields, no_fast_from_json))]
+#[derive(crate::DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields, no_fast_from_json)]
 struct MemberFields {
     public_key: PublicKey,
     weight: u16,
@@ -31,33 +30,26 @@ impl MemberFields {
     }
 }
 
+pub(super) fn validate_policy(value: MultisigPolicy) -> Result<MultisigPolicy, norito::Error> {
+    MultisigPolicy::from_serialized(value.version, value.threshold, value.members)
+        .map_err(|error| norito::Error::Message(error.to_string()))
+}
+
+pub(super) fn validate_member(value: MultisigMember) -> Result<MultisigMember, norito::Error> {
+    MultisigMember::new(value.public_key, value.weight)
+        .map_err(|error| norito::Error::Message(error.to_string()))
+}
+
 macro_rules! validated_decode {
     ($target:ty, $fields:ty) => {
-        impl<'de> norito::NoritoDeserialize<'de> for $target {
-            fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-                Self::try_deserialize(archived).expect("canonical V1 multisig archive")
-            }
-
-            fn try_deserialize(
-                archived: &'de norito::core::Archived<Self>,
-            ) -> Result<Self, norito::Error> {
-                let fields =
-                    <$fields as norito::NoritoDeserialize>::try_deserialize(archived.cast())?;
-                fields
-                    .validate()
-                    .map_err(|error| norito::Error::Message(error.to_string()))
-            }
-        }
-
         impl<'de> norito::core::DecodeFromSlice<'de> for $target {
             fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), norito::Error> {
                 // The common field decoder honors the declared packed-struct layout
-                // and calls the validating archived decoder above.
+                // and calls the validating archived decoder derived on the owner.
                 norito::core::decode_field_canonical::<Self>(bytes)
             }
         }
 
-        #[cfg(feature = "json")]
         impl norito::json::JsonDeserialize for $target {
             fn json_deserialize(
                 parser: &mut norito::json::Parser<'_>,

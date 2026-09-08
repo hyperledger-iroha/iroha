@@ -40,9 +40,8 @@ mod handle_update_tests {
     }
     #[derive(Clone, Debug)]
     struct BadLengthHintPayload;
-    impl ncore::NoritoSerialize for BadLengthHintPayload {
-}
-impl ncore::SerializePayload for BadLengthHintPayload {
+    impl ncore::NoritoSerialize for BadLengthHintPayload {}
+    impl ncore::SerializePayload for BadLengthHintPayload {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             writer.write_all(&[1, 2, 3, 4])?;
             Ok(())
@@ -51,7 +50,8 @@ impl ncore::SerializePayload for BadLengthHintPayload {
             Some(1)
         }
     }
-    impl<'a> ncore::NoritoDeserialize<'a> for BadLengthHintPayload {
+    impl ncore::NoritoDeserialize<'_> for BadLengthHintPayload {}
+    impl<'a> ncore::DeserializePayload<'a> for BadLengthHintPayload {
         fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
             Self
         }
@@ -67,16 +67,16 @@ impl ncore::SerializePayload for BadLengthHintPayload {
     impl message::ClassifyTopic for BadLengthHintPayload {}
     #[derive(Clone, Debug)]
     struct FailingSerializerPayload;
-    impl ncore::NoritoSerialize for FailingSerializerPayload {
-}
-impl ncore::SerializePayload for FailingSerializerPayload {
+    impl ncore::NoritoSerialize for FailingSerializerPayload {}
+    impl ncore::SerializePayload for FailingSerializerPayload {
         fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             Err(ncore::Error::Message(
                 "intentional actor-admission serialization failure".to_owned(),
             ))
         }
     }
-    impl<'a> ncore::NoritoDeserialize<'a> for FailingSerializerPayload {
+    impl ncore::NoritoDeserialize<'_> for FailingSerializerPayload {}
+    impl<'a> ncore::DeserializePayload<'a> for FailingSerializerPayload {
         fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
             Self
         }

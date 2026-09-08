@@ -1,5 +1,5 @@
 //! Explicit wire qualification using an actual retained complete native race proof.
-#![cfg(feature = "json")]
+
 use iroha_data_model::{
     execution_proofs::{ExecutionProofEnvelopeV1, RaceProofPayloadV1},
     game::{game_message_hash_v1, game_roster_hash_v1},

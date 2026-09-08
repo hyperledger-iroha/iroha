@@ -5063,7 +5063,7 @@ dependencies = [
  "iroha_schema",
  "iroha_version",
  "iroha_zkp_halo2",
- "ivm",
+ "ivm_abi",
  "mv",
  "nonzero_ext",
  "norito",

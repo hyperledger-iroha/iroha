@@ -204,7 +204,7 @@ impl ValidQueryRequest {
                         let sel: iroha_data_model::query::dsl::SelectorTuple<$itemty> =
                             decoder.decode(selector_bytes)?;
                         let concrete: $find = decoder.decode(query_payload)?;
-                        let (iter, _source_stats) = execute_iterable_source(
+                        let (iter, source_stats) = execute_iterable_source(
                             concrete,
                             pred,
                             params,
@@ -221,6 +221,7 @@ impl ValidQueryRequest {
                             authority,
                             stored_cursor_budget,
                             replay_state.clone(),
+                            source_stats,
                         )?;
                         return Ok(QueryResponse::Iterable(output));
                     }};
@@ -369,7 +370,7 @@ impl ValidQueryRequest {
                                 if let Some(concrete) =
                                     decoder.try_decode::<$find>(query_payload)?
                                 {
-                                    let (iter, _source_stats) = execute_iterable_source(
+                                    let (iter, source_stats) = execute_iterable_source(
                                         concrete,
                                         pred,
                                         params,
@@ -386,6 +387,7 @@ impl ValidQueryRequest {
                                         authority,
                                         stored_cursor_budget,
                                         replay_state.clone(),
+                                        source_stats,
                                     )?;
                                     return Ok(QueryResponse::Iterable(output));
                                 }
@@ -406,7 +408,7 @@ impl ValidQueryRequest {
                             .decode::<iroha_data_model::query::proof::prelude::FindProofRecords>(
                             query_payload,
                         )?;
-                        let (iter, _source_stats) = execute_iterable_source(
+                        let (iter, source_stats) = execute_iterable_source(
                             concrete,
                             pred,
                             params,
@@ -423,6 +425,7 @@ impl ValidQueryRequest {
                             authority,
                             stored_cursor_budget,
                             replay_state.clone(),
+                            source_stats,
                         )?;
                         return Ok(QueryResponse::Iterable(output));
                     }

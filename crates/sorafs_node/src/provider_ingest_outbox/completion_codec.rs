@@ -24,6 +24,8 @@ impl<'a> norito::core::NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1
     fn schema_hash() -> [u8; 16] {
         <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()
     }
+}
+impl<'a> norito::core::DeserializePayload<'a> for BoxedStoredCompletionDeliveryV1 {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("boxed provider-ingest completion decode")
     }
@@ -31,7 +33,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1
         archived: &'a norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let completion =
-            <StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::try_deserialize(
+            <StoredCompletionDeliveryV1 as norito::core::DeserializePayload<'a>>::try_deserialize(
                 archived.cast::<StoredCompletionDeliveryV1>(),
             )?;
         Ok(Self::new(completion))

@@ -1,3 +1,37 @@
+/// Decode and validate a retained incident frame without opening or mutating its store.
+#[test]
+#[ignore = "requires IROHA_LIFECYCLE_INCIDENT_FRAME pointing to a retained diagnostic frame"]
+fn inspect_retained_lifecycle_ledger_frame() {
+    let path = std::env::var_os("IROHA_LIFECYCLE_INCIDENT_FRAME")
+        .expect("provide the retained lifecycle frame path");
+    let bytes = std::fs::read(path).expect("read retained frame");
+    let ledger = decode_frame(
+        &bytes,
+        u64::try_from(bytes.len()).expect("frame length fits"),
+    )
+    .expect("retained frame has a valid checksum and canonical Norito encoding");
+    ledger
+        .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+        .expect("retained frame satisfies the lifecycle invariants");
+    println!(
+        "context={:?} high_water={} records={}",
+        ledger.context(),
+        ledger.high_water(),
+        ledger.records().len()
+    );
+    for record in ledger.records() {
+        println!(
+            "ordinal={} class={:?} stage={:?} terminal={:?} continuation={:?} payload={:?}",
+            record.ordinal(),
+            record.work_class(),
+            record.stage(),
+            record.terminal(),
+            record.continuation(),
+            record.durable_payload(),
+        );
+    }
+}
+
 fn digest(byte: u8) -> LifecycleDigest {
     LifecycleDigest::new([byte; 32])
 }

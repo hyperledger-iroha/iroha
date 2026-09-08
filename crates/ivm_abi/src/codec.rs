@@ -1,10 +1,6 @@
 //! Canonical Norito helpers shared by ABI producers and consumers.
 use crate::VMError;
-use norito::{
-    NoritoSerialize,
-    codec::{Decode, Encode},
-    core::DecodeLimits,
-};
+use norito::{NoritoSerialize, core::DecodeLimits};
 /// Encode a Norito value using the V1 canonical layout.
 ///
 /// The result is independent of any ambient decode/encode flag guard.
@@ -41,7 +37,7 @@ pub const fn canonical_norito_decode_limits(payload_len: usize) -> DecodeLimits 
 /// its byte representation is not the canonical V1 representation.
 pub fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + NoritoSerialize,
 {
     norito::decode_canonical(payload).map_err(|_| VMError::NoritoInvalid)
 }
@@ -60,7 +56,7 @@ pub fn decode_canonical_norito_with_limits<T>(
     limits: DecodeLimits,
 ) -> Result<T, VMError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + NoritoSerialize,
 {
     norito::decode_canonical_with_limits(payload, limits).map_err(|_| VMError::NoritoInvalid)
 }

@@ -8,7 +8,7 @@ use iroha_data_model::prelude::{
     Quantity,
 };
 use norito::{
-    Decode, Encode, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    Decode, DeserializePayload, Encode, NoritoDeserialize, NoritoSerialize, SerializePayload,
     core::{self as ncore, DecodeFromSlice},
 };
 use std::fmt;
@@ -80,7 +80,8 @@ impl SerializePayload for CoreQueryEntityTagV1 {
         self.as_u64().encoded_len_exact()
     }
 }
-impl<'de> NoritoDeserialize<'de> for CoreQueryEntityTagV1 {
+impl NoritoDeserialize<'_> for CoreQueryEntityTagV1 {}
+impl<'de> DeserializePayload<'de> for CoreQueryEntityTagV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid V1 core-query entity tag")
     }
@@ -176,7 +177,8 @@ impl SerializePayload for QuantityV1 {
         self.0.encoded_len_exact()
     }
 }
-impl<'de> NoritoDeserialize<'de> for QuantityV1 {
+impl NoritoDeserialize<'_> for QuantityV1 {}
+impl<'de> DeserializePayload<'de> for QuantityV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("invalid V1 quantity payload")
     }
@@ -272,8 +274,7 @@ impl CoreQueryProjectionV1 for NftView {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct QueryPageItemsV1<T>(Vec<T>);
-impl<T: NoritoSerialize> NoritoSerialize for QueryPageItemsV1<T> {}
-impl<T: NoritoSerialize> SerializePayload for QueryPageItemsV1<T> {
+impl<T: SerializePayload> SerializePayload for QueryPageItemsV1<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         self.0.serialize(writer)
     }
@@ -284,10 +285,10 @@ impl<T: NoritoSerialize> SerializePayload for QueryPageItemsV1<T> {
         self.0.encoded_len_exact()
     }
 }
-impl<'de, T> NoritoDeserialize<'de> for QueryPageItemsV1<T>
+impl<'de, T> DeserializePayload<'de> for QueryPageItemsV1<T>
 where
-    T: NoritoSerialize
-        + for<'value> NoritoDeserialize<'value>
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
@@ -302,8 +303,8 @@ where
 }
 impl<'de, T> DecodeFromSlice<'de> for QueryPageItemsV1<T>
 where
-    T: NoritoSerialize
-        + for<'value> NoritoDeserialize<'value>
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
@@ -334,7 +335,8 @@ impl SerializePayload for NonNegativeOffsetV1 {
         self.0.encoded_len_exact()
     }
 }
-impl<'de> NoritoDeserialize<'de> for NonNegativeOffsetV1 {
+impl NoritoDeserialize<'_> for NonNegativeOffsetV1 {}
+impl<'de> DeserializePayload<'de> for NonNegativeOffsetV1 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("negative V1 query-page offset")
     }
@@ -442,15 +444,21 @@ pub struct QueryPageV1<T> {
     items: QueryPageItemsV1<T>,
     next_offset: Option<NonNegativeOffsetV1>,
 }
-#[derive(Encode, Decode)]
+#[derive(SerializePayload, DeserializePayload)]
 struct QueryPageWireV1<T> {
     items: QueryPageItemsV1<T>,
     next_offset: Option<NonNegativeOffsetV1>,
 }
-impl<'de, T> NoritoDeserialize<'de> for QueryPageV1<T>
-where
+impl<T> NoritoDeserialize<'_> for QueryPageV1<T> where
     T: NoritoSerialize
         + for<'value> NoritoDeserialize<'value>
+        + for<'slice> DecodeFromSlice<'slice>
+{
+}
+impl<'de, T> DeserializePayload<'de> for QueryPageV1<T>
+where
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
@@ -465,8 +473,8 @@ where
 }
 impl<'de, T> DecodeFromSlice<'de> for QueryPageV1<T>
 where
-    T: NoritoSerialize
-        + for<'value> NoritoDeserialize<'value>
+    T: SerializePayload
+        + for<'value> DeserializePayload<'value>
         + for<'slice> DecodeFromSlice<'slice>,
 {
     fn decode_from_slice(bytes: &'de [u8]) -> Result<(Self, usize), ncore::Error> {
@@ -856,5 +864,28 @@ mod tests {
         assert_roundtrip!(definition_page, AssetDefinitionView);
         assert_roundtrip!(domain_page, DomainView);
         assert_roundtrip!(nft_page, NftView);
+    }
+}
+
+#[cfg(test)]
+mod payload_contract_tests {
+    use super::QueryPageV1;
+    use norito::codec::{Decode, Encode};
+
+    #[derive(Debug, PartialEq, norito::SerializePayload, norito::DeserializePayload)]
+    #[norito(decode_from_slice)]
+    struct LocalValue(u32);
+
+    #[test]
+    fn bounded_query_page_reconstructs_schema_free_fields() {
+        let page = QueryPageV1::try_new(vec![LocalValue(7), LocalValue(11)], Some(2))
+            .expect("valid payload page");
+        let bytes = page.encode();
+        let decoded = QueryPageV1::<LocalValue>::decode(&mut bytes.as_slice())
+            .expect("bare decoding does not need a field frame contract");
+        assert_eq!(decoded, page);
+        let mut trailing = bytes;
+        trailing.push(0xFF);
+        assert!(QueryPageV1::<LocalValue>::decode(&mut trailing.as_slice()).is_err());
     }
 }

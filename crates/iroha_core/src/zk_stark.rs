@@ -377,15 +377,17 @@ impl norito::SerializePayload for GoldilocksFp4V1 {
         Some(Self::BYTES)
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for GoldilocksFp4V1 {
+impl norito::NoritoDeserialize<'_> for GoldilocksFp4V1 {}
+impl<'de> norito::DeserializePayload<'de> for GoldilocksFp4V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical GoldilocksFp4V1 decode")
     }
 
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
-        let value = <fastpq_prover::GoldilocksFp4V1 as norito::NoritoDeserialize>::try_deserialize(
-            archived.cast(),
-        )?;
+        let value =
+            <fastpq_prover::GoldilocksFp4V1 as norito::DeserializePayload>::try_deserialize(
+                archived.cast(),
+            )?;
         let [c0, c1, c2, c3] = value.coefficients();
         Ok(Self { c0, c1, c2, c3 })
     }

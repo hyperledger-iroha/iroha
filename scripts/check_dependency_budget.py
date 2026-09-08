@@ -6,8 +6,9 @@ ratchet host-independent and makes it useful even before dependencies are
 fetched.  ``--resolved`` retains a diagnostic view of Cargo's resolved graph;
 tests can provide a captured response with ``--metadata-json``.
 ``--check-boundaries`` enforces layer ownership using a separately selected,
-feature-resolved Cargo tree for each shipping configuration. Both normal and
-build dependencies count; development dependencies do not.
+feature-resolved Cargo tree for each configured root. Normal and build dependencies
+always count. Shipping selections exclude development dependencies; test selections
+may explicitly include the selected root's development dependency closure.
 
 Prerequisites are Python 3.11+ or the repository's pinned ``tomli`` backport.
 No environment variables are required. The default is read-only; only the
@@ -155,7 +156,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--check-boundaries",
         action="store_true",
-        help="Enforce configured shipping layer boundaries with locked Cargo trees.",
+        help="Enforce configured shipping and test layer boundaries with locked Cargo trees.",
     )
     parser.add_argument(
         "--offline",
@@ -990,7 +991,7 @@ def run_source_mode(args: argparse.Namespace) -> int:
 
 
 def validate_boundary_policy(config: Mapping[str, Any]) -> Mapping[str, Any]:
-    """Validate explicit package ownership and shipping feature selections."""
+    """Validate explicit package ownership and shipping or test feature selections."""
 
     policy = config.get("architecture")
     if not isinstance(policy, dict) or policy.get("schema_version") != 1:
@@ -1010,7 +1011,7 @@ def validate_boundary_policy(config: Mapping[str, Any]) -> Mapping[str, Any]:
             owners[package] = layer
     configurations = policy.get("configurations")
     if not isinstance(configurations, dict) or not configurations:
-        raise ValueError("architecture.configurations must select shipping roots")
+        raise ValueError("architecture.configurations must select dependency roots")
     for name, selection in configurations.items():
         if not isinstance(selection, dict):
             raise ValueError(f"boundary `{name}` must be an object")
@@ -1019,6 +1020,10 @@ def validate_boundary_policy(config: Mapping[str, Any]) -> Mapping[str, Any]:
             raise ValueError(f"boundary `{name}` root must have a layer owner")
         if not isinstance(selection.get("default_features"), bool):
             raise ValueError(f"boundary `{name}` must explicitly select default_features")
+        if not isinstance(selection.get("include_root_dev_dependencies", False), bool):
+            raise ValueError(
+                f"boundary `{name}` include_root_dev_dependencies must be boolean"
+            )
         for field in ("features", "forbidden_layers"):
             rows = selection.get(field)
             if not isinstance(rows, list) or not all(
@@ -1047,11 +1052,16 @@ def validate_boundary_policy(config: Mapping[str, Any]) -> Mapping[str, Any]:
 def boundary_tree_command(
     manifest: Path, selection: Mapping[str, Any], *, offline: bool
 ) -> list[str]:
-    """Select one shipping root without workspace-wide feature unification."""
+    """Select one root, optionally including its dev closure, without workspace unification."""
 
+    edges = (
+        "normal,build,dev"
+        if selection.get("include_root_dev_dependencies", False)
+        else "normal,build"
+    )
     command = [
         "cargo", "tree", "--manifest-path", str(manifest), "--locked",
-        "--package", selection["package"], "--edges", "normal,build",
+        "--package", selection["package"], "--edges", edges,
         "--target", selection["target"], "--prefix", "depth",
         "--format", "|{p}|{f}", "--charset", "ascii", "--color", "never",
     ]
@@ -1132,7 +1142,7 @@ def evaluate_boundary_tree(
 
 
 def run_boundary_mode(args: argparse.Namespace) -> int:
-    """Resolve and enforce every shipping selection; resolver failures never pass."""
+    """Resolve and enforce every dependency selection; resolver failures never pass."""
 
     if args.write_baseline or resolved_mode_requested(args):
         print("ERROR: boundary checks cannot rewrite budgets or use diagnostic metadata", file=sys.stderr)
@@ -1149,7 +1159,7 @@ def run_boundary_mode(args: argparse.Namespace) -> int:
             reports[name] = evaluate_boundary_tree(policy, selection, completed.stdout)
         report = {
             "schema_version": 1,
-            "measurement_kind": "cargo-feature-resolved-normal-build-boundaries-v1",
+            "measurement_kind": "cargo-feature-resolved-layer-boundaries-v1",
             "configurations": reports,
             "within_boundary": all(row["within_boundary"] for row in reports.values()),
         }

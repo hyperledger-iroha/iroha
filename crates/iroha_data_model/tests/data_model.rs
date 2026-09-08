@@ -33,7 +33,7 @@ fn block_parameters_roundtrip() {
     let inner: u64 = params.max_transactions().get();
     let bytes = norito::core::to_bytes(&inner).expect("encode");
     let archived = norito::core::from_bytes::<u64>(&bytes).expect("archived");
-    let decoded_inner = <u64 as norito::core::NoritoDeserialize>::deserialize(archived);
+    let decoded_inner = <u64 as norito::core::DeserializePayload>::deserialize(archived);
     let decoded = BlockParameters::new(core::num::NonZeroU64::new(decoded_inner).unwrap());
     assert_eq!(decoded.max_transactions(), params.max_transactions());
 }
@@ -45,7 +45,7 @@ fn compound_predicate_roundtrip() {
     let bytes = norito::core::to_bytes(&predicate).expect("encode");
     let archived = norito::core::from_bytes::<CompoundPredicate<Domain>>(&bytes).expect("archived");
     let decoded =
-        <CompoundPredicate<Domain> as norito::core::NoritoDeserialize>::deserialize(archived);
+        <CompoundPredicate<Domain> as norito::core::DeserializePayload>::deserialize(archived);
     assert_eq!(decoded.json_payload(), predicate.json_payload());
 }
 #[test]

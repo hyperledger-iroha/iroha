@@ -128,6 +128,8 @@ const BFV_GOLDILOCKS_DIGEST384_MDS_V1: [[u64; 3]; 3] = [
 /// Construction and decoding reject non-canonical field words.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::fhe_bfv::BfvGoldilocksDigest384V1")]
 pub struct BfvGoldilocksDigest384V1([u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1]);
 
 impl Default for BfvGoldilocksDigest384V1 {
@@ -211,7 +213,8 @@ impl norito::core::SerializePayload for BfvGoldilocksDigest384V1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for BfvGoldilocksDigest384V1 {
+impl norito::core::NoritoDeserialize<'_> for BfvGoldilocksDigest384V1 {}
+impl<'de> norito::core::DeserializePayload<'de> for BfvGoldilocksDigest384V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical BFV Goldilocks digest decode")
     }
@@ -219,7 +222,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for BfvGoldilocksDigest384V1 {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let bytes = <[u8; BFV_GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
         Self::from_le_bytes(bytes).ok_or_else(|| {
             norito::core::Error::Message(
                 "non-canonical BFV GoldilocksDigest384V1 field element".into(),
@@ -6477,7 +6480,7 @@ fn decode_bfv_base_material_bytes_v1<T>(
     validate: impl FnOnce(&T) -> Result<(), BfvError>,
 ) -> Result<T, BfvError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     invalid_guards! {
         bytes.is_empty() => ("{label} must not be empty"),
@@ -8055,7 +8058,7 @@ fn decode_bfv_canonical_material_bytes_v1<T>(
     validate: impl FnOnce(&T) -> Result<(), BfvError>,
 ) -> Result<T, BfvError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     invalid_guards! {
         bytes.is_empty() => ("{label} must not be empty"),
@@ -15154,7 +15157,7 @@ fn decode_bfv_full_bootstrap_release_audit_canonical_bytes_v1<T>(
     validate: impl FnOnce(&T) -> Result<(), BfvError>,
 ) -> Result<T, BfvError>
 where
-    T: Decode + Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     invalid_guards! {
         bytes.is_empty() => ("{label} must not be empty"),

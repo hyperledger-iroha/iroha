@@ -1,4 +1,3 @@
-#[cfg(feature = "json")]
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     da::types::{BlobDigest, RetentionPolicy, StorageTicketId},
@@ -15,10 +14,22 @@ use std::{fmt, str::FromStr};
 use thiserror::Error;
 /// Proof scheme used to authenticate DA commitments.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "type", content = "value"))]
+#[norito(tag = "type", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaProofScheme")]
 pub enum DaProofScheme {
@@ -27,8 +38,20 @@ pub enum DaProofScheme {
     MerkleSha256,
 }
 /// Policy snapshot describing the proof scheme expected for a lane.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaProofPolicy")]
@@ -43,8 +66,19 @@ pub struct DaProofPolicy {
     pub proof_scheme: DaProofScheme,
 }
 /// Versioned bundle of proof policies for all configured lanes.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaProofPolicyBundle")]
@@ -102,8 +136,20 @@ impl FromStr for DaProofScheme {
     }
 }
 /// Canonical DA commitment persisted in Nexus blocks.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaCommitmentRecord")]
@@ -164,8 +210,19 @@ impl DaCommitmentRecord {
     }
 }
 /// Bundle embedded into `SignedBlockWire` and hashed inside `BlockHeader`.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -241,9 +298,21 @@ impl Default for DaCommitmentBundle {
 /// Alias representing the retained policy class recorded on-chain.
 pub type RetentionClass = RetentionPolicy;
 /// Canonical key identifying a DA commitment across lanes/epochs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaCommitmentKey")]
 pub struct DaCommitmentKey {
     /// Lane the blob belongs to.
@@ -265,9 +334,20 @@ impl DaCommitmentKey {
     }
 }
 /// Location of a sealed DA commitment inside the blockchain.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaCommitmentLocation")]
 pub struct DaCommitmentLocation {
     /// Height of the block that sealed the commitment.
@@ -276,9 +356,18 @@ pub struct DaCommitmentLocation {
     pub index_in_bundle: u32,
 }
 /// Commitment record paired with its on-chain location.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaCommitmentWithLocation")]
 pub struct DaCommitmentWithLocation {
     /// Raw commitment stored on chain.
@@ -287,9 +376,20 @@ pub struct DaCommitmentWithLocation {
     pub location: DaCommitmentLocation,
 }
 /// Direction of a sibling inside a binary Merkle tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "direction", content = "value"))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(tag = "direction", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::commitment::MerkleDirection")]
 pub enum MerkleDirection {
@@ -299,9 +399,20 @@ pub enum MerkleDirection {
     Right,
 }
 /// A single hop inside a Merkle proof path.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::commitment::MerklePathItem")]
 pub struct MerklePathItem {
     /// Hash of the sibling node at this tree level.
@@ -310,9 +421,19 @@ pub struct MerklePathItem {
     pub direction: MerkleDirection,
 }
 /// Membership proof for a DA commitment inside a block bundle.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::commitment::DaCommitmentProof")]
 pub struct DaCommitmentProof {
     /// Commitment covered by the proof.
@@ -402,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "json")]
+
     fn consensus_da_json_requires_exact_current_fields() {
         let record = sample_record();
         let mut missing = norito::json::to_value(&record).expect("serialize DA commitment record");

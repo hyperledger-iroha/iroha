@@ -9,10 +9,19 @@ use iroha_crypto::HashOf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// A time-triggered entrypoint, forming the second half of the transaction entrypoints.
-#[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Display,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[display("TimeTriggerEntrypoint")]
 #[cfg_attr(

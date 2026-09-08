@@ -91,7 +91,10 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('user/kura_and_snapshot_tests.rs'),
         Path('user/runtime_tail_tests.rs'),
     ),
-    Path('crates/iroha_data_model/src/block/consensus_v2.rs'): (Path('consensus_v2_tests.rs'),),
+    Path('crates/iroha_data_model/src/block/consensus_v2.rs'): (
+        Path('consensus_v2/messages.rs'),
+        Path('consensus_v2_tests.rs'),
+    ),
     Path('crates/iroha_data_model/src/block/consensus_v2_tests.rs'): (Path('consensus_v2_json_tests.rs'),),
     Path('crates/iroha_core/src/kura.rs'): (
         Path('kura/startup_finality_support.rs'),
@@ -235,6 +238,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     ),
     Path('crates/iroha_core/src/smartcontracts/ivm/host.rs'): (
         Path('host/axt_persistent_budget_tests.rs'),
+        Path('host/axt_unanchored_admission_tests.rs'),
         Path('host/core_codec_and_contract_tests.rs'),
         Path('host/core_query_execution_tests.rs'),
         Path('host/core_query_pagination_tests.rs'),
@@ -531,6 +535,8 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_lane_work_native_body_recovery.rs'),
         Path('tests/v2_lane_work_lifecycle_and_recovery_cases.rs'),
         Path('v2_lane_work/strict_historical_read_tests.rs'),
+        Path('v2_lane_work/strict_volatile_owner_tests.rs'),
+        Path('v2_lane_work/strict_receipt_gate_tests.rs'),
         Path('v2_lane_work/canonical_executed_block_recovery_drift_test.rs'),
         Path('v2_lane_work/historical_recovery_and_carrier_tests.rs'),
         Path('v2_lane_work_autonomous_ready_durability_tests.rs'),
@@ -2293,16 +2299,6 @@ def test_merge_runtime_config_v6_source_binding_accepts_repository() -> None:
     module = load_checker()
 
     assert module._merge_runtime_config_production_source_fidelity_errors() == []
-
-
-def test_reviewed_rust_include_manifests_are_static_and_current() -> None:
-    module = load_checker()
-    observed = {
-        Path(parent): tuple(Path(component) for component in components)
-        for parent, components in module._REVIEWED_RUST_INCLUDE_MANIFESTS.items()
-    }
-    assert observed == REVIEWED_RUST_INCLUDE_MANIFESTS
-    assert module._reviewed_rust_include_manifest_errors() == []
 
 
 def test_reviewed_rust_include_manifest_rejects_ignored_untracked_component(

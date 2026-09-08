@@ -1,6 +1,6 @@
 //! Oracle data events for feed aggregation outcomes.
 use super::*;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     oracle::{
@@ -20,14 +20,15 @@ use crate::{
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::oracle::FeedEventRecord")]
 pub struct FeedEventRecord {
     /// Feed event describing the aggregation outcome.
     pub event: FeedEvent,
     /// Consensus block time at which the event became durable.
     pub recorded_at_ms: u64,
     /// Optional hashes of external evidence (e.g., `SoraFS` bundles).
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub evidence_hashes: Vec<Hash>,
 }
 /// Event emitted when a twitter binding attestation is recorded.
@@ -40,7 +41,8 @@ pub struct FeedEventRecord {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::oracle::TwitterBindingRecorded")]
 pub struct TwitterBindingRecorded {
     /// Recorded binding.
     pub record: TwitterBindingRecord,
@@ -55,7 +57,8 @@ pub struct TwitterBindingRecorded {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::oracle::TwitterBindingRevoked")]
 pub struct TwitterBindingRevoked {
     /// Binding hash that was revoked.
     pub binding_hash: KeyedHash,
@@ -76,7 +79,8 @@ pub struct TwitterBindingRevoked {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::oracle::OracleChangeProposed")]
 pub struct OracleChangeProposed {
     /// Unique identifier of the change.
     pub change_id: OracleChangeId,
@@ -99,7 +103,8 @@ pub struct OracleChangeProposed {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::oracle::OracleChangeStageUpdated")]
 pub struct OracleChangeStageUpdated {
     /// Identifier of the change.
     pub change_id: OracleChangeId,
@@ -112,7 +117,7 @@ pub struct OracleChangeStageUpdated {
     /// Count of rejections recorded for the stage.
     pub rejections: u32,
     /// Evidence hashes attached during this update (if any).
-    #[cfg_attr(feature = "json", norito(default))]
+    #[norito(default)]
     pub evidence_hashes: Vec<Hash>,
 }
 /// Event emitted when a native `DeFi` oracle attestation is recorded.
@@ -125,7 +130,8 @@ pub struct OracleChangeStageUpdated {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::oracle::DefiOracleAttestationRecorded")]
 pub struct DefiOracleAttestationRecorded {
     /// Recorded attestation.
     pub attestation: DefiOracleAttestation,
@@ -151,8 +157,10 @@ pub struct DefiOracleAttestationRecorded {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[cfg_attr(feature = "json", norito(tag = "event", content = "payload"))]
+#[norito(tag = "event", content = "payload")]
 #[event_set(schema_name = "iroha_data_model::events::data::oracle::OracleEventSet")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::events::data::oracle::OracleEvent")]
 pub enum OracleEvent {
     /// Feed slot aggregated with an outcome.
     FeedProcessed(FeedEventRecord),
@@ -183,3 +191,6 @@ pub mod prelude {
         TwitterBindingRevoked,
     };
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

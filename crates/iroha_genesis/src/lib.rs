@@ -4867,9 +4867,10 @@ impl norito::core::SerializePayload for IvmPath {
         norito::core::SerializePayload::serialize(&s, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for IvmPath {
+impl norito::core::NoritoDeserialize<'_> for IvmPath {}
+impl<'a> norito::core::DeserializePayload<'a> for IvmPath {
     fn deserialize(archived: &'a norito::core::Archived<IvmPath>) -> Self {
-        let s: String = norito::core::NoritoDeserialize::deserialize(archived.cast());
+        let s: String = norito::core::DeserializePayload::deserialize(archived.cast());
         IvmPath(PathBuf::from(s))
     }
 }

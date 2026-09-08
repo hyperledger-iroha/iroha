@@ -35,7 +35,7 @@ isi! {
         /// Canonical request hash for the aggregation window.
         pub request_hash: Hash,
         /// Optional hashes of external evidence (e.g., `SoraFS` bundles).
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<Hash>,
     }
 }
@@ -52,10 +52,10 @@ isi! {
         /// Provider being challenged.
         pub target: OracleId,
         /// Optional bond override (falls back to config when `None`).
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub bond: Option<Quantity>,
         /// Evidence hashes supplied by the challenger.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<Hash>,
         /// Human-readable reason for the dispute.
         pub reason: String,
@@ -70,7 +70,7 @@ isi! {
         /// Outcome applied to the dispute.
         pub outcome: OracleDisputeOutcome,
         /// Optional operator notes.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub notes: String,
     }
 }
@@ -87,7 +87,7 @@ isi! {
         /// Hash of the change manifest or external artefact.
         pub payload_hash: Hash,
         /// Optional evidence bundle hashes attached at intake.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<Hash>,
     }
 }
@@ -102,7 +102,7 @@ isi! {
         /// Whether this vote approves (`true`) or rejects (`false`) the stage.
         pub approve: bool,
         /// Optional evidence hashes linked to this vote.
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub evidence_hashes: Vec<Hash>,
     }
 }
@@ -113,7 +113,7 @@ isi! {
         /// Identifier of the change being rolled back.
         pub change_id: OracleChangeId,
         /// Optional stage to tag the rollback against (defaults to the active stage).
-        #[cfg_attr(feature = "json", norito(default))]
+        #[norito (default)]
         pub stage: Option<OracleChangeStage>,
         /// Human-readable reason for the rollback.
         pub reason: String,

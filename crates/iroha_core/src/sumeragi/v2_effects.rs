@@ -15647,5 +15647,6 @@ mod tests {
     include!("tests/v2_effects_main_03.rs");
     include!("tests/v2_effects_main_04.rs");
     include!("tests/v2_effects_main_05.rs");
+    include!("tests/v2_effects_protected_body_reseed.rs");
     include!("tests/v2_effects_03_locked_body_and_sidecar.rs");
 }

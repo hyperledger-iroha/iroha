@@ -957,8 +957,15 @@ pub enum AcceptTransactionFail {
     UnexpectedGenesisAccountSignature,
     /// Signed transaction domain does not match the admitted domain: {0}
     TransactionDomainMismatch(Mismatch<TransactionDomain>),
-    /// Transaction creation time is in the future
-    TransactionInTheFuture,
+    /// Transaction creation time `{creation_time_ms}` ms is in the future (admission time `{now_ms}` ms, maximum drift `{max_clock_drift_ms}` ms)
+    TransactionInTheFuture {
+        /// Signature-bound transaction creation time in Unix milliseconds.
+        creation_time_ms: u128,
+        /// Exact network-time snapshot used for this admission decision in Unix milliseconds.
+        now_ms: u128,
+        /// Configured maximum admitted future drift in milliseconds.
+        max_clock_drift_ms: u128,
+    },
 }
 fn duration_since_epoch_with_fallback(result: Result<Duration, SystemTimeError>) -> Duration {
     match result {
@@ -1610,7 +1617,11 @@ impl<'tx> AcceptedTransaction<'tx> {
         now: Duration,
     ) -> Result<(), AcceptTransactionFail> {
         if tx.creation_time().saturating_sub(now) > max_clock_drift {
-            return Err(AcceptTransactionFail::TransactionInTheFuture);
+            return Err(AcceptTransactionFail::TransactionInTheFuture {
+                creation_time_ms: tx.creation_time().as_millis(),
+                now_ms: now.as_millis(),
+                max_clock_drift_ms: max_clock_drift.as_millis(),
+            });
         }
         tx.payload().validate_fee_payment_intent().map_err(|err| {
             AcceptTransactionFail::SignatureVerification(Self::signature_fail_from_error(
@@ -5429,7 +5440,7 @@ pub mod tests {
             EventBox,
             data::{
                 self,
-                prelude::{AssetChanged, AssetEvent, DomainEvent},
+                prelude::{AssetChanged, AssetEvent, AssetTransferred, DomainEvent},
             },
             trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
         },
@@ -5449,11 +5460,7 @@ pub mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
         role::{Role, RoleId},
         runtime::RuntimeUpgradeManifest,
-        transaction::{
-            TransactionBuilder,
-            executable::ContractInvocation,
-            signed::{MultisigSignature, MultisigSignatures},
-        },
+        transaction::{TransactionBuilder, executable::ContractInvocation},
     };
     use iroha_executor_data_model::isi::multisig::{
         DEFAULT_MULTISIG_TTL_MS, MultisigApprove, MultisigRegister, MultisigSpec,
@@ -5834,6 +5841,40 @@ pub mod tests {
         assert_eq!(super::unix_time_from_network_status(status), expected);
     }
     #[test]
+    fn future_transaction_rejection_retains_the_exact_admission_clock_boundary() {
+        let (_handle, source) = TimeSource::new_mock(Duration::from_millis(12_000));
+        let tx = TransactionBuilder::new_genesis_with_time_source(
+            GENESIS_ACCOUNT.id.clone(),
+            &source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::DEBUG, "future clock boundary".to_owned())])
+        .sign(&GENESIS_ACCOUNT.key);
+        let drift = Duration::from_millis(1_000);
+        AcceptedTransaction::validate_common_envelope(&tx, drift, Duration::from_millis(11_000))
+            .expect("exact maximum future drift remains accepted");
+        let error = AcceptedTransaction::validate_common_envelope(
+            &tx,
+            drift,
+            Duration::from_millis(10_999),
+        )
+        .expect_err("one millisecond beyond the configured drift is rejected");
+        assert_eq!(
+            error,
+            super::AcceptTransactionFail::TransactionInTheFuture {
+                creation_time_ms: 12_000,
+                now_ms: 10_999,
+                max_clock_drift_ms: 1_000,
+            }
+        );
+        let rendered = error.to_string();
+        for value in ["12000", "10999", "1000"] {
+            assert!(rendered.contains(value), "{rendered}");
+        }
+        AcceptedTransaction::validate_common_envelope(&tx, drift, Duration::from_millis(12_001))
+            .expect("a transaction created before the admission snapshot is not future-dated");
+    }
+    #[test]
     fn validate_genesis_with_now_uses_supplied_timestamp() {
         let far_future = Duration::from_secs(10_000_000_000);
         let (_handle, time_source) = TimeSource::new_mock(far_future);
@@ -6026,12 +6067,14 @@ pub mod tests {
         let tx = tx.with_authority(multisig_authority);
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        match AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(
@@ -6071,43 +6114,42 @@ pub mod tests {
         }
         crypto_cfg.allowed_signing.sort();
         crypto_cfg.allowed_signing.dedup();
-        AcceptedTransaction::accept(tx, &test_network_id(), Duration::ZERO, limits, &crypto_cfg)
-            .expect("multisig with quorum should be accepted");
-    }
-    #[test]
-    fn multisig_authority_rejects_unknown_signer() {
-        let (authority, keypair) = gen_account_in("wonderland");
-        let mut builder = TransactionBuilder::new(
-            test_network_id(),
-            authority.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        );
-        builder = builder.with_instructions([Log::new(Level::INFO, "multisig".into())]);
-        let tx = builder.sign(keypair.private_key());
-        let member = MultisigMember::new(keypair.public_key().clone(), 2).expect("member is valid");
-        let policy = MultisigPolicy::new(2, vec![member]).expect("policy is valid");
-        let multisig_authority = AccountId::new_multisig(policy);
-        let mut tx = tx.with_authority(multisig_authority);
-        // Attach a signature from an unknown signer.
-        let payload = tx.payload().clone();
-        let rogue = checked_random_tx_keypair();
-        let rogue_sig = checked_signature_of(rogue.private_key(), &payload);
-        tx.set_multisig_signatures(
-            iroha_data_model::transaction::signed::MultisigSignatures::new(vec![
-                iroha_data_model::transaction::signed::MultisigSignature::new(
-                    rogue.public_key().clone(),
-                    rogue_sig,
-                ),
-            ]),
-        );
-        let limits = TransactionParameters::default();
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
+        )
+        .expect("multisig with quorum should be accepted");
+    }
+    #[test]
+    fn multisig_authority_rejects_unknown_signer() {
+        let member_key = checked_random_tx_keypair();
+        let member =
+            MultisigMember::new(member_key.public_key().clone(), 2).expect("member is valid");
+        let policy = MultisigPolicy::new(2, vec![member]).expect("policy is valid");
+        let rogue = checked_random_tx_keypair();
+        // A canonical bundle and matching primary signature reach membership validation.
+        let tx = TransactionBuilder::new(
+            test_network_id(),
+            AccountId::new_multisig(policy),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "multisig".into())])
+        .sign_multisig([rogue.private_key()]);
+        let limits = TransactionParameters::default();
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        match AcceptedTransaction::accept_with_time_source(
+            tx,
+            &test_network_id(),
+            Duration::ZERO,
+            limits,
+            &crypto_cfg,
+            &time_source,
         ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::UnknownSigner);
@@ -6140,12 +6182,14 @@ pub mod tests {
         }
         crypto_cfg.allowed_signing.sort();
         crypto_cfg.allowed_signing.dedup();
-        match AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        match AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::InsufficientWeight);
@@ -6199,12 +6243,14 @@ pub mod tests {
         .sign(multisig_key.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission must accept the signature shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -6334,12 +6380,14 @@ pub mod tests {
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission must accept the signature shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -6420,12 +6468,14 @@ pub mod tests {
         .sign(signer1.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission must accept the signature shape");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -6534,12 +6584,14 @@ pub mod tests {
         .sign(signer1.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission must accept the signature shape");
         let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
@@ -6602,12 +6654,14 @@ pub mod tests {
         .sign(authority_keypair.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission should accept transaction shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -7002,12 +7056,14 @@ pub mod tests {
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission should accept transaction shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -7082,12 +7138,14 @@ pub mod tests {
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission should accept transaction shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -7101,7 +7159,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn existing_authority_self_register_is_idempotent() {
+    fn existing_authority_self_register_rejects_repetition_without_mutation() {
         let chain: ChainId = "existing-authority-self-register".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let existing = Account::new(authority.clone()).build(&authority);
@@ -7121,21 +7179,33 @@ pub mod tests {
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission should accept transaction shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
+        let account_before = block.world.accounts.get(&authority).cloned();
         let mut ivm_cache = IvmCache::new();
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
         assert!(
-            result.is_ok(),
-            "duplicate self-register should remain a no-op: {result:?}"
+            matches!(&result,
+                Err(TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::Repetition(error)
+                ))) if error.instruction == iroha_data_model::isi::InstructionType::Register
+                    && error.id == IdBox::AccountId(authority.clone())
+            ),
+            "duplicate self-register must reject its exact existing identity: {result:?}"
+        );
+        assert_eq!(
+            block.world.accounts.get(&authority).cloned(),
+            account_before
         );
     }
     #[test]
@@ -7160,12 +7230,14 @@ pub mod tests {
         .sign(keypair.private_key());
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let accepted = AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        let accepted = AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         )
         .expect("admission should accept transaction shape");
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -7197,12 +7269,14 @@ pub mod tests {
         crypto_cfg
             .allowed_signing
             .retain(|algo| *algo == Algorithm::Ed25519);
-        match AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        match AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
@@ -7231,12 +7305,14 @@ pub mod tests {
         crypto_cfg
             .allowed_signing
             .retain(|algo| *algo == Algorithm::Ed25519);
-        match AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        match AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::AlgorithmNotPermitted);
@@ -7264,12 +7340,14 @@ pub mod tests {
         let tx = builder.sign_multisig(vec![member_a.private_key()]);
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        match AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         ) {
             Err(AcceptTransactionFail::SignatureVerification(fail)) => {
                 assert_eq!(fail.code(), SignatureRejectionCode::InsufficientWeight);
@@ -7279,24 +7357,21 @@ pub mod tests {
     }
     #[test]
     fn multisig_signature_limit_counts_bundle_entries() {
-        let signer = checked_random_tx_keypair();
-        let members = vec![MultisigMember::new(signer.public_key().clone(), 1).expect("member")];
+        let signers = std::array::from_fn::<_, 3, _>(|_| checked_random_tx_keypair());
+        let members = signers
+            .iter()
+            .map(|signer| MultisigMember::new(signer.public_key().clone(), 1).expect("member"))
+            .collect();
         let policy = MultisigPolicy::new(1, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
-        let mut tx = TransactionBuilder::new(
+        // Three distinct, correctly ordered signatures reach the two-signature limit.
+        let tx = TransactionBuilder::new(
             test_network_id(),
-            authority.clone(),
+            authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "multisig too many signatures".into())])
-        .sign_multisig(vec![signer.private_key()]);
-        let payload = tx.payload().clone();
-        let member_signature = checked_signature_of(signer.private_key(), &payload);
-        tx.set_multisig_signatures(MultisigSignatures::new(vec![
-            MultisigSignature::new(signer.public_key().clone(), member_signature.clone()),
-            MultisigSignature::new(signer.public_key().clone(), member_signature.clone()),
-            MultisigSignature::new(signer.public_key().clone(), member_signature),
-        ]));
+        .sign_multisig(signers.iter().map(KeyPair::private_key));
         let defaults = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
             nonzero!(2_u64),
@@ -7307,12 +7382,14 @@ pub mod tests {
             defaults.max_metadata_depth(),
         );
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        match AcceptedTransaction::accept(
+        let (_clock_handle, time_source) = TimeSource::new_mock(tx.creation_time());
+        match AcceptedTransaction::accept_with_time_source(
             tx,
             &test_network_id(),
             Duration::ZERO,
             limits,
             &crypto_cfg,
+            &time_source,
         ) {
             Err(AcceptTransactionFail::TransactionLimit(fail)) => {
                 assert!(
@@ -7714,7 +7791,7 @@ pub mod tests {
         assert!(accepted.single_ed25519_key().is_some());
     }
     #[test]
-    fn decoded_versioned_signed_transaction_normalizes_adaptive_payload_metadata() {
+    fn decoded_versioned_signed_transaction_preserves_exact_confidential_payload_metadata() {
         let (authority, keypair) = gen_account_in("wonderland");
         let signed = TransactionBuilder::new(
             test_network_id(),
@@ -7730,9 +7807,10 @@ pub mod tests {
         )])
         .sign(keypair.private_key());
         let actual_payload_len = norito::codec::Encode::encode(&signed).len();
-        assert!(
-            norito::core::SerializePayload::encoded_len_exact(&signed).is_none(),
-            "adaptive confidential payload must not advertise an exact encoded length"
+        assert_eq!(
+            norito::core::SerializePayload::encoded_len_exact(&signed),
+            Some(actual_payload_len),
+            "the first-release confidential transaction layout must advertise its exact payload length"
         );
         let canonical_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
@@ -7757,11 +7835,11 @@ pub mod tests {
         assert_eq!(decoded.prepared.encoded_len, canonical_len);
         assert!(
             decoded.prepared.signed_bytes.is_some(),
-            "canonical adaptive ingress payload should seed signed bytes"
+            "canonical confidential ingress payload should seed signed bytes"
         );
         assert!(
             decoded.prepared.entrypoint_bytes.is_some(),
-            "canonical adaptive ingress payload should seed entrypoint bytes"
+            "canonical confidential ingress payload should seed entrypoint bytes"
         );
     }
     #[test]
@@ -8848,7 +8926,8 @@ pub mod tests {
         match err {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(reason)) => {
                 assert!(
-                    reason.contains("signature payload must not be all zero"),
+                    reason.contains("fraud assessment signature is malformed:")
+                        && reason.contains("signature payload must not be empty or all zero"),
                     "unexpected rejection reason: {reason}"
                 );
             }
@@ -12540,7 +12619,14 @@ pub mod tests {
         let error = next
             .register_confidential_proof(8)
             .expect_err("a rejected proof must still exhaust the one-call block budget");
-        assert!(error.to_string().contains("per block exceeded"));
+        assert!(
+            matches!(&error,
+                iroha_data_model::isi::error::InstructionExecutionError::InvalidParameter(
+                    iroha_data_model::isi::error::InvalidParameterError::SmartContract(reason)
+                ) if reason == "confidential verify calls per block exceeded"
+            ),
+            "the next overlay must reject at the block verify-call quota: {error:?}"
+        );
     }
     #[test]
     fn zero_block_gas_limit_remains_unlimited_in_shared_validation() {
@@ -12855,6 +12941,10 @@ pub mod tests {
         }
         .into_state_from_json(snapshot)
         .expect("restore marker-bearing state");
+        // Runtime fee policy is process configuration, not persisted World state.
+        // Restore that exact fixture policy without replacing authenticated lane geometry.
+        restarted.nexus.write().fees = state.nexus.read().fees.clone();
+        restarted.install_lane_manifests(&state.lane_manifests.read().clone());
         assert!(
             restarted
                 .view()

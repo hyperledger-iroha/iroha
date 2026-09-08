@@ -636,24 +636,25 @@ fn ensure_world_state_start_shape(
     ensure_source_bound(limits, ORDINARY_NAME_ID_SOURCE_BYTES)?;
     if query_limits.count_mode != QueryCountMode::Bounded {
         return Err(Error::Conversion(
-            "ordinary peer adapter requires bounded query counting".to_owned(),
+            "ordinary iterable adapters require bounded query counting".to_owned(),
         ));
     }
     let peer_source = canonical_peer_source_shape(start, query_limits)?;
-    if !peer_source {
-        // TODO: Add query-specific borrowed adapters for the remaining 36
+    let account_source = canonical_account_source_shape(start, query_limits)?;
+    if !peer_source && !account_source {
+        // TODO: Add query-specific borrowed adapters for the remaining 35
         // world producers. The three Kura producers additionally require an
         // authenticated fixed projection in the bounded reader.
         return Err(Error::Conversion(
             "ordinary iterable producer is awaiting a source-specific bounded adapter".to_owned(),
         ));
     }
-    if mode != OrdinaryCursorMode::Ephemeral
+    if (peer_source && mode != OrdinaryCursorMode::Ephemeral)
         || start.params.pagination.offset_value() != 0
         || start.params.sorting.sort_by_metadata_key.is_some()
     {
         return Err(Error::Conversion(
-            "ordinary peer adapter currently requires ephemeral, unsorted, zero-offset pagination"
+            "ordinary iterable adapters require unsorted, zero-offset pagination; peers require ephemeral mode"
                 .to_owned(),
         ));
     }
@@ -677,6 +678,27 @@ fn canonical_peer_source_shape(
     let _: FindPeers = decoder.decode(payload)?;
     let predicate: CompoundPredicate<iroha_data_model::peer::PeerId> = decoder.decode(predicate)?;
     let selector: SelectorTuple<iroha_data_model::peer::PeerId> = decoder.decode(selector)?;
+    Ok(predicate.is_pass() && selector.iter().next().is_none())
+}
+fn canonical_account_source_shape(
+    start: &iroha_data_model::query::QueryWithParams,
+    query_limits: QueryLimits,
+) -> Result<bool, Error> {
+    use iroha_data_model::query::{
+        QueryItemKind,
+        account::prelude::FindAccountIds,
+        dsl::{CompoundPredicate, SelectorTuple},
+    };
+    let (item, predicate, selector, payload) = start.parts();
+    if item != QueryItemKind::AccountId {
+        return Ok(false);
+    }
+    let mut decoder =
+        super::FastIterComponentDecoder::new(query_limits, [payload, predicate, selector])?;
+    let _: FindAccountIds = decoder.decode(payload)?;
+    let predicate: CompoundPredicate<iroha_data_model::account::AccountId> =
+        decoder.decode(predicate)?;
+    let selector: SelectorTuple<iroha_data_model::account::AccountId> = decoder.decode(selector)?;
     Ok(predicate.is_pass() && selector.iter().next().is_none())
 }
 fn ensure_iterable_params(
@@ -767,8 +789,13 @@ fn ensure_iterable_params(
         let retained_bytes = retained_items
             .checked_mul(limits.max_source_item_bytes())
             .ok_or(Error::CapacityLimit)?;
+        // Stored bounded adapters own at most T rows under the resident R lease and measure
+        // their actual canonical tail bytes before publishing a cursor. A source-row resident
+        // ceiling is not the serialized value length; requiring T*S <= the wire quota would
+        // reject a valid exact-byte tail even though both ownership and wire bytes fit.
         if retained_items > limits.max_cursor_retained_items()
-            || retained_bytes > limits.max_cursor_value_bytes()
+            || (query_limits.count_mode == QueryCountMode::Exact
+                && retained_bytes > limits.max_cursor_value_bytes())
         {
             return Err(Error::CapacityLimit);
         }
@@ -839,120 +866,120 @@ enum SingularSourceAdmission {
 }
 #[cfg(test)]
 macro_rules! define_singular_source_admission {
-    ($($number:literal => $variant:ident: $class:ident),+ $(,)?) => {
+    ($($variant:ident: $class:ident),+ $(,)?) => {
         fn singular_source_admission(query: &SingularQueryBox) -> SingularSourceAdmission {
             match query {
                 $(SingularQueryBox::$variant(_) => SingularSourceAdmission::$class,)+
             }
         }
-        const SINGULAR_SOURCE_ADMISSION_AUDIT: &[(u8, &str, SingularSourceAdmission)] = &[
-            $(($number, stringify!($variant), SingularSourceAdmission::$class),)+
+        const SINGULAR_SOURCE_ADMISSION_AUDIT: &[(&str, SingularSourceAdmission)] = &[
+            $((stringify!($variant), SingularSourceAdmission::$class),)+
         ];
     };
 }
 #[cfg(test)]
 define_singular_source_admission! {
-    1 => FindExecutorDataModel: ProvenBounded,
-    2 => FindParameters: ProvenBounded,
-    3 => FindAccountById: ProvenBounded,
-    4 => FindAccountByAlias: ProvenBounded,
-    5 => FindAliasesByAccountId: ProvenBounded,
-    6 => FindAccountRecoveryPolicyByAlias: ProvenBounded,
-    7 => FindAccountRecoveryRequestByAlias: ProvenBounded,
-    8 => FindProofRecordById: ProvenBounded,
-    9 => FindContractManifestByCodeHash: ProvenBounded,
-    10 => FindAbiVersion: ProvenBounded,
-    11 => FindAssetById: ProvenBounded,
-    12 => FindAssetDefinitionById: ProvenBounded,
-    13 => FindNftById: ProvenBounded,
-    14 => FindAssetEscrowById: ProvenBounded,
-    15 => FindTriggerById: ProvenBounded,
-    16 => FindTwitterBindingByHash: ProvenBounded,
-    17 => FindOracleFeedById: ProvenBounded,
-    18 => FindOracleDisputeById: ProvenBounded,
-    19 => FindOracleChangeById: ProvenBounded,
-    20 => FindOracleProviderStatsByKey: ProvenBounded,
-    21 => FindLatestDefiOracleAttestation: ProvenBounded,
-    22 => FindDaPinIntentByTicket: ProvenBounded,
-    23 => FindDaPinIntentByManifest: ProvenBounded,
-    24 => FindDaPinIntentByAlias: ProvenBounded,
-    25 => FindDaPinIntentByLaneEpochSequence: ProvenBounded,
-    26 => FindLaneRelayEnvelopeByRef: ProvenBounded,
-    27 => FindSorafsProviderOwner: ProvenBounded,
-    28 => FindSorafsOrderbookPolicy: ProvenBounded,
-    29 => FindSorafsOrderbookOrderById: ProvenBounded,
-    30 => FindSorafsOrderbookCancellationByOrderId: ProvenBounded,
-    31 => FindSorafsOrderbookReceiptById: ProvenBounded,
-    32 => FindSorafsOrderbookTradeById: ProvenBounded,
-    33 => FindSorafsOrderbookChannelById: ProvenBounded,
-    34 => FindSorafsOrderbookStatus: ProvenBounded,
-    35 => FindSorafsOrderbookOrders: ProvenBounded,
-    36 => FindSorafsOrderbookReceipts: ProvenBounded,
-    37 => FindSorafsOrderbookTrades: ProvenBounded,
-    38 => FindSorafsOrderbookChannels: ProvenBounded,
-    39 => FindSorafsOrderbookEvents: ProvenBounded,
-    40 => FindSorafsReservePolicy: ProvenBounded,
-    41 => FindSorafsReserveProviderById: ProvenBounded,
-    42 => FindSorafsReserveMovementById: ProvenBounded,
-    43 => FindSorafsReserveAppealById: ProvenBounded,
-    44 => FindSorafsReserveProviders: ProvenBounded,
-    45 => FindSorafsReserveMovements: ProvenBounded,
-    46 => FindSorafsReserveAppeals: ProvenBounded,
-    47 => FindSorafsReserveEvents: ProvenBounded,
-    48 => FindSorafsPopIssuerPolicy: ProvenBounded,
-    49 => FindSorafsPopCredentialCommitmentByDigest: ProvenBounded,
-    50 => FindSorafsPopCommitmentRootByVersion: ProvenBounded,
-    51 => FindSorafsPopRevocationPublicationByVersion: ProvenBounded,
-    52 => FindSorafsPopRevocationByNonceCommitment: ProvenBounded,
-    53 => FindSorafsPopAuditDigestBySequence: ProvenBounded,
-    54 => FindSorafsPopRegistryStatus: ProvenBounded,
-    55 => FindSorafsCitizenBondBySerialCommitment: ProvenBounded,
-    56 => FindSorafsCitizenBondSnapshot: ProvenBounded,
-    58 => FindSorafsPinManifest: ProvenBounded,
-    59 => FindSorafsPinManifests: ProvenBounded,
-    60 => FindSorafsRepairTask: ProvenBounded,
-    61 => FindSorafsRepairTasks: ProvenBounded,
-    62 => FindSorafsRepairStatus: ProvenBounded,
-    63 => FindSorafsRepairEvents: ProvenBounded,
-    64 => FindSorafsProofOutcome: ProvenBounded,
-    65 => FindSorafsProofOutcomeEvents: ProvenBounded,
-    66 => FindSorafsReputationJournalAuthorityPolicy: ProvenBounded,
-    67 => FindSorafsReputationJournalEventBySourceId: ProvenBounded,
-    68 => FindSorafsReputationJournalEvents: ProvenBounded,
-    69 => FindSorafsModerationPolicy: ProvenBounded,
-    70 => FindSorafsModerationAppeal: ProvenBounded,
-    71 => FindSorafsModerationJurorEligibility: ProvenBounded,
-    73 => FindSorafsModerationCase: ProvenBounded,
-    74 => FindSorafsModerationCommit: ProvenBounded,
-    75 => FindSorafsModerationReveal: ProvenBounded,
-    76 => FindSorafsModerationChallenge: ProvenBounded,
-    77 => FindSorafsModerationOutcome: ProvenBounded,
-    78 => FindSorafsModerationNoShow: ProvenBounded,
-    79 => FindSorafsModerationStatus: ProvenBounded,
-    80 => FindSorafsModerationSnapshot: ProvenBounded,
-    81 => FindSorafsModerationEvents: ProvenBounded,
-    82 => FindDataspaceNameOwnerById: ProvenBounded,
-    83 => FindMusubiExactPackageV1: ProvenBounded,
-    84 => FindMusubiExactReleaseV1: ProvenBounded,
-    85 => FindMusubiProviderBundleAttestationV1: ProvenBounded,
-    86 => FindMusubiResolverIndexV1: ProvenBounded,
-    87 => FindMusubiVersionsV1: ProvenBounded,
-    88 => FindMusubiMaintainersV1: ProvenBounded,
-    89 => FindMusubiArchiveLocationsV1: ProvenBounded,
-    90 => FindMusubiArchiveRetentionV1: ProvenBounded,
-    91 => FindMusubiAliasV1: ProvenBounded,
-    92 => FindMusubiAliasHistoryV1: ProvenBounded,
-    93 => FindMusubiOrderedPrefixV1: ProvenBounded,
-    94 => FindDomainById: ProvenBounded,
-    95 => FindFeeSponsorProgramById: ProvenBounded,
-    96 => FindFxCorridorPolicyRegistry: ProvenBounded,
-    97 => FindFxCorridorPolicyById: ProvenBounded,
-    98 => FindDomainEndorsements: ProvenBounded,
-    99 => FindDomainEndorsementPolicy: ProvenBounded,
-    100 => FindDomainCommittee: ProvenBounded,
-    101 => FindGameSessionById: ProvenBounded,
-    102 => FindExecutionProofVerificationById: ProvenBounded,
-    103 => FindNftSaleOfferById: ProvenBounded,
+    FindExecutorDataModel: ProvenBounded,
+    FindParameters: ProvenBounded,
+    FindAccountById: ProvenBounded,
+    FindAccountByAlias: ProvenBounded,
+    FindAliasesByAccountId: ProvenBounded,
+    FindAccountRecoveryPolicyByAlias: ProvenBounded,
+    FindAccountRecoveryRequestByAlias: ProvenBounded,
+    FindProofRecordById: ProvenBounded,
+    FindContractManifestByCodeHash: ProvenBounded,
+    FindAbiVersion: ProvenBounded,
+    FindAssetById: ProvenBounded,
+    FindAssetDefinitionById: ProvenBounded,
+    FindNftById: ProvenBounded,
+    FindAssetEscrowById: ProvenBounded,
+    FindTriggerById: ProvenBounded,
+    FindTwitterBindingByHash: ProvenBounded,
+    FindOracleFeedById: ProvenBounded,
+    FindOracleDisputeById: ProvenBounded,
+    FindOracleChangeById: ProvenBounded,
+    FindOracleProviderStatsByKey: ProvenBounded,
+    FindLatestDefiOracleAttestation: ProvenBounded,
+    FindDaPinIntentByTicket: ProvenBounded,
+    FindDaPinIntentByManifest: ProvenBounded,
+    FindDaPinIntentByAlias: ProvenBounded,
+    FindDaPinIntentByLaneEpochSequence: ProvenBounded,
+    FindLaneRelayEnvelopeByRef: ProvenBounded,
+    FindSorafsProviderOwner: ProvenBounded,
+    FindSorafsOrderbookPolicy: ProvenBounded,
+    FindSorafsOrderbookOrderById: ProvenBounded,
+    FindSorafsOrderbookCancellationByOrderId: ProvenBounded,
+    FindSorafsOrderbookReceiptById: ProvenBounded,
+    FindSorafsOrderbookTradeById: ProvenBounded,
+    FindSorafsOrderbookChannelById: ProvenBounded,
+    FindSorafsOrderbookStatus: ProvenBounded,
+    FindSorafsOrderbookOrders: ProvenBounded,
+    FindSorafsOrderbookReceipts: ProvenBounded,
+    FindSorafsOrderbookTrades: ProvenBounded,
+    FindSorafsOrderbookChannels: ProvenBounded,
+    FindSorafsOrderbookEvents: ProvenBounded,
+    FindSorafsReservePolicy: ProvenBounded,
+    FindSorafsReserveProviderById: ProvenBounded,
+    FindSorafsReserveMovementById: ProvenBounded,
+    FindSorafsReserveAppealById: ProvenBounded,
+    FindSorafsReserveProviders: ProvenBounded,
+    FindSorafsReserveMovements: ProvenBounded,
+    FindSorafsReserveAppeals: ProvenBounded,
+    FindSorafsReserveEvents: ProvenBounded,
+    FindSorafsPopIssuerPolicy: ProvenBounded,
+    FindSorafsPopCredentialCommitmentByDigest: ProvenBounded,
+    FindSorafsPopCommitmentRootByVersion: ProvenBounded,
+    FindSorafsPopRevocationPublicationByVersion: ProvenBounded,
+    FindSorafsPopRevocationByNonceCommitment: ProvenBounded,
+    FindSorafsPopAuditDigestBySequence: ProvenBounded,
+    FindSorafsPopRegistryStatus: ProvenBounded,
+    FindSorafsCitizenBondBySerialCommitment: ProvenBounded,
+    FindSorafsCitizenBondSnapshot: ProvenBounded,
+    FindSorafsPinManifest: ProvenBounded,
+    FindSorafsPinManifests: ProvenBounded,
+    FindSorafsRepairTask: ProvenBounded,
+    FindSorafsRepairTasks: ProvenBounded,
+    FindSorafsRepairStatus: ProvenBounded,
+    FindSorafsRepairEvents: ProvenBounded,
+    FindSorafsProofOutcome: ProvenBounded,
+    FindSorafsProofOutcomeEvents: ProvenBounded,
+    FindSorafsReputationJournalAuthorityPolicy: ProvenBounded,
+    FindSorafsReputationJournalEventBySourceId: ProvenBounded,
+    FindSorafsReputationJournalEvents: ProvenBounded,
+    FindSorafsModerationPolicy: ProvenBounded,
+    FindSorafsModerationAppeal: ProvenBounded,
+    FindSorafsModerationJurorEligibility: ProvenBounded,
+    FindSorafsModerationCase: ProvenBounded,
+    FindSorafsModerationCommit: ProvenBounded,
+    FindSorafsModerationReveal: ProvenBounded,
+    FindSorafsModerationChallenge: ProvenBounded,
+    FindSorafsModerationOutcome: ProvenBounded,
+    FindSorafsModerationNoShow: ProvenBounded,
+    FindSorafsModerationStatus: ProvenBounded,
+    FindSorafsModerationSnapshot: ProvenBounded,
+    FindSorafsModerationEvents: ProvenBounded,
+    FindDataspaceNameOwnerById: ProvenBounded,
+    FindMusubiExactPackageV1: ProvenBounded,
+    FindMusubiExactReleaseV1: ProvenBounded,
+    FindMusubiProviderBundleAttestationV1: ProvenBounded,
+    FindMusubiResolverIndexV1: ProvenBounded,
+    FindMusubiVersionsV1: ProvenBounded,
+    FindMusubiMaintainersV1: ProvenBounded,
+    FindMusubiArchiveLocationsV1: ProvenBounded,
+    FindMusubiArchiveRetentionV1: ProvenBounded,
+    FindMusubiAliasV1: ProvenBounded,
+    FindMusubiAliasHistoryV1: ProvenBounded,
+    FindMusubiOrderedPrefixV1: ProvenBounded,
+    FindDomainById: ProvenBounded,
+    FindFeeSponsorProgramById: ProvenBounded,
+    FindFxCorridorPolicyRegistry: ProvenBounded,
+    FindFxCorridorPolicyById: ProvenBounded,
+    FindDomainEndorsements: ProvenBounded,
+    FindDomainEndorsementPolicy: ProvenBounded,
+    FindDomainCommittee: ProvenBounded,
+    FindGameSessionById: ProvenBounded,
+    FindExecutionProofVerificationById: ProvenBounded,
+    FindNftSaleOfferById: ProvenBounded,
 }
 /// Measure a singular source before a metered server lane can clone or decode it.
 ///
@@ -1545,11 +1572,15 @@ mod tests {
         params
     }
     #[test]
-    fn singular_source_admission_audit_covers_all_100_variants() {
+    fn singular_source_admission_audit_covers_every_variant() {
         assert_eq!(SINGULAR_SOURCE_ADMISSION_AUDIT.len(), 101);
-        for (index, (number, name, class)) in SINGULAR_SOURCE_ADMISSION_AUDIT.iter().enumerate() {
-            assert_eq!(usize::from(*number), index + 1);
+        let mut names = std::collections::BTreeSet::new();
+        for (name, class) in SINGULAR_SOURCE_ADMISSION_AUDIT {
             assert!(!name.is_empty());
+            assert!(
+                names.insert(*name),
+                "each production variant has one source admission owner"
+            );
             assert_eq!(*class, SingularSourceAdmission::ProvenBounded);
         }
         let representative = SingularQueryBox::FindAbiVersion(

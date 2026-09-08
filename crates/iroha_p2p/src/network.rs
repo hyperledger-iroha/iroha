@@ -601,7 +601,7 @@ where
         };
         let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
         let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-        let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
+        let value = <Self as ncore::DeserializePayload>::try_deserialize(archived.archived())?;
         Ok((value, bytes.len()))
     }
 }

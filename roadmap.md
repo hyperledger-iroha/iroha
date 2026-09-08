@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-07.
+Last updated: 2026-09-08.
 
 This is the outstanding-outcome view for Iroha 3's first release. Component owners
 below are code responsibilities, not invented individual assignments. Local
@@ -23,7 +23,7 @@ and [schema contract](specs/norito_schema_identity.md) define these boundaries.
 
 | ID | Outstanding outcome | Component owner | Completion criteria |
 | --- | --- | --- | --- |
-| A1 | Foundational, privacy and service model boundaries | `iroha_data_model`, model crates, Norito/schema | Independent cohesive units with acyclic dependencies; mandatory aggregate protocol surface; complete explicit generic schema identities, exact named/frame goldens and consumer migration before atomic codec cutover. |
+| A1 | Foundational, privacy and service model boundaries | `iroha_data_model`, model crates, Norito/schema | Independent cohesive units with acyclic dependencies; preserve mandatory aggregate protocol JSON for admission and consensus parameters while qualifying supported feature graphs. Complete explicit generic schema identities, exact named/frame goldens and consumer migration before atomic codec cutover and physical model extraction. |
 | A2 | SDK and service runtime separation | Rust SDK, storage client, Musubi service | Remove telemetry/CAR/orchestrator runtime edges; one service owner for journals, clocks and publication; one typed storage adapter; dependency-boundary gate passes for shipping normal/build graphs. |
 | A3 | Immutable asynchronous Rust client | Rust SDK and all callers | Public/account/operator contexts enforce authority; one async transport and explicit blocking facade; cancellation, bounded responses, retry/finality and streaming regressions pass; remove mutable/global transports and migrate consumers. |
 | A4 | Cohesive Core and Torii modules | Core state/storage/execution; Torii route capabilities | Separate World schema, restore, merge, execution and caches; preserve one atomic block overlay, rollback/replay and canonical storage definition; capability-owned route construction; no new facade-only layers. |

@@ -23,6 +23,10 @@ mod model {
     #[event_set(
         schema_name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeEventSet"
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeEvent"
+    )]
     pub enum RuntimeUpgradeEvent {
         Proposed(RuntimeUpgradeProposed),
         Activated(RuntimeUpgradeActivated),
@@ -42,6 +46,10 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeProposed"
+    )]
     pub struct RuntimeUpgradeProposed {
         pub id: crate::runtime::RuntimeUpgradeId,
         pub abi_version: u16,
@@ -62,6 +70,10 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeActivated"
+    )]
     pub struct RuntimeUpgradeActivated {
         pub id: crate::runtime::RuntimeUpgradeId,
         pub abi_version: u16,
@@ -81,11 +93,15 @@ mod model {
         iroha_schema::IntoSchema,
     )]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::runtime_upgrade::model::RuntimeUpgradeCanceled"
+    )]
     pub struct RuntimeUpgradeCanceled {
         pub id: crate::runtime::RuntimeUpgradeId,
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     RuntimeUpgradeEvent,
     RuntimeUpgradeProposed,
@@ -99,3 +115,6 @@ pub mod prelude {
         RuntimeUpgradeProposed,
     };
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

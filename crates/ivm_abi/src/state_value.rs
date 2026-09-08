@@ -10,8 +10,8 @@ use norito::core::serialize_to_buffer;
 use norito::{
     Decode, Encode,
     core::{
-        Archived, DecodeFromSlice, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
-        SerializePayload, serialize_to_writer,
+        Archived, DecodeFromSlice, DeserializePayload, Error as NoritoError, NoritoDeserialize,
+        NoritoSerialize, SerializePayload, serialize_to_writer,
     },
 };
 use std::io::{self, Write};
@@ -850,10 +850,12 @@ impl SerializePayload for StateValueSchemaV1 {
         encode_state_value_schema_payload(self)?.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for StateValueSchemaV1 {
+impl NoritoDeserialize<'_> for StateValueSchemaV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_SCHEMA_NAME_V1)
     }
+}
+impl<'a> DeserializePayload<'a> for StateValueSchemaV1 {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("StateValueSchemaV1 decode")
     }
@@ -2232,10 +2234,12 @@ impl SerializePayload for StateValueRecordV1 {
         encode_state_value_record_payload(self)?.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for StateValueRecordV1 {
+impl NoritoDeserialize<'_> for StateValueRecordV1 {
     fn schema_hash() -> [u8; 16] {
         norito::core::schema_hash_for_name(STATE_VALUE_RECORD_NAME_V1)
     }
+}
+impl<'a> DeserializePayload<'a> for StateValueRecordV1 {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("StateValueRecordV1 decode")
     }

@@ -54,17 +54,37 @@ while `#[derive(SerializePayload)]` emits only payload serialization and rejects
 frame-schema attributes. Manual implementations and qualified calls use the
 same ownership boundary; no old payload-method alias remains.
 
+`DeserializePayload<'a>` owns `deserialize` and `try_deserialize`, reconstructing
+values within the active bounded payload context. `NoritoDeserialize<'a>` is the
+typed marker above that contract and retains only the active frame hash. The
+`NoritoDeserialize`/`Decode` derive emits both implementations;
+`#[derive(DeserializePayload)]` emits only reconstruction and rejects
+`#[norito(schema_name = "...")]`. Payload-only records and their containers
+cannot acquire a typed frame decoder from their reconstruction implementation.
+Manual implementations and qualified reconstruction calls use the payload owner.
+
+Public `IdBox` and `BlockSignature` retain one typed frame API each, with their
+compiler-observed nominal identities and 24 immutable root/container frames.
+`IdBoxCandidate` and the block header/signature tuple adapters expose only the
+payload contracts. `IdBox::try_deserialize` delegates to its carrier's fallible
+method, preserving unknown/truncated-tag errors without panicking. The
+[public-owner fixture contract](../crates/iroha_data_model/tests/fixtures/public_frame_owner_identities.md)
+records the exact captures and validation scope; these declarations do not
+activate the pending global identity transition.
+
 The remaining atomic identity transition is:
 
-1. `SerializePayload` owns object-safe serialization and encoded-size methods.
+1. `SerializePayload` and `DeserializePayload<'a>` retain their respective bare
+   serialization and reconstruction responsibilities.
 2. `NoritoSerialize: SerializePayload + NoritoSchema` is the typed contract,
    implemented once for types satisfying both. Erased bare writers use
    `dyn SerializePayload`; typed generic callers inherit the identity bound.
-3. `NoritoDeserialize<'a>: Sized + NoritoSchema` retains reconstruction methods.
+3. `NoritoDeserialize<'a>: DeserializePayload<'a> + NoritoSchema` is the typed
+   decoding contract. Reconstruction remains solely on `DeserializePayload`.
 4. Both codec directions remove their independent `schema_hash` methods. Every
-   typed frame writer/checker uses the fixed helper. Update Encode/Decode,
+   typed frame writer/checker uses the fixed helper. Update framed callers,
    derives, manual implementations and qualified calls together. No legacy
-   alias is retained for the old payload trait.
+   hash or reconstruction-method forwarding remains.
 
 This keeps allocation-conscious bare streaming while preventing a type without
 an identity from entering a typed frame. `schema-structural` remains explicit
@@ -72,9 +92,105 @@ inspection data, not a feature-selected active header digest.
 
 Until that transition, the active typed codec directions retain their existing
 `schema_hash` implementations. They are not yet bound to `NoritoSchema`.
-Bare canonical field decoding and `Decode` still carry typed serializer bounds;
-their re-encoding requirements must move to payload ownership during the
-coordinated identity cutover, preserving all canonical byte comparisons.
+Bare `Decode` requires `for<'de> DeserializePayload<'de> + SerializePayload`;
+canonical field/container decoders use the payload contracts for reconstruction
+and byte comparison. Exact slice helpers combine `DeserializePayload` with
+`DecodeFromSlice` and do not require a frame identity. Typed frame consumers
+explicitly retain their `NoritoSerialize`/`NoritoDeserialize` bounds; bare
+`Encode`/`Decode` bounds do not imply those contracts. Option fields use the
+shared canonical decoder without inventing
+a nested frame schema, retaining advertised flags and resource limits.
+Tuple and result slice decoders enforce exact child consumption with runtime
+errors. Both result branches guard child nesting and restore the previous depth
+before subsequent decodes in the same limit scope. Unit size diagnostics use
+the shared layout calculation, including the existing packed zero-offset table;
+canonical field/frame comparison continues to validate that metadata.
+
+The actual `MultisigPolicy` and `MultisigMember` owners derive binary decoding
+with the fallible
+`#[norito(validate = "path")]` hook. It consumes the reconstructed owner and
+returns `Result<Self, norito::Error>` once per reconstruction, preserving typed
+errors and the existing strict constructors. Their private `PolicyFields` and
+`MemberFields` carriers retain only JSON decoding and acquire no binary frame
+identity. Moving the generated reconstruction implementation to
+`DeserializePayload` retains this validation behavior and one reconstruction
+owner. The atomic identity transition and remaining owner/feature
+qualification are still pending.
+
+## Streaming wire declaration checkpoint
+
+The integrated batch closes declarations for all 84 current production binary
+owners in `norito::streaming`: 70 root records and 14 `codec` records. Each
+explicit nominal identity is captured from the pinned compiler and checked
+against both existing codec directions. The immutable
+[`streaming_wire_identities.json`](../crates/norito/tests/fixtures/streaming_wire_identities.json)
+and [`streaming_wire_identity_frames.json`](../crates/norito/tests/fixtures/streaming_wire_identity_frames.json)
+retain those observations and 396 complete/bare frame records across 132
+populated values and their root, Option and two-element Vec forms. Root enum
+variants are covered. Header checks include the actual required alignment
+padding, zero padding bytes, advertised flags and exact payload length;
+decode/re-encode comparisons preserve the captured bytes.
+
+The implementation and its large test module move into `streaming/codec.rs`
+and `streaming/codec/tests.rs`, retaining the original module namespaces,
+visibility, declared identities and every existing assertion. Final default Norito tests pass 1,308 cases, and
+`--no-default-features --features base-codec --lib` passes 456 tests; each
+selection has one existing ignored case. Strict
+`cargo clippy -p norito --tests --no-deps --locked --offline -- -D warnings`
+also passes. All three runs retain the same 19,297 final candidate inputs
+unchanged, with no stack override. The integrated code/budget paths match those
+qualified inputs. A fresh rerun of eight settlement cases and the removed-layout
+case also passes on that seal, without a stack override; the owning live model
+and hash sources match the candidate. This includes the populated 4,096-source
+schema/codec/hash/drop regression.
+
+A subsequent isolated structural-feature check exposes an existing enum derive
+mismatch: serialization selects the structural hash, while deserialization
+retains the nominal default. The unfixed runtime regression fails at directional
+hash equality. The integrated correction emits the same existing hash-selection
+body in both directions, retaining explicit `schema_name` projections and
+unchanged default-mode identities. Its regression checks high-level, reader,
+core archived/slice and ArchiveView paths, including wrong-header rejection.
+
+The streaming guards compare all 84 declared nominal identities to the
+unchanged captures independently of the active hash mode. Default mode still
+compares all 396 complete frames; the structural branch compares populated bare
+bytes, advertised flags and alignment while checking active directional/header
+equality, exact roundtrips and malformed-frame rejection. Runtime qualification
+of these streaming guards is limited to default/base builds: the structural
+library selection cannot yet compile. The captured rANS checksum stays fixed in
+the fixture value, and default mode verifies the original checksum calculation.
+These fixtures validate wire representation, not signed-table authorization.
+
+The final combined default run passes 1,380 tests: 1,309 Norito, 57 derive-library
+and 14 strict JSON cases, with one existing ignored case. Base-codec library
+tests pass 456 cases with one ignored. Strict Norito `--tests --no-deps` and
+isolated derive-library `--lib --no-deps` Clippy both pass with warnings denied.
+The derive cleanup removes unused `Debug` from private attribute records,
+retaining all parser diagnostics through explicit error extraction at 11 test
+sites; no dependency or dependency feature is added. All final checkpoints bind
+`qualified-correction-inputs.json`, with 19,297 unchanged inputs and no stack
+override. These results are distinct from the earlier 1,308-test checkpoint;
+the integrated correction paths match the qualified candidate exactly. The final Native AMX
+selection also passes all 32 tests, with no failures or ignored cases and no
+stack override on that same seal. It includes the populated 4,096-source
+schema/codec/hash/drop and removed-recursive-layout regressions. The
+`qualified-correction-native-amx-checkpoint.json` checkpoint binds this result
+and exact live model/hash owner correspondence; the earlier nine-case run
+remains separately bound to its prior seal.
+
+Only the six focused schema integration tests ran successfully under
+`--no-default-features --features base-codec,schema-structural`, with zero
+failures or ignored cases on that same final seal. The complete structural
+group diagnostic remains failed: 109 pass and ten fail, comprising eight
+compression assumptions when compression is disabled and two existing nominal
+streaming-ticket goldens. The separate structural library selection fails
+compilation with 24 errors across 15 test owners. In particular, payload-only
+generic decoder regressions must retain their schema-free leaves; adding
+frame/schema bounds would weaken their contract. Closing that coupling requires
+the planned identity separation. No tests are disabled to obtain a pass. The
+atomic trait transition, remaining owner/feature closure and physical model
+extraction are still pending.
 
 ## Source review queue
 
@@ -420,9 +536,9 @@ cutover occur atomically; compile upward through supported features and targets.
   preserves 432 complete frames across nine values and 40 nominal identities;
   account/NFT/RWA storage records have their captured declarations too.
   Active codec selection remains unchanged by these declarations.
-  Metadata's private `MetadataEntryRef` writes unframed borrowed fields.
-  Migrate its implementation to `SerializePayload` at the atomic cutover;
-  it never enters typed framing.
+  Metadata's private `MetadataEntryRef` already implements `SerializePayload`
+  for unframed borrowed fields. It needs no identity or further migration at
+  the atomic cutover; it never enters typed framing.
 - Preserve remaining forwarding projections such as InstructionBox's tuple
   frame (`isi/mod.rs:812`), and SoraFS
   borrowed signing views in orderbook, governance, por, potr, provider_advert and
@@ -489,3 +605,54 @@ coverage includes lifetime-only uses so wrapper crates can retain
 `deny(warnings)`. Complete generated/manual identity closure, the atomic active
 codec transition, all-feature qualification and source-bound memory comparison
 remain pending.
+
+## Manual public frame ownership
+
+Sixteen additional manual model owners now declare their actual captured
+nominal identities. X.509 key usage retains its explicit boolean root
+projection and distinct wrapper identity inside containers; every other owner
+retains its own root identity. The complete fixtures and projections are
+documented in the [public frame contract](../crates/iroha_data_model/tests/fixtures/public_frame_owner_identities.md).
+
+`iroha_data_model` has one explicit `manual_frame_identity` integration target
+for these public contracts. It also owns the existing IdBox and BlockSignature
+assertions, preserving all 144 immutable frame records with one shared binary
+checker and JSON checks only where supported. The seven tests pass after the
+declarations and relocation, including direct fallible malformed-input checks,
+on 19,313 unchanged default/HTTP inputs without a stack override. Prior full
+library qualification remains tied to its separate preceding source seal.
+
+The subsequent query/time stage adds fifteen declarations and two permanent
+tests containing 181 unchanged pre-declaration frames. QueryBox remains
+specialized to its existing aggregate output; QuerySignature forwards only its
+root projection to SignatureOf<QueryRequestWithAuthority>. Query reconstruction
+candidates have payload contracts only, and the redundant private TimeInterval
+carrier is removed. The public target now passes nine tests and preserves all
+325 frames, with 19,317 unchanged inputs and no stack override. Its callback
+checker preserves complete semantics without expanding the public query API.
+
+A further nine time-event and query-parameter declarations preserve 97 actual
+pre-declaration frames. Schedule and fetch hints retain their structural codecs;
+Core and service admission retain their execution policy. All 11 public tests
+preserve 422 frames, and the same 19,321-input source passes 256 model, 33 query/SM
+integration and one allocation test without a stack override. The single
+combined build reports no warnings after removing an unused framing-trait
+import. These counts have their own source seal in the public frame contract.
+
+The next event stage adds 196 owner declarations and 103 fresh captured frames.
+Four slice decoders now reconstruct the complete owner without dropping the
+message envelope or resetting caller layout context. Nine direct regressions
+retain typed budget errors, exact consumption and context restoration. All 21
+public tests preserve 525 frames; the same 19,341-input source passes 329 model,
+33 query/SM and one allocation test on the default stack. The complete Native
+AMX include closure retains 104 functions and 75 tests after moving settlement
+tests to their topic module. All 32 Native AMX cases pass. Source-size findings
+fall to 235 with 173 unchanged exceptions. Strict Clippy stops at the model
+library with 225 diagnostics, leaving the test target's strict lint unqualified.
+See the event section of the public frame contract for precise scoped evidence.
+
+Remaining generated/manual declarations and the atomic transition from
+directional hashes still require completion before physical model moves. These
+stages change no active frame-selection algorithm, codec layout, ABI version,
+dependencies or optimization setting. Full workspace/release and strict-lint
+qualification remain separate requirements.

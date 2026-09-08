@@ -479,9 +479,11 @@ def test_provider_ingest_clippy_shapes_preserve_the_durable_codec() -> None:
         "use super::{BoxedStoredCompletionDeliveryV1, StoredCompletionDeliveryV1};",
         "NoritoSerialize for BoxedStoredCompletionDeliveryV1",
         "NoritoDeserialize<'a> for BoxedStoredCompletionDeliveryV1",
+        "DeserializePayload<'a> for BoxedStoredCompletionDeliveryV1",
         "SerializePayload for BoxedStoredCompletionDeliveryV1",
         "<StoredCompletionDeliveryV1 as norito::core::NoritoSerialize>::schema_hash()",
         "<StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()",
+        "<StoredCompletionDeliveryV1 as norito::core::DeserializePayload<'a>>::try_deserialize(",
         "norito::core::SerializePayload::serialize(self.0.as_ref(), writer)",
         "archived.cast::<StoredCompletionDeliveryV1>()",
     ):
@@ -490,3 +492,34 @@ def test_provider_ingest_clippy_shapes_preserve_the_durable_codec() -> None:
     assert "completion: Box<StoredCompletionDeliveryV1>" not in outbox
     assert "pub type FinalizedProviderIngestRuntimeResultV1<" in node_lib
     assert ") -> FinalizedProviderIngestRuntimeResultV1<" in node_lib
+
+
+@pytest.mark.parametrize(
+    "contract",
+    (
+        "DeserializePayload<'a> for BoxedStoredCompletionDeliveryV1",
+        "<StoredCompletionDeliveryV1 as norito::core::NoritoDeserialize<'a>>::schema_hash()",
+        "<StoredCompletionDeliveryV1 as norito::core::DeserializePayload<'a>>::try_deserialize(",
+    ),
+)
+def test_boxed_completion_guard_rejects_disconnected_payload_or_frame_ownership(
+    monkeypatch: pytest.MonkeyPatch, contract: str
+) -> None:
+    """Reject a lost payload decoder, owner delegation, or directional frame hash."""
+    test_provider_ingest_clippy_shapes_preserve_the_durable_codec()
+    completion_path = NODE_OUTBOX.parent / "provider_ingest_outbox" / "completion_codec.rs"
+    original_read = _read
+    original = original_read(completion_path)
+    assert original.count(contract) == 1
+    mutated = original.replace(contract, "REMOVED_CODEC_CONTRACT", 1)
+    assert mutated != original
+    monkeypatch.setitem(
+        globals(),
+        "_read",
+        lambda path: mutated if path == completion_path else original_read(path),
+    )
+    with pytest.raises(
+        AssertionError,
+        match=re.escape(f"missing boxed-completion codec contract: {contract}"),
+    ):
+        test_provider_ingest_clippy_shapes_preserve_the_durable_codec()

@@ -13710,7 +13710,7 @@ fn decode_canonical_contract_state_norito<T>(
     label: &str,
 ) -> core::result::Result<T, String>
 where
-    T: norito::codec::Decode + norito::codec::Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     let value =
         norito::decode_from_bytes(payload).map_err(|err| format!("decode {label}: {err}"))?;

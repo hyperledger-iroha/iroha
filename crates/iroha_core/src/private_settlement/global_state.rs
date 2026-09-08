@@ -202,7 +202,9 @@ fn encode_private_settlement_storage_key_v1<T: norito::NoritoSerialize>(key: &T,
     json::write_json_string(&hex::encode_upper(encoded), out);
 }
 
-fn decode_private_settlement_storage_key_v1<T: Decode + Encode>(
+fn decode_private_settlement_storage_key_v1<
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
+>(
     encoded: &str,
 ) -> Result<T, json::Error> {
     let bytes = hex::decode(encoded).map_err(|error| {

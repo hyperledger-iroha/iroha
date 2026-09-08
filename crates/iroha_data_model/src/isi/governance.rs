@@ -35,11 +35,18 @@ pub use parliament::*;
 mod at_window_placeholder {
     use super::*;
     #[derive(
-        Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        Clone,
+        Copy,
+        Debug,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Encode,
+        Decode,
+        iroha_schema::IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     /// Inclusive governance enactment window expressed in block heights.
     pub struct AtWindow {
@@ -148,12 +155,19 @@ pub struct CastZkBallot {
     pub public_inputs_json: String,
 }
 impl crate::seal::Instruction for CastZkBallot {}
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 /// Canonical V1 ZK ballot proof envelope.
 ///
 /// Opaque container for the ballot proof and minimal public context.
@@ -161,23 +175,17 @@ pub struct BallotProof {
     /// Proof backend tag (e.g., "halo2/ipa" or "halo2/pasta/tiny-add").
     pub backend: iroha_schema::Ident,
     /// Opaque proof envelope bytes (ZK1 or H2* container).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub envelope_bytes: Vec<u8>,
     /// Optional eligibility root hint (32-byte) to bind verification to a known root.
     /// JSON uses a lowercase hex string (optional 0x or blake2b32: prefix).
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes_hex::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex::option")]
     pub root_hint: Option<[u8; 32]>,
     /// Optional owner account id (when the circuit commits to it in public inputs).
     pub owner: Option<crate::account::AccountId>,
     /// Optional nullifier hint (32-byte) derived from the proof's commitment.
     /// JSON uses a lowercase hex string (optional 0x or blake2b32: prefix).
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes_hex::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes_hex::option")]
     pub nullifier: Option<[u8; 32]>,
     /// Optional exact lock amount hint.
     pub amount: Option<Quantity>,
@@ -355,7 +363,7 @@ mod tests {
             upper: 20,
         }
     }
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: norito::json::JsonSerialize>(value: &T) {
         let legacy = norito::json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -377,7 +385,7 @@ mod tests {
             name: "runtime-upgrade".to_string(),
             description: "isi roundtrip".to_string(),
             abi_version: 1,
-            abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+            abi_hash: ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1),
             added_syscalls: Vec::new(),
             added_pointer_types: Vec::new(),
             start_height: 100,
@@ -530,7 +538,7 @@ mod tests {
             },
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn voting_mode_json_is_canonical_and_rejects_aliases() {
         assert_exact_json(&VotingMode::Zk);

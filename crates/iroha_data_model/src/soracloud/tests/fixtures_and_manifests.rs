@@ -272,7 +272,7 @@ fn app_route_and_service_references_require_exact_v1_tokens() {
         .validate()
         .expect_err("shard aliases must fail closed");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn app_infra_v1_json_graph_is_closed_and_requires_explicit_nullable_and_vector_keys() {
     macro_rules! assert_closed {
@@ -680,7 +680,6 @@ fn hf_persisted_binding_tokens_are_exact() {
         .expect_err("audit apartment bindings must use canonical Names");
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn hf_registry_json_rejects_retired_runtime_metadata() {
     for retired_field in [
@@ -1204,7 +1203,7 @@ fn model_artifact_audit_identifiers_are_exact_tokens() {
         .validate()
         .expect_err("consumed-version aliases must fail closed");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn canonical_deployment_and_hosting_json_graph_rejects_unknown_fields() {
     macro_rules! assert_unknown_rejected {
@@ -1308,7 +1307,7 @@ fn canonical_deployment_and_hosting_json_graph_rejects_unknown_fields() {
     assert_unknown_rejected!(SoraOrderedMailboxResultV1, "ordered mailbox result");
     assert_unknown_rejected!(SoraRuntimeReceiptV1, "runtime receipt");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
     macro_rules! assert_required_keys {
@@ -1500,7 +1499,7 @@ fn canonical_deployment_and_hosting_json_graph_requires_explicit_keys() {
         "HF shared-lease audit event"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_v1_wire_records_reject_retired_fields() {
     let cases = [
@@ -1593,7 +1592,7 @@ fn inrou_v1_wire_records_reject_retired_fields() {
         assert!(rejected, "{label} must reject retired `{retired_field}`");
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn inrou_v1_wire_records_require_every_canonical_field() {
     macro_rules! assert_missing_rejected {
@@ -2456,7 +2455,7 @@ fn assert_zero_prehash_digest_error(err: &SoracloudManifestError, expected_field
         "unexpected error: {err_text}"
     );
 }
-#[cfg(feature = "json")]
+
 fn assert_soracloud_proof_key_commitment_domains(
     schema_value: &Value,
     pointer: &str,
@@ -2490,7 +2489,7 @@ fn assert_soracloud_proof_key_commitment_domains(
         "{context} proof-key material and pair commitment domains must be distinct"
     );
 }
-#[cfg(feature = "json")]
+
 fn assert_soracloud_artifact_digest_domains(
     schema_value: &Value,
     pointer: &str,
@@ -2538,14 +2537,14 @@ fn assert_soracloud_artifact_digest_domains(
         "{context} evaluator-artifact-set and circuit-artifact-bundle domains must be distinct"
     );
 }
-#[cfg(feature = "json")]
+
 fn assert_schema_object<'a>(schema_value: &'a Value, pointer: &str, context: &str) -> &'a Value {
     schema_value
         .pointer(pointer)
         .filter(|value| value.as_object().is_some())
         .unwrap_or_else(|| panic!("{context} must carry object at `{pointer}`"))
 }
-#[cfg(feature = "json")]
+
 fn assert_schema_string_field(section: &Value, field: &str, expected: &str, context: &str) {
     assert_eq!(
         section.get(field).and_then(Value::as_str),
@@ -2553,7 +2552,7 @@ fn assert_schema_string_field(section: &Value, field: &str, expected: &str, cont
         "{context} schema field `{field}` drifted"
     );
 }
-#[cfg(feature = "json")]
+
 fn assert_schema_u64_field(section: &Value, field: &str, expected: u64, context: &str) {
     assert_eq!(
         section.get(field).and_then(Value::as_u64),
@@ -2561,7 +2560,7 @@ fn assert_schema_u64_field(section: &Value, field: &str, expected: u64, context:
         "{context} schema field `{field}` drifted"
     );
 }
-#[cfg(feature = "json")]
+
 fn assert_schema_bool_field(section: &Value, field: &str, expected: bool, context: &str) {
     assert_eq!(
         section.get(field).and_then(Value::as_bool),
@@ -2569,7 +2568,7 @@ fn assert_schema_bool_field(section: &Value, field: &str, expected: bool, contex
         "{context} schema field `{field}` drifted"
     );
 }
-#[cfg(feature = "json")]
+
 #[allow(clippy::too_many_lines)]
 fn assert_soracloud_execution_schema_sections(schema_value: &Value, context: &str) {
     let witness_digest_domain = std::str::from_utf8(
@@ -2963,7 +2962,7 @@ fn assert_soracloud_execution_schema_sections(schema_value: &Value, context: &st
         assert_schema_bool_field(release_prover_input, field, true, context);
     }
 }
-#[cfg(feature = "json")]
+
 #[allow(clippy::too_many_lines)]
 fn assert_soracloud_release_audit_schema_sections(schema_value: &Value, context: &str) {
     let evidence_digest_domain = std::str::from_utf8(

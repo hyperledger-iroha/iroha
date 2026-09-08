@@ -1,7 +1,10 @@
 #![allow(clippy::manual_div_ceil)]
 use norito::{
     Compression,
-    core::{DecodeFlagsGuard, Header, NoritoDeserialize, NoritoSerialize, header_flags},
+    core::{
+        DecodeFlagsGuard, DeserializePayload, Header, NoritoDeserialize, NoritoSerialize,
+        header_flags,
+    },
     deserialize_from, serialize_into,
 };
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
@@ -39,7 +42,7 @@ fn empty_vec_roundtrip() {
     let original: Vec<u8> = Vec::new();
     let bytes = norito::core::to_bytes(&original).unwrap();
     let archived = norito::core::from_bytes::<Vec<u8>>(&bytes).unwrap();
-    let decoded = <Vec<u8> as NoritoDeserialize>::deserialize(archived);
+    let decoded = <Vec<u8> as DeserializePayload>::deserialize(archived);
     assert_eq!(original, decoded);
 }
 #[test]

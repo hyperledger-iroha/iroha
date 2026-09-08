@@ -322,7 +322,9 @@ fn streaming_writer_errors_never_return_a_partial_digest() {
 /// A serializer-owned allocation charge tests the adapter's inherited-budget error path.
 struct BudgetedField;
 
-impl NoritoSerialize for BudgetedField {
+impl NoritoSerialize for BudgetedField {}
+
+impl norito::core::SerializePayload for BudgetedField {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         norito::core::reserve_decode_allocation(1)?;
         writer.write_all(&[42])?;

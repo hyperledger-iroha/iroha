@@ -5,7 +5,7 @@
 //! sortition manifests plus sealed commit / reveal ballots so governance clients can prove juror
 //! selection and ballot integrity before admitting policy votes to the ledger.
 use crate::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use blake2::digest::Digest;
 use iroha_crypto::Blake2b256;
@@ -21,12 +21,19 @@ pub const POLICY_JURY_SORTITION_VERSION_V1: u16 = 1;
 const POLICY_JURY_BALLOT_COMMITMENT_DOMAIN_V1: &[u8] =
     b"iroha.ministry.policy-jury.ballot.commitment.v1";
 /// Vote options available to policy juries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-    norito(tag = "choice", content = "value", rename_all = "kebab-case")
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
+#[norito(tag = "choice", content = "value", rename_all = "kebab-case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryVoteChoice")]
 pub enum PolicyJuryVoteChoice {
@@ -47,9 +54,18 @@ impl PolicyJuryVoteChoice {
     }
 }
 /// ZK proof references attached to a policy-jury ballot commitment.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryZkEnvelope")]
 pub struct PolicyJuryZkEnvelope {
     /// URI referencing the proof bundle backing the reveal.
@@ -59,8 +75,17 @@ pub struct PolicyJuryZkEnvelope {
     pub attachments: Vec<String>,
 }
 /// Ballot channel used for a juror's vote.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "mode", content = "value", rename_all = "kebab-case")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryBallotMode")]
@@ -71,9 +96,18 @@ pub enum PolicyJuryBallotMode {
     ZkEnvelope(PolicyJuryZkEnvelope),
 }
 /// Juror ballot commitment produced during the sealed phase.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryBallotCommitV1")]
 pub struct PolicyJuryBallotCommitV1 {
     /// Schema version; must equal [`POLICY_JURY_BALLOT_COMMIT_VERSION_V1`].
@@ -85,7 +119,7 @@ pub struct PolicyJuryBallotCommitV1 {
     /// Stable juror identifier.
     pub juror_id: String,
     /// Blake2b commitment for the juror + choice + nonce tuple.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub commitment_blake2b_256: [u8; 32],
     /// UTC timestamp (milliseconds) when the commitment was recorded.
     pub committed_at_unix_ms: u64,
@@ -156,9 +190,18 @@ impl PolicyJuryBallotCommitV1 {
     }
 }
 /// Public reveal payload proving the juror's choice and salt.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryBallotRevealV1")]
 pub struct PolicyJuryBallotRevealV1 {
     /// Schema version; must equal [`POLICY_JURY_BALLOT_REVEAL_VERSION_V1`].
@@ -172,7 +215,7 @@ pub struct PolicyJuryBallotRevealV1 {
     /// Vote selected by the juror.
     pub choice: PolicyJuryVoteChoice,
     /// Random nonce used when generating the commitment.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub nonce: Vec<u8>,
     /// UTC timestamp (milliseconds) when the reveal was recorded.
     pub revealed_at_unix_ms: u64,
@@ -285,9 +328,18 @@ pub enum PolicyJuryBallotError {
     UnexpectedZkEvidence,
 }
 /// Deterministic sortition manifest for a policy jury round.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJurySortitionV1")]
 pub struct PolicyJurySortitionV1 {
     /// Schema version; must equal [`POLICY_JURY_SORTITION_VERSION_V1`].
@@ -299,10 +351,10 @@ pub struct PolicyJurySortitionV1 {
     /// UTC timestamp (milliseconds) when the draw was executed.
     pub drawn_at_unix_ms: u64,
     /// Blake2b digest of the proof-of-personhood snapshot used for sortition.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub pop_snapshot_digest_blake2b_256: [u8; 32],
     /// Randomness beacon used for the draw.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub randomness_beacon: [u8; 32],
     /// Target committee size.
     pub committee_size: u32,
@@ -458,9 +510,18 @@ pub enum PolicyJurySortitionError {
     },
 }
 /// Primary juror assignment emitted by the sortition workflow.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryAssignment")]
 pub struct PolicyJuryAssignment {
     /// Slot number (`0..committee_size`).
@@ -476,9 +537,19 @@ pub struct PolicyJuryAssignment {
     pub failover: Option<PolicyJuryFailoverPlan>,
 }
 /// Automatic failover plan mapping a slot to the waitlist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryFailoverPlan")]
 pub struct PolicyJuryFailoverPlan {
     /// Waitlist rank that should replace this slot if the juror no-shows.
@@ -487,9 +558,18 @@ pub struct PolicyJuryFailoverPlan {
     pub escalate_after_secs: u32,
 }
 /// Waitlisted juror entry.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::ministry::jury::PolicyJuryWaitlistEntry")]
 pub struct PolicyJuryWaitlistEntry {
     /// Rank position (1-indexed, ascending).

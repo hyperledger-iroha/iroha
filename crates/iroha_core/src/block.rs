@@ -12179,7 +12179,7 @@ pub(crate) mod valid {
                             )),
                         )
                     }
-                    AcceptTransactionFail::TransactionInTheFuture => {
+                    AcceptTransactionFail::TransactionInTheFuture { .. } => {
                         TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(
                                 "transaction creation time is in the future".to_owned(),
@@ -28171,7 +28171,7 @@ mod event {
                 | AcceptTransactionFail::SignatureVerification(_)
                 | AcceptTransactionFail::UnexpectedGenesisAccountSignature
                 | AcceptTransactionFail::TransactionDomainMismatch(_)
-                | AcceptTransactionFail::TransactionInTheFuture
+                | AcceptTransactionFail::TransactionInTheFuture { .. }
                 | AcceptTransactionFail::TransactionExpired { .. }
                 | AcceptTransactionFail::NetworkTimeUnhealthy { .. } => {
                     Reason::TransactionValidationFailed

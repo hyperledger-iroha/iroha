@@ -5783,7 +5783,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// by the current syscall policy, or the Norito payload cannot be decoded.
     pub fn decode_tlv_typed<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
-        T: norito::codec::Decode + norito::codec::Encode,
+        T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
@@ -5817,7 +5817,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     fn decode_query_key<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
     where
-        T: norito::codec::Decode + norito::codec::Encode,
+        T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
         decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::DecodeError)
@@ -6038,7 +6038,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     }
     fn decode_header<T>(payload: &[u8]) -> Result<T, ivm::VMError>
     where
-        T: norito::codec::Decode + norito::codec::Encode,
+        T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
     {
         decode_canonical_norito(payload).map_err(|_| ivm::VMError::NoritoInvalid)
     }

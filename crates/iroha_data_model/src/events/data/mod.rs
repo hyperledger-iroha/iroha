@@ -1,7 +1,4 @@
 //! Data events.
-#[cfg(not(feature = "json"))]
-#[cfg(feature = "transparent_api")]
-use super::EventFilter;
 pub use crate::Registered;
 use crate::prelude::*;
 pub use events::DataEvent;

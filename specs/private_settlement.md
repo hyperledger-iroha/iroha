@@ -120,6 +120,19 @@ virtual dummy without bootstrapping another pool or depending on an earlier
 zero output's role memo. Output roles remain recipient, optional payer change,
 and sponsor reimbursement; inactive output slots carry zero value.
 
+`prepare_atomic_private_settlement_funding_note_v1` derives a positive funding
+commitment before a bundle exists. The release harness funds each pool with
+that input and an unspent reserve note, waits for state-resolved Applied
+activation, and only then chooses an observed committed authority height and
+generates the proof. The virtual dummy remains bound to the resulting bundle;
+its fixed-shape path does not spend the reserve note. Smoke, fault, leakage and
+performance preparation share this ordering. They do not predict how many
+admission blocks precede activation or require a later capability query to
+equal the activation transaction's block height. Exact historical committee
+authorization, governance validity, root membership for positive inputs and
+the 300-height protocol activation notice remain mandatory. Current runtime
+qualification of this harness correction is pending.
+
 The required public `audit_input_commitment` binds the exact two ordered input
 openings with SHA-256 inside the AIR. The statement stores the exact raw 32-byte
 digest; no hash-wrapper marker bit or normalization may alter it. Its private

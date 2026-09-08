@@ -1,7 +1,7 @@
 //! This module contains [`Domain`](`crate::domain::Domain`) structure
 //! and related implementations and trait implementations.
 pub use self::model::*;
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
@@ -64,8 +64,8 @@ mod model {
     #[derive(Debug, Display, Clone, IdEqOrdHash, Getters, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
     #[display("[{id}]")]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::domain::model::Domain")]
@@ -82,11 +82,23 @@ mod model {
         pub owned_by: AccountId,
     }
     /// Builder which can be submitted in a transaction to create a new [`Domain`]
-    #[derive(Debug, Display, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        IdEqOrdHash,
+        Decode,
+        Encode,
+        IntoSchema,
+        DeriveJsonSer,
+        DeriveJsonDe,
+        DeriveFast,
+    )]
+    #[norito(no_fast_from_json)]
     #[display("[{id}]")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::domain::model::NewDomain")]
     pub struct NewDomain {
         /// The identification associated with the domain builder.
         pub id: DomainId,
@@ -319,7 +331,7 @@ impl DomainId {
     }
 
     /// Parse one canonical JSON object-key spelling with bounded decode accounting.
-    #[cfg(feature = "json")]
+
     pub(crate) fn parse_json_object_key(candidate: &str) -> Result<Self, norito::json::Error> {
         let (name, dataspace) = candidate.split_once('.').ok_or_else(|| {
             norito::json::Error::Message("domain key must use `domain.dataspace` format".to_owned())
@@ -336,11 +348,12 @@ impl DomainId {
     }
 }
 
-impl<'de> ncore::NoritoDeserialize<'de> for DomainId {
+impl ncore::NoritoDeserialize<'_> for DomainId {
     fn schema_hash() -> [u8; 16] {
         <Self as ncore::NoritoSerialize>::schema_hash()
     }
-
+}
+impl<'de> ncore::DeserializePayload<'de> for DomainId {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("DomainId deserialization requires a valid canonical archive")
@@ -355,7 +368,6 @@ impl<'de> ncore::NoritoDeserialize<'de> for DomainId {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for DomainId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.to_string(), out);
@@ -367,7 +379,7 @@ impl norito::json::FastJsonWrite for DomainId {
         norito::json::write_json_string_to(&self.to_string(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for DomainId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -482,7 +494,6 @@ mod tests {
         assert!(DomainId::parse_fully_qualified("treasury").is_err());
     }
 
-    #[cfg(feature = "json")]
     #[test]
     fn domain_json_key_accounts_punycode_normalization_before_idna() {
         use norito::json::JsonObjectKeyOwned;

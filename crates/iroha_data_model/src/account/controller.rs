@@ -14,10 +14,19 @@ use thiserror::Error;
 
 mod canonical_decode;
 /// Controller responsible for authorising account actions.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(tag = "kind", content = "payload", no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
@@ -87,11 +96,23 @@ impl fmt::Display for AccountController {
     }
 }
 /// Multisignature authorisation policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::controller::MultisigPolicy")]
+#[norito(validate = "canonical_decode::validate_policy")]
 pub struct MultisigPolicy {
     version: u8,
     threshold: u16,
@@ -311,11 +332,23 @@ impl MultisigPolicy {
     }
 }
 /// Participant in a multisignature policy.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+)]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::controller::MultisigMember")]
+#[norito(validate = "canonical_decode::validate_member")]
 pub struct MultisigMember {
     public_key: PublicKey,
     weight: u16,

@@ -1,5 +1,5 @@
 //! Integration tests for the JSON query envelope DSL.
-#[cfg(feature = "json")]
+
 mod json_envelope {
     use iroha_data_model::query::{
         QueryRequest,

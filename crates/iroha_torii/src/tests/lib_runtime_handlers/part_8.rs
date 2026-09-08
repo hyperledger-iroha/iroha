@@ -1579,14 +1579,13 @@ async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
     let response_task = tokio::spawn(async move {
         tokio::time::timeout(Duration::from_secs(1), async {
             loop {
-                let pending = app_for_response.torii_proxy_pending.lock().await;
-                if pending.contains_key(&(
+                let has_pending = app_for_response.torii_proxy_pending.lock().contains_key(&(
                     request_id_for_response,
                     authoritative_peer_for_response.clone(),
-                )) {
+                ));
+                if has_pending {
                     break;
                 }
-                drop(pending);
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
         })
@@ -1659,8 +1658,7 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
         tx,
         usize::MAX,
         false,
-    )
-    .await;
+    );
     let payload = iroha_core::NetworkMessage::ToriiProxyResponse(Box::new(ToriiProxyResponseV1 {
         schema_version: TORII_PROXY_RESPONSE_VERSION_V1,
         request_id,
@@ -1688,7 +1686,6 @@ async fn torii_proxy_network_message_dispatch_resolves_pending_response() {
     assert!(
         !app.torii_proxy_pending
             .lock()
-            .await
             .keys()
             .any(|(pending_request_id, _)| *pending_request_id == request_id),
         "Torii proxy response dispatcher must clear the pending request"
@@ -1712,20 +1709,17 @@ async fn identical_torii_proxy_submissions_keep_all_pending_waiters() {
     let (first_tx, first_rx) = tokio::sync::oneshot::channel();
     let (second_tx, second_rx) = tokio::sync::oneshot::channel();
     let _first_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), first_tx, 1024, true)
-            .await;
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), first_tx, 1024, true);
     let _second_waiter_token = super::register_torii_proxy_pending_waiter(
         &app,
         pending_key.clone(),
         second_tx,
         1024,
         true,
-    )
-    .await;
+    );
     assert_eq!(
         app.torii_proxy_pending
             .lock()
-            .await
             .get(&pending_key)
             .map(Vec::len),
         Some(2),
@@ -1736,7 +1730,6 @@ async fn identical_torii_proxy_submissions_keep_all_pending_waiters() {
     assert_eq!(
         app.torii_proxy_pending
             .lock()
-            .await
             .get(&pending_key)
             .map(Vec::len),
         Some(2),
@@ -1768,10 +1761,7 @@ async fn identical_torii_proxy_submissions_keep_all_pending_waiters() {
         expected_response
     );
     assert!(
-        !app.torii_proxy_pending
-            .lock()
-            .await
-            .contains_key(&pending_key),
+        !app.torii_proxy_pending.lock().contains_key(&pending_key),
         "the shared response must clear the completed waiter set"
     );
 }
@@ -1788,11 +1778,9 @@ async fn identical_torii_proxy_waiters_enforce_body_bounds_independently() {
     let (tight_tx, tight_rx) = tokio::sync::oneshot::channel();
     let (wide_tx, wide_rx) = tokio::sync::oneshot::channel();
     let _tight_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), tight_tx, 4, false)
-            .await;
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), tight_tx, 4, false);
     let _wide_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), wide_tx, 1024, false)
-            .await;
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), wide_tx, 1024, false);
     let expected_response = ToriiProxyHttpResponseV1 {
         status_code: StatusCode::OK.as_u16(),
         headers: Vec::new(),
@@ -1824,10 +1812,7 @@ async fn identical_torii_proxy_waiters_enforce_body_bounds_independently() {
         expected_response
     );
     assert!(
-        !app.torii_proxy_pending
-            .lock()
-            .await
-            .contains_key(&pending_key),
+        !app.torii_proxy_pending.lock().contains_key(&pending_key),
         "per-waiter validation must consume the completed waiter set"
     );
 }
@@ -1849,13 +1834,11 @@ async fn identical_torii_proxy_attempt_cleanup_is_waiter_scoped() {
         failed_tx,
         1024,
         true,
-    )
-    .await;
+    );
     let _live_waiter_token =
-        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), live_tx, 1024, true)
-            .await;
+        super::register_torii_proxy_pending_waiter(&app, pending_key.clone(), live_tx, 1024, true);
 
-    super::remove_torii_proxy_pending_waiter(&app, &pending_key, &failed_waiter_token).await;
+    drop(failed_waiter_token);
     assert!(
         tokio::time::timeout(Duration::from_millis(100), failed_rx)
             .await
@@ -1866,7 +1849,6 @@ async fn identical_torii_proxy_attempt_cleanup_is_waiter_scoped() {
     assert_eq!(
         app.torii_proxy_pending
             .lock()
-            .await
             .get(&pending_key)
             .map(Vec::len),
         Some(1),
@@ -1941,7 +1923,7 @@ async fn process_incoming_torii_proxy_response_marks_late_responses_once() {
     )
     .await;
     assert!(
-        app.torii_proxy_pending.lock().await.is_empty(),
+        app.torii_proxy_pending.lock().is_empty(),
         "late responses must not recreate pending state after completion"
     );
 }

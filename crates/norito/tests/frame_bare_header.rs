@@ -1,5 +1,5 @@
 //! Verify framing bare Norito payloads with explicit header flags roundtrips via `from_bytes`.
-use norito::{NoritoDeserialize, NoritoSerialize};
+use norito::{DeserializePayload, NoritoDeserialize, NoritoSerialize};
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
 struct Item(u32, String);
 #[test]
@@ -14,6 +14,6 @@ fn frame_bare_with_header_flags_roundtrip() {
         .expect("frame header");
     // Zero-copy decode the archived payload via header-aware path
     let archived = norito::core::from_bytes::<Vec<Item>>(&bytes).expect("view");
-    let got = <Vec<Item> as NoritoDeserialize>::deserialize(archived);
+    let got = <Vec<Item> as DeserializePayload>::deserialize(archived);
     assert_eq!(got, v);
 }

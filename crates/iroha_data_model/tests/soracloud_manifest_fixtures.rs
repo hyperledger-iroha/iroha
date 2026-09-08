@@ -6,7 +6,7 @@ use iroha_crypto::{
         registered_bfv_parameter_digest, registered_bfv_rns_modulus_chain_digest,
     },
 };
-#[cfg(feature = "json")]
+
 use iroha_data_model::soracloud::SoraInrouManifestV1;
 use iroha_data_model::soracloud::SoracloudManifestError;
 use iroha_data_model::{
@@ -42,7 +42,7 @@ use iroha_data_model::{
     sorafs::pin_registry::StorageClass,
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
-#[cfg(feature = "json")]
+
 use norito::json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -83,7 +83,7 @@ fn xor_quantity_nanos(value: u128) -> Quantity {
     Quantity::from_canonical_numeric(Numeric::new(value, SORACLOUD_XOR_SCALE))
         .expect("u128 nano-XOR manifest fixture fits Quantity")
 }
-#[cfg(feature = "json")]
+
 fn expected_inrou_placement_targets(count: u16) -> BTreeSet<SoraInrouPlacementTargetV1> {
     (0..count)
         .map(|index| {
@@ -328,7 +328,7 @@ fn expected_deployment_bundle() -> SoraDeploymentBundleV1 {
         service,
     }
 }
-#[cfg(feature = "json")]
+
 fn expected_inrou_http_deployment_bundle() -> SoraDeploymentBundleV1 {
     let mut container = expected_container_manifest();
     container.runtime = SoraContainerRuntimeV1::Inrou;
@@ -657,7 +657,7 @@ where
     assert!(cursor.is_empty(), "decode must consume all bytes");
     decoded
 }
-#[cfg(feature = "json")]
+
 fn assert_fixture_eq<T>(path: &str, fixture: &str, expected: &T)
 where
     T: Clone + PartialEq + Debug + FastJsonWrite + JsonDeserialize + JsonSerialize,
@@ -674,14 +674,14 @@ where
         "fixture `{path}` is not canonical JSON for the current schema"
     );
 }
-#[cfg(feature = "json")]
+
 fn write_fixture<T: JsonSerialize>(path: &Path, value: &T) {
     let json = json::to_json_pretty(value).expect("serialize fixture");
     fs::write(path, json).unwrap_or_else(|error| {
         panic!("failed writing {}: {error}", path.display());
     });
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_fixture_is_canonical() {
     let manifest = expected_container_manifest();
@@ -693,7 +693,7 @@ fn container_manifest_fixture_is_canonical() {
     assert_norito_roundtrip(&manifest);
     manifest.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn state_binding_fixture_is_canonical() {
     let binding = expected_state_binding();
@@ -751,7 +751,7 @@ fn state_binding_rejects_plaintext_confidential_state() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn service_manifest_fixture_is_canonical() {
     let manifest = expected_service_manifest();
@@ -759,7 +759,7 @@ fn service_manifest_fixture_is_canonical() {
     assert_norito_roundtrip(&manifest);
     manifest.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_is_canonical() {
     let bundle = expected_deployment_bundle();
@@ -773,7 +773,7 @@ fn deployment_bundle_fixture_is_canonical() {
         .validate_for_admission()
         .expect("deployment bundle fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_fixture_rejects_missing_v1_fields() {
     for field in [
@@ -807,7 +807,7 @@ fn container_manifest_fixture_rejects_missing_v1_fields() {
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_fixture_rejects_missing_nested_v1_fields() {
     for (parent, field) in [
@@ -832,7 +832,7 @@ fn container_manifest_fixture_rejects_missing_nested_v1_fields() {
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_fixture_rejects_null_v1_collections() {
     for field in [
@@ -855,7 +855,7 @@ fn container_manifest_fixture_rejects_null_v1_collections() {
             .expect_err("first-release collection fields must not accept null");
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_fixture_rejects_unknown_json_field() {
     let mut value: json::Value =
@@ -871,7 +871,7 @@ fn container_manifest_fixture_rejects_unknown_json_field() {
         .expect_err("unknown container manifest fields must be rejected");
     assert!(matches!(error, json::Error::UnknownField { field } if field == "legacy_padding"));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_fixture_rejects_inrou_metadata_for_ivm_runtime() {
     let mut value: json::Value =
@@ -917,7 +917,7 @@ fn container_manifest_fixture_rejects_inrou_metadata_for_ivm_runtime() {
         SoracloudManifestError::InvalidField { field: "inrou", .. }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn container_manifest_fixture_rejects_inrou_runtime_without_metadata() {
     let mut value: json::Value =
@@ -1129,7 +1129,7 @@ fn container_manifest_rejects_relative_healthcheck_path() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn service_manifest_fixture_rejects_missing_v1_fields() {
     for field in [
@@ -1162,7 +1162,7 @@ fn service_manifest_fixture_rejects_missing_v1_fields() {
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn service_manifest_fixture_rejects_missing_nested_v1_fields() {
     for (collection, field) in [
@@ -1190,7 +1190,7 @@ fn service_manifest_fixture_rejects_missing_nested_v1_fields() {
         );
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn service_manifest_fixture_rejects_null_v1_collections() {
     for field in ["state_bindings", "lease_volumes", "handlers", "artifacts"] {
@@ -1485,7 +1485,7 @@ fn artifact_ref_rejects_control_character_path() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_rejects_missing_nested_container_field() {
     let mut value: json::Value = json::from_str(DEPLOYMENT_BUNDLE_FIXTURE)
@@ -1501,7 +1501,7 @@ fn deployment_bundle_fixture_rejects_missing_nested_container_field() {
     json::from_value::<SoraDeploymentBundleV1>(value)
         .expect_err("nested first-release container fields must be explicit");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_uses_embedded_container_hash() {
     let container: SoraContainerManifestV1 =
@@ -1517,7 +1517,7 @@ fn deployment_bundle_fixture_uses_embedded_container_hash() {
         Hash::new(Encode::encode(&bundle.service))
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_rejects_container_drift_without_reference_update() {
     let mut bundle: SoraDeploymentBundleV1 =
@@ -1534,7 +1534,7 @@ fn deployment_bundle_fixture_rejects_container_drift_without_reference_update() 
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_accepts_container_change_after_reference_refresh() {
     let mut bundle: SoraDeploymentBundleV1 =
@@ -1548,7 +1548,7 @@ fn deployment_bundle_fixture_accepts_container_change_after_reference_refresh() 
         .validate_for_admission()
         .expect("refreshed container manifest reference should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_rejects_public_route_without_healthcheck() {
     let mut bundle: SoraDeploymentBundleV1 =
@@ -1620,7 +1620,7 @@ fn deployment_bundle_rejects_http_service_with_ivm_runtime() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_accepts_inrou_http_service_fixture() {
     let bundle = expected_inrou_http_deployment_bundle();
@@ -1628,7 +1628,7 @@ fn deployment_bundle_accepts_inrou_http_service_fixture() {
         .validate_for_admission()
         .expect("valid Inrou HTTP deployment bundle should pass admission");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_rejects_http_service_without_root_lease_volume() {
     let mut bundle = expected_inrou_http_deployment_bundle();
@@ -1647,7 +1647,7 @@ fn deployment_bundle_rejects_http_service_without_root_lease_volume() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_rejects_http_service_without_data_lease_volume() {
     let mut bundle = expected_inrou_http_deployment_bundle();
@@ -1666,7 +1666,7 @@ fn deployment_bundle_rejects_http_service_without_data_lease_volume() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_accepts_inrou_http_service_without_login_surface() {
     let mut bundle = expected_inrou_http_deployment_bundle();
@@ -1675,7 +1675,7 @@ fn deployment_bundle_accepts_inrou_http_service_without_login_surface() {
         .validate_for_admission()
         .expect("Inrou HTTP services must not require an SSH access path");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_source_rejects_http_service_replica_count_over_quota() {
     let mut bundle = expected_inrou_http_deployment_bundle();
@@ -1722,7 +1722,7 @@ fn deployment_source_rejects_http_service_replica_count_over_quota() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_rejects_replicas_without_distinct_placement_targets() {
     let mut bundle = expected_inrou_http_deployment_bundle();
@@ -1745,7 +1745,7 @@ fn deployment_bundle_rejects_replicas_without_distinct_placement_targets() {
         .validate_for_admission()
         .expect("four distinct targets can host four replicas within quota");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_rejects_http_service_task_limit_over_quota() {
     let mut bundle = expected_inrou_http_deployment_bundle();
@@ -1762,7 +1762,7 @@ fn deployment_bundle_rejects_http_service_task_limit_over_quota() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_charges_replica_private_lease_bytes_for_every_replica() {
     let mut bundle = expected_inrou_http_deployment_bundle();
@@ -1798,7 +1798,7 @@ fn deployment_bundle_charges_replica_private_lease_bytes_for_every_replica() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_rejects_expected_schema_version_drift() {
     let mut bundle: SoraDeploymentBundleV1 =
@@ -1816,7 +1816,7 @@ fn deployment_bundle_fixture_rejects_expected_schema_version_drift() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn deployment_bundle_fixture_rejects_top_level_schema_version_drift() {
     let mut bundle: SoraDeploymentBundleV1 =
@@ -1834,7 +1834,7 @@ fn deployment_bundle_fixture_rejects_top_level_schema_version_drift() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn agent_apartment_manifest_fixture_is_canonical() {
     let manifest = expected_agent_apartment_manifest();
@@ -1846,7 +1846,7 @@ fn agent_apartment_manifest_fixture_is_canonical() {
     assert_norito_roundtrip(&manifest);
     manifest.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fhe_param_set_fixture_is_canonical() {
     let param_set = expected_fhe_param_set();
@@ -1854,7 +1854,7 @@ fn fhe_param_set_fixture_is_canonical() {
     assert_norito_roundtrip(&param_set);
     param_set.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fhe_execution_policy_fixture_is_canonical() {
     let policy = expected_fhe_execution_policy();
@@ -1883,7 +1883,7 @@ fn fhe_execution_policy_fixture_is_canonical() {
         .validate_for_param_set(&expected_fhe_param_set())
         .expect("fixture should match expected parameter set");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fhe_execution_policy_fixture_rejects_adversarial_bootstrap_digest_drift() {
     let mut missing_digest: json::Value =
@@ -1972,7 +1972,7 @@ fn fhe_execution_policy_norito_rejects_adversarial_bootstrap_digest_drift_after_
         .validate_for_param_set(&param_set)
         .expect("binary-decoded zero-bootstrap policy may omit the proof digest");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fhe_governance_bundle_fixture_is_canonical() {
     let bundle = expected_fhe_governance_bundle();
@@ -1986,7 +1986,7 @@ fn fhe_governance_bundle_fixture_is_canonical() {
         .validate_for_admission()
         .expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fhe_governance_bundle_fixture_rejects_adversarial_policy_digest_drift() {
     let mut missing_public_key_digest: json::Value =
@@ -2119,7 +2119,7 @@ fn fhe_governance_bundle_norito_rejects_adversarial_policy_digest_drift_after_de
         .validate_for_admission()
         .expect("binary-decoded zero-bootstrap bundle may omit the proof digest");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fhe_governance_bundle_fixture_rejects_adversarial_parameter_drift() {
     let bundle: FheGovernanceBundleV1 =
@@ -2193,7 +2193,7 @@ fn fhe_governance_bundle_fixture_rejects_adversarial_parameter_drift() {
         }
     ));
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn secret_envelope_fixture_is_canonical() {
     let envelope = expected_secret_envelope();
@@ -2205,7 +2205,7 @@ fn secret_envelope_fixture_is_canonical() {
     assert_norito_roundtrip(&envelope);
     envelope.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn ciphertext_state_record_fixture_is_canonical() {
     let record = expected_ciphertext_state_record();
@@ -2217,7 +2217,7 @@ fn ciphertext_state_record_fixture_is_canonical() {
     assert_norito_roundtrip(&record);
     record.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn fhe_job_spec_fixture_is_canonical() {
     let job = expected_fhe_job_spec();
@@ -2227,7 +2227,7 @@ fn fhe_job_spec_fixture_is_canonical() {
     job.validate_for_execution(&expected_fhe_execution_policy(), &expected_fhe_param_set())
         .expect("fixture should pass execution admission checks");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn decryption_authority_policy_fixture_is_canonical() {
     let policy = expected_decryption_authority_policy();
@@ -2239,7 +2239,7 @@ fn decryption_authority_policy_fixture_is_canonical() {
     assert_norito_roundtrip(&policy);
     policy.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn decryption_request_fixture_is_canonical() {
     let request = expected_decryption_request();
@@ -2253,7 +2253,7 @@ fn decryption_request_fixture_is_canonical() {
         .validate_for_policy(&expected_decryption_authority_policy())
         .expect("fixture should pass policy-linked validation");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn ciphertext_query_spec_fixture_is_canonical() {
     let spec = expected_ciphertext_query_spec();
@@ -2265,7 +2265,7 @@ fn ciphertext_query_spec_fixture_is_canonical() {
     assert_norito_roundtrip(&spec);
     spec.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn ciphertext_query_response_fixture_is_canonical() {
     let response = expected_ciphertext_query_response();
@@ -2277,7 +2277,7 @@ fn ciphertext_query_response_fixture_is_canonical() {
     assert_norito_roundtrip(&response);
     response.validate().expect("fixture should validate");
 }
-#[cfg(feature = "json")]
+
 #[test]
 #[ignore = "regenerates Soracloud fixture files"]
 fn regenerate_soracloud_fixtures() {

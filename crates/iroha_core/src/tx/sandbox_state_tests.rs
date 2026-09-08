@@ -10,14 +10,14 @@ fn sandbox_accounts_are_deterministic() {
 /// Account credentials used by the sandbox (ID and signing key).
 #[derive(Debug, Clone)]
 pub struct Credential {
-    /// Fully-qualified account identifier.
+    /// Canonical domainless account identifier.
     pub id: AccountId,
     /// Private key used to sign transactions for the account.
     pub key: iroha_crypto::PrivateKey,
 }
 /// Credentials of the special genesis account used to bootstrap state.
 pub static GENESIS_ACCOUNT: LazyLock<Credential> = LazyLock::new(|| {
-    let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.clone());
+    let (id, key_pair) = gen_account_in(GENESIS_DOMAIN_ID.name());
     Credential {
         id,
         key: key_pair.into_parts().1,
@@ -123,6 +123,7 @@ impl norito::json::JsonSerialize for EventSnapshot<'_> {
 enum AssetEventSnapshot<'a> {
     Added(&'a AssetChanged),
     Removed(&'a AssetChanged),
+    Transferred(&'a AssetTransferred),
 }
 impl<'a> AssetEventSnapshot<'a> {
     fn from_data_event(event: &'a data::DataEvent) -> Option<Self> {
@@ -142,18 +143,8 @@ impl<'a> AssetEventSnapshot<'a> {
         match event {
             AssetEvent::Added(change) => Some(Self::Added(change)),
             AssetEvent::Removed(change) => Some(Self::Removed(change)),
+            AssetEvent::Transferred(transfer) => Some(Self::Transferred(transfer)),
             _ => None,
-        }
-    }
-    fn variant_label(&self) -> &'static str {
-        match self {
-            Self::Added(_) => "Added",
-            Self::Removed(_) => "Removed",
-        }
-    }
-    fn change(&self) -> &'a AssetChanged {
-        match self {
-            Self::Added(change) | Self::Removed(change) => change,
         }
     }
 }
@@ -209,37 +200,67 @@ fn collapse_to_unix_line_endings(text: &str) -> std::borrow::Cow<'_, str> {
 }
 impl norito::json::JsonSerialize for AssetEventSnapshot<'_> {
     fn json_serialize(&self, out: &mut String) {
-        out.push('{');
-        norito::json::write_json_string("Data", out);
-        out.push(':');
-        out.push('{');
-        norito::json::write_json_string("Domain", out);
-        out.push(':');
-        out.push('{');
-        norito::json::write_json_string("Account", out);
-        out.push(':');
-        out.push('{');
-        norito::json::write_json_string("Asset", out);
-        out.push(':');
-        out.push('{');
-        norito::json::write_json_string(self.variant_label(), out);
-        out.push(':');
-        out.push('{');
-        norito::json::write_json_string("asset", out);
-        out.push(':');
-        let asset_id = format_asset_id_for_snapshot(self.change().asset());
-        norito::json::write_json_string(&asset_id, out);
-        out.push(',');
-        norito::json::write_json_string("amount", out);
-        out.push(':');
-        let amount = self.change().amount().to_string();
-        norito::json::write_json_string(&amount, out);
-        out.push('}');
-        out.push('}');
-        out.push('}');
-        out.push('}');
-        out.push('}');
-        out.push('}');
+        let event = match self {
+            Self::Added(change) => norito::json!({
+                "Added": {"asset": (format_asset_id_for_snapshot(change.asset())),
+                    "amount": (change.amount().to_string())}
+            }),
+            Self::Removed(change) => norito::json!({
+                "Removed": {"asset": (format_asset_id_for_snapshot(change.asset())),
+                    "amount": (change.amount().to_string())}
+            }),
+            Self::Transferred(transfer) => norito::json!({
+                "Transferred": {"source": (format_asset_id_for_snapshot(transfer.source())),
+                    "destination": (format_asset_id_for_snapshot(transfer.destination())),
+                    "amount": (transfer.amount().to_string())}
+            }),
+        };
+        norito::json::JsonSerialize::json_serialize(
+            &norito::json!({"Data": {"Asset": event}}),
+            out,
+        );
+    }
+}
+#[test]
+fn current_asset_event_snapshots_preserve_deltas_and_complete_transfers() {
+    let source = asset("alice");
+    let destination = asset("bob");
+    let amount = Quantity::from(7_u32);
+    let cases = [
+        (
+            AssetEvent::Removed(AssetChanged {
+                asset: source.clone(),
+                amount: amount.clone(),
+            }),
+            norito::json!({"Data": {"Asset": {"Removed": {
+                "asset": "rose##alice@wonderland", "amount": "7"}}}}),
+        ),
+        (
+            AssetEvent::Added(AssetChanged {
+                asset: destination.clone(),
+                amount: amount.clone(),
+            }),
+            norito::json!({"Data": {"Asset": {"Added": {
+                "asset": "rose##bob@wonderland", "amount": "7"}}}}),
+        ),
+        (
+            AssetEvent::Transferred(AssetTransferred {
+                source,
+                destination,
+                amount,
+            }),
+            norito::json!({"Data": {"Asset": {"Transferred": {
+                "source": "rose##alice@wonderland", "destination": "rose##bob@wonderland",
+                "amount": "7"}}}}),
+        ),
+    ];
+    for (event, expected) in cases {
+        let snapshot = AssetEventSnapshot::from_asset_event(&event)
+            .expect("current balance and transfer events must be represented");
+        assert_eq!(
+            norito::json::to_value(&snapshot).expect("serialize exact event"),
+            expected
+        );
     }
 }
 struct TriggerCompletedSnapshot<'a>(&'a TriggerCompletedEvent);
@@ -302,6 +323,10 @@ impl Default for Sandbox {
             std::collections::BTreeSet::from([
                 iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {
                     authority: GENESIS_ACCOUNT.id.clone(),
+                }
+                .into(),
+                iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition {
+                    asset_definition: ASSET.clone(),
                 }
                 .into(),
             ]),

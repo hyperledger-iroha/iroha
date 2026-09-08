@@ -17,7 +17,7 @@ isi! {
         /// Merkle root the host used when generating the proof (privacy mode only).
         pub roster_root: Option<Hash>,
         /// Proof bytes attesting ownership of the commitment (privacy mode only).
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+        #[norito (json = "crate::json_helpers::base64_vec")]
         pub proof: Option<Vec<u8>>,
     }
 }
@@ -36,7 +36,7 @@ isi! {
     /// Merkle root the participant used when generating their proof (privacy mode only).
     pub roster_root: Option<Hash>,
     /// Proof bytes attesting ownership of the commitment (privacy mode only).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito (json = "crate::json_helpers::base64_vec")]
     pub proof: Option<Vec<u8>>,
     }
 }
@@ -58,7 +58,7 @@ isi! {
     /// Current roster root, required for private leave.
     pub roster_root: Option<Hash>,
     /// Canonical authorization proof, required for private leave.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito (json = "crate::json_helpers::base64_vec")]
     pub proof: Option<Vec<u8>>,
     }
 }
@@ -80,7 +80,7 @@ isi! {
         /// Merkle root the host used when generating the proof (privacy mode only).
         pub roster_root: Option<Hash>,
         /// Proof bytes attesting ownership of the commitment (privacy mode only).
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+        #[norito (json = "crate::json_helpers::base64_vec")]
         pub proof: Option<Vec<u8>>,
     }
 }
@@ -99,7 +99,7 @@ isi! {
     /// Proof binding the commitment to the supplied usage tuple (required in privacy mode).
     ///
     /// The V1 statement does not attest an encrypted-log payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito (json = "crate::json_helpers::base64_vec")]
     pub proof: Option<Vec<u8>>,
 }
 }

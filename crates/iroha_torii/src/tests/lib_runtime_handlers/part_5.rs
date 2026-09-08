@@ -2103,7 +2103,7 @@ async fn ledger_headers_respect_from_and_limit() {
     .expect("ok");
     let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived = norito::from_bytes::<Vec<BlockHeader>>(&norito_bytes).expect("archive");
-    let decoded: Vec<BlockHeader> = norito::core::NoritoDeserialize::deserialize(archived);
+    let decoded: Vec<BlockHeader> = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded.len(), 2);
     assert_eq!(decoded[0].height().get(), 2);
     assert_eq!(decoded[1].height().get(), 1);
@@ -2192,7 +2192,7 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
     let norito_bytes = torii_body_bytes(norito_resp, "norito body").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state root archive");
-    let decoded: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    let decoded: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded.state_root, expected_root);
     assert_eq!(decoded.finality_artifact, expected_artifact);
     let resp = handler_ledger_state_proof(
@@ -2214,7 +2214,7 @@ async fn ledger_state_endpoints_return_exact_v2_finality_in_json_and_norito() {
     let norito_bytes = torii_body_bytes(norito_resp, "bytes").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&norito_bytes).expect("state proof archive");
-    let decoded: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    let decoded: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded.state_root, expected_root);
     assert_eq!(decoded.finality_artifact, expected_artifact);
 }
@@ -2257,7 +2257,7 @@ async fn state_proof_http_roundtrip_supports_json_and_norito() {
     let bytes = torii_body_bytes(response, "body").await;
     let archived =
         norito::from_bytes::<StateFinalityResponse>(&bytes).expect("archived state proof");
-    let proof: StateFinalityResponse = norito::core::NoritoDeserialize::deserialize(archived);
+    let proof: StateFinalityResponse = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(proof.height, 1);
     assert_eq!(proof.block_hash, expected_artifact.block_hash);
     assert_eq!(proof.state_root, expected_root);
@@ -2365,7 +2365,7 @@ async fn block_proof_handler_emits_norito() {
     );
     let bytes = torii_body_bytes(resp, "norito payload").await;
     let archived = norito::from_bytes::<BlockProofs>(&bytes).expect("archive decode");
-    let proofs: BlockProofs = norito::core::NoritoDeserialize::deserialize(archived);
+    let proofs: BlockProofs = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(proofs.block_height.get(), 1);
     assert_eq!(proofs.block_hash, expected_block_hash);
     assert_eq!(proofs.executed_block_wire_hash, expected_executed_wire_hash);

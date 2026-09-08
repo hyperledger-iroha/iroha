@@ -2785,7 +2785,6 @@ fn zk_ace_digest384_wrappers_reject_noncanonical_field_elements() {
     assert!(PrivacyZkAceReplayNullifierV1::from_le_bytes(noncanonical).is_none());
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn goldilocks_digest384_json_rejects_noncanonical_words() {
     let digest = GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).expect("canonical words");

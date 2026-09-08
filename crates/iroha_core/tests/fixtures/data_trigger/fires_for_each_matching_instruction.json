@@ -1,84 +1,93 @@
 [
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Removed": {
-              "asset": "rose##alice@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Removed": {
+          "amount": "10",
+          "asset": "rose##alice@wonderland"
         }
       }
     }
   },
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Added": {
-              "asset": "rose##bob@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Added": {
+          "amount": "10",
+          "asset": "rose##bob@wonderland"
         }
       }
     }
   },
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Removed": {
-              "asset": "rose##alice@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Transferred": {
+          "amount": "10",
+          "destination": "rose##bob@wonderland",
+          "source": "rose##alice@wonderland"
         }
       }
     }
   },
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Added": {
-              "asset": "rose##bob@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Removed": {
+          "amount": "10",
+          "asset": "rose##alice@wonderland"
         }
       }
     }
   },
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Removed": {
-              "asset": "rose##bob@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Added": {
+          "amount": "10",
+          "asset": "rose##bob@wonderland"
         }
       }
     }
   },
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Added": {
-              "asset": "rose##carol@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Transferred": {
+          "amount": "10",
+          "destination": "rose##bob@wonderland",
+          "source": "rose##alice@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Removed": {
+          "amount": "10",
+          "asset": "rose##bob@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Added": {
+          "amount": "10",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "10",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
         }
       }
     }
@@ -91,28 +100,31 @@
   },
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Removed": {
-              "asset": "rose##bob@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Removed": {
+          "amount": "10",
+          "asset": "rose##bob@wonderland"
         }
       }
     }
   },
   {
     "Data": {
-      "Domain": {
-        "Account": {
-          "Asset": {
-            "Added": {
-              "asset": "rose##carol@wonderland",
-              "amount": "10"
-            }
-          }
+      "Asset": {
+        "Added": {
+          "amount": "10",
+          "asset": "rose##carol@wonderland"
+        }
+      }
+    }
+  },
+  {
+    "Data": {
+      "Asset": {
+        "Transferred": {
+          "amount": "10",
+          "destination": "rose##carol@wonderland",
+          "source": "rose##bob@wonderland"
         }
       }
     }

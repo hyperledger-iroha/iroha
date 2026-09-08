@@ -14,11 +14,8 @@ pub const LANE_PRIVACY_MAX_MERKLE_DEPTH_V1: usize = u8::MAX as usize;
 /// Proof payload bound to a specific lane commitment identifier.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::privacy::LanePrivacyProof")]
 pub struct LanePrivacyProof {
@@ -128,21 +125,15 @@ impl LanePrivacyProof {
 /// Merkle witness payload for lane privacy proofs.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::privacy::LanePrivacyMerkleWitness")]
 pub struct LanePrivacyMerkleWitness {
     /// Leaf bytes used to derive the committed hash.
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes",
-            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes",
+        bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
     )]
     pub leaf: [u8; 32],
     /// Inclusion path from the leaf to the committed root.
@@ -151,14 +142,8 @@ pub struct LanePrivacyMerkleWitness {
 /// Witness payload for a lane privacy proof.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "kind", content = "payload", deny_unknown_fields)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+#[norito(tag = "kind", content = "payload", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::privacy::LanePrivacyWitness")]
 pub enum LanePrivacyWitness {
@@ -334,7 +319,7 @@ mod tests {
         let bytes = norito::to_bytes(&wire).expect("encode lane privacy proof");
         let archived =
             norito::from_bytes::<LanePrivacyProof>(&bytes).expect("decode lane privacy proof");
-        let decoded: LanePrivacyProof = norito::core::NoritoDeserialize::deserialize(archived);
+        let decoded: LanePrivacyProof = norito::core::DeserializePayload::deserialize(archived);
         let commitment = LanePrivacyCommitment::merkle(
             LaneCommitmentId::new(3),
             MerkleCommitment::from_root_bytes([0xAA; 32], 8),
@@ -346,7 +331,7 @@ mod tests {
             PrivacyError::EmptyMerkleProof
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn lane_privacy_json_rejects_unknown_first_release_fields() {
         let proof = LanePrivacyProof::merkle_from_raw_path(
@@ -377,7 +362,7 @@ mod tests {
             .expect_err("LanePrivacyWitness must reject unknown first-release fields");
         assert!(error.to_string().contains("unknown"));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn removed_snark_witness_is_rejected_by_json_decoder() {
         let stale = r#"{"kind":"snark","payload":{}}"#;

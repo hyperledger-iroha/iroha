@@ -581,15 +581,15 @@ and optimization settings are unchanged.
 The exact reviewed integration preserves inherited dirty work and excludes
 three unrelated live edits. Subsequent downstream trait-bound/import corrections
 and eight whitespace-only lines are recorded separately from those test inputs.
-Complete downstream targets, source-size budgets and same-source release
-qualification remain open. The model transcript digest is
+Selected downstream target checks pass; complete workspace, source-size and
+same-source release qualification remain open. The model transcript digest is
 `0d813689de0b81ac9ab75df05310ea92e3203824d142e35fe607f0fe4aced8f4`;
 the codec transcript digest is
 `a57030ead9bc3ae55847ca01a24a81e441495049deb88aae9077257e117bb427`.
 
-Two codec modules retain every nominal declaration and codec body in the same
-semantic owner while reducing the outbox and Governance DAG parent files to
-10,366 and 7,401 lines. Their existing exceptions ratchet downward; both remain
+Codec and authorization-fixture modules retain every production nominal
+declaration and codec body in the same semantic owner. The outbox and Governance
+DAG parent files now contain 10,255 and 7,401 lines. Their existing exceptions ratchet downward; both remain
 above the ultimate 5,000-line production limit. All 77 applied source-budget and
 provider-ingest contract tests pass. The repository still reports 240 findings
 with the same 174 exceptions; no complete module-budget pass is claimed.
@@ -600,9 +600,34 @@ normal source selection includes the original test bytes. The new regression
 uses the actual ignore policy and proves an oversized nested security test is
 still measured and rejected. All 387 Torii Rust files are now present in both
 the working tree and candidate inventories; an independent literal-path audit
-finds no remaining source omission. Complete target and runtime checks continue.
+finds no remaining source omission. All selected SDK, storage client, Core, Torii
+and P2P targets now compile; pre-existing warnings still prevent a strict-lint
+qualification claim.
 
-TODO: Complete remaining model feature selections, full SDK and mandatory consensus qualification,
+The complete default SDK library passes **716 tests**, with zero failures or
+ignored cases, in 270.64 seconds on the default stack. All 19,174 recorded
+candidate inputs remain unchanged, including the formerly stalled exact-release
+Musubi transaction-boundary case. The SDK transcript digest is
+`a14809f71119f49d5f1f538a6512b36cd1378d364626a8a96ffd69f4137da2ac`.
+All 25 transaction-forwarder tests also pass. The new framing regression proves
+valid baselines before rejecting truncated, trailing, wrong-header and
+oversized signed envelopes; every rejection preserves the complete signing
+claim, which subsequently accepts the original valid bytes.
+
+The outbox's 74 tests pass after replacing its truncated CID fixture with a
+canonical CID constructed from the same digest. A separate network-fixture
+review replaces nominally invalid values that `Hash::prehashed` normalized into
+valid identities. Raw payload carriers preserve custom-type field classification
+and prove exact valid bytes before clearing the marker. Journal tests now prove
+the decoder rejects that marker, independently of the retained approval digest.
+Clock and outbox tests cover every supported advertised layout. The coordinator
+fixture uses a canonical test-owned temporary directory so macOS's `/var` alias
+does not prevent secure storage initialization. These test-only followups have
+separate source manifests. All 80 selected outbox/network-fixture tests pass
+with zero failures or ignored cases and all 19,174 final inputs unchanged.
+Full release qualification remains open.
+
+TODO: Complete remaining model feature selections, SDK release and mandatory consensus qualification,
 and migrate remaining historical source assertions to current release contracts.
 Source/artifact hashes and individual logs remain under the ignored
 `target/architecture-redesign/owned-storage-identity/` directory.
@@ -754,6 +779,246 @@ are untracked. The exact production inventory includes the new files; its Git
 tracking requirement remains enforced.
 These are outstanding qualification work, not passing results.
 
+## Foundation identity follow-up (2026-09-07)
+
+Seven FFI-owned address types and the Hash, BFV Goldilocks digest and SM3
+scalar owners now have explicit nominal declarations. Actual compiler names,
+both codec-direction hashes, complete frames and bare bytes were captured
+before annotation. Address fixtures cover 56 root/container records and 560
+advertised-layout records; crypto fixtures cover all seven forms per scalar
+under default, minimal, JSON-only and SM-only feature selections. Their
+captured files remain immutable. Permanent tests compare declared identity
+against those observations, allowing later physical relocation.
+
+The frozen candidate passes 303 default, 265 minimal and 303 FFI primitive
+library tests, plus the scalar fixture test in all four crypto selections.
+JSON-only address tests now declare their feature requirement. The owned
+inline-string rejection path retains the original allocation; its existing
+regression passes. A dedicated crypto test target avoids pulling unrelated
+PQC/rand/streaming test requirements into minimal-feature qualification.
+
+Cargo formatting and the codec guard pass. Strict Clippy and repository
+source-size qualification remain failing: existing crypto/PQ diagnostics,
+primitive test-helper diagnostics and 240 source-budget findings remain.
+No exceptions or limits were expanded. This is identity coverage evidence,
+not the atomic codec cutover, physical model extraction or release approval.
+
+Seventeen unchanged consensus-key, FX settlement and privacy protocol owners
+also declare their independently captured identities. All three source-adjacent
+owner tests pass on the rebuilt current model artifact. Complete item bodies
+and preceding attributes match the controlled compiler capture; no field,
+variant tag, production method or signing preimage changes in this batch.
+The subsequent private-settlement batch declares another 58 captured owners.
+Its bounded confidential staging and validation errors have private module
+owners, with one canonical public error path. Governance, AXT and private
+settlement retain all 114 existing tests in separate test modules. Their
+production roots now contain 3,511, 2,911 and 4,992 lines respectively; every
+extracted test file remains below 3,000 lines. No wire declaration moved,
+field/tag changed, assertion disappeared or source-size exception expanded.
+
+The fresh AMX-only run passes all 32 tests on the default stack, with all
+19,262 recorded candidate inputs unchanged. It includes the maximum 4,096-source
+schema/encode/decode/hash/drop regression and rejection of the removed recursive
+settlement layout. After the seventeen declarations, those two regressions and
+the three identity tests pass again. The complete refreshed default/HTTP model
+library passes all 3,644 tests with zero failures and six fixture generators
+ignored, on the default stack (591.39 seconds). All 19,265 recorded inputs
+remain unchanged. The tested artifact and its hash are retained in the scoped
+capture directory. Prior full-library results above belong to their stated
+artifacts; other feature graphs, workspace and release gates remain unqualified.
+
+Untracked review/capture/log manifests are retained under
+`target/architecture-redesign/owned-storage-identity/model-identity-closure/`.
+The 2026-09-08 follow-up replaces the model's test-only IVM dependency with
+its owning `ivm_abi` crate. Cargo.lock changes that one edge without changing
+package versions. The feature-resolved model-test graph drops from 359 to
+325 packages and contains no IVM, node configuration or telemetry runtime.
+The new root-dev boundary retains normal/build traversal and all forbidden
+layers; all 16 real selections and 45 guard tests pass, including Cargo
+fixtures for root-dev isolation and transitive leaks. This test graph still
+enables governance and JSON through the ABI owner; it does not qualify a
+governance-disabled build.
+
+The exact manifest ratchet now accounts for five added and three removed
+edges since its reviewed baseline. All 106 historical manifests reproduce
+the original fingerprint and all 60 limits. Direct owning-code uses justify
+the committed Core/FASTPQ/Kaigi/Python additions; removed primitive and FEC
+dependencies reduce external package counts. The refreshed limits equal the
+observations with no spare allowance; ownership denials and source-file
+budgets remain unchanged. This graph review does not qualify the recorded
+non-edge runtime, feature or test-profile changes.
+
+NetworkId, EscrowId and ProposalId also declare their independently observed
+manual identities. Their 21 immutable root/container/hash/signature records
+preserve both codec hashes, complete frames, bare bytes and JSON. Integration
+testing exposed an AXT handle fixture predating the committed ABI-v1
+EXECUTION_SUMMARY signature update. Its old and current hashes match their
+respective IVM ABI goldens exactly. Only the handle's 32-byte ABI hash and
+eight-byte frame checksum change; the other four AXT fixtures remain exact.
+The test now checks ABI binding explicitly before complete byte equality.
+The downstream IVM `core_host_enforces_fixture_snapshot_fields` test also
+passes on the same frozen source and default stack; its executable and source
+hashes are retained separately. No additional consumer expectation changed.
+
+The final default/HTTP selection passes 199 model-library tests, six AXT
+integration tests and six pointer/generated-schema integration tests, with
+one fixture printer ignored. All 19,273 frozen inputs remain unchanged and
+the three executable artifacts are retained. Formatting, the codec guard,
+dependency boundaries and all five manifest-budget scopes pass. All changed
+source files satisfy their production/test limits; the frozen repository
+still has 237 other source-budget findings. Strict Clippy, the atomic codec
+cutover, physical extraction and complete workspace/native/release gates
+remain open. These focused results do not replace the separately scoped
+3,644-test complete-library evidence above.
+
+## Bare decoding ownership (2026-09-08)
+
+Bare `Decode`, canonical field comparison, owned containers, generated fields
+and erased query payloads now depend on `SerializePayload`. Actual framed
+ABI, network, storage and conversion entry points explicitly require
+`NoritoSerialize`. No wire identity, field order or ABI version changes.
+Option decoding uses the shared canonical child decoder, preserving declared
+layout flags and alignment while enforcing child byte/depth limits. Tuple
+and Result slice decoders reject unconsumed child bytes with `LengthMismatch`
+in every profile. Payload-only records, enums, containers and registered
+queries have runtime tests without a frame serializer. The 13 model consumers
+of `ParseError` now use its owning constructor/accessor; strings and validation
+behavior remain unchanged.
+
+The frozen default/HTTP model and ABI run passes 4,110 tests in 11 suites,
+with zero failures and 13 ignored cases. All 32 Native AMX tests pass on the
+default stack. All 19,275 source inputs remain unchanged; eight test binaries
+and the exact log are retained with `bare-decode-model-checkpoint.json` in the
+scoped capture directory above. The preceding complete codec/derive/primitives
+run passes 1,684 tests (three ignored); six refined child-consumption tests and
+267 minimal-feature primitive tests pass separately. Norito/derive library
+Clippy and four retired-codec guards pass; the codec-contract Python suite
+passes nine tests and 31 subtests. Source-file checks still report 237 findings.
+
+The 42-path integration preserves every recorded root preimage, including
+13 already-integrated ParseError consumers. These results do not qualify the
+remaining Core/Torii callers, the atomic identity transition, physical model
+moves, pinned memory reduction or complete workspace/native/release matrices.
+The subsequent validation-owner batch is scoped separately below.
+
+## Validated binary owner decoding (2026-09-08)
+
+`#[norito(validate = "path")]` now invokes a fallible constructor on the actual
+reconstructed owner exactly once. Multisig policy/member binary decoders use
+this contract; their private carriers serve JSON only. Invalid order, duplicate
+members and zero weights retain typed rejection and successful retry coverage.
+The shared schema parser accepts the attribute without invoking its function
+or changing schema identity. Generic slice derives now compose one valid
+parameter list and choose a lifetime absent from nested higher-ranked bounds.
+
+Both Result slice branches enforce nesting limits and restore the guard after
+success or rejection. Regression tests first reproduced acceptance at a zero
+depth limit. Unit payload size calculation now matches the existing packed
+zero-field offset table; a separate failing regression preserved the prior
+zero-versus-eight-byte mismatch. Canonical frame checks still reject corrupt
+unit metadata and trailing bytes. Valid serialized bytes remain unchanged.
+
+The complete Norito/derive/primitive/schema suites pass **1,726 tests**, with
+zero failures and three ignored cases; all nine schema UI fixtures pass. The
+focused model suite passes **52 tests**, including all 32 Native AMX cases and
+the bounded default-stack regression. Those runs have no drift across 19,283
+recorded candidate inputs. One subsequent integration-test import formatting
+correction has a separate source record; library source is identical.
+Strict library Clippy passes for Norito and both changed derive crates, and
+all 18 changed Rust files pass formatting. The 27-path integration preserves
+all root preimages and retains its patch and checkpoints under the scoped
+capture directory's `validated-decode-integration/` record.
+The integrated working tree also passes all four retired-codec guards and
+28 codec/release-contract tests with 31 subtests.
+The candidate's Core/Torii production-library graph subsequently compiles,
+including the required IVM and P2P dependencies, with all 19,283 input hashes
+unchanged. Its first check exposed a production `Encode` trait import gated
+behind tests; the already-correct working-tree import was reconciled into the
+candidate and the failed log retained. Seven Core warnings remain, so this is
+compilation evidence rather than strict workspace Clippy or runtime evidence.
+Kagami also compiles in its own binary feature graph on the same unchanged
+inputs, retaining two CLI warnings. Its codec caller and the production node
+callers now have compiler evidence; runtime/feature matrices remain separate.
+
+## Mandatory aggregate protocol JSON (2026-09-08)
+
+The earlier normal model check with `--no-default-features` exposed mandatory
+JSON consumers behind contradictory model feature gates. Its failed log remains
+retained. JSON is required by `CustomParameter.payload`, account admission,
+consensus roster parameters and retained Kaigi state. The isolated candidate
+now owns that protocol surface unconditionally through six normal dependencies:
+`iroha_crypto`, `iroha_primitives`, `iroha_version`, `norito`, `norito_derive`
+and `mv`. Norito's existing `base-codec` selection includes JSON. The obsolete
+aggregate `json` feature and active manifest, tooling, generator and caller
+selections are removed; lower-crate JSON features remain independently owned.
+Governance and HTTP selections remain independent. Generated model and builder
+JSON implementations resolve their traits from Norito, preserving defaults,
+unknown/duplicate-field rejection and bounded output.
+
+Rustfmt after removing conditional attributes exposed oversized implementation
+owners. Validation/constructor impls and private helpers now live in cohesive
+private modules; named wire records, schema/codec declarations, local hash
+preimage types and serializer bodies stay in their original owner namespaces.
+The moves preserve exact implementation bodies and all existing tests.
+
+| Parent owner | Parent lines | New implementation modules and lines |
+| --- | ---: | --- |
+| `musubi.rs` | 4,663 | `archive_validation.rs` 773; `publication_validation.rs` 448 |
+| `sorafs/moderation.rs` | 4,657 | `trust_validation.rs` 502 |
+| `block/consensus_v2.rs` | 4,860 | `messages.rs` 672 |
+| `nexus/private_settlement.rs` | 4,941 | `settlement_validation.rs` 442 |
+| `privacy/protocol.rs` | 4,651 | `privacy/policy.rs` 377 |
+
+The Musubi generator input inventory now includes both validation modules;
+reviewed consensus source closure includes its compiled `messages.rs` owner.
+Cargo.lock and captured/generated fixture bytes are unchanged. No source-size
+exception expands; that checkpoint retains 237 other source-size findings.
+
+Before decomposition, the candidate's full model library passes **3,648 tests**
+and its existing integration suites pass. The same command exposes two
+derive-test visibility expectations inconsistent with `transparent_api`; those
+failed logs are retained and the expectations now follow the selected policy.
+After decomposition, **419 focused model tests pass**, with three ignored cases.
+The subsequent derive/ABI command passes **217 tests**: 29 derive unit tests,
+22 integration tests and 166 `ivm_abi` unit tests, with zero failures or ignored
+cases. The integration suites include eleven distinct UI fixtures: the positive
+protocol-JSON consumer and ten compile-fail cases; six negative fixtures run
+again in their focused harnesses. These UI checks are included in the 22-test
+integration count. The consumer fixture retains `schema-structural` check-cfg
+warnings, so this is not strict-lint qualification.
+
+Both post-decomposition Rust runs use the default stack and preserve all 19,290
+recorded candidate inputs. The feature-hygiene, Musubi input and dependency-budget
+Python suites pass **89 controls** across two runs: 87 selected cases, then the
+two previously deselected Cargo dependency controls. Separately, all **16
+feature-resolved dependency boundaries** pass. These candidate observations do
+not imply a full post-decomposition model run or whole-workspace qualification.
+
+The dependency-budget refresh is limited to making the existing model→`mv` and
+model→`norito_derive` edges required. Reversing only those classifications
+reproduces every previous metric; all declared metrics remain unchanged.
+Required model/SDK closures each add one local/workspace package (`mv`), one
+external package (`concread`), four edges and one external edge. Model required
+edges become 198; SDK edges become 272. CLI, daemon and workspace required edge
+counts each increase by two, to 650, 671 and 1,542. The refreshed fingerprint
+binds the exact 106 current manifests; denials, layers and source-file limits
+are unchanged. This graph accounting does not qualify runtime or memory use.
+
+The final `iroha_data_model --lib --no-default-features` check passes with the
+unchanged lock; one existing governance `validate_capacity_intent` dead-code
+warning remains. All three final source guards pass, including the corrected
+canonical include-manifest digest and precise corrupted-pin/missing-member
+negatives. These checks retain all 19,290 final candidate inputs unchanged in
+their separate terminal checkpoint. The standalone restricted-visibility selection also passes all 29 derive unit
+tests, and strict Clippy passes for the derive library without default features.
+Both terminal checkpoints preserve the same final source inputs. The 292
+integrated source paths exactly match this qualified candidate; unrelated root
+edits are preserved. Minimal compilation and these focused checks do not qualify
+runtime behavior or the full feature matrix.
+Atomic identity cutover, physical model extraction, remaining feature/target
+qualification, measured memory reduction, native/device execution and complete
+workspace/release qualification remain outstanding.
+
 ## Completion gate
 
 TODO: Complete each pending implementation and acceptance item above. In
@@ -762,3 +1027,307 @@ build/tests, the mandatory consensus harnesses, valid release-feature checks,
 formatting, strict Clippy, the codec guard, and four-validator integration tests.
 Rebuild native artifacts from that candidate; unavailable device qualification
 must remain explicitly unverified.
+
+## Streaming wire identity closure (2026-09-08)
+
+The integrated batch adds explicit captured identities for all 84 current
+production streaming binary owners: 70 root records and 14 records under
+`streaming::codec`. Pre-declaration compiler captures bind every nominal name
+and both codec-direction hashes. Immutable fixtures retain 396 complete/bare
+frame records for 132 populated values, each in root, Option and two-element
+Vec forms, including every root enum variant. The permanent tests compare
+declared identities and frame hashes against those captures and preserve exact
+header flags, required zero alignment padding, payload length and decoded
+re-encoding. No frame or codec implementation is changed by the declarations.
+An initial capture-helper assertion incorrectly omitted alignment padding; its
+failed checkpoint is retained, and the corrected helper checks the codec-owned
+padding calculation before recording the successful pre-declaration bytes.
+
+The existing public `codec` module becomes a canonical file, and its large
+private test module becomes `codec/tests.rs`. Both retain their original Rust
+namespaces, private access and all existing assertions. All 109 direct streaming
+tests remain, including the 69 codec tests and 59 moved `codec::tests` cases.
+
+| Owner | Lines | Unchanged limit |
+| --- | ---: | ---: |
+| `crates/norito/src/streaming.rs` | 3,757 | 5,000 |
+| `crates/norito/src/streaming/codec.rs` | 4,383 | 5,000 |
+| `crates/norito/src/streaming/codec/tests.rs` | 1,722 | 3,000 |
+
+The source-budget change removes only the obsolete 10,218-line streaming
+exception. Existing exceptions decrease from 174 to 173; the corrected report
+retains 236 source-size findings across all measured languages. The global
+production/test limits remain 5,000/3,000; no other exception expands. Earlier
+237-finding checkpoints remain historical scoped measurements, not Rust-only
+counts.
+
+Final default Norito tests pass **1,308 cases**, and the separate
+`--no-default-features --features base-codec --lib` run passes **456 tests**;
+each selection retains one existing ignored case. Strict
+`cargo clippy -p norito --tests --no-deps --locked --offline -- -D warnings`
+also passes after two unnecessary Copy clones are removed from test fixtures.
+All three terminal checkpoints preserve the same **19,297 final candidate
+inputs**, with zero drift and no stack override. The integrated code and budget
+paths match the qualified candidate. These are scoped Norito test and lint
+results; Clippy excludes dependencies and unselected features.
+
+Retained evidence is under
+`target/architecture-redesign/owned-storage-identity/model-identity-closure/streaming-identity/`:
+`final-qualified-node-checkpoint.json`, `final-qualified-base-checkpoint.json`
+and `final-qualified-tests-clippy-checkpoint.json` bind
+`final-candidate-inputs.json`. The separate pre-declaration identity/value
+captures, earlier failed helper checks and corrected source-budget report
+remain retained. The same source seal also passes a fresh **nine-case settlement
+selection**: eight participant cases plus rejection of the removed recursive
+layout, with zero failures/ignored tests and no stack override. The populated
+4,096-source case exercises schema construction, codec, hash and drop.
+`final-qualified-stack-checkpoint.json` records all 19,297 unchanged inputs and
+exact agreement of the three live model/hash owner files with the candidate.
+
+### Integrated structural-feature correction
+
+The subsequent structural check exposes an existing enum-direction defect:
+derived serialization selects the structural schema hash, while default enum
+deserialization retains the nominal hash. The unfixed exact regression
+`schema_hash::derived_enum_schema_agrees_across_all_frame_readers` fails at the
+first directional equality assertion; its retained negative checkpoint records
+exit 101 with no source drift. The integrated fix emits the same existing
+hash-selection body for enum decoding as for encoding. Explicit `schema_name`
+projections and default nominal identities remain unchanged. The regression
+exercises high-level, reader, core archived/slice and ArchiveView decoding, and
+rejects altered frame identities through each checked entry point.
+
+The fixture correction retains the immutable 84-identity and 396-frame files
+byte-for-byte. The streaming tests compare declared nominal identities against
+captures independently of the active hash mode. Default mode retains complete
+frame comparisons; the structural branch compares every case, nominal name,
+bare payload, advertised flag and alignment, alongside active directional/header
+agreement, roundtrips and wrong-schema/truncation/trailing-byte negatives.
+At this integrated checkpoint, these guards executed only under default/base;
+the retained structural compile failure prevented their structural execution.
+The later integrated [reconstruction checkpoint](#payload-reconstruction-checkpoint-2026-09-08)
+executes both guards successfully; its remaining structural failure is recorded below.
+The rANS checksum literal is the exact captured 32-byte field, with the original
+nominal checksum calculation asserted in default mode. These synthetic wire
+records do not qualify signed-table authorization.
+
+Isolated derive lint exposed unused private `FieldAttr`/`ContainerAttr` Debug
+derives relying on an undeclared Syn feature. Removing those derives eliminates
+the incidental requirement without adding dependencies or features. Eleven test
+error-extraction sites use explicit `Err` matching; every original diagnostic
+assertion and the five-case validation loop remain intact. Parsing, codec
+generation and supported attributes are unchanged by this cleanup.
+
+The final combined default run passes **1,380 tests**: **1,309 Norito**, **57
+derive-library** and **14 strict JSON** cases, with one existing ignored case.
+The separate base-codec library run passes **456 tests**, with one ignored.
+Strict Norito `--tests --no-deps` and isolated derive-library `--lib --no-deps`
+Clippy both pass with warnings denied. The final structural `schema_hash::`
+integration selection passes **six tests**, with zero failures or ignored cases
+under `--no-default-features --features base-codec,schema-structural`.
+
+All final results bind **19,297 unchanged inputs** in
+`qualified-correction-inputs.json`, without a stack override. The checkpoints
+are `qualified-correction-default-checkpoint.json`,
+`qualified-correction-base-checkpoint.json`,
+`qualified-correction-tests-clippy-checkpoint.json`,
+`qualified-correction-derive-clippy-checkpoint.json` and
+`qualified-correction-structural-schema-checkpoint.json` in the retained evidence
+directory above. All seven correction paths are integrated with exact afterimage
+verification in `structural-correction/final-integration/root-integration.json`;
+the fourteen total code/budget paths match the qualified candidate. The initial
+1,308-test declaration checkpoint remains separate earlier evidence.
+
+The final Native AMX selection passes **32 tests**, with zero failures or
+ignored cases, in 5.60 seconds on the default stack. It exercises the populated
+maximum 4,096-source settlement through schema, codec, hash and drop, and
+rejects the removed recursive layout. `qualified-correction-native-amx-checkpoint.json`
+binds all 19,297 unchanged final inputs in `qualified-correction-inputs.json`
+and confirms exact live model/hash owner correspondence. This final run is
+distinct from the earlier nine-case selection on `final-candidate-inputs.json`;
+neither uses a stack-size override.
+
+The retained full structural group diagnostic failed: **109 pass and ten fail**,
+comprising eight compression assumptions with compression disabled and two
+pre-existing nominal streaming-ticket golden checks. At that checkpoint the
+broader structural library selection failed compilation: **24 errors across 15
+test owners**. Ordinary framed fixtures need correct schema ownership, while the
+deliberately payload-only generic decoder regressions expose coupling that must
+be closed by the planned identity separation. Their schema-free leaves and
+assertions remain intact; no tests or production bounds are weakened to hide
+the failure. Evidence remains in `structural-before-correction.log`,
+`structural-corrected-schema-checkpoint.json` and
+`structural-enum-negative-runtime-checkpoint.json`. Those six passing structural
+integration cases did not qualify the failed selections or the streaming
+guards that had not executed at that checkpoint.
+
+The final source-budget check still exits 1 with 236 findings and 173 exceptions;
+none of the seven correction paths violates its limit. Atomic identity cutover,
+physical crate extraction, the required measured 25% model-memory reduction and
+unchanged-unit budgets, native/workspace and other feature qualification, and
+the complete first-release goal remain open.
+
+## Payload reconstruction checkpoint (2026-09-08)
+
+All **166 changed source paths (163 Rust and three Python) are integrated**
+from the isolated `abi-candidate` after exact preimage checks; every integrated
+afterimage matches the qualified candidate. `DeserializePayload` is the single
+reconstruction owner. Typed `NoritoDeserialize` inherits it and retains the
+existing frame-hash contract; typed derives emit both contracts,
+while payload-only derives reject frame schema attributes. Bare `Decode`, field
+and container reconstruction use payload bounds, and actual framed consumers
+state their typed contracts explicitly. The final `NoritoSchema` supertrait and
+removal of independent codec hashes remain the pending atomic identity cutover.
+
+The migration preserves reconstruction bodies, checked-owner validation, layout
+and resource enforcement, and all 41 retained manual hash overrides. Deliberately
+schema-free test leaves lose their panicking frame implementations; private
+query-page wire helpers retain payload contracts, while public `QueryPageV1`
+retains its frame contract and checked reconstruction. Opaque authorization
+source guards now also reject payload codec traits. No compatibility aliases,
+stack increases or decoder fallback paths are introduced.
+
+| Qualified selection | Terminal result |
+| --- | --- |
+| Default Norito/derive tests | 1,382 passed, one ignored (1,310 Norito, 58 derive, 14 strict JSON) |
+| Base-codec library | 457 passed, one ignored |
+| Codec documentation tests | 11 passed, one ignored |
+| Strict Clippy | Norito tests and isolated derive library pass, dependencies excluded |
+| Changed Rust formatting | All 163 changed Rust files pass the final scoped formatting check |
+| Primitive library | 305 passed |
+| Complete model library | 3,650 passed, one new registration-fixture failure, six ignored |
+| Corrected registration selection | All three pass in a subsequent run |
+| Native AMX | All 32 pass on the default stack, including maximum 4,096-source schema/codec/hash/drop and removed-layout rejection |
+| ABI/artifact admission libraries | 167 ABI and 15 artifact tests pass |
+| Production compilation | All 15 selected libraries and the shipping CLI/Kagami binaries pass |
+| Consumer library-test compilation | Revised seven-package `--lib --no-run` selection passes; no runtime test count |
+| CLI/Kagami test compilation | `--bins --no-run` passes in 874.132 seconds; no runtime test count |
+| Nexus/streaming integration harness | Entire harness compiles; both selected `global_commit::` tests pass, zero failed or ignored (301 filtered out) |
+| Core payload runtime selection | 28 passed, zero failed or ignored |
+| P2P library runtime | 583 passed, zero failed or ignored |
+| Config library runtime | 632 passed, zero failed or ignored, with explicit workspace context |
+| Config-base library runtime | 34 passed, zero failed or ignored |
+| Telemetry library runtime | 93 passed, zero failed or ignored, with explicit workspace context |
+| Torii-shared library runtime | 267 passed, zero failed or ignored |
+| Standalone status-wire integration | One passed, zero failed or ignored |
+| Torii payload runtime selection | Corrected run: 14 passed, zero failed or ignored; earlier nine-pass/five-failure fixture result retained |
+| Capture/identity and opaque/provider source controls | 87 Python tests and 91 subtests pass, repeated successfully on the integrated root |
+| Structural library | 467 passed, one signed rANS checksum failure, one ignored |
+
+The model failure correctly rejects cache validation on a resultless genesis
+proposal. The fixture now attaches one legitimate successful result through the
+checked owner, validates both Merkle caches, and preserves its original proposal
+bytes, consensus hash, signature and complete frame-family assertions. The
+subsequent three-test pass does not change the retained failed full-run result.
+Both structural streaming guards now execute and pass; their earlier compile
+failures remain retained. The sole current structural failure uses the unchanged
+signed rANS fixture and the feature-selected active schema hash. Its bytes are
+not refreshed to manufacture a pass. The whole Parliament source checker still
+fails at four existing `world.rs` anchors; focused payload-codec controls do not
+qualify that broader gate.
+
+The production check passes for all 15 selected libraries, including SDK, Core,
+Torii, P2P, IVM and storage consumers. The subsequent production/CLI check also
+passes for the shipping `iroha` and `kagami` binaries. Both commands retain
+19,300 unchanged inputs in their separate `production-consumer-check-checkpoint.json`
+and `production-and-cli-check-checkpoint.json` seals. Seven Core dead-code,
+two Kagami and one CLI helper warnings remain. The two additional CLI unused
+payload imports reported by the latter command were removed before the later
+passing CLI/Kagami test build. That test build also retains two existing unused
+`ErrReport` expressions in the CLI's soracloud tests. These compile checks do
+not claim strict all-target lint or test execution.
+
+The revised seven-package Core/P2P/Torii/shared/config/telemetry library-test
+build passes `--lib --no-run` in 309.531 seconds. Its
+`consumer-library-tests-build-revised-checkpoint.json` binds 19,300 unchanged
+source inputs, with no `RUST_MIN_STACK` override. This compiles the test owners;
+it assigns no runtime passing count. The initial failed build remains retained:
+its four errors came from the old `BudgetedField` serializer owner and the
+hybrid-recovery fixture's borrow extending past a consuming-key move. Both
+corrections already existed in live root and were reconciled byte for byte into
+the candidate, preserving the proof assertions without cloning the recovered
+key. Two unused decoder-trait test imports were also removed.
+
+The subsequent `cli-kagami-test-build-checkpoint.json` records a passing
+`--bins --no-run` selection in 874.132 seconds, retaining 19,300 unchanged inputs
+and no stack override. This qualifies compilation of those test binaries only.
+The six earlier consumer runtime selections total 1,637 passing cases; the
+standalone status-wire integration contributes one separate passing case. Every
+listed runtime checkpoint retains 19,300 inputs with no drift or stack override.
+The final config and telemetry results use
+`iroha_config-library-runtime-explicit-workspace-checkpoint.json` and
+`iroha_telemetry-library-runtime-explicit-workspace-checkpoint.json`; their earlier
+launcher-context failures remain retained and are not rewritten as passing runs.
+
+Torii's five failures all stop at the shared test commitment constructor with
+`InvalidChunkProfile(UnknownProfile { profile_id: 171 })`. Its synthetic inline
+profile ID conflicts with the current canonical inline profile; the production
+registry correctly rejects it. A fixture-only correction reuses the actual
+request-profile constructor while preserving chunk geometry and every existing
+assertion. The fixture correction was qualified in C before integration. The
+revised selection passes all 14 actual Torii cases, zero failed or ignored, in
+140.980 seconds. Its six other library
+harnesses select zero tests and contribute no additional runtime passes.
+`torii-payload-runtime-revised-checkpoint.json` retains 19,300 unchanged inputs
+without a stack override. The original nine-pass/five-failure result in
+`torii-payload-runtime-checkpoint.json` is not rewritten.
+
+The first Nexus/streaming `--no-run` build retains exit 101 after 1,122.580
+seconds, with one E0599 in `integration_tests/tests/nexus/global_commit.rs`:
+`LaneBlockCommitment::try_deserialize` still imported the former typed method
+owner. Replacing that import with DeserializePayload restores its existing
+payload reconstruction call. The unrelated unused SerializePayload import in
+`data_model/samples/mint_rose_trigger_data_model/src/lib.rs` is also removed.
+`nexus-commitment-fixture-runtime-revised-checkpoint.json` then records successful
+compilation of the entire integration harness and both actual `global_commit::`
+tests passing in 31.816 seconds, zero failed or ignored, 301 filtered out. Both
+attempts retain their own 19,300 unchanged-input seals without a stack override.
+This qualifies the two commitment fixtures, not runtime execution of the full
+Nexus/streaming integration suite; the initial failed build remains retained.
+
+The scoped runtime and compilation selections above are terminal. The complete
+166-path integration is recorded in `final-source-review-v3-integration.json`,
+with every preimage checked and every afterimage verified. These integrated
+paths match the qualified candidate; independent live changes remain outside
+that runtime qualification.
+
+The separate `unstaged-codec-review/` preserves the 59 unowned live source deltas.
+A bounded review of their 36 Rust files and direct resolution context found no
+additional codec migration. Those independent live changes were not synchronized
+into the candidate; this source review and the candidate's compilation results
+do not qualify the full current live root.
+
+Each terminal run retains its own source seal: the early codec/primitive/AMX
+runs cover 19,299 unchanged inputs; the model, corrected registration and
+ABI/artifact runs cover 19,300. Exact checkpoints and failed logs are under
+`target/architecture-redesign/owned-storage-identity/model-identity-closure/payload-reconstruction/`.
+`final-source-review-v2/` retains the earlier 164-path snapshot, matching live
+preimages, whitespace-strict replay and per-file hashes. Subsequent existing-root
+fixture reconciliations are recorded separately in `reconciled-source-updates/`;
+the revised test-build seal records the two test-import cleanups. With the Nexus
+and sample import corrections, the stage now changes 166 paths (163 Rust and
+three Python). `final-source-review-v3/` now retains the exact 166-path delta,
+matching live preimages and whitespace-strict replay; its patch SHA-256 is
+`79ca3524d977d1c3090a60d5e386da7647b4f3b4087385cac532d5cc960bb69c`.
+The earlier frozen review bundles remain historical snapshots. The restored
+synthetic compiler probe is excluded. Cargo.lock and both streaming fixture
+files remain exact.
+
+The final v3 legacy-codec guard passes. Its authoritative size check still fails
+with
+**236 source-size findings and 173 unchanged exceptions** over 10,763 measured
+files; its findings and exceptions are identical to v2. No file newly fails its
+budget, but five existing violations grow:
+Core gossiper and privacy state by two lines each, crypto FHE by one, model
+KAGEMUSHA by three and genesis by one. No limit or exception expands.
+
+After integration, the merged-root source controls also pass all 87 Python tests
+and 91 subtests, and the legacy-codec guard passes. That root's separate size
+check still fails with 236 findings and 173 exceptions over 10,765 files: the
+two additional files are the previously audited live-only Core modules. Finding
+paths match C, while 11 diagnostic messages have different lengths from the
+retained concurrent work. `live-integration-checks/` records these root results
+separately from the 166-path candidate's source-budget proof and runtime seals.
+Neither those static checks nor C's scoped passes qualify physical model
+extraction, the required 25% measured memory reduction, native/device execution,
+the full workspace or the first release.

@@ -4,9 +4,9 @@ use crate::{
     ValidationFail,
     isi::{Instruction, InstructionBox},
 };
-#[cfg(feature = "json")]
+
 use base64::Engine as _;
-#[cfg(feature = "json")]
+
 use base64::engine::general_purpose::STANDARD;
 use derive_more::Display;
 use getset::Getters;
@@ -58,7 +58,7 @@ mod model {
         /// Exceeded maximum depth for synchronous trigger execution or chained data triggers.
         MaxDepthExceeded,
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::JsonSerialize for TriggerExecutionFail {
         fn json_serialize(&self, out: &mut String) {
             let label = match self {
@@ -73,7 +73,7 @@ mod model {
             norito::json::write_json_string_to("MaxDepthExceeded", out)
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::JsonDeserialize for TriggerExecutionFail {
         fn json_deserialize(
             parser: &mut norito::json::Parser<'_>,
@@ -129,7 +129,7 @@ mod model {
         TriggerExecution(#[source] TriggerExecutionFail),
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for TransactionRejectionReason {
     fn json_serialize(&self, out: &mut String) {
         norito::json::write_canonical_base64_json(self, out);
@@ -141,7 +141,7 @@ impl norito::json::JsonSerialize for TransactionRejectionReason {
         norito::json::write_canonical_base64_json_to(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for TransactionRejectionReason {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -166,7 +166,7 @@ impl Display for InstructionExecutionFail {
         write!(f, "Failed to execute instruction: {}", self.reason)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for TransactionLimitError {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.reason, out);
@@ -178,7 +178,7 @@ impl norito::json::FastJsonWrite for TransactionLimitError {
         norito::json::JsonSerialize::json_serialize_to(&self.reason, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for TransactionLimitError {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -187,7 +187,7 @@ impl norito::json::JsonDeserialize for TransactionLimitError {
         Ok(Self { reason })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for IvmExecutionFail {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.reason, out);
@@ -199,7 +199,7 @@ impl norito::json::FastJsonWrite for IvmExecutionFail {
         norito::json::JsonSerialize::json_serialize_to(&self.reason, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for IvmExecutionFail {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -223,7 +223,7 @@ pub mod prelude {
 mod tests {
     use super::*;
     use crate::{Level, isi::Log};
-    #[cfg(feature = "json")]
+
     #[test]
     fn rejection_reason_json_is_canonical_and_ambient_independent() {
         fn assert_bounded<T: norito::json::JsonSerialize>(value: &T) {

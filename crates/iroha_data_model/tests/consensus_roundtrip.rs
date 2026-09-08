@@ -27,7 +27,7 @@ use iroha_data_model::{
     peer::PeerId,
 };
 use norito::{
-    NoritoDeserialize,
+    DeserializePayload, NoritoDeserialize,
     codec::{Decode, DecodeAll, Encode},
 };
 use std::{
@@ -735,7 +735,7 @@ fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFix
             norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
         let archived =
             norito::from_bytes::<LaneBlockCommitment>(&norito_bytes).expect("archive commitment");
-        let decoded = NoritoDeserialize::try_deserialize(archived)
+        let decoded = DeserializePayload::try_deserialize(archived)
             .expect("deserialize commitment from Norito bytes");
         assert_eq!(
             commitment,
@@ -756,7 +756,7 @@ fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFix
                     });
                     let archived_file = norito::from_bytes::<LaneBlockCommitment>(&fixture_bytes)
                         .expect("archive fixture");
-                    let decoded_from_file = NoritoDeserialize::try_deserialize(archived_file)
+                    let decoded_from_file = DeserializePayload::try_deserialize(archived_file)
                         .expect("deserialize fixture Norito bytes");
                     assert_eq!(
                         commitment,
@@ -974,8 +974,8 @@ fn lane_block_commitment_roundtrips_without_metadata_or_receipts() {
     let norito_bytes = norito::to_bytes(&commitment).expect("encode commitment to Norito bytes");
     let archived = norito::from_bytes::<LaneBlockCommitment>(&norito_bytes)
         .expect("archive metadata-free commitment");
-    let decoded =
-        NoritoDeserialize::try_deserialize(archived).expect("deserialize metadata-free commitment");
+    let decoded = DeserializePayload::try_deserialize(archived)
+        .expect("deserialize metadata-free commitment");
     assert_eq!(
         decoded, commitment,
         "Norito roundtrip must preserve commitments without receipts"

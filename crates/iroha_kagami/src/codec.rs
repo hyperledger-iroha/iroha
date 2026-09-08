@@ -6,10 +6,7 @@ use color_eyre::{
 };
 use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain, peer::Peer};
 use iroha_genesis::RawGenesisTransaction;
-use norito::{
-    codec::{DecodeAll, Encode},
-    json::{JsonDeserializeOwned, JsonSerialize},
-};
+use norito::json::{JsonDeserializeOwned, JsonSerialize};
 use std::{
     collections::BTreeMap,
     fmt::{self, Debug, Write as _},
@@ -32,7 +29,11 @@ const CODEC_DECODE_LIMITS_V1: norito::DecodeLimits =
 fn generate_map() -> ConverterMap {
     fn insert_converter<T>(map: &mut ConverterMap)
     where
-        T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
+        T: Debug
+            + norito::NoritoSerialize
+            + for<'__frame> norito::NoritoDeserialize<'__frame>
+            + JsonSerialize
+            + JsonDeserializeOwned,
         T: iroha_schema::TypeId + Send + Sync + 'static,
     {
         let type_id = <T as iroha_schema::TypeId>::id();
@@ -130,7 +131,11 @@ impl io::Write for BoundedCodecOutput {
 struct ConverterImpl<T>(PhantomData<T>);
 impl<T> ConverterImpl<T>
 where
-    T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
+    T: Debug
+        + norito::NoritoSerialize
+        + for<'__frame> norito::NoritoDeserialize<'__frame>
+        + JsonSerialize
+        + JsonDeserializeOwned,
     T: Send + Sync + 'static,
 {
     fn boxed() -> Arc<dyn Converter> {
@@ -144,7 +149,11 @@ trait Converter: Send + Sync {
 }
 impl<T> Converter for ConverterImpl<T>
 where
-    T: Debug + Encode + DecodeAll + JsonSerialize + JsonDeserializeOwned,
+    T: Debug
+        + norito::NoritoSerialize
+        + for<'__frame> norito::NoritoDeserialize<'__frame>
+        + JsonSerialize
+        + JsonDeserializeOwned,
     T: Send + Sync + 'static,
 {
     fn norito_to_rust(&self, input: &[u8]) -> Result<String> {

@@ -1929,7 +1929,7 @@ fn status_uses_one_complete_v1_binary_layout() {
     let expected_json = json::to_json(&status).expect("serialize status JSON");
     let bytes = norito::to_bytes(&status).expect("serialize status");
     let archived = norito::from_bytes::<Status>(&bytes).expect("deserialize status");
-    let decoded = <Status as norito::NoritoDeserialize>::deserialize(archived);
+    let decoded = <Status as norito::DeserializePayload>::deserialize(archived);
 
     assert_eq!(
         json::to_json(&decoded).expect("serialize decoded status JSON"),
@@ -1967,7 +1967,7 @@ fn sumeragi_status_v1_binary_roundtrip_preserves_every_field() {
     let bytes = norito::to_bytes(&status).expect("serialize consensus status");
     let archived = norito::from_bytes::<SumeragiConsensusStatus>(&bytes)
         .expect("deserialize consensus status");
-    let decoded = <SumeragiConsensusStatus as norito::NoritoDeserialize>::deserialize(archived);
+    let decoded = <SumeragiConsensusStatus as norito::DeserializePayload>::deserialize(archived);
 
     assert_eq!(
         json::to_json(&decoded).expect("serialize decoded consensus status JSON"),

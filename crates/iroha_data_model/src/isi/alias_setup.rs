@@ -7,10 +7,7 @@ isi! {
     /// missing derived state is repaired without charge, absence is acquired once,
     /// and authoritative drift fails closed.
     #[norito(decode_from_slice)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::alias_setup::EnsureAlias")]
     pub struct EnsureAlias {
         /// Exact desired resource state.
@@ -42,10 +39,7 @@ impl crate::seal::Instruction for EnsureAlias {}
 isi! {
     /// Renew one lease using expiry compare-and-set and an absolute target expiry.
     #[norito(decode_from_slice)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::alias_setup::RenewAliasLease")]
     pub struct RenewAliasLease {
         /// Exact resolved lease target.
@@ -81,10 +75,7 @@ impl crate::seal::Instruction for RenewAliasLease {}
 isi! {
     /// Configure or disable native deterministic alias auto-renew.
     #[norito(decode_from_slice)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew")]
     pub struct ConfigureAliasAutoRenew {
         /// Exact resolved lease target.

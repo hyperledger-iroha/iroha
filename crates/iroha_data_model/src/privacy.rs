@@ -6,7 +6,7 @@
 //! parameter, verifier, statement-schema, and engine-manifest digests. There
 //! are no free-form identifiers, aliases, or fallback proof variants.
 use crate::{AssetDefinitionId, NetworkId, account::AccountId, asset::AssetBalanceScope};
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 pub use iroha_zkp_halo2::vega_constants::{
@@ -187,54 +187,60 @@ pub const MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1: u64 = 300;
 ///
 /// Variant order is part of the Norito wire contract. New protocols require a
 /// new data-model release; unknown discriminants are rejected.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "protocol", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "protocol", content = "value", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolIdV1")]
 pub enum PrivacyProtocolIdV1 {
     /// Native ZK-ACE post-quantum authorization protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v1"))]
+    #[norito(rename = "zk-ace-pq-authorization-v1")]
     ZkAcePqAuthorizationV1,
     /// Anonymous PGC k-out-of-n payment protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
+    #[norito(rename = "anonymous-pgc-k-out-of-n-v1")]
     AnonymousPgcKOutOfNV1,
     /// `VeRange` transparent range-proof protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "verange-transparent-range-v1"))]
+    #[norito(rename = "verange-transparent-range-v1")]
     VeRangeTransparentRangeV1,
     /// Native Iroha ZK-AMS admission and anonymous-account provisioning suite v1.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-ams-v1"))]
+    #[norito(rename = "iroha-zk-ams-v1")]
     IrohaZkAmsV1,
     /// Vega proof over an existing credential v1.
-    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v1"))]
+    #[norito(rename = "vega-existing-credential-zk-v1")]
     VegaExistingCredentialZkV1,
     /// Native Iroha P-256 X.509 predicate STARK protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v1"))]
+    #[norito(rename = "iroha-zk-x509-stark-p256-v1")]
     IrohaZkX509StarkP256V1,
     /// Native Iroha Jindo batched univariate lattice polynomial-commitment protocol v1.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "iroha-jindo-polynomial-commitment-v1")
-    )]
+    #[norito(rename = "iroha-jindo-polynomial-commitment-v1")]
     IrohaJindoPolynomialCommitmentV1,
     /// Native Bootle Lantern/LNP22 module-lattice anonymous credential v1.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-bootle-lantern-anoncred-v1"))]
+    #[norito(rename = "iroha-bootle-lantern-anoncred-v1")]
     IrohaBootleLanternAnoncredV1,
     /// Orchard Halo2 action protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "orchard-halo2-actions-v1"))]
+    #[norito(rename = "orchard-halo2-actions-v1")]
     OrchardHalo2ActionsV1,
     /// Monero FCMP++ full-chain membership protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "monero-fcmp-plus-plus-v1"))]
+    #[norito(rename = "monero-fcmp-plus-plus-v1")]
     MoneroFcmpPlusPlusV1,
     /// Native IVM private-note STARK protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
+    #[norito(rename = "iroha-ivm-private-note-stark-v1")]
     IrohaIvmPrivateNoteStarkV1,
     /// Post-quantum MASP STARK protocol v1.
-    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v1"))]
+    #[norito(rename = "pq-masp-stark-v1")]
     PqMaspStarkV1,
 }
 /// Overall security model claimed by a final first-release privacy protocol.
@@ -242,21 +248,30 @@ pub enum PrivacyProtocolIdV1 {
 /// This records the weakest primitive in the complete protocol composition.
 /// A post-quantum STARK component therefore does not upgrade a protocol that
 /// also depends on P-256, Pasta, or another classical primitive.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "security_model", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "security_model", content = "value", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacySecurityModelV1")]
 pub enum PrivacySecurityModelV1 {
     /// Post-quantum security in the quantum random-oracle model.
-    #[cfg_attr(feature = "json", norito(rename = "pq-qrom"))]
+    #[norito(rename = "pq-qrom")]
     PostQuantumQrom,
     /// Classical security in the random-oracle model.
-    #[cfg_attr(feature = "json", norito(rename = "classical-rom"))]
+    #[norito(rename = "classical-rom")]
     ClassicalRom,
 }
 
@@ -442,108 +457,108 @@ pub fn privacy_protocol_label_is_exact12_v1(label: &str) -> bool {
 ///
 /// This is intentionally distinct from [`PrivacyProtocolIdV1`] because several
 /// protocols can share one proof system without becoming interchangeable.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "proof_system", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "proof_system", content = "value", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofSystemIdV1")]
 pub enum PrivacyProofSystemIdV1 {
     /// Six-lane Poseidon-x7 STARK/FRI over the Goldilocks field.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "stark-fri-poseidon-x7-goldilocks-6x64-v1")
-    )]
+    #[norito(rename = "stark-fri-poseidon-x7-goldilocks-6x64-v1")]
     StarkFriPoseidonX7Goldilocks6x64,
     /// ZK-AMS masked relaxed-R1CS admission plus Ristretto255 possession and LSAG.
     ///
     /// Batch admission uses Poseidon2/Goldilocks commitment digests and a
     /// transparent STARK/FRI proof. Account provisioning uses MLSAGS over
     /// Ristretto255 with SHA3-512 for the transcript and hash-to-group suite.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512")
-    )]
+    #[norito(rename = "zk-ams-masked-relaxed-spartan-t256-ristretto255-sha3-512")]
     ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512,
     /// Anonymous PGC k-out-of-n proof system over P-256.
-    #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-p256"))]
+    #[norito(rename = "anonymous-pgc-p256")]
     AnonymousPgcP256,
     /// Iroha Type-1 `VeRange` profile over P-256 with SHA-256.
     ///
     /// This profile is distinct from the upstream BN254-and-Keccak reference.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-verange-p256"))]
+    #[norito(rename = "iroha-verange-p256")]
     IrohaVeRangeP256,
     /// Vega Neutron/Nova/Spartan proof system with Hyrax commitments over T256.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "vega-neutron-nova-spartan-hyrax-t256")
-    )]
+    #[norito(rename = "vega-neutron-nova-spartan-hyrax-t256")]
     VegaNeutronNovaSpartanHyraxT256,
     /// Jindo batched univariate lattice polynomial-commitment proof system.
-    #[cfg_attr(feature = "json", norito(rename = "jindo-polynomial-commitment"))]
+    #[norito(rename = "jindo-polynomial-commitment")]
     JindoPolynomialCommitment,
     /// Halo2 IPA proof system over the Pasta curve cycle.
-    #[cfg_attr(feature = "json", norito(rename = "halo2-ipa-pasta"))]
+    #[norito(rename = "halo2-ipa-pasta")]
     Halo2IpaPasta,
     /// FCMP++ Curve Tree and Bulletproofs proof composition.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "fcmp-plus-plus-curve-tree-bulletproofs")
-    )]
+    #[norito(rename = "fcmp-plus-plus-curve-tree-bulletproofs")]
     FcmpPlusPlusCurveTreeBulletproofs,
     /// Bootle Lantern/LNP22 module-lattice linear-and-norm proof system.
-    #[cfg_attr(feature = "json", norito(rename = "lantern-lnp22-module-linear-norm"))]
+    #[norito(rename = "lantern-lnp22-module-linear-norm")]
     LanternLnp22ModuleLinearNorm,
 }
 /// Native verifier engine implementation selected by a privacy protocol.
 ///
 /// Engine identity binds the pinned final Rust implementation
 /// independently of the mathematical proof-system profile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "engine", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "engine", content = "value", deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyEngineIdV1")]
 pub enum PrivacyEngineIdV1 {
     /// Native Goldilocks STARK/FRI verifier.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "native-goldilocks-poseidon-x7-stark-fri-6x64-v1")
-    )]
+    #[norito(rename = "native-goldilocks-poseidon-x7-stark-fri-6x64-v1")]
     NativeGoldilocksPoseidonX7StarkFri6x64,
     /// Native ZK-AMS masked relaxed-R1CS and Ristretto255 verifier suite.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "native-zk-ams-masked-relaxed-spartan-t256-ristretto255")
-    )]
+    #[norito(rename = "native-zk-ams-masked-relaxed-spartan-t256-ristretto255")]
     NativeZkAmsMaskedRelaxedSpartanT256Ristretto255,
     /// Native Anonymous PGC verifier over P-256.
-    #[cfg_attr(feature = "json", norito(rename = "native-anonymous-pgc-p256"))]
+    #[norito(rename = "native-anonymous-pgc-p256")]
     NativeAnonymousPgcP256,
     /// Native `VeRange` verifier over P-256.
-    #[cfg_attr(feature = "json", norito(rename = "native-verange-p256"))]
+    #[norito(rename = "native-verange-p256")]
     NativeVeRangeP256,
     /// Native Vega verifier.
-    #[cfg_attr(feature = "json", norito(rename = "native-vega"))]
+    #[norito(rename = "native-vega")]
     NativeVega,
     /// Native Jindo verifier.
-    #[cfg_attr(feature = "json", norito(rename = "native-jindo"))]
+    #[norito(rename = "native-jindo")]
     NativeJindo,
     /// Native Orchard Halo2 verifier.
-    #[cfg_attr(feature = "json", norito(rename = "native-halo2-orchard"))]
+    #[norito(rename = "native-halo2-orchard")]
     NativeHalo2Orchard,
     /// Native FCMP++ verifier.
-    #[cfg_attr(feature = "json", norito(rename = "native-fcmp-plus-plus"))]
+    #[norito(rename = "native-fcmp-plus-plus")]
     NativeFcmpPlusPlus,
     /// Native Bootle Lantern/LNP22 module-lattice verifier.
-    #[cfg_attr(feature = "json", norito(rename = "native-lantern-lnp22"))]
+    #[norito(rename = "native-lantern-lnp22")]
     NativeLanternLnp22,
 }
 /// Validated first-release privacy proof wire marker.
@@ -553,6 +568,8 @@ pub enum PrivacyEngineIdV1 {
 /// envelopes fail while decoding, before an ordinal can be interpreted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyProofWireMagicV1")]
 pub struct PrivacyProofWireMagicV1([u8; 8]);
 
 impl PrivacyProofWireMagicV1 {
@@ -595,7 +612,8 @@ impl norito::core::SerializePayload for PrivacyProofWireMagicV1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyProofWireMagicV1 {
+impl norito::core::NoritoDeserialize<'_> for PrivacyProofWireMagicV1 {}
+impl<'de> norito::core::DeserializePayload<'de> for PrivacyProofWireMagicV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical privacy proof wire magic")
     }
@@ -603,7 +621,8 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyProofWireMagicV1 {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; 8] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let bytes =
+            <[u8; 8] as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
         Self::from_bytes(bytes).ok_or_else(|| {
             norito::core::Error::Message("invalid first-release privacy proof wire magic".into())
         })
@@ -623,7 +642,6 @@ impl<'de> norito::core::DecodeFromSlice<'de> for PrivacyProofWireMagicV1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for PrivacyProofWireMagicV1 {
     fn write_json(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(&self.0, out);
@@ -637,7 +655,6 @@ impl norito::json::FastJsonWrite for PrivacyProofWireMagicV1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for PrivacyProofWireMagicV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -659,6 +676,8 @@ impl norito::json::JsonDeserialize for PrivacyProofWireMagicV1 {
 /// manufacturing a non-canonical wire value after validation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::GoldilocksDigest384V1")]
 pub struct GoldilocksDigest384V1([u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1]);
 
 impl Default for GoldilocksDigest384V1 {
@@ -737,7 +756,8 @@ impl norito::core::SerializePayload for GoldilocksDigest384V1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for GoldilocksDigest384V1 {
+impl norito::core::NoritoDeserialize<'_> for GoldilocksDigest384V1 {}
+impl<'de> norito::core::DeserializePayload<'de> for GoldilocksDigest384V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical GoldilocksDigest384V1 decode")
     }
@@ -745,7 +765,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for GoldilocksDigest384V1 {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let bytes = <[u8; fastpq_isi::GOLDILOCKS_DIGEST384_BYTES_V1] as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
         Self::from_le_bytes(bytes).ok_or_else(|| {
             norito::core::Error::Message("non-canonical GoldilocksDigest384V1 field element".into())
         })
@@ -767,7 +787,6 @@ impl<'de> norito::core::DecodeFromSlice<'de> for GoldilocksDigest384V1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for GoldilocksDigest384V1 {
     fn write_json(&self, out: &mut String) {
         crate::json_helpers::fixed_bytes::serialize(&self.to_le_bytes(), out);
@@ -781,7 +800,6 @@ impl norito::json::FastJsonWrite for GoldilocksDigest384V1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for GoldilocksDigest384V1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -880,7 +898,10 @@ impl norito::core::SerializePayload for $name {
             }
         }
 
-        impl<'de> norito::core::NoritoDeserialize<'de> for $name {
+        impl norito::core::NoritoDeserialize<'_> for $name {
+
+}
+impl<'de> norito::core::DeserializePayload<'de> for $name {
             fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                 Self::try_deserialize(archived).expect("canonical ZK-ACE digest decode")
             }
@@ -888,7 +909,7 @@ impl norito::core::SerializePayload for $name {
             fn try_deserialize(
                 archived: &'de norito::core::Archived<Self>,
             ) -> Result<Self, norito::core::Error> {
-                <GoldilocksDigest384V1 as norito::core::NoritoDeserialize>::try_deserialize(
+                <GoldilocksDigest384V1 as norito::core::DeserializePayload>::try_deserialize(
                     archived.cast(),
                 ).map(Self)
             }
@@ -903,7 +924,7 @@ impl norito::core::SerializePayload for $name {
             }
         }
 
-        #[cfg(feature = "json")]
+
         impl norito::json::FastJsonWrite for $name {
             fn write_json(&self, out: &mut String) {
                 norito::json::FastJsonWrite::write_json(&self.0, out);
@@ -917,7 +938,7 @@ impl norito::core::SerializePayload for $name {
             }
         }
 
-        #[cfg(feature = "json")]
+
         impl norito::json::JsonDeserialize for $name {
             fn json_deserialize(
                 parser: &mut norito::json::Parser<'_>,
@@ -980,6 +1001,8 @@ pub fn compute_privacy_exact12_catalog_commitment_v1() -> GoldilocksDigest384V1 
 /// retaining otherwise valid protocol ordinals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyExact12CatalogCommitmentV1")]
 pub struct PrivacyExact12CatalogCommitmentV1(GoldilocksDigest384V1);
 
 impl PrivacyExact12CatalogCommitmentV1 {
@@ -1024,7 +1047,8 @@ impl norito::core::SerializePayload for PrivacyExact12CatalogCommitmentV1 {
     }
 }
 
-impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyExact12CatalogCommitmentV1 {
+impl norito::core::NoritoDeserialize<'_> for PrivacyExact12CatalogCommitmentV1 {}
+impl<'de> norito::core::DeserializePayload<'de> for PrivacyExact12CatalogCommitmentV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical Exact12 catalog commitment")
     }
@@ -1032,7 +1056,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PrivacyExact12CatalogCommitme
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let digest = <GoldilocksDigest384V1 as norito::core::NoritoDeserialize>::try_deserialize(
+        let digest = <GoldilocksDigest384V1 as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
         Self::from_digest(digest).ok_or_else(|| {
@@ -1055,7 +1079,6 @@ impl<'de> norito::core::DecodeFromSlice<'de> for PrivacyExact12CatalogCommitment
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for PrivacyExact12CatalogCommitmentV1 {
     fn write_json(&self, out: &mut String) {
         norito::json::FastJsonWrite::write_json(&self.0, out);
@@ -1069,7 +1092,6 @@ impl norito::json::FastJsonWrite for PrivacyExact12CatalogCommitmentV1 {
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::JsonDeserialize for PrivacyExact12CatalogCommitmentV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1104,13 +1126,10 @@ macro_rules! define_privacy_digest {
         )]
         #[repr(transparent)]
         #[norito(decode_from_slice)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
+        #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
         pub struct $name(
             /// The exact 32-byte digest value.
-            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+            #[norito (json = "crate::json_helpers::fixed_bytes")]
             pub [u8; 32],
         );
         impl $name {
@@ -1473,13 +1492,10 @@ macro_rules! define_ristretto255_encoding {
         )]
         #[repr(transparent)]
         #[norito(decode_from_slice)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-        )]
+        #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
         pub struct $name(
             /// Exact canonical compressed Ristretto255 encoding.
-            #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+            #[norito (json = "crate::json_helpers::fixed_bytes")]
             pub [u8; 32],
         );
         impl $name {
@@ -1514,10 +1530,11 @@ define_ristretto255_encoding!(
     PrivacyZkAmsKeyImageV1,
     "iroha_data_model::privacy::PrivacyZkAmsKeyImageV1"
 );
-// Keep the implementation in this public module: textual includes improve
-// navigation without changing path-derived Norito identities.
+// Keep wire declarations in this public module so their Norito identities
+// remain stable; validation implementations have focused private owners.
 include!("privacy/protocol.rs");
 mod capability_manifest;
+mod policy;
 pub use capability_manifest::*;
 mod release_manifest;
 pub use release_manifest::*;
@@ -1532,3 +1549,6 @@ pub(crate) mod tests {
     include!("privacy/tests/namespaces_and_governance.rs");
     include!("privacy/tests/adversarial.rs");
 }
+
+#[cfg(test)]
+mod captured_privacy_ordinary_schema_tests;

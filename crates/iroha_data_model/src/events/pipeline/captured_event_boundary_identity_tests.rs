@@ -1,0 +1,67 @@
+//! Source-bound compiler identities for this event capability's existing owners.
+
+use crate::events::captured_event_boundary_identity_tests::check;
+
+#[test]
+fn captured_event_codec_schema_identities() {
+    check::<super::PipelineEventBox>(
+        "iroha_data_model::events::pipeline::model::PipelineEventBox",
+        "e854599bd0a564724a090f3a6148e155",
+        "e854599bd0a564724a090f3a6148e155",
+    );
+    check::<super::BlockEvent>(
+        "iroha_data_model::events::pipeline::model::BlockEvent",
+        "09c2a77bbe4629352c6b87982c7bee7e",
+        "09c2a77bbe4629352c6b87982c7bee7e",
+    );
+    check::<super::TransactionEvent>(
+        "iroha_data_model::events::pipeline::model::TransactionEvent",
+        "316ebeafd731e5b2bd6760e82d5d5df9",
+        "316ebeafd731e5b2bd6760e82d5d5df9",
+    );
+    check::<super::BlockStatus>(
+        "iroha_data_model::events::pipeline::model::BlockStatus",
+        "08243ef5221eb6469ce065e3445fb88f",
+        "08243ef5221eb6469ce065e3445fb88f",
+    );
+    check::<super::PipelineWarning>(
+        "iroha_data_model::events::pipeline::model::PipelineWarning",
+        "a4e4c77ec8eb367ac481c3145afde46e",
+        "a4e4c77ec8eb367ac481c3145afde46e",
+    );
+    check::<super::MergeLedgerEvent>(
+        "iroha_data_model::events::pipeline::model::MergeLedgerEvent",
+        "c0bb9a1419f0adb16ac67b939b4e5d24",
+        "c0bb9a1419f0adb16ac67b939b4e5d24",
+    );
+    check::<super::TransactionStatus>(
+        "iroha_data_model::events::pipeline::model::TransactionStatus",
+        "b2bcd2f6b717770ef66d21853ea83ff9",
+        "b2bcd2f6b717770ef66d21853ea83ff9",
+    );
+    check::<super::PipelineEventFilterBox>(
+        "iroha_data_model::events::pipeline::model::PipelineEventFilterBox",
+        "6aa941571a4169bd8c60be0779cc1b69",
+        "6aa941571a4169bd8c60be0779cc1b69",
+    );
+    check::<super::BlockEventFilter>(
+        "iroha_data_model::events::pipeline::model::BlockEventFilter",
+        "b61f1d00fa56af09347bd1de2717eb6c",
+        "b61f1d00fa56af09347bd1de2717eb6c",
+    );
+    check::<super::TransactionEventFilter>(
+        "iroha_data_model::events::pipeline::model::TransactionEventFilter",
+        "e47bdf43a6e82056dd47fa2acb15fef4",
+        "e47bdf43a6e82056dd47fa2acb15fef4",
+    );
+    check::<super::MergeLedgerEventFilter>(
+        "iroha_data_model::events::pipeline::model::MergeLedgerEventFilter",
+        "817822147004e4cd960143f739666255",
+        "817822147004e4cd960143f739666255",
+    );
+    check::<super::WitnessEventFilter>(
+        "iroha_data_model::events::pipeline::model::WitnessEventFilter",
+        "845fac0576ecf54cbd7f3406a1944e05",
+        "845fac0576ecf54cbd7f3406a1944e05",
+    );
+}

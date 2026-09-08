@@ -11,7 +11,7 @@ use crate::json;
 use crate::{ArchiveSlice, guarded_try_deserialize};
 pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::convert::TryFrom;
-pub use norito_derive::{NoritoDeserialize, NoritoSerialize};
+pub use norito_derive::{DeserializePayload, NoritoDeserialize, NoritoSerialize};
 use sha2::{Digest, Sha256};
 use std::{
     alloc::Layout,
@@ -49,6 +49,9 @@ mod counting_tests;
 mod element_sequence_tests;
 pub mod heuristics;
 pub mod hw;
+#[cfg(test)]
+#[path = "core/payload_decode_tests.rs"]
+mod payload_decode_tests;
 #[cfg(test)]
 #[path = "core/payload_tests.rs"]
 mod payload_tests;
@@ -3053,7 +3056,7 @@ impl<'a> DecodeFromSlice<'a> for char {
 }
 fn decode_sequence_plan_serial<'a, T>(bytes: &'a [u8], plan: &SequencePlan) -> Result<Vec<T>, Error>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     let mut out = try_decode_vec_with_capacity(plan.spans.len())?;
     for span in &plan.spans {
@@ -3072,7 +3075,7 @@ fn decode_element_sequence_from_slice_with<'a, T, F>(
     decode_planned: F,
 ) -> Result<(Vec<T>, usize), Error>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
     F: FnOnce(&'a [u8], u8, &SequencePlan) -> Result<Option<Vec<T>>, Error>,
 {
     let (len, _) = read_seq_len_slice(bytes)?;
@@ -3109,7 +3112,7 @@ pub fn decode_element_sequence_from_slice_serial<'a, T>(
     bytes: &'a [u8],
 ) -> Result<(Vec<T>, usize), Error>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     decode_element_sequence_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))
 }
@@ -3119,7 +3122,7 @@ fn decode_vec_from_slice_with<'a, T, F>(
     decode_planned: F,
 ) -> Result<(Vec<T>, usize), Error>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
     F: FnOnce(&'a [u8], u8, &SequencePlan) -> Result<Option<Vec<T>>, Error>,
 {
     // `Vec<u8>` is encoded as `len(u64)` + raw bytes for efficiency. Generic
@@ -3142,13 +3145,13 @@ where
 #[doc(hidden)]
 pub fn decode_vec_from_slice_serial<'a, T>(bytes: &'a [u8]) -> Result<(Vec<T>, usize), Error>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     decode_vec_from_slice_with::<T, _>(bytes, |_, _, _| Ok(None))
 }
 impl<'a, T> DecodeFromSlice<'a> for Vec<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         decode_vec_from_slice_serial::<T>(bytes)
@@ -3156,7 +3159,7 @@ where
 }
 fn decode_sequence_elements<'a, T, F>(bytes: &'a [u8], mut on_value: F) -> Result<usize, Error>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
     F: FnMut(T) -> Result<(), Error>,
 {
     let (len, _) = read_seq_len_slice(bytes)?;
@@ -3253,7 +3256,7 @@ impl<'a, T: DecodeFromSlice<'a> + 'static, const N: usize> DecodeFromSlice<'a> f
 }
 impl<'a, T> DecodeFromSlice<'a> for VecDeque<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, _) = inspect_seq_len_slice(bytes)?;
@@ -3278,7 +3281,7 @@ where
 include!("core/owned_collection_allocation.rs");
 impl<'a, T> DecodeFromSlice<'a> for LinkedList<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, _) = inspect_seq_len_slice(bytes)?;
@@ -3294,7 +3297,7 @@ where
 }
 impl<'a, T> DecodeFromSlice<'a> for BinaryHeap<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
+    T: for<'de> DeserializePayload<'de> + SerializePayload + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, _) = inspect_seq_len_slice(bytes)?;
@@ -3316,7 +3319,7 @@ where
 }
 impl<'a, T> DecodeFromSlice<'a> for BTreeSet<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
+    T: for<'de> DeserializePayload<'de> + SerializePayload + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, _) = inspect_seq_len_slice(bytes)?;
@@ -3334,7 +3337,7 @@ where
 }
 impl<'a, T> DecodeFromSlice<'a> for HashSet<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
+    T: for<'de> DeserializePayload<'de> + SerializePayload + Eq + Hash + Ord,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, _) = inspect_seq_len_slice(bytes)?;
@@ -3359,8 +3362,8 @@ fn decode_map_entries<'a, K, V, F>(
     mut on_entry: F,
 ) -> Result<(usize, usize), Error>
 where
-    K: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
-    V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    K: for<'de> DeserializePayload<'de> + SerializePayload,
+    V: for<'de> DeserializePayload<'de> + SerializePayload,
     F: FnMut(K, V) -> Result<(), Error>,
 {
     let (len, mut offset) = read_seq_len_slice(bytes)?;
@@ -3469,8 +3472,8 @@ where
 }
 impl<'a, K, V> DecodeFromSlice<'a> for BTreeMap<K, V>
 where
-    K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
-    V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    K: for<'de> DeserializePayload<'de> + SerializePayload + Ord,
+    V: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, _) = inspect_seq_len_slice(bytes)?;
@@ -3488,8 +3491,8 @@ where
 }
 impl<'a, K, V> DecodeFromSlice<'a> for HashMap<K, V>
 where
-    K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
-    V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    K: for<'de> DeserializePayload<'de> + SerializePayload + Eq + Hash + Ord,
+    V: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (len, _) = inspect_seq_len_slice(bytes)?;
@@ -3530,10 +3533,16 @@ where
         map_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, K, V> NoritoDeserialize<'a> for BTreeMap<K, V>
+impl<K, V> NoritoDeserialize<'_> for BTreeMap<K, V>
 where
-    K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
-    V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    K: for<'de> NoritoDeserialize<'de> + SerializePayload + Ord,
+    V: for<'de> NoritoDeserialize<'de> + SerializePayload,
+{
+}
+impl<'a, K, V> DeserializePayload<'a> for BTreeMap<K, V>
+where
+    K: for<'de> DeserializePayload<'de> + SerializePayload + Ord,
+    V: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn deserialize(archived: &'a Archived<BTreeMap<K, V>>) -> Self {
         Self::try_deserialize(archived).expect("BTreeMap decode")
@@ -3586,10 +3595,16 @@ where
         map_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, K, V> NoritoDeserialize<'a> for HashMap<K, V>
+impl<K, V> NoritoDeserialize<'_> for HashMap<K, V>
 where
-    K: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
-    V: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    K: for<'de> NoritoDeserialize<'de> + SerializePayload + Eq + Hash + Ord,
+    V: for<'de> NoritoDeserialize<'de> + SerializePayload,
+{
+}
+impl<'a, K, V> DeserializePayload<'a> for HashMap<K, V>
+where
+    K: for<'de> DeserializePayload<'de> + SerializePayload + Eq + Hash + Ord,
+    V: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn deserialize(archived: &'a Archived<HashMap<K, V>>) -> Self {
         Self::try_deserialize(archived).expect("HashMap decode")
@@ -3624,9 +3639,13 @@ where
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for BTreeSet<T>
+impl<T> NoritoDeserialize<'_> for BTreeSet<T> where
+    T: for<'de> NoritoDeserialize<'de> + SerializePayload + Ord
+{
+}
+impl<'a, T> DeserializePayload<'a> for BTreeSet<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Ord,
+    T: for<'de> DeserializePayload<'de> + SerializePayload + Ord,
 {
     fn deserialize(archived: &'a Archived<BTreeSet<T>>) -> Self {
         Self::try_deserialize(archived).expect("BTreeSet decode")
@@ -3673,9 +3692,13 @@ where
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for HashSet<T>
+impl<T> NoritoDeserialize<'_> for HashSet<T> where
+    T: for<'de> NoritoDeserialize<'de> + SerializePayload + Eq + Hash + Ord
+{
+}
+impl<'a, T> DeserializePayload<'a> for HashSet<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize + Eq + Hash + Ord,
+    T: for<'de> DeserializePayload<'de> + SerializePayload + Eq + Hash + Ord,
 {
     fn deserialize(archived: &'a Archived<HashSet<T>>) -> Self {
         Self::try_deserialize(archived).expect("HashSet decode")
@@ -3697,7 +3720,7 @@ where
 }
 impl<'a, T> DecodeFromSlice<'a> for Box<T>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
@@ -3712,7 +3735,7 @@ where
 }
 impl<'a, T> DecodeFromSlice<'a> for Rc<T>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
@@ -3727,7 +3750,7 @@ where
 }
 impl<'a, T> DecodeFromSlice<'a> for Arc<T>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let _depth_guard = OwnedValueDecodeDepthGuard::enter()?;
@@ -3765,7 +3788,9 @@ macro_rules! impl_decode_tuple_from_slice {
                     let field = bytes.get(offset..end).ok_or(Error::LengthMismatch)?;
                     let _depth = DecodeDepthGuard::enter()?;
                     let ($var, used) = $name::decode_from_slice(field)?;
-                    debug_assert_eq!(used, len);
+                    if used != len {
+                        return Err(Error::LengthMismatch);
+                    }
                     drop(_depth);
                     offset = end;
                 )+
@@ -3787,7 +3812,7 @@ impl_decode_tuple_from_slice!(A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, 
 impl_decode_tuple_from_slice!(A a, B b, C c, D d, E e, F f, G g, H h, I i, J j, K k, L l);
 impl<'a, T> DecodeFromSlice<'a> for Option<T>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
@@ -3801,22 +3826,10 @@ where
                 if end > bytes.len() {
                     return Err(Error::LengthMismatch);
                 }
-                let flags = effective_layout_flags();
-                let _flags_guard = DecodeFlagsGuard::enter(flags);
-                let schema = <T as NoritoSerialize>::schema_hash();
-                let align = archived_payload_align::<T>();
-                let archive = ArchiveSlice::new(&bytes[start..end], align)?;
-                let slice = archive.as_slice();
-                let payload_guard =
-                    PayloadCtxGuard::enter_with_schema_and_flags(slice, schema, flags);
-                let archived_ptr = if slice.is_empty() {
-                    empty_archived_ptr::<T>()
-                } else {
-                    slice.as_ptr().cast::<Archived<T>>()
-                };
-                let archived = unsafe { &*archived_ptr };
-                let value = crate::guarded_try_deserialize(|| T::try_deserialize(archived))?;
-                drop(payload_guard);
+                let (value, used) = decode_field_canonical::<T>(&bytes[start..end])?;
+                if used != len {
+                    return Err(Error::LengthMismatch);
+                }
                 record_slice_access(bytes, end);
                 Ok((Some(value), end))
             }
@@ -3836,9 +3849,12 @@ impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for
                 if end > bytes.len() {
                     return Err(Error::LengthMismatch);
                 }
+                let _depth = DecodeDepthGuard::enter()?;
                 let (val, used) = T::decode_from_slice(&bytes[start..end])?;
                 record_slice_access(bytes, end);
-                debug_assert_eq!(used, len);
+                if used != len {
+                    return Err(Error::LengthMismatch);
+                }
                 Ok((Ok(val), end))
             }
             1 => {
@@ -3848,9 +3864,12 @@ impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for
                 if end > bytes.len() {
                     return Err(Error::LengthMismatch);
                 }
+                let _depth = DecodeDepthGuard::enter()?;
                 let (err, used) = E::decode_from_slice(&bytes[start..end])?;
                 record_slice_access(bytes, end);
-                debug_assert_eq!(used, len);
+                if used != len {
+                    return Err(Error::LengthMismatch);
+                }
                 Ok((Err(err), end))
             }
             _ => Err(Error::Message("invalid result tag".into())),
@@ -4396,21 +4415,47 @@ pub fn serialize_to_buffer(
     let mut encoder = Encoder::for_buffer(buffer);
     value.serialize(&mut encoder)
 }
-/// Trait for reconstructing types from their archived form.
-pub trait NoritoDeserialize<'a>: Sized {
-    /// Schema hash used for validation.
-    ///
-    /// By default this mirrors [`NoritoSerialize::schema_hash`].
+/// Typed frame decoding contract.
+///
+/// Framed readers validate this identity before invoking payload reconstruction.
+/// Bare fields implement [`DeserializePayload`] without a frame identity.
+pub trait NoritoDeserialize<'a>: DeserializePayload<'a> {
+    /// Schema hash used for validation by typed frame readers.
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<Self>()
     }
-    /// Deserialize from bytes without allocations.
+}
+
+/// Reconstruct a value from its bounded archived payload, without a frame identity.
+///
+/// The archived reference is an address marker into the active payload context;
+/// it is never a reference to a reconstructed Rust value. Fallible implementations
+/// must reject invalid fields and preserve the active resource limits.
+///
+/// A payload implementation alone cannot be used as a typed frame decoder:
+///
+/// ```compile_fail
+/// #[derive(norito::SerializePayload, norito::DeserializePayload)]
+/// struct Field(u32);
+/// let _ = norito::core::from_bytes::<Field>(&[]);
+/// ```
+///
+/// This restriction also applies through collections:
+///
+/// ```compile_fail
+/// #[derive(norito::SerializePayload, norito::DeserializePayload)]
+/// struct Field(u32);
+/// let _ = norito::core::from_bytes::<Vec<Field>>(&[]);
+/// ```
+pub trait DeserializePayload<'a>: Sized {
+    /// Reconstruct a valid value, panicking if a fallible decoder rejects it.
+    /// Prefer [`Self::try_deserialize`] for untrusted input.
     fn deserialize(archived: &'a Archived<Self>) -> Self;
-    /// Fallible deserialization helper.
+
+    /// Reconstruct a value while preserving typed validation failures.
     ///
-    /// Types that can fail during deserialization can override this method to
-    /// surface an error instead of panicking. By default deserialization is
-    /// assumed to be infallible and wraps [`NoritoDeserialize::deserialize`].
+    /// Infallible implementations may inherit this default. Implementations
+    /// that can reject input must override it instead of relying on a panic.
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         Ok(Self::deserialize(archived))
     }
@@ -4631,7 +4676,7 @@ impl<T> std::ops::Deref for ArchivedBox<T> {
 #[inline(never)]
 pub fn decode_archived_field<T>(bytes: &[u8]) -> Result<T, Error>
 where
-    T: for<'de> NoritoDeserialize<'de>,
+    T: for<'de> DeserializePayload<'de>,
 {
     let logical_len = bytes.len();
     let min_size = archived_payload_size::<T>();
@@ -4665,7 +4710,7 @@ where
 ///
 /// This validates the archived footprint and produces suitably aligned backing
 /// storage. Payload structure and offsets are validated by the subsequent
-/// fallible [`NoritoDeserialize::try_deserialize`] call.
+/// fallible [`DeserializePayload::try_deserialize`] call.
 ///
 /// # Errors
 ///
@@ -4788,7 +4833,8 @@ impl SerializePayload for u8 {
         Some(1)
     }
 }
-impl<'a> NoritoDeserialize<'a> for u8 {
+impl NoritoDeserialize<'_> for u8 {}
+impl<'a> DeserializePayload<'a> for u8 {
     fn deserialize(archived: &'a Archived<u8>) -> Self {
         read_archived_bytes::<_, 1>(archived)[0]
     }
@@ -4809,7 +4855,8 @@ impl SerializePayload for i8 {
         Some(1)
     }
 }
-impl<'a> NoritoDeserialize<'a> for i8 {
+impl NoritoDeserialize<'_> for i8 {}
+impl<'a> DeserializePayload<'a> for i8 {
     fn deserialize(archived: &'a Archived<i8>) -> Self {
         i8::from_le_bytes(read_archived_bytes(archived))
     }
@@ -4830,7 +4877,8 @@ impl SerializePayload for u16 {
         Some(2)
     }
 }
-impl<'a> NoritoDeserialize<'a> for u16 {
+impl NoritoDeserialize<'_> for u16 {}
+impl<'a> DeserializePayload<'a> for u16 {
     fn deserialize(archived: &'a Archived<u16>) -> Self {
         u16::from_le_bytes(read_archived_bytes(archived))
     }
@@ -4850,15 +4898,16 @@ impl SerializePayload for NonZeroU16 {
         self.get().encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for NonZeroU16 {
+impl NoritoDeserialize<'_> for NonZeroU16 {}
+impl<'a> DeserializePayload<'a> for NonZeroU16 {
     fn deserialize(archived: &'a Archived<NonZeroU16>) -> Self {
         let val_arch: &Archived<u16> = archived.cast();
-        let value = <u16 as NoritoDeserialize>::deserialize(val_arch);
+        let value = <u16 as DeserializePayload>::deserialize(val_arch);
         NonZeroU16::new(value).expect("non-zero")
     }
     fn try_deserialize(archived: &'a Archived<NonZeroU16>) -> Result<Self, Error> {
         let val_arch: &Archived<u16> = archived.cast();
-        let value = <u16 as NoritoDeserialize>::try_deserialize(val_arch)?;
+        let value = <u16 as DeserializePayload>::try_deserialize(val_arch)?;
         NonZeroU16::new(value).ok_or(Error::InvalidNonZero)
     }
 }
@@ -4875,7 +4924,8 @@ impl SerializePayload for i16 {
         Some(2)
     }
 }
-impl<'a> NoritoDeserialize<'a> for i16 {
+impl NoritoDeserialize<'_> for i16 {}
+impl<'a> DeserializePayload<'a> for i16 {
     fn deserialize(archived: &'a Archived<i16>) -> Self {
         i16::from_le_bytes(read_archived_bytes(archived))
     }
@@ -4896,7 +4946,8 @@ impl SerializePayload for u32 {
         Some(4)
     }
 }
-impl<'a> NoritoDeserialize<'a> for u32 {
+impl NoritoDeserialize<'_> for u32 {}
+impl<'a> DeserializePayload<'a> for u32 {
     fn deserialize(archived: &'a Archived<u32>) -> Self {
         u32::from_le_bytes(read_archived_bytes(archived))
     }
@@ -4916,15 +4967,16 @@ impl SerializePayload for NonZeroU32 {
         self.get().encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for NonZeroU32 {
+impl NoritoDeserialize<'_> for NonZeroU32 {}
+impl<'a> DeserializePayload<'a> for NonZeroU32 {
     fn deserialize(archived: &'a Archived<NonZeroU32>) -> Self {
         let val_arch: &Archived<u32> = archived.cast();
-        let value = <u32 as NoritoDeserialize>::deserialize(val_arch);
+        let value = <u32 as DeserializePayload>::deserialize(val_arch);
         NonZeroU32::new(value).expect("non-zero")
     }
     fn try_deserialize(archived: &'a Archived<NonZeroU32>) -> Result<Self, Error> {
         let val_arch: &Archived<u32> = archived.cast();
-        let value = <u32 as NoritoDeserialize>::try_deserialize(val_arch)?;
+        let value = <u32 as DeserializePayload>::try_deserialize(val_arch)?;
         NonZeroU32::new(value).ok_or(Error::InvalidNonZero)
     }
 }
@@ -4941,12 +4993,13 @@ impl SerializePayload for bool {
         Some(1)
     }
 }
-impl<'a> NoritoDeserialize<'a> for bool {
+impl NoritoDeserialize<'_> for bool {}
+impl<'a> DeserializePayload<'a> for bool {
     fn deserialize(archived: &'a Archived<bool>) -> Self {
         Self::try_deserialize(archived).expect("invalid bool")
     }
     fn try_deserialize(archived: &'a Archived<bool>) -> Result<Self, Error> {
-        match <u8 as NoritoDeserialize>::try_deserialize(archived.cast())? {
+        match <u8 as DeserializePayload>::try_deserialize(archived.cast())? {
             0 => Ok(false),
             1 => Ok(true),
             tag => Err(Error::invalid_tag("bool", tag)),
@@ -4966,13 +5019,14 @@ impl SerializePayload for char {
         Some(4)
     }
 }
-impl<'a> NoritoDeserialize<'a> for char {
+impl NoritoDeserialize<'_> for char {}
+impl<'a> DeserializePayload<'a> for char {
     fn deserialize(archived: &'a Archived<char>) -> Self {
-        let v = <u32 as NoritoDeserialize>::deserialize(archived.cast());
+        let v = <u32 as DeserializePayload>::deserialize(archived.cast());
         char::from_u32(v).expect("invalid char")
     }
     fn try_deserialize(archived: &'a Archived<char>) -> Result<Self, Error> {
-        let value = <u32 as NoritoDeserialize>::try_deserialize(archived.cast())?;
+        let value = <u32 as DeserializePayload>::try_deserialize(archived.cast())?;
         char::from_u32(value)
             .ok_or_else(|| Error::Message(format!("invalid Unicode scalar value {value:#x}")))
     }
@@ -4989,7 +5043,8 @@ impl SerializePayload for () {
         Some(0)
     }
 }
-impl<'a> NoritoDeserialize<'a> for () {
+impl NoritoDeserialize<'_> for () {}
+impl<'a> DeserializePayload<'a> for () {
     fn deserialize(_archived: &'a Archived<()>) -> Self {
         // unit type has no data
     }
@@ -5000,7 +5055,8 @@ impl<T> SerializePayload for PhantomData<T> {
         Ok(())
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for PhantomData<T> {
+impl<T> NoritoDeserialize<'_> for PhantomData<T> {}
+impl<'a, T> DeserializePayload<'a> for PhantomData<T> {
     fn deserialize(_archived: &'a Archived<PhantomData<T>>) -> Self {
         PhantomData
     }
@@ -5023,7 +5079,8 @@ impl SerializePayload for i32 {
         Some(4)
     }
 }
-impl<'a> NoritoDeserialize<'a> for i32 {
+impl NoritoDeserialize<'_> for i32 {}
+impl<'a> DeserializePayload<'a> for i32 {
     fn deserialize(archived: &'a Archived<i32>) -> Self {
         i32::from_le_bytes(read_archived_bytes(archived))
     }
@@ -5044,7 +5101,8 @@ impl SerializePayload for u64 {
         Some(8)
     }
 }
-impl<'a> NoritoDeserialize<'a> for u64 {
+impl NoritoDeserialize<'_> for u64 {}
+impl<'a> DeserializePayload<'a> for u64 {
     fn deserialize(archived: &'a Archived<u64>) -> Self {
         u64::from_le_bytes(read_archived_bytes(archived))
     }
@@ -5064,15 +5122,16 @@ impl SerializePayload for NonZeroU64 {
         self.get().encoded_len_exact()
     }
 }
-impl<'a> NoritoDeserialize<'a> for NonZeroU64 {
+impl NoritoDeserialize<'_> for NonZeroU64 {}
+impl<'a> DeserializePayload<'a> for NonZeroU64 {
     fn deserialize(archived: &'a Archived<NonZeroU64>) -> Self {
         let val_arch: &Archived<u64> = archived.cast();
-        let value = <u64 as NoritoDeserialize>::deserialize(val_arch);
+        let value = <u64 as DeserializePayload>::deserialize(val_arch);
         NonZeroU64::new(value).expect("non-zero")
     }
     fn try_deserialize(archived: &'a Archived<NonZeroU64>) -> Result<Self, Error> {
         let val_arch: &Archived<u64> = archived.cast();
-        let value = <u64 as NoritoDeserialize>::try_deserialize(val_arch)?;
+        let value = <u64 as DeserializePayload>::try_deserialize(val_arch)?;
         NonZeroU64::new(value).ok_or(Error::InvalidNonZero)
     }
 }
@@ -5089,7 +5148,8 @@ impl SerializePayload for i64 {
         Some(8)
     }
 }
-impl<'a> NoritoDeserialize<'a> for i64 {
+impl NoritoDeserialize<'_> for i64 {}
+impl<'a> DeserializePayload<'a> for i64 {
     fn deserialize(archived: &'a Archived<i64>) -> Self {
         i64::from_le_bytes(read_archived_bytes(archived))
     }
@@ -5110,7 +5170,8 @@ impl SerializePayload for usize {
         Some(8)
     }
 }
-impl<'a> NoritoDeserialize<'a> for usize {
+impl NoritoDeserialize<'_> for usize {}
+impl<'a> DeserializePayload<'a> for usize {
     fn deserialize(archived: &'a Archived<usize>) -> Self {
         Self::try_deserialize(archived).expect("archived usize does not fit this target")
     }
@@ -5132,7 +5193,8 @@ impl SerializePayload for isize {
         Some(8)
     }
 }
-impl<'a> NoritoDeserialize<'a> for isize {
+impl NoritoDeserialize<'_> for isize {}
+impl<'a> DeserializePayload<'a> for isize {
     fn deserialize(archived: &'a Archived<isize>) -> Self {
         Self::try_deserialize(archived).expect("archived isize does not fit this target")
     }
@@ -5154,7 +5216,8 @@ impl SerializePayload for u128 {
         Some(16)
     }
 }
-impl<'a> NoritoDeserialize<'a> for u128 {
+impl NoritoDeserialize<'_> for u128 {}
+impl<'a> DeserializePayload<'a> for u128 {
     fn deserialize(archived: &'a Archived<u128>) -> Self {
         u128::from_le_bytes(read_archived_bytes(archived))
     }
@@ -5175,7 +5238,8 @@ impl SerializePayload for i128 {
         Some(16)
     }
 }
-impl<'a> NoritoDeserialize<'a> for i128 {
+impl NoritoDeserialize<'_> for i128 {}
+impl<'a> DeserializePayload<'a> for i128 {
     fn deserialize(archived: &'a Archived<i128>) -> Self {
         i128::from_le_bytes(read_archived_bytes(archived))
     }
@@ -5196,12 +5260,13 @@ impl SerializePayload for f32 {
         Some(4)
     }
 }
-impl<'a> NoritoDeserialize<'a> for f32 {
+impl NoritoDeserialize<'_> for f32 {}
+impl<'a> DeserializePayload<'a> for f32 {
     fn deserialize(archived: &'a Archived<f32>) -> Self {
-        Self::from_bits(<u32 as NoritoDeserialize>::deserialize(archived.cast()))
+        Self::from_bits(<u32 as DeserializePayload>::deserialize(archived.cast()))
     }
     fn try_deserialize(archived: &'a Archived<f32>) -> Result<Self, Error> {
-        <u32 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
+        <u32 as DeserializePayload>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
 }
 impl NoritoSerialize for f64 {}
@@ -5217,12 +5282,13 @@ impl SerializePayload for f64 {
         Some(8)
     }
 }
-impl<'a> NoritoDeserialize<'a> for f64 {
+impl NoritoDeserialize<'_> for f64 {}
+impl<'a> DeserializePayload<'a> for f64 {
     fn deserialize(archived: &'a Archived<f64>) -> Self {
-        Self::from_bits(<u64 as NoritoDeserialize>::deserialize(archived.cast()))
+        Self::from_bits(<u64 as DeserializePayload>::deserialize(archived.cast()))
     }
     fn try_deserialize(archived: &'a Archived<f64>) -> Result<Self, Error> {
-        <u64 as NoritoDeserialize>::try_deserialize(archived.cast()).map(Self::from_bits)
+        <u64 as DeserializePayload>::try_deserialize(archived.cast()).map(Self::from_bits)
     }
 }
 impl NoritoSerialize for String {}
@@ -5244,7 +5310,8 @@ impl SerializePayload for String {
 
 include!("core/owned_string_allocation.rs");
 
-impl<'a> NoritoDeserialize<'a> for String {
+impl NoritoDeserialize<'_> for String {}
+impl<'a> DeserializePayload<'a> for String {
     fn deserialize(archived: &'a Archived<String>) -> Self {
         Self::try_deserialize(archived)
             .unwrap_or_else(|err| panic!("norito: invalid archived String: {err:?}"))
@@ -5294,6 +5361,8 @@ impl<'a> NoritoDeserialize<'a> for &'a str {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
+}
+impl<'a> DeserializePayload<'a> for &'a str {
     fn deserialize(archived: &'a Archived<&'a str>) -> Self {
         Self::try_deserialize(archived)
             .unwrap_or_else(|err| panic!("norito: invalid archived &str: {err:?}"))
@@ -5364,8 +5433,10 @@ impl<'a> NoritoDeserialize<'a> for Cow<'a, str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
+}
+impl<'a> DeserializePayload<'a> for Cow<'a, str> {
     fn deserialize(archived: &'a Archived<Cow<'a, str>>) -> Self {
-        let s = <&'a str as NoritoDeserialize>::deserialize(archived.cast());
+        let s = <&'a str as DeserializePayload>::deserialize(archived.cast());
         Cow::Borrowed(s)
     }
 }
@@ -5385,10 +5456,12 @@ impl SerializePayload for Box<str> {
         len_prefixed_payload_len(self.len())
     }
 }
-impl<'a> NoritoDeserialize<'a> for Box<str> {
+impl NoritoDeserialize<'_> for Box<str> {
     fn schema_hash() -> [u8; 16] {
         compute_schema_hash::<String>()
     }
+}
+impl<'a> DeserializePayload<'a> for Box<str> {
     fn deserialize(archived: &'a Archived<Box<str>>) -> Self {
         let s = String::deserialize(archived.cast());
         s.into_boxed_str()
@@ -5415,9 +5488,10 @@ impl<T: SerializePayload> SerializePayload for Box<T> {
             .and_then(len_prefixed_payload_len)
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for Box<T>
+impl<T> NoritoDeserialize<'_> for Box<T> where T: SerializePayload + for<'de> NoritoDeserialize<'de> {}
+impl<'a, T> DeserializePayload<'a> for Box<T>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn deserialize(archived: &'a Archived<Box<T>>) -> Self {
         Self::try_deserialize(archived).expect("Box decode")
@@ -5445,9 +5519,10 @@ impl<T: SerializePayload> SerializePayload for Rc<T> {
             .and_then(len_prefixed_payload_len)
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for Rc<T>
+impl<T> NoritoDeserialize<'_> for Rc<T> where T: SerializePayload + for<'de> NoritoDeserialize<'de> {}
+impl<'a, T> DeserializePayload<'a> for Rc<T>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn deserialize(archived: &'a Archived<Rc<T>>) -> Self {
         Self::try_deserialize(archived).expect("Rc decode")
@@ -5475,9 +5550,10 @@ impl<T: SerializePayload> SerializePayload for Arc<T> {
             .and_then(len_prefixed_payload_len)
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for Arc<T>
+impl<T> NoritoDeserialize<'_> for Arc<T> where T: SerializePayload + for<'de> NoritoDeserialize<'de> {}
+impl<'a, T> DeserializePayload<'a> for Arc<T>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     fn deserialize(archived: &'a Archived<Arc<T>>) -> Self {
         Self::try_deserialize(archived).expect("Arc decode")
@@ -5500,7 +5576,8 @@ impl<T: SerializePayload + Copy> SerializePayload for Cell<T> {
         Some(core::mem::size_of::<T>())
     }
 }
-impl<'a, T: NoritoDeserialize<'a> + Copy> NoritoDeserialize<'a> for Cell<T> {
+impl<'a, T: NoritoDeserialize<'a> + Copy> NoritoDeserialize<'a> for Cell<T> {}
+impl<'a, T: DeserializePayload<'a> + Copy> DeserializePayload<'a> for Cell<T> {
     fn deserialize(archived: &'a Archived<Cell<T>>) -> Self {
         Cell::new(T::deserialize(archived.cast()))
     }
@@ -5520,7 +5597,8 @@ impl<T: SerializePayload> SerializePayload for RefCell<T> {
         self.borrow().encoded_len_exact()
     }
 }
-impl<'a, T: NoritoDeserialize<'a>> NoritoDeserialize<'a> for RefCell<T> {
+impl<'a, T: NoritoDeserialize<'a>> NoritoDeserialize<'a> for RefCell<T> {}
+impl<'a, T: DeserializePayload<'a>> DeserializePayload<'a> for RefCell<T> {
     fn deserialize(archived: &'a Archived<RefCell<T>>) -> Self {
         RefCell::new(T::deserialize(archived.cast()))
     }
@@ -5560,9 +5638,13 @@ impl<T: SerializePayload> SerializePayload for Option<T> {
         }
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for Option<T>
+impl<T> NoritoDeserialize<'_> for Option<T> where
+    T: for<'de> NoritoDeserialize<'de> + SerializePayload
+{
+}
+impl<'a, T> DeserializePayload<'a> for Option<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn deserialize(archived: &'a Archived<Option<T>>) -> Self {
         match Self::try_deserialize(archived) {
@@ -5648,6 +5730,12 @@ impl<'a, T, E> NoritoDeserialize<'a> for Result<T, E>
 where
     T: NoritoDeserialize<'a> + DecodeFromSlice<'a>,
     E: NoritoDeserialize<'a> + DecodeFromSlice<'a>,
+{
+}
+impl<'a, T, E> DeserializePayload<'a> for Result<T, E>
+where
+    T: DeserializePayload<'a> + DecodeFromSlice<'a>,
+    E: DeserializePayload<'a> + DecodeFromSlice<'a>,
 {
     fn deserialize(archived: &'a Archived<Result<T, E>>) -> Self {
         match Self::try_deserialize(archived) {
@@ -5751,7 +5839,8 @@ impl<T: SerializePayload, const N: usize> SerializePayload for [T; N] {
         Some(total)
     }
 }
-impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'a> for [T; N] {
+impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'a> for [T; N] {}
+impl<'a, T: DeserializePayload<'a> + 'static, const N: usize> DeserializePayload<'a> for [T; N] {
     fn deserialize(archived: &'a Archived<[T; N]>) -> Self {
         match Self::try_deserialize(archived) {
             Ok(value) => value,
@@ -5826,8 +5915,9 @@ impl<'a, T: NoritoDeserialize<'a> + 'static, const N: usize> NoritoDeserialize<'
 }
 pub mod stream {
     use super::{
-        Archived, Compression, DecodeFlagsGuard, Error, Header, NoritoDeserialize, PayloadCtxGuard,
-        archived_payload_align, archived_payload_size, empty_archived_ptr, header_flags,
+        Archived, Compression, DecodeFlagsGuard, DeserializePayload, Error, Header,
+        PayloadCtxGuard, archived_payload_align, archived_payload_size, empty_archived_ptr,
+        header_flags,
     };
     use crate::guarded_try_deserialize;
     use crc64fast::Digest;
@@ -5882,7 +5972,7 @@ pub mod stream {
     ) -> Result<Acc, Error>
     where
         R: Read,
-        T: for<'de> NoritoDeserialize<'de>,
+        T: for<'de> DeserializePayload<'de>,
         Init: FnOnce(usize) -> Result<Acc, Error>,
         F: FnMut(Acc, T) -> Acc,
     {
@@ -5920,7 +6010,7 @@ pub mod stream {
                 let _pg = PayloadCtxGuard::enter(&[]);
                 let archived = unsafe { &*empty_archived_ptr::<T>() };
                 let val = guarded_try_deserialize(|| {
-                    <T as NoritoDeserialize>::try_deserialize(archived)
+                    <T as DeserializePayload>::try_deserialize(archived)
                 })?;
                 acc = f(acc, val);
             } else {
@@ -5932,7 +6022,7 @@ pub mod stream {
                     let _pg = PayloadCtxGuard::enter(tmp_slice);
                     let archived = &*(ptr as *const Archived<T>);
                     let val = guarded_try_deserialize(|| {
-                        <T as NoritoDeserialize>::try_deserialize(archived)
+                        <T as DeserializePayload>::try_deserialize(archived)
                     })?;
                     acc = f(acc, val);
                 }
@@ -6288,9 +6378,13 @@ impl<T: SerializePayload> SerializePayload for VecDeque<T> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for VecDeque<T>
+impl<T> NoritoDeserialize<'_> for VecDeque<T> where
+    T: for<'de> NoritoDeserialize<'de> + SerializePayload
+{
+}
+impl<'a, T> DeserializePayload<'a> for VecDeque<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn deserialize(archived: &'a Archived<VecDeque<T>>) -> Self {
         Self::try_deserialize(archived).expect("norito: VecDeque decode failed")
@@ -6322,9 +6416,13 @@ impl<T: SerializePayload> SerializePayload for LinkedList<T> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for LinkedList<T>
+impl<T> NoritoDeserialize<'_> for LinkedList<T> where
+    T: for<'de> NoritoDeserialize<'de> + SerializePayload
+{
+}
+impl<'a, T> DeserializePayload<'a> for LinkedList<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn deserialize(archived: &'a Archived<LinkedList<T>>) -> Self {
         Self::try_deserialize(archived).expect("norito: LinkedList decode failed")
@@ -6371,9 +6469,10 @@ where
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for BinaryHeap<T>
+impl<'a, T> NoritoDeserialize<'a> for BinaryHeap<T> where T: NoritoDeserialize<'a> + Ord {}
+impl<'a, T> DeserializePayload<'a> for BinaryHeap<T>
 where
-    T: NoritoDeserialize<'a> + Ord,
+    T: DeserializePayload<'a> + Ord,
 {
     fn deserialize(archived: &'a Archived<BinaryHeap<T>>) -> Self {
         Self::try_deserialize(archived).expect("BinaryHeap decode")
@@ -6514,9 +6613,10 @@ impl<T: SerializePayload> SerializePayload for Vec<T> {
         sequence_encoded_len_exact(self.len(), self.iter())
     }
 }
-impl<'a, T> NoritoDeserialize<'a> for Vec<T>
+impl<T> NoritoDeserialize<'_> for Vec<T> where T: for<'de> NoritoDeserialize<'de> + SerializePayload {}
+impl<'a, T> DeserializePayload<'a> for Vec<T>
 where
-    T: for<'de> NoritoDeserialize<'de> + NoritoSerialize,
+    T: for<'de> DeserializePayload<'de> + SerializePayload,
 {
     fn deserialize(archived: &'a Archived<Vec<T>>) -> Self {
         Self::try_deserialize(archived).expect("Vec decode")
@@ -6591,6 +6691,9 @@ impl<$( $name: SerializePayload ),+> SerializePayload for ( $( $name, )+ ) {
             }
         }
         impl<'a, $( $name: NoritoDeserialize<'a> ),+> NoritoDeserialize<'a> for ( $( $name, )+ ) {
+
+}
+impl<'a, $( $name: DeserializePayload<'a> ),+> DeserializePayload<'a> for ( $( $name, )+ ) {
             fn deserialize(archived: &'a Archived<( $( $name, )+ )>) -> Self {
                 Self::try_deserialize(archived)
                     .unwrap_or_else(|err| panic!("norito: tuple decode failed: {err:?}"))
@@ -7573,7 +7676,7 @@ pub fn from_compressed_bytes<T: for<'de> NoritoDeserialize<'de>>(
 /// The function validates the frame header, checksum, schema hash, payload
 /// length, and alignment, then returns an opaque marker at the payload start
 /// without allocating. Type-specific payload bounds and structure are checked
-/// by the subsequent fallible [`NoritoDeserialize::try_deserialize`] call.
+/// by the subsequent fallible [`DeserializePayload::try_deserialize`] call.
 pub fn from_bytes<'a, T: NoritoDeserialize<'a>>(bytes: &'a [u8]) -> Result<&'a Archived<T>, Error> {
     let mut cursor = std::io::Cursor::new(bytes);
     let header = Header::read(&mut cursor)?;
@@ -7835,7 +7938,7 @@ impl<T> TypedFieldSlot<T> {
 }
 impl<T> ErasedFieldSlot for TypedFieldSlot<T>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     fn archived_align(&self) -> usize {
         archived_payload_align::<T>()
@@ -7992,7 +8095,7 @@ fn decode_field_erased(
 /// Returns both the decoded value and the number of bytes that were consumed from `bytes`.
 pub fn decode_field_canonical<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     let mut slot = TypedFieldSlot::<T>::new();
     let used = decode_field_erased(bytes, FieldDecodeBoundary::Canonical, &mut slot)?;
@@ -8005,7 +8108,7 @@ where
 /// by the decoded field.
 pub fn decode_field_prefix<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     let mut slot = TypedFieldSlot::<T>::new();
     let used = decode_field_erased(bytes, FieldDecodeBoundary::Prefix, &mut slot)?;
@@ -8055,7 +8158,7 @@ fn remaining_context_field(ptr: *const u8, offset: usize) -> Result<&'static [u8
 #[inline(never)]
 pub fn decode_context_field_canonical<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     let (field, next_offset) = take_length_prefixed_context_field(ptr, *offset)?;
     let (value, used) = decode_field_canonical::<T>(field)?;
@@ -8074,7 +8177,7 @@ pub fn decode_context_field_fixed_canonical<T>(
     len: usize,
 ) -> Result<T, Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     let (field, next_offset) = take_context_field(ptr, *offset, len)?;
     let (value, used) = decode_field_canonical::<T>(field)?;
@@ -8118,7 +8221,7 @@ pub fn decode_context_framed_byte_array<const N: usize>(
 #[inline(never)]
 pub fn decode_context_field_prefix<T>(ptr: *const u8, offset: &mut usize) -> Result<T, Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + crate::NoritoSerialize,
+    T: for<'de> crate::DeserializePayload<'de> + crate::SerializePayload,
 {
     let field = remaining_context_field(ptr, *offset)?;
     let (value, used) = decode_field_prefix::<T>(field)?;
@@ -8155,7 +8258,7 @@ fn decode_field_with_slice_decoder<T>(
     require_full_consumption: bool,
 ) -> Result<(T, usize), Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+    T: for<'de> crate::DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
 {
     if bytes.is_empty() {
         if archived_payload_size::<T>() == 0 {
@@ -8193,7 +8296,7 @@ where
 }
 pub fn decode_field_canonical_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+    T: for<'de> crate::DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
 {
     decode_field_with_slice_decoder(bytes, true)
 }
@@ -8204,7 +8307,7 @@ where
 /// slice-based decoder already guarantees canonical consumption.
 pub fn decode_field_canonical_from_slice<T>(bytes: &[u8]) -> Result<(T, usize), Error>
 where
-    T: for<'de> crate::NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+    T: for<'de> crate::DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
 {
     decode_field_canonical_slice(bytes)
 }

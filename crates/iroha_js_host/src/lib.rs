@@ -171,7 +171,7 @@ use std::{
 use iroha_data_model::isi::settlement::FxCorridorOracleEvidence;
 use iroha_primitives::{
     json::Json,
-    numeric::{Numeric, Quantity},
+    numeric::Quantity,
     soradns::{
         GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
         derive_gateway_hosts_with_profile,
@@ -12954,7 +12954,7 @@ mod tests {
     };
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
-        NoritoDeserialize,
+        DeserializePayload, NoritoDeserialize,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
         from_bytes,
         json::{self, Value},

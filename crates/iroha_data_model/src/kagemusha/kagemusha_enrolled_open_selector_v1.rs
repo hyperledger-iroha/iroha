@@ -5,7 +5,7 @@
 //! MiBank approval, enrollment, hardware custody, current selection nor monetary authority.
 
 use super::{KAGEMUSHA_WIRE_VERSION_V1, KagemushaRetailEnrollmentOwnerV1};
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::Algorithm;
 use iroha_schema::IntoSchema;
@@ -18,8 +18,17 @@ pub const KAGEMUSHA_ENROLLED_OPEN_SELECTOR_MAX_BYTES_V1: usize = 16 * 1024;
 ///
 /// A qualified native backend must independently derive its owner and compare every field.
 /// Neither a caller-provided matching digest nor these bytes can create that native owner.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(schema_name = "iroha.kagemusha.v1.enrolled-open-selector")]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaEnrolledOpenSelectorV1 {
@@ -179,7 +188,7 @@ mod tests {
             selector
         );
         assert_eq!(selector.canonical_bytes().expect("second encode"), bytes);
-        #[cfg(feature = "json")]
+
         {
             let fixture: norito::json::Value = norito::json::from_str(include_str!(concat!(
                 env!("CARGO_MANIFEST_DIR"),

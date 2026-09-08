@@ -77,7 +77,7 @@ fn lane_relay_envelope_roundtrips_and_verifies_hash() {
     let bytes = norito::to_bytes(&envelope).expect("encode envelope");
     let archived = norito::from_bytes::<LaneRelayEnvelope>(&bytes).expect("archive envelope");
     let decoded: LaneRelayEnvelope =
-        NoritoDeserialize::try_deserialize(archived).expect("deserialize envelope");
+        DeserializePayload::try_deserialize(archived).expect("deserialize envelope");
     assert_eq!(envelope, decoded);
     assert_eq!(header.hash(), decoded.block_header.hash());
     assert_eq!(settlement, decoded.settlement_commitment);

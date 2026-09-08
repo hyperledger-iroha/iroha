@@ -18034,8 +18034,7 @@ impl Kura {
     }
     fn sidecar_bytes_with_historical_budget(
         store_dir: &Path,
-        historical_record_budget: &mut usize,
-        historical_byte_budget: &mut u64,
+        historical_budget: &mut HistoricalAutonomousRecoveryAccountingBudget,
     ) -> Result<u64> {
         if store_dir.as_os_str().is_empty() {
             return Ok(0);
@@ -18085,37 +18084,10 @@ impl Kura {
                     && metadata.file_type().is_dir()
                     && !metadata.file_type().is_symlink()
                 {
-                    let (records, bytes) = bounded_historical_autonomous_recovery_entries(
+                    let bytes = Self::historical_autonomous_recovery_publication_accounting_bytes(
                         &path,
-                        *historical_record_budget,
-                        *historical_byte_budget,
-                        |record_path| {
-                            let record_metadata = secure_file_metadata::from_path(record_path)
-                                .map_err(|err| Error::IO(err, record_path.to_path_buf()))?;
-                            Ok(((), record_metadata))
-                        },
+                        historical_budget,
                     )?;
-                    *historical_record_budget = historical_record_budget
-                        .checked_sub(records.len())
-                        .ok_or_else(|| {
-                            Error::IO(
-                                std::io::Error::new(
-                                    ErrorKind::InvalidData,
-                                    "historical autonomous recovery record count overflowed",
-                                ),
-                                path.clone(),
-                            )
-                        })?;
-                    *historical_byte_budget =
-                        historical_byte_budget.checked_sub(bytes).ok_or_else(|| {
-                            Error::IO(
-                                std::io::Error::new(
-                                    ErrorKind::InvalidData,
-                                    "historical autonomous recovery byte count overflowed",
-                                ),
-                                path.clone(),
-                            )
-                        })?;
                     total = total.checked_add(bytes).ok_or_else(|| {
                         Error::IO(
                             std::io::Error::new(
@@ -18154,8 +18126,7 @@ impl Kura {
     }
     fn block_store_bytes_with_historical_budget(
         blocks_dir: &Path,
-        historical_record_budget: &mut usize,
-        historical_byte_budget: &mut u64,
+        historical_budget: &mut HistoricalAutonomousRecoveryAccountingBudget,
     ) -> Result<u64> {
         if blocks_dir.as_os_str().is_empty() {
             return Ok(0);
@@ -18180,24 +18151,16 @@ impl Kura {
                 files = files.saturating_add(len);
             }
         }
-        let sidecars = Self::sidecar_bytes_with_historical_budget(
-            blocks_dir,
-            historical_record_budget,
-            historical_byte_budget,
-        )?;
+        let sidecars = Self::sidecar_bytes_with_historical_budget(blocks_dir, historical_budget)?;
         Ok(files.saturating_add(sidecars))
     }
     fn block_store_bytes_with_historical_limit(
         blocks_dir: &Path,
         historical_byte_limit: u64,
     ) -> Result<u64> {
-        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
-        let mut historical_byte_budget = historical_byte_limit;
-        Self::block_store_bytes_with_historical_budget(
-            blocks_dir,
-            &mut historical_record_budget,
-            &mut historical_byte_budget,
-        )
+        let mut historical_budget =
+            HistoricalAutonomousRecoveryAccountingBudget::new(historical_byte_limit);
+        Self::block_store_bytes_with_historical_budget(blocks_dir, &mut historical_budget)
     }
     fn blocks_root_bytes(root: &Path, historical_byte_limit: u64) -> Result<u64> {
         if root.as_os_str().is_empty() {
@@ -18209,8 +18172,8 @@ impl Kura {
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
         let mut total = Self::blocks_root_debug_file_bytes(root)?;
-        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
-        let mut historical_byte_budget = historical_byte_limit;
+        let mut historical_budget =
+            HistoricalAutonomousRecoveryAccountingBudget::new(historical_byte_limit);
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
             let path = entry.path();
@@ -18220,8 +18183,7 @@ impl Kura {
             if file_type.is_dir() {
                 total = total.saturating_add(Self::block_store_bytes_with_historical_budget(
                     &path,
-                    &mut historical_record_budget,
-                    &mut historical_byte_budget,
+                    &mut historical_budget,
                 )?);
             }
         }
@@ -18282,8 +18244,8 @@ impl Kura {
         let debug_bytes = Self::blocks_root_debug_file_bytes(root)?;
         let mut enforced = debug_bytes;
         let mut total = debug_bytes;
-        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
-        let mut historical_byte_budget = historical_byte_limit;
+        let mut historical_budget =
+            HistoricalAutonomousRecoveryAccountingBudget::new(historical_byte_limit);
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
             let path = entry.path();
@@ -18291,11 +18253,8 @@ impl Kura {
                 .file_type()
                 .map_err(|err| Error::IO(err, path.clone()))?;
             if file_type.is_dir() {
-                let budgeted = Self::block_store_bytes_with_historical_budget(
-                    &path,
-                    &mut historical_record_budget,
-                    &mut historical_byte_budget,
-                )?;
+                let budgeted =
+                    Self::block_store_bytes_with_historical_budget(&path, &mut historical_budget)?;
                 enforced = enforced.saturating_add(budgeted);
                 total = total
                     .saturating_add(budgeted)

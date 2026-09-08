@@ -94,6 +94,8 @@ inputs = [
   "crates/iroha_data_model/src/isi/mod.rs",
   "crates/iroha_data_model/src/isi/musubi.rs",
   "crates/iroha_data_model/src/musubi.rs",
+  "crates/iroha_data_model/src/musubi/archive_validation.rs",
+  "crates/iroha_data_model/src/musubi/publication_validation.rs",
   "crates/iroha_data_model/src/musubi/query_models.rs",
   "crates/iroha_data_model/src/sorafs/pin_registry.rs",
 ]

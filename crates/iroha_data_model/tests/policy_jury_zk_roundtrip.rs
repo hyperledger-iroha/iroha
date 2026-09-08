@@ -32,7 +32,7 @@ fn policy_jury_zk_envelope_norito_roundtrip() {
         norito::decode_from_bytes(&encoded).expect("decode policy-jury ZK envelope");
     assert_eq!(decoded, original);
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn policy_jury_zk_envelope_json_roundtrip() {
     let original = sample_envelope();
@@ -49,7 +49,7 @@ fn policy_jury_zk_ballot_mode_tuple_variant_norito_roundtrip() {
         norito::decode_from_bytes(&encoded).expect("decode policy-jury ZK ballot mode");
     assert_eq!(decoded, original);
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn policy_jury_zk_ballot_mode_tuple_variant_json_roundtrip() {
     let original = PolicyJuryBallotMode::ZkEnvelope(sample_envelope());
@@ -66,7 +66,7 @@ fn policy_jury_reveal_with_zk_proof_uris_norito_roundtrip() {
         norito::decode_from_bytes(&encoded).expect("decode policy-jury ballot reveal");
     assert_eq!(decoded, original);
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn policy_jury_reveal_json_contains_canonical_zk_proof_uris_field() {
     let original = sample_reveal();

@@ -4,6 +4,7 @@ mod canonical_topk;
 mod fast_iter_decode;
 mod ordinary_iterable;
 mod ordinary_memory;
+mod ordinary_stored;
 mod singular_memory;
 use crate::{
     prelude::ValidSingularQuery,
@@ -2606,6 +2607,7 @@ fn handle_iter_start_stored_replayable<I>(
     authority: &AccountId,
     gas_budget: Option<u64>,
     _replay_state: Option<Weak<State>>,
+    source_stats: QueryExecutionStats,
 ) -> Result<QueryOutput, Error>
 where
     I: Iterator<Item: SortableQueryOutput>,
@@ -2613,6 +2615,19 @@ where
     <I::Item as HasProjection<SelectorMarker>>::Projection: EvaluateSelector<I::Item> + Send + Sync,
     QueryOutputBatchBox: From<Vec<I::Item>>,
 {
+    if let Some(ordinary) = limits.ordinary_execution_limits {
+        return ordinary_stored::handle(
+            iter,
+            selector,
+            params,
+            limits,
+            ordinary,
+            live_query_store,
+            authority,
+            gas_budget,
+            source_stats,
+        );
+    }
     // A live `State` handle is not an immutable query snapshot: replaying a
     // generic continuation through it can observe later commits, and a weak
     // handle expires when the request owner drops its `Arc`. Keep generic

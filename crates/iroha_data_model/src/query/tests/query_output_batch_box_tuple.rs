@@ -174,7 +174,7 @@ fn norito_decode_rejects_every_truncated_prefix_and_trailing_data() {
         "trailing bytes must not be accepted"
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn json_decode_rejects_hostile_column_shapes() {
     let nonempty = norito::json::to_value(&numeric(&[1])).expect("serialize batch column");
@@ -188,7 +188,7 @@ fn json_decode_rejects_hostile_column_shapes() {
         assert!(error.to_string().to_lowercase().contains("column"));
     }
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn query_response_json_rejects_hostile_batch_before_iteration() {
     let nonempty = norito::json::to_value(&numeric(&[1])).expect("serialize batch column");

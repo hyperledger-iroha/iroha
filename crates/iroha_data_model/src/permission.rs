@@ -14,9 +14,19 @@ mod model {
     use norito::codec::{Decode, Encode};
     /// Stored proof of the account having a permission for a certain action.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Display, Getters,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        Display,
+        Getters,
+        crate :: DeriveJsonSerialize,
     )]
-    #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[display("{name}({payload})")]
     #[derive(norito::NoritoSchema)]
@@ -46,7 +56,7 @@ impl Permission {
         &self.name
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Permission {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,

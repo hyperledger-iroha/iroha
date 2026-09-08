@@ -1077,7 +1077,7 @@ fn expected_pointer_type(kind: EntrypointValueKindV1) -> Option<PointerType> {
 }
 fn decode_canonical_norito<T>(payload: &[u8]) -> Result<T, VMError>
 where
-    T: norito::codec::Decode + norito::codec::Encode,
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
 {
     decode_abi_canonical_norito(payload).map_err(|_| VMError::DecodeError)
 }

@@ -13,7 +13,7 @@ crate-type = ["rlib"]
 [dependencies]
 hex = { workspace = true, features = ["alloc"] }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["json"] }
-iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
+iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "governance"] }
 ivm_abi = { path = "../ivm_abi" }
 kotodama_lang = { path = "../kotodama_lang" }
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }

@@ -99,6 +99,29 @@ ownership. A noncanonical predecessor, self-declared or currently different
 roster, retired incarnation, or inactive routing plan fails closed as
 `queue_plan_admission_context_mismatch`.
 
+The ingress collector admits at most four simultaneous authority attempts,
+independent of roster size. A first attempt receives the existing bounded
+hedge interval (50--250 ms); later passes double the attempt share without
+extending the original absolute request deadline. A silent authority therefore
+releases its slot so later candidates can respond. Explicit, bounded
+`503 queue_plan_admission_context_future` responses and timed-out attempts
+permit another pass. The exact signed transaction, admission binding and
+request ID remain unchanged; valid distinct attestations persist, and already
+attested authorities are skipped. Catch-up hints and timeouts contribute no
+acceptance or definite non-admission evidence.
+
+The complete proxy-ingress reservation includes the fixed response window,
+current/output snapshots and conservative bounds for certificate decoding and
+reduction, in addition to the shared request representations. No response
+window grows with the validator roster. Exhausting the original deadline with
+a partial certificate or cancelled dispatched attempt returns the exact
+transaction's unknown outcome. Response waiters have synchronous attempt
+ownership: normal completion and cancellation remove only that caller's token,
+preserving other callers sharing a semantic request ID. The first verified
+quorum returns without waiting for silent peers. The focused liveness tests
+exercise four bounded attempts and a 128-authority roster with a 42-peer silent
+prefix; real-network and full release qualification remain separate gates.
+
 The delayed-certificate argument assumes the protocol's static bound of at
 most `f` Byzantine identities in each `3f+1` authority: an `f+1` durable quorum
 that exactly matches the current roster includes at least one current honest
@@ -124,7 +147,7 @@ returned as `queue_plan_journal_outcome_unknown` with the canonical
 accepted-transaction hash so the caller can reconcile ownership. Once the
 validated certificate is locally durable, later dissemination, Sumeragi wake,
 or proposal-native WSV application failure cannot downgrade the known `202`.
-Hedged candidates are reduced
+Candidate failures are reduced
 deterministically: any valid indeterminate result dominates definite failures,
 non-retryable failures dominate generic retryable failures, and candidate order
 breaks ties. A remote indeterminate response is accepted only when its status,

@@ -20,6 +20,8 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[event_set(schema_name = "iroha_data_model::events::data::musubi::model::MusubiEventSet")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::musubi::model::MusubiEvent")]
     pub enum MusubiEvent {
         /// A canonical namespace was immutably bound.
         NamespaceBound(crate::musubi::MusubiNamespaceBindingV1),
@@ -65,6 +67,10 @@ mod model {
     /// Compact first-package-claim event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiPackageClaimedEventV1"
+    )]
     pub struct MusubiPackageClaimedEventV1 {
         /// Stable structural package identity.
         pub package: crate::musubi::MusubiPackageIdV1,
@@ -80,6 +86,10 @@ mod model {
     /// Compact immutable-release publication event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiReleasePublishedEventV1"
+    )]
     pub struct MusubiReleasePublishedEventV1 {
         /// Exact package release.
         pub release: crate::musubi::MusubiReleaseIdV1,
@@ -95,6 +105,10 @@ mod model {
     /// Compact yank/unyank event with its immutable archive binding.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiReleaseYankEventV1"
+    )]
     pub struct MusubiReleaseYankEventV1 {
         /// Resulting reversible yank record.
         pub yank: crate::musubi::MusubiReleaseYankV1,
@@ -104,6 +118,10 @@ mod model {
     /// Compact accepted-member removal event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiPackageMemberRemovedEventV1"
+    )]
     pub struct MusubiPackageMemberRemovedEventV1 {
         /// Governed package.
         pub package: crate::musubi::MusubiPackageIdV1,
@@ -119,6 +137,10 @@ mod model {
     /// Compact terminal transition for a pending package-member invitation.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiMaintainerInvitationLifecycleEventV1"
+    )]
     pub struct MusubiMaintainerInvitationLifecycleEventV1 {
         /// Governed package.
         pub package: crate::musubi::MusubiPackageIdV1,
@@ -134,6 +156,10 @@ mod model {
     /// Compact Parliament package-recovery event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiPackageRecoveredEventV1"
+    )]
     pub struct MusubiPackageRecoveredEventV1 {
         /// Recovered package.
         pub package: crate::musubi::MusubiPackageIdV1,
@@ -149,6 +175,10 @@ mod model {
     /// Compact archive-registration event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiArchiveRegisteredEventV1"
+    )]
     pub struct MusubiArchiveRegisteredEventV1 {
         /// Domain-separated archive identity.
         pub archive_id: crate::musubi::ArchiveId,
@@ -162,6 +192,10 @@ mod model {
     /// Compact provider bundle-attestation registration event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiProviderBundleAttestationRegisteredEventV1"
+    )]
     pub struct MusubiProviderBundleAttestationRegisteredEventV1 {
         /// Exact archive/order/provider identity of the registered attestation.
         pub key: crate::musubi::MusubiProviderBundleAttestationKeyV1,
@@ -177,6 +211,10 @@ mod model {
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiArchiveLocationTransitionV1"
+    )]
     pub enum MusubiArchiveLocationTransitionV1 {
         /// A new location identity was bound.
         Added,
@@ -190,6 +228,10 @@ mod model {
     /// Compact archive-location lifecycle event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiArchiveLocationEventV1"
+    )]
     pub struct MusubiArchiveLocationEventV1 {
         /// Exact archive/location identity.
         pub location: crate::musubi::MusubiArchiveLocationKeyV1,
@@ -214,6 +256,10 @@ mod model {
     /// Compact Parliament artifact-takedown event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiArtifactTakedownEventV1"
+    )]
     pub struct MusubiArtifactTakedownEventV1 {
         /// Exact release whose artifact became unavailable.
         pub release: crate::musubi::MusubiReleaseIdV1,
@@ -229,6 +275,10 @@ mod model {
     /// Compact registry-policy replacement event.
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::musubi::model::MusubiRegistryPolicyEventV1"
+    )]
     pub struct MusubiRegistryPolicyEventV1 {
         /// Resulting policy revision.
         pub revision: u64,
@@ -360,3 +410,6 @@ mod tests {
         assert_eq!(decoded.provider_count, 3);
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

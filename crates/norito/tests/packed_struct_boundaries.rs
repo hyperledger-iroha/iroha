@@ -110,3 +110,42 @@ fn tuple_slice_decoder_rejects_trailing_packed_bytes() {
         assert!(Tuple::decode_from_slice(&payload).is_err());
     }
 }
+
+#[derive(norito::SerializePayload)]
+struct EmptyUnit;
+
+#[test]
+fn unit_struct_size_hints_match_serialization_for_every_advertised_layout() {
+    use norito::SerializePayload as _;
+
+    let value = EmptyUnit;
+    for flags in (0..=norito::core::supported_header_flags())
+        .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+    {
+        let _flags = DecodeFlagsGuard::enter(flags);
+        let mut payload = Vec::new();
+        norito::core::serialize_to_buffer(&value, &mut payload).unwrap();
+        let expected: &[u8] = if flags & header_flags::PACKED_STRUCT != 0
+            && flags & header_flags::FIELD_BITSET == 0
+        {
+            // The existing zero-field packed record has one zero offset.
+            &[0; 8]
+        } else {
+            &[]
+        };
+        assert_eq!(
+            payload, expected,
+            "unit bytes changed for flags {flags:#04x}"
+        );
+        assert_eq!(
+            value.encoded_len_exact(),
+            Some(payload.len()),
+            "wrong exact unit length for flags {flags:#04x}",
+        );
+        assert_eq!(
+            value.encoded_len_hint(),
+            Some(payload.len()),
+            "wrong hinted unit length for flags {flags:#04x}",
+        );
+    }
+}

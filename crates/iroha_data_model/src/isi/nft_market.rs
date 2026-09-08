@@ -8,8 +8,8 @@ macro_rules! native_isi {
     ($(#[$meta:meta])* pub struct $name:ident { $($(#[$fm:meta])* pub $field:ident: $ty:ty,)* }) => {
         isi! {
             $(#[$meta])*
-            #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
-            #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+            #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+            #[norito (deny_unknown_fields)]
             pub struct $name { $($(#[$fm])* pub $field: $ty,)* }
         }
         impl crate::seal::Instruction for $name {}

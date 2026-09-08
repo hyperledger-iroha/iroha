@@ -72,10 +72,19 @@ mod model {
     use crate::account::AccountId;
     use iroha_primitives::const_vec::ConstVec;
     /// Fee system whose charge is bounded by a signed transaction limit.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(
         tag = "kind",
@@ -90,10 +99,18 @@ mod model {
         PipelineGas,
     }
     /// Signature-bound upper bound for one fee component and asset.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct FeeChargeLimit {
@@ -105,10 +122,18 @@ mod model {
         pub max_amount: Quantity,
     }
     /// Signature-bound limits for authority-paid fees.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct AuthorityFeePayment {
@@ -119,10 +144,18 @@ mod model {
         pub gas_limit: Option<NonZeroU64>,
     }
     /// Signature-bound limits and exact revision for sponsor-program fees.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct SponsorFeePayment {
@@ -137,10 +170,18 @@ mod model {
         pub gas_limit: Option<NonZeroU64>,
     }
     /// Required signature-bound choice of fee funding source and limits.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(
         tag = "payer",
@@ -159,10 +200,19 @@ mod model {
     /// Ordinary transactions bind the exact genesis-header-derived network
     /// identity. The marker variant exists solely because a genesis block
     /// cannot contain its own header hash without a self-reference.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(
         tag = "kind",
@@ -182,10 +232,19 @@ mod model {
     ///
     /// Relays and proposers cannot downgrade this value without invalidating the
     /// transaction signature and changing its canonical entrypoint identity.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(
         tag = "intent",
@@ -200,10 +259,18 @@ mod model {
         QueuePlanSynced,
     }
     /// Canonical unsigned transaction draft used by quote, signing, and verification APIs.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct TransactionPayload {
@@ -236,18 +303,34 @@ mod model {
         pub attachments: Option<crate::proof::ProofAttachmentList>,
     }
     /// Signature of a transaction, encoded in its declared tuple-field frame.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(decode_from_slice)]
     pub struct TransactionSignature(pub SignatureOf<TransactionPayload>);
     /// A single signature produced by a multisig member.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct MultisigSignature {
@@ -266,10 +349,18 @@ mod model {
         }
     }
     /// Collection of multisig signatures attached to a transaction.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     pub struct MultisigSignatures {
@@ -300,10 +391,18 @@ mod model {
         }
     }
     /// Payload signed when committing to a sealed transaction.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct SealedTransactionCommitmentPayload {
         /// Exact deployment identity of the blockchain.
@@ -320,10 +419,18 @@ mod model {
         pub nonce: Option<NonZeroU64>,
     }
     /// Signed sealed-transaction commitment.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct SignedSealedTransactionCommitment {
         /// Signature over [`Self::payload`].
@@ -332,10 +439,18 @@ mod model {
         pub(super) payload: SealedTransactionCommitmentPayload,
     }
     /// Reveal data for a previously committed sealed transaction.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     pub struct SealedTransactionReveal {
         /// Commitment hash being opened.
@@ -350,10 +465,19 @@ mod model {
     /// `Iroha` and its clients use [`Self`] to send transactions over the network. After a
     /// transaction is signed and before it can be processed any further, the transaction must be
     /// accepted by an `Iroha` peer. The peer verifies the signature and checks the limits.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Display, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Display,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(deny_unknown_fields)]
     #[display("{}", self.hash())]
@@ -1931,7 +2055,7 @@ impl MultisigSignatures {
         Ok(Self::new(signatures))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for TransactionEntrypoint {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1988,7 +2112,7 @@ impl norito::json::FastJsonWrite for TransactionEntrypoint {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for TransactionEntrypoint {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2024,7 +2148,7 @@ impl norito::json::JsonDeserialize for TransactionEntrypoint {
         Ok(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for TransactionResult {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -2069,7 +2193,7 @@ impl norito::json::JsonSerialize for TransactionResult {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for TransactionResult {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2125,7 +2249,7 @@ impl norito::json::JsonDeserialize for TransactionResult {
         ))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ExecutionStep {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -2137,7 +2261,7 @@ impl norito::json::FastJsonWrite for ExecutionStep {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ExecutionStep {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,

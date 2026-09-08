@@ -7,7 +7,7 @@ use iroha_data_model::{
     nft::NftId,
     smart_contract::manifest::{AccessSetHints, ContractManifest},
 };
-use ivm::{PointerType, validate_tlv_bytes};
+use ivm_abi::pointer_abi::{PointerType, validate_tlv_bytes};
 use norito::{
     codec::{Decode, Encode},
     decode_from_bytes, to_bytes,
