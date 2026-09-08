@@ -26,8 +26,8 @@ use iroha_data_model::{
     isi::sorafs::CompleteReplicationOrder,
     musubi::ArchiveId,
     sorafs::pin_registry::{
-        ProviderIngestCompletionAuthorityV1, ProviderIngestCompletionSignerPolicyV1,
-        ProviderIngestFinalizedAnchorV1,
+        ManifestRootCid, ProviderIngestCompletionAuthorityV1,
+        ProviderIngestCompletionSignerPolicyV1, ProviderIngestFinalizedAnchorV1,
     },
     transaction::{Executable, SignedTransaction, TransactionPayload},
 };
@@ -72,7 +72,6 @@ const PROVIDER_INGEST_SEALED_CHECKPOINT_REVISION_DOMAIN_V1: &[u8] =
 pub const PROVIDER_INGEST_SEALED_CHECKPOINT_RECORD_MAX_OVERHEAD_BYTES_V1: u64 = 1_024;
 const PROVIDER_INGEST_CHECKPOINT_REQUEST_CAPACITY_V1: usize = 1;
 const PROVIDER_INGEST_CHECKPOINT_OPERATION_TIMEOUT_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
-const MAX_MANIFEST_CID_BYTES_V1: usize = 256;
 const MAX_CHUNKER_HANDLE_BYTES_V1: usize = 128;
 const MAX_MANIFEST_ID_BYTES_V1: usize = 128;
 static PROVIDER_INGEST_PROCESS_LOCKS: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
@@ -237,7 +236,7 @@ impl ProviderIngestSealedCheckpointRecordV1 {
         self.validate(checkpoint_max_bytes)?;
         let max_record_bytes =
             provider_ingest_sealed_checkpoint_record_max_bytes(checkpoint_max_bytes)?;
-        let bytes = norito::to_bytes(self)
+        let bytes = norito::encode_canonical(self)
             .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
         if bytes.is_empty() || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_record_bytes {
             return Err(ProviderIngestOutboxError::InvalidSealedCheckpoint);
@@ -552,7 +551,7 @@ pub struct FinalizedProviderIngestAuthorizationV1 {
     provider_id: [u8; 32],
     order_id: [u8; 32],
     manifest_digest: [u8; 32],
-    manifest_cid: Vec<u8>,
+    manifest_cid: ManifestRootCid,
     chunker_handle: String,
     chunk_digest_sha3_256: [u8; 32],
     por_root: [u8; 32],
@@ -583,6 +582,8 @@ impl FinalizedProviderIngestAuthorizationV1 {
         por_root: [u8; 32],
         content_length: u64,
     ) -> Result<Self, ProviderIngestOutboxError> {
+        let manifest_cid = ManifestRootCid::try_from_slice(&manifest_cid)
+            .map_err(|_| ProviderIngestOutboxError::InvalidAuthorization)?;
         let mut authorization = Self {
             job_id: [0; 32],
             admission_finalized_cursor: ProviderIngestFinalizedCursorV1 {
@@ -686,7 +687,7 @@ impl FinalizedProviderIngestAuthorizationV1 {
     /// Canonical manifest CID.
     #[must_use]
     pub fn manifest_cid(&self) -> &[u8] {
-        &self.manifest_cid
+        self.manifest_cid.as_bytes()
     }
     /// Canonical chunker profile handle.
     #[must_use]
@@ -719,7 +720,7 @@ impl FinalizedProviderIngestAuthorizationV1 {
         hasher.update(&self.provider_id);
         hasher.update(&self.order_id);
         hasher.update(&self.manifest_digest);
-        hash_length_prefixed(&mut hasher, &self.manifest_cid);
+        hash_length_prefixed(&mut hasher, self.manifest_cid.as_bytes());
         hash_length_prefixed(&mut hasher, self.chunker_handle.as_bytes());
         hasher.update(&self.chunk_digest_sha3_256);
         hasher.update(&self.por_root);
@@ -761,8 +762,6 @@ impl FinalizedProviderIngestAuthorizationV1 {
         if self.provider_id == [0; 32]
             || self.order_id == [0; 32]
             || self.manifest_digest == [0; 32]
-            || self.manifest_cid.is_empty()
-            || self.manifest_cid.len() > MAX_MANIFEST_CID_BYTES_V1
             || self.chunker_handle.is_empty()
             || self.chunker_handle.len() > MAX_CHUNKER_HANDLE_BYTES_V1
             || self.chunker_handle.trim() != self.chunker_handle
@@ -1991,7 +1990,7 @@ fn encode_provider_ingest_checkpoint(
     policy: ProviderIngestOutboxPolicyV1,
 ) -> Result<Vec<u8>, ProviderIngestOutboxError> {
     validate_checkpoint(checkpoint, policy)?;
-    let bytes = norito::to_bytes(checkpoint)
+    let bytes = norito::encode_canonical(checkpoint)
         .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
     if bytes.is_empty()
         || u64::try_from(bytes.len()).unwrap_or(u64::MAX) > policy.checkpoint_max_bytes
@@ -5097,7 +5096,7 @@ fn derive_signing_token(
     generation: u64,
     context: &ProviderIngestCompletionSigningContextV1,
 ) -> Result<[u8; 32], ProviderIngestOutboxError> {
-    let encoded = norito::to_bytes(context)
+    let encoded = norito::encode_canonical(context)
         .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
     let mut hasher = blake3::Hasher::new();
     hasher.update(PROVIDER_INGEST_SIGNING_TOKEN_DOMAIN_V1);
@@ -5142,7 +5141,7 @@ fn validate_completion_signing_context(
     {
         return Err(ProviderIngestOutboxError::InvalidSigningContext);
     }
-    let encoded = norito::to_bytes(&context.expected_payload)
+    let encoded = norito::encode_canonical(&context.expected_payload)
         .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
     if encoded.is_empty()
         || u64::try_from(encoded.len()).unwrap_or(u64::MAX) > policy.max_signed_transaction_bytes
@@ -5157,7 +5156,7 @@ fn validate_completion_signing_context(
     .map_err(|_| ProviderIngestOutboxError::InvalidSigningContext)
 }
 fn completion_account_id_fits_canonical_bound(account_id: &AccountId) -> bool {
-    norito::to_bytes(account_id).is_ok_and(|encoded| {
+    norito::encode_canonical(account_id).is_ok_and(|encoded| {
         !encoded.is_empty()
             && u64::try_from(encoded.len()).is_ok_and(|length| {
                 length
@@ -5359,7 +5358,7 @@ fn validate_completion_transaction(
 ) -> Result<[u8; 32], ProviderIngestOutboxError> {
     validate_completion_signing_context(authorization, context, policy)
         .map_err(|_| ProviderIngestOutboxError::InvalidSignedTransaction)?;
-    let encoded = norito::to_bytes(transaction)
+    let encoded = norito::encode_canonical(transaction)
         .map_err(|error| ProviderIngestOutboxError::CanonicalEncoding(error.to_string()))?;
     if encoded.is_empty()
         || u64::try_from(encoded.len()).unwrap_or(u64::MAX) > policy.max_signed_transaction_bytes
@@ -6656,6 +6655,7 @@ mod tests {
         }
     }
     include!("provider_ingest_outbox/tests/sealed_checkpoint_lifecycle.rs");
+    include!("provider_ingest_outbox/tests/canonical_authorization.rs");
     #[test]
     fn sealed_record_rejects_byte_digest_revision_and_lineage_tamper() {
         let checkpoint_bytes = encode_provider_ingest_checkpoint(
@@ -7239,7 +7239,10 @@ mod tests {
             [0x11; 32],
             [0x51; 32],
             [0x71; 32],
-            vec![0xA5; MAX_MANIFEST_CID_BYTES_V1],
+            ManifestRootCid::from_blake3_digest([0xA5; 32])
+                .expect("canonical maximum-width root CID")
+                .as_bytes()
+                .to_vec(),
             "x".repeat(MAX_CHUNKER_HANDLE_BYTES_V1),
             [0x81; 32],
             [0x91; 32],
@@ -8405,37 +8408,6 @@ mod tests {
             ProviderIngestOutbox::open(&path, policy()),
             Err(ProviderIngestOutboxError::InvalidCheckpoint)
         ));
-    }
-    #[test]
-    fn musubi_context_is_bounded_and_separates_job_identity() {
-        let generic = authorization(0x5A, 7);
-        let commitment = musubi_commitment(&generic, 0x31);
-        let first_context =
-            FinalizedProviderIngestMusubiContextV1::new(network_id(0x41), commitment.archive_id())
-                .expect("first context");
-        assert_eq!(first_context.network_id(), &network_id(0x41));
-        assert_eq!(first_context.archive_id(), commitment.archive_id());
-        first_context.validate().expect("valid bounded context");
-        let encoded = norito::to_bytes(&first_context).expect("encode context");
-        let decoded: FinalizedProviderIngestMusubiContextV1 =
-            norito::decode_from_bytes(&encoded).expect("decode context");
-        assert_eq!(decoded, first_context);
-        let first = authorization_with_musubi_context(&generic, first_context.clone());
-        let second_context =
-            FinalizedProviderIngestMusubiContextV1::new(network_id(0x42), commitment.archive_id())
-                .expect("second context");
-        let second = authorization_with_musubi_context(&generic, second_context);
-        assert_ne!(generic.job_id(), first.job_id());
-        assert_ne!(first.job_id(), second.job_id());
-        assert!(!generic.same_binding(&first));
-        assert!(!first.same_binding(&second));
-        assert_musubi_context_rejects_unmarked_network(&first_context);
-        let mut zero_archive = first_context;
-        zero_archive.archive_id = ArchiveId::new([0; 32]);
-        assert_eq!(
-            zero_archive.validate(),
-            Err(ProviderIngestOutboxError::InvalidAuthorization)
-        );
     }
     #[test]
     fn generic_and_musubi_local_receipt_pairing_is_exact() {

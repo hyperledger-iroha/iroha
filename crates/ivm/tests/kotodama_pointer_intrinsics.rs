@@ -25,7 +25,7 @@ fn kotodama_zk_verify_accepts_typed_bytes_parameter() {
     let src = r#"
         seiyaku ZkVerifyIntrinsic {
             kotoage fn verify(bytes env) authorize("VerifyProof") {
-                crypto::zk::verify_batch(env);
+                crypto::zk::verify_batch(request: env);
             }
         }
     "#;

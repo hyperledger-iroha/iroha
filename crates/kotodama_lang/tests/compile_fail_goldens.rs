@@ -133,18 +133,20 @@ fn trigger_metadata_contract(value: &str) -> String {
 #[test]
 fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
     let session = CompilerSession::default();
-    for value in [r#"Json::parse("{}")"#, r#"Json::parse(value: "{}")"#] {
-        let source = trigger_metadata_contract(value);
-        session
-            .build(CompileRequest {
-                source: &source,
-                source_name: Some("trigger-json-canonical.ko"),
-            })
-            .unwrap_or_else(|diagnostics| {
-                panic!("canonical trigger metadata `{value}` failed: {diagnostics:#?}")
-            });
-    }
+    let source = trigger_metadata_contract(r#"Json::parse("{}")"#);
+    session
+        .build(CompileRequest {
+            source: &source,
+            source_name: Some("trigger-json-canonical.ko"),
+        })
+        .expect("canonical positional Json::parse trigger metadata must compile");
     for (value, phase, code, message) in [
+        (
+            r#"Json::parse(value: "{}")"#,
+            DiagnosticPhase::Semantic,
+            "E_POSITIONAL_ARGUMENT_REQUIRED",
+            "parameter `value` of `Json::parse` is declared positional; omit its label",
+        ),
         (
             r#"Json::parse(raw: "{}")"#,
             DiagnosticPhase::Semantic,
@@ -160,17 +162,17 @@ fn public_session_enforces_json_parse_arguments_in_trigger_metadata() {
         (
             "Json::parse()",
             DiagnosticPhase::Semantic,
-            "K2003",
-            "Json::parse expects one argument",
+            "E_MISSING_NAMED_ARGUMENT",
+            "call `Json::parse` is missing required argument `value`",
         ),
         (
             r#"Json::parse("{}", "{}")"#,
             DiagnosticPhase::Semantic,
             "K2003",
-            "Json::parse expects one argument",
+            "call `Json::parse` expects at most 1 arguments, got 2",
         ),
         (
-            "Json::parse(value: dynamic)",
+            "Json::parse(dynamic)",
             DiagnosticPhase::Semantic,
             "E_JSON_LITERAL_REQUIRED",
             "Json::parse requires a direct string literal so native JSON is validated at compile time",

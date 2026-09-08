@@ -135,7 +135,7 @@ struct TransactionInputValidator {
         }
         do {
             let prefix = try AccountAddress.inspectI105NetworkPrefix(checked).chainDiscriminant
-            let address = try AccountAddress.parseEncodedSwiftOnly(
+            let address = try AccountAddress.parseCanonicalI105(
                 checked,
                 expectedPrefix: prefix
             )

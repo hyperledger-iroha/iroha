@@ -72,7 +72,7 @@ pub fn validate_contract_interface(
         contract_interface.access_set_hints.as_ref(),
         &contract_interface.states,
     )?;
-    validate_error_codes(contract_interface)?;
+    validate_error_types(contract_interface)?;
     if contract_interface.entrypoints.is_empty() {
         return Err(ContractArtifactError::invalid(
             "CNTR must declare at least one entrypoint",
@@ -170,7 +170,6 @@ pub fn validate_contract_interface(
             entrypoint.return_type.as_deref(),
             entrypoint.return_schema.as_ref(),
         ) {
-            (None, None) => {}
             (Some(type_name), Some(schema))
                 if schema.validate()
                     && schema.canonical_type_name().as_deref() == Some(type_name)
@@ -189,9 +188,9 @@ pub fn validate_contract_interface(
                     entrypoint.name
                 )));
             }
-            (None, Some(_)) => {
+            (None, _) => {
                 return Err(ContractArtifactError::invalid(format!(
-                    "unit entrypoint `{}` must not declare a return schema",
+                    "entrypoint `{}` is missing its exact return descriptor; Unit requires type `()` and a Unit schema",
                     entrypoint.name
                 )));
             }
@@ -384,8 +383,10 @@ fn validate_koto_test_return_entrypoint(
     let is_exact_descriptor = entrypoint.kind == EntryPointKind::View
         && entrypoint.params.is_empty()
         && entrypoint.argument_schema.is_none()
-        && entrypoint.return_type.is_none()
-        && entrypoint.return_schema.is_none()
+        && entrypoint.return_type.as_deref() == Some("()")
+        && entrypoint.return_schema.as_ref().is_some_and(|schema| {
+            schema.nodes.as_slice() == [ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit]
+        })
         && entrypoint.permission.is_none()
         && entrypoint.read_keys.is_empty()
         && entrypoint.write_keys.is_empty()
@@ -983,7 +984,10 @@ fn embedded_state_map_key_type_name(ty: &EmbeddedStateType) -> Option<&'static s
         EmbeddedStateType::NftId => Some("NftId"),
         EmbeddedStateType::DomainId => Some("DomainId"),
         EmbeddedStateType::Name => Some("Name"),
-        EmbeddedStateType::Json
+        EmbeddedStateType::Unit
+        | EmbeddedStateType::Error(_)
+        | EmbeddedStateType::StateCursor(_)
+        | EmbeddedStateType::Json
         | EmbeddedStateType::Tuple(_)
         | EmbeddedStateType::Struct { .. }
         | EmbeddedStateType::StateMap { .. }
@@ -1138,39 +1142,77 @@ fn validate_runtime_state_schema(
     }
     Ok(())
 }
-fn validate_error_codes(
+fn validate_error_types(
     contract_interface: &EmbeddedContractInterfaceV1,
 ) -> Result<(), ContractArtifactError> {
-    let mut paths = BTreeSet::new();
-    let mut codes = BTreeSet::new();
-    for error in &contract_interface.error_codes {
-        if !is_canonical_source_type_declaration_name(&error.namespace)
-            || !is_canonical_source_identifier(&error.name)
-        {
+    use iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1;
+    let catalog = &contract_interface.error_types;
+    if catalog.len() > 256 {
+        return Err(ContractArtifactError::invalid(
+            "CNTR exceeds 256 nominal error types",
+        ));
+    }
+    let mut identities = BTreeSet::new();
+    for error in catalog {
+        if !error.validate() || !identities.insert(&error.identity) {
             return Err(ContractArtifactError::invalid(
-                "CNTR error code namespace and name must be canonical Kotodama V1 identifiers",
+                "invalid or duplicate nominal error descriptor",
             ));
         }
-        let path = format!("{}::{}", error.namespace, error.name);
-        if !paths.insert(path.clone()) {
-            return Err(ContractArtifactError::invalid(format!(
-                "duplicate error code descriptor `{path}`"
-            )));
+    }
+    let require_declared =
+        |error: &iroha_data_model::smart_contract::manifest::ContractErrorTypeDescriptor| {
+            if catalog.contains(error) {
+                Ok(())
+            } else {
+                Err(ContractArtifactError::invalid(
+                    "schema error type does not exactly match a CNTR error descriptor",
+                ))
+            }
+        };
+    for entrypoint in &contract_interface.entrypoints {
+        for schema in entrypoint
+            .argument_schema
+            .iter()
+            .flat_map(|schema| schema.fields.iter().map(|field| &field.ty))
+            .chain(entrypoint.return_schema.iter())
+        {
+            for node in &schema.nodes {
+                if let EntrypointValueTypeNodeV1::Error(error) = node {
+                    require_declared(error)?;
+                }
+            }
         }
-        if error.code == 0 {
-            return Err(ContractArtifactError::invalid(format!(
-                "error code descriptor `{path}` uses reserved code 0"
-            )));
-        }
-        if !codes.insert(error.code) {
-            return Err(ContractArtifactError::invalid(format!(
-                "duplicate numeric error code {}",
-                error.code
-            )));
+    }
+    let mut pending = contract_interface
+        .states
+        .iter()
+        .map(|state| &state.ty)
+        .collect::<Vec<_>>();
+    while let Some(ty) = pending.pop() {
+        match ty {
+            EmbeddedStateType::Error(error) => require_declared(error)?,
+            EmbeddedStateType::Tuple(items) => pending.extend(items),
+            EmbeddedStateType::Struct { fields, .. } => {
+                pending.extend(fields.iter().map(|field| &field.ty))
+            }
+            EmbeddedStateType::StateMap { key, value } => {
+                pending.push(key);
+                pending.push(value);
+            }
+            EmbeddedStateType::Result { ok, err } => {
+                pending.push(ok);
+                pending.push(err);
+            }
+            EmbeddedStateType::Option(value) | EmbeddedStateType::List { element: value, .. } => {
+                pending.push(value)
+            }
+            _ => {}
         }
     }
     Ok(())
 }
+
 fn is_supported_state_map_key(ty: &EmbeddedStateType) -> bool {
     matches!(
         ty,
@@ -1271,6 +1313,16 @@ fn schedule_nested_state_types<'a>(
     pending: &mut Vec<PendingStateTypeValidation<'a>>,
 ) -> Result<(), ContractArtifactError> {
     match ty {
+        EmbeddedStateType::StateCursor(key) => {
+            let schema = iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::StateCursor(*key)],
+            };
+            if !schema.validate() {
+                return Err(ContractArtifactError::invalid(
+                    "CNTR StateCursor key must be a supported canonical scalar type",
+                ));
+            }
+        }
         EmbeddedStateType::Tuple(items) => {
             if items.len() < 2 {
                 return Err(ContractArtifactError::invalid(
@@ -1288,9 +1340,16 @@ fn schedule_nested_state_types<'a>(
             );
         }
         EmbeddedStateType::Struct { name, fields } => {
-            if !is_canonical_source_type_declaration_name(name) {
+            let valid_name = if name.contains("::") || name == "StatePage" {
+                iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_struct_name(
+                    name,
+                )
+            } else {
+                is_canonical_source_type_declaration_name(name)
+            };
+            if !valid_name {
                 return Err(ContractArtifactError::invalid(format!(
-                    "CNTR struct `{name}` is not a canonical Kotodama V1 identifier"
+                    "CNTR struct `{name}` is not a canonical Kotodama V1 struct identity"
                 )));
             }
             if fields.is_empty() {
@@ -1353,7 +1412,59 @@ fn schedule_nested_state_types<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn state_cursor_is_an_opaque_value_with_a_supported_scalar_key() {
+        use iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1;
+        let cursor = EmbeddedStateType::StateCursor(EntrypointValueKindV1::Int);
+        assert!(validate_state_type(&cursor, false).is_ok());
+        assert_eq!(embedded_state_map_key_type_name(&cursor), None);
+        assert!(validate_state_type(&EmbeddedStateType::Option(Box::new(cursor)), false).is_ok());
+        assert!(
+            validate_state_type(
+                &EmbeddedStateType::StateCursor(EntrypointValueKindV1::Json),
+                false
+            )
+            .is_err()
+        );
+    }
+
     use ivm_abi::metadata::EmbeddedStateFieldDescriptor;
+    #[test]
+    fn nominal_error_catalog_binds_state_schema_without_global_code_collisions() {
+        let list = ivm_abi::error_types::list_error_type();
+        let numeric = ivm_abi::error_types::numeric_error_type();
+        let mut interface = EmbeddedContractInterfaceV1 {
+            seiyaku_name: "Errors".into(),
+            compiler_fingerprint: "test".into(),
+            abi_hash: [0; 32],
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: vec![],
+            entrypoints: vec![],
+            states: vec![EmbeddedStateDescriptor {
+                name: "last_error".into(),
+                ty: EmbeddedStateType::Option(Box::new(EmbeddedStateType::Error(list.clone()))),
+            }],
+            error_types: vec![list.clone(), numeric],
+        };
+        validate_error_types(&interface).expect("different types may share enum-local codes");
+        interface.error_types[0].variants[0].name = "DifferentMeaning".into();
+        assert!(
+            validate_error_types(&interface).is_err(),
+            "schema substitution must fail"
+        );
+        interface.error_types[0] = list.clone();
+        interface.error_types.push(list);
+        assert!(
+            validate_error_types(&interface).is_err(),
+            "duplicate identity must fail"
+        );
+        interface.error_types.clear();
+        assert!(
+            validate_error_types(&interface).is_err(),
+            "undeclared state error must fail"
+        );
+    }
     fn dynamic_hint(
         base_key: &str,
         key_type: &str,
@@ -1447,7 +1558,7 @@ mod tests {
             let hints = dynamic_read_hints(vec![dynamic_hint(
                 &format!("state:{state_name}"),
                 key_type,
-                "range",
+                "page",
                 64,
             )]);
             let states = [state_map(&state_name, key, EmbeddedStateType::Bool)];
@@ -1458,14 +1569,17 @@ mod tests {
     }
     #[test]
     fn dynamic_hint_shape_aliases_duplicates_and_overflow_reject() {
-        let valid = dynamic_hint("state:Orders", "int", "range", 1);
+        let valid = dynamic_hint("state:Orders", "int", "page", 1);
+        validate_access_set_hints(Some(&dynamic_read_hints(vec![valid.clone()])))
+            .expect("canonical page hint must pass before negative mutations");
         let invalid = [
-            dynamic_hint("state:", "int", "range", 1),
-            dynamic_hint("state:Orders/child", "int", "range", 1),
-            dynamic_hint("state:Orders", "Numeric", "range", 1),
+            dynamic_hint("state:Orders", "int", "range", 1),
+            dynamic_hint("state:", "int", "page", 1),
+            dynamic_hint("state:Orders/child", "int", "page", 1),
+            dynamic_hint("state:Orders", "Numeric", "page", 1),
             dynamic_hint("state:Orders", "int", "bounded", 1),
-            dynamic_hint("state:Orders", "int", "range", 0),
-            dynamic_hint("state:Orders", "int", "range", 65),
+            dynamic_hint("state:Orders", "int", "page", 0),
+            dynamic_hint("state:Orders", "int", "page", 65),
         ];
         for hint in invalid {
             validate_access_set_hints(Some(&dynamic_read_hints(vec![hint])))
@@ -1496,8 +1610,8 @@ mod tests {
     #[test]
     fn same_base_with_distinct_bound_fields_is_not_a_duplicate() {
         let hints = dynamic_read_hints(vec![
-            dynamic_hint("state:Orders", "int", "range", 1),
-            dynamic_hint("state:Orders", "int", "range", 2),
+            dynamic_hint("state:Orders", "int", "page", 1),
+            dynamic_hint("state:Orders", "int", "page", 2),
             dynamic_hint("state:Orders", "int", "take", 1),
         ]);
         let states = [state_map(

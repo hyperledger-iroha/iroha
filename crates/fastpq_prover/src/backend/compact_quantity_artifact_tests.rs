@@ -90,7 +90,7 @@ fn fixed_quantity_profile_is_nominal_distinct_and_codec_independent() {
     assert_ne!(expected, diagnostic_profile_id());
     assert_eq!(
         hex::encode(diagnostic_profile_id().0),
-        "c1f0ca64798a78dc186b99fefd72645d584701dd3980886dcc50b5317011558e"
+        "19093354f57a228cf17a92d94212a4419167225d04e4e2ab46d0a2a6c6860ba4"
     );
     for flags in [0, 1, 2, 3, norito::core::default_encode_flags()] {
         let _flags = norito::core::DecodeFlagsGuard::enter(flags);
@@ -265,9 +265,9 @@ fn complete_retained_quantity_artifact(is_axt: bool) {
     let expected = f.expected();
     let label = if is_axt { "axt" } else { "ordinary" };
     let bundle_hash = if is_axt {
-        "106eedbef45e0c652289e014643004be8c4d02d76dee9341b5dc6bef68f50280"
+        "3ceff34c2ca74ef1554f23bc7e8ec1f4c493a286dd9e532614b511cdfbd5bb20"
     } else {
-        "72446454083030585da910cf121a0b76ce61d1ba04db8ea911a412b6fda4f14e"
+        "2d655210af9e7f550f8cd9706899851fe804ff0d06ac50dc2fc08e8b0ddfa014"
     };
     let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../target/fastpq-production-validation");
@@ -330,6 +330,70 @@ fn complete_retained_quantity_artifact(is_axt: bool) {
         )
         .unwrap(),
         *identity
+    );
+    // Exercise the public library boundary on this same complete retained proof.
+    // Expectations are rebuilt from the independent fixture, never decoded bytes.
+    let p = policy();
+    let public_limits = crate::offline_compact::VerificationLimits {
+        transport: p.transport,
+        public_statement: p.public_statement,
+        bundle: crate::offline_compact::BundleVerificationLimits {
+            max_segments: p.bundle.max_segments,
+            max_wire_bytes: p.bundle.max_wire_bytes,
+            max_total_segment_bytes: p.bundle.max_total_segment_bytes,
+            max_total_statement_bytes: p.bundle.max_total_statement_bytes,
+            max_total_queries: p.bundle.max_total_queries,
+            max_total_decode_allocation_charges: p.bundle.max_total_decode_allocation_charges,
+            segment: p.bundle.segment,
+        },
+        max_segment_decode_allocation_charges: p.max_segment_decode_allocation_charges,
+        total_decode: p.total_decode,
+    };
+    let public_expected = crate::offline_compact::ExpectedStatement {
+        inputs: f.model().public_inputs,
+        ordering_hash: expected.ordering_hash,
+        public_statement_digest: statement_digest,
+    };
+    let offline = if is_axt {
+        let independent = axt(&f, Vec::new());
+        crate::offline_compact::verify_quantity_axt_artifact(
+            &bytes,
+            public_expected,
+            crate::offline_compact::ExpectedAxtContext {
+                binding: &independent.binding,
+                metadata: &independent.metadata,
+                mirrors: independent.mirrors,
+                remote_spend_claims: independent.remote_spend_claims.as_deref(),
+            },
+            public_limits,
+        )
+    } else {
+        crate::offline_compact::verify_quantity_ordinary_artifact(
+            &bytes,
+            public_expected,
+            public_limits,
+        )
+    }
+    .unwrap();
+    assert_eq!(offline.expected_statement(), public_expected);
+    assert_eq!(offline.identity(), result.identity());
+    assert_eq!(offline.air_row_roots(), result.bundle().row_roots());
+    assert_eq!(offline.segments(), result.bundle().segments());
+    assert_eq!(offline.bundle_frame_bytes(), result.bundle().wire_bytes());
+    assert_eq!(offline.statement_bytes(), result.bundle().statement_bytes());
+    let old_work = result.bundle().work();
+    assert_eq!(
+        offline.work(),
+        crate::offline_compact::VerificationWork {
+            proof_bytes: old_work.proof_bytes,
+            transcripts: old_work.transcripts,
+            row_leaves: old_work.row_leaves,
+            oracle_leaves: old_work.oracle_leaves,
+            fri_leaves: old_work.fri_leaves,
+            parent_hashes: old_work.parent_hashes,
+            air_evaluations: old_work.air_evaluations,
+            terminal_degree_checks: old_work.terminal_degree_checks,
+        }
     );
     let charges = usage.total_allocated_bytes();
     let elements = usage.total_elements();

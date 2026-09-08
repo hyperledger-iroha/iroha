@@ -4,7 +4,7 @@
 
                 #[test]
                 fn drive_run() {
-                    let _next = test::invoke_kotoage("run", 7);
+                    let _next = test::invoke_kotoage(kotoage: "run", arguments: 7);
                 }
             }
             

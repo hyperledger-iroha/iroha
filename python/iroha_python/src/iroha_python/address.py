@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from blake3 import blake3
+from iroha_native import require_account_codec_v1
 
 HEADER_VERSION_V1 = 0
 HEADER_NORM_VERSION_V1 = 1
@@ -18,6 +19,7 @@ I105_CHECKSUM_LEN = 6
 BECH32M_CONST = 0x2BC830A3
 DEFAULT_CHAIN_DISCRIMINANT = 0x02F1
 I105_DISCRIMINANT_MAX = 0xFFFF
+ACCOUNT_ADDRESS_MAX_BYTES = 64 * 1024 * 1024
 CHAIN_DISCRIMINANT_SORA = DEFAULT_CHAIN_DISCRIMINANT
 CHAIN_DISCRIMINANT_TEST = 0x0171
 CHAIN_DISCRIMINANT_DEV = 0x0000
@@ -128,6 +130,13 @@ class AccountAddressError(ValueError):
     """Raised when an address cannot be parsed or encoded."""
 
 
+def _admit_canonical_address(canonical: bytes) -> None:
+    try:
+        require_account_codec_v1()._validate_account_address_v1(canonical)
+    except ValueError as error:
+        raise AccountAddressError(str(error)) from error
+
+
 class AddressClass(IntEnum):
     SINGLE_KEY = 0
     MULTI_SIG = 1
@@ -177,11 +186,15 @@ class AddressHeader:
 class CurveId(IntEnum):
     ED25519 = 1
     MLDSA = 2
+    BLS_NORMAL = 3
+    SECP256K1 = 4
+    BLS_SMALL = 5
     GOST_256_A = 10
     GOST_256_B = 11
     GOST_256_C = 12
     GOST_512_A = 13
     GOST_512_B = 14
+    SM2 = 15
 
     @classmethod
     def from_algorithm(cls, algorithm: str) -> "CurveId":
@@ -207,6 +220,10 @@ class CurveId(IntEnum):
             "ml-dsa-65": cls.MLDSA,
             "ml_dsa_65": cls.MLDSA,
             "ml_dsa-65": cls.MLDSA,
+            "secp256k1": cls.SECP256K1,
+            "bls_normal": cls.BLS_NORMAL,
+            "bls_small": cls.BLS_SMALL,
+            "sm2": cls.SM2,
             "gost256a": cls.GOST_256_A,
             "gost-256-a": cls.GOST_256_A,
             "gost256b": cls.GOST_256_B,
@@ -217,6 +234,11 @@ class CurveId(IntEnum):
             "gost-512-a": cls.GOST_512_A,
             "gost512b": cls.GOST_512_B,
             "gost-512-b": cls.GOST_512_B,
+            "gost3410-2012-256-paramset-a": cls.GOST_256_A,
+            "gost3410-2012-256-paramset-b": cls.GOST_256_B,
+            "gost3410-2012-256-paramset-c": cls.GOST_256_C,
+            "gost3410-2012-512-paramset-a": cls.GOST_512_A,
+            "gost3410-2012-512-paramset-b": cls.GOST_512_B,
         }
         try:
             return mapping[normalized]
@@ -240,6 +262,17 @@ class ControllerPayload:
     CONTROLLER_SINGLE_KEY_TAG = 0x00
     CONTROLLER_SINGLE_KEY_EXTENDED_TAG = 0x02
     ML_DSA_65_PUBLIC_KEY_LENGTH = 1_952
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "curve", CurveId.from_byte(self.curve))
+        if not isinstance(self.public_key, (bytes, bytearray, memoryview)):
+            raise AccountAddressError("public key must be bytes-like")
+        if not 1 <= memoryview(self.public_key).nbytes <= 65535:
+            raise AccountAddressError("public key length must fit a positive u16")
+        object.__setattr__(self, "public_key", bytes(self.public_key))
+        canonical = bytearray((2,))
+        self.encode_into(canonical)
+        _admit_canonical_address(bytes(canonical))
 
     @classmethod
     def _validate_public_key(cls, curve: CurveId, public_key: bytes) -> None:
@@ -286,11 +319,13 @@ class ControllerPayload:
         out.extend(self.public_key)
 
     @classmethod
-    def decode(cls, data: bytes, cursor: int) -> Tuple["ControllerPayload", int]:
+    def decode(cls, data: bytes, cursor: int) -> Tuple[Union["ControllerPayload", "MultisigControllerPayload"], int]:
         if cursor >= len(data):
             raise AccountAddressError("invalid length for address payload")
         tag = data[cursor]
         cursor += 1
+        if tag == 1:
+            return MultisigControllerPayload.decode(data, cursor)
         if tag not in (
             cls.CONTROLLER_SINGLE_KEY_TAG,
             cls.CONTROLLER_SINGLE_KEY_EXTENDED_TAG,
@@ -323,9 +358,92 @@ class ControllerPayload:
 
 
 @dataclass(frozen=True)
+class MultisigMember:
+    """One complete account-controller key and its positive u16 signing weight."""
+
+    curve: CurveId
+    public_key: bytes
+    weight: int
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "curve", CurveId.from_byte(self.curve))
+        if not isinstance(self.public_key, (bytes, bytearray, memoryview)):
+            raise AccountAddressError("public key must be bytes-like")
+        if not 1 <= memoryview(self.public_key).nbytes <= 65535:
+            raise AccountAddressError("public key length must fit a positive u16")
+        object.__setattr__(self, "public_key", bytes(self.public_key))
+        if isinstance(self.weight, bool) or not isinstance(self.weight, int) or not 1 <= self.weight <= 65535:
+            raise AccountAddressError("multisig member weight must be a positive u16")
+        ControllerPayload(0 if len(self.public_key) <= 255 else 2, self.curve, self.public_key)
+
+
+@dataclass(frozen=True)
+class MultisigControllerPayload:
+    """A complete canonical V1 weighted multisig policy, with no identity projection."""
+
+    version: int
+    threshold: int
+    members: Tuple[MultisigMember, ...]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "members", tuple(self.members))
+        if self.version != 1 or isinstance(self.version, bool):
+            raise AccountAddressError("multisig policy version must be 1")
+        if isinstance(self.threshold, bool) or not isinstance(self.threshold, int) or not 1 <= self.threshold <= 65535:
+            raise AccountAddressError("multisig threshold must be a positive u16")
+        if not 1 <= len(self.members) <= 65535 or not all(isinstance(member, MultisigMember) for member in self.members):
+            raise AccountAddressError("multisig policy must contain 1..65535 complete members")
+        if 7 + sum(5 + len(member.public_key) for member in self.members) > ACCOUNT_ADDRESS_MAX_BYTES:
+            raise AccountAddressError("multisig account address exceeds the V1 byte limit")
+        canonical = bytearray((10,))
+        self.encode_into(canonical)
+        _admit_canonical_address(bytes(canonical))
+
+    @property
+    def tag(self) -> int:
+        return 1
+
+    def encode_into(self, out: bytearray) -> None:
+        out.extend((1, self.version))
+        out.extend(self.threshold.to_bytes(2, "big"))
+        out.extend(len(self.members).to_bytes(2, "big"))
+        for member in self.members:
+            if not 1 <= len(member.public_key) <= 65535:
+                raise AccountAddressError("multisig public key length must fit a positive u16")
+            out.append(int(member.curve))
+            out.extend(member.weight.to_bytes(2, "big"))
+            out.extend(len(member.public_key).to_bytes(2, "big"))
+            out.extend(member.public_key)
+
+    @classmethod
+    def decode(cls, data: bytes, cursor: int) -> Tuple["MultisigControllerPayload", int]:
+        if cursor + 5 > len(data):
+            raise AccountAddressError("truncated multisig policy header")
+        version = data[cursor]
+        threshold = int.from_bytes(data[cursor + 1:cursor + 3], "big")
+        count = int.from_bytes(data[cursor + 3:cursor + 5], "big")
+        cursor += 5
+        if count == 0 or count > (len(data) - cursor) // 6:
+            raise AccountAddressError("truncated multisig members")
+        members = []
+        for _ in range(count):
+            if cursor + 5 > len(data):
+                raise AccountAddressError("truncated multisig member")
+            curve = CurveId.from_byte(data[cursor])
+            weight = int.from_bytes(data[cursor + 1:cursor + 3], "big")
+            length = int.from_bytes(data[cursor + 3:cursor + 5], "big")
+            cursor += 5
+            if length == 0 or cursor + length > len(data):
+                raise AccountAddressError("truncated multisig public key")
+            members.append(MultisigMember(curve, data[cursor:cursor + length], weight))
+            cursor += length
+        return cls(version, threshold, tuple(members)), cursor
+
+
+@dataclass(frozen=True)
 class AccountAddress:
     header: AddressHeader
-    controller: ControllerPayload
+    controller: Union[ControllerPayload, MultisigControllerPayload]
 
     def __post_init__(self) -> None:
         if (
@@ -334,8 +452,10 @@ class AccountAddress:
             or self.header.ext_flag
         ):
             raise AccountAddressError("unsupported account address header")
-        if self.header.class_ is not AddressClass.SINGLE_KEY:
+        expected_class = AddressClass.MULTI_SIG if isinstance(self.controller, MultisigControllerPayload) else AddressClass.SINGLE_KEY
+        if self.header.class_ is not expected_class:
             raise AccountAddressError("address header class does not match controller tag")
+        _admit_canonical_address(self.canonical_bytes())
 
     @classmethod
     def from_account(
@@ -348,8 +468,27 @@ class AccountAddress:
         return cls(header=header, controller=controller)
 
     @classmethod
+    def from_multisig_policy(cls, *, threshold: int, members: Sequence[MultisigMember], version: int = 1) -> "AccountAddress":
+        """Construct one canonical ordered policy; reject duplicate or invalid keys."""
+        names = {
+            CurveId.ED25519: "ed25519", CurveId.MLDSA: "ml-dsa",
+            CurveId.BLS_NORMAL: "bls_normal", CurveId.BLS_SMALL: "bls_small",
+            CurveId.SECP256K1: "secp256k1", CurveId.SM2: "sm2",
+            CurveId.GOST_256_A: "gost3410-2012-256-paramset-a",
+            CurveId.GOST_256_B: "gost3410-2012-256-paramset-b",
+            CurveId.GOST_256_C: "gost3410-2012-256-paramset-c",
+            CurveId.GOST_512_A: "gost3410-2012-512-paramset-a",
+            CurveId.GOST_512_B: "gost3410-2012-512-paramset-b",
+        }
+        members = tuple(members)
+        if not 1 <= len(members) <= 65535 or not all(isinstance(member, MultisigMember) for member in members):
+            raise AccountAddressError("multisig policy must contain 1..65535 complete members")
+        ordered = tuple(sorted(members, key=lambda member: (names[member.curve], member.public_key)))
+        return cls(AddressHeader.new(0, AddressClass.MULTI_SIG, 1), MultisigControllerPayload(version, threshold, ordered))
+
+    @classmethod
     def from_canonical_bytes(cls, payload: bytes) -> "AccountAddress":
-        if not payload:
+        if not payload or len(payload) > ACCOUNT_ADDRESS_MAX_BYTES:
             raise AccountAddressError("invalid length for address payload")
         header = AddressHeader.decode(payload[0])
         cursor = 1
@@ -363,6 +502,8 @@ class AccountAddress:
         cls, encoded: str, expected_discriminant: Optional[int] = None
     ) -> "AccountAddress":
         literal = encoded.strip()
+        if literal != encoded:
+            raise AccountAddressError("account address literals must not contain surrounding whitespace")
         payload = decode_i105_string(literal, expected_discriminant=expected_discriminant)
         address = cls.from_canonical_bytes(payload)
         discriminant = i105_discriminant_from_sentinel(literal)
@@ -375,6 +516,8 @@ class AccountAddress:
         cls, address: str, expected_discriminant: Optional[int] = None
     ) -> "AccountAddress":
         token = address.strip()
+        if token != address:
+            raise AccountAddressError("account address literals must not contain surrounding whitespace")
         if not token:
             raise AccountAddressError("invalid length for address payload")
         if "@" in token:
@@ -490,26 +633,19 @@ def strip_i105_sentinel(encoded: str, expected_discriminant: Optional[int] = Non
 
 
 def encode_i105_string(canonical: bytes, *, discriminant: int = DEFAULT_CHAIN_DISCRIMINANT) -> str:
-    digits = encode_base_n(canonical, I105_BASE)
-    checksum = i105_checksum_digits(canonical)
-    pieces = [i105_sentinel_for_discriminant(discriminant)]
-    pieces.extend(I105_ALPHABET[digit] for digit in digits)
-    pieces.extend(I105_ALPHABET[digit] for digit in checksum)
-    return "".join(pieces)
+    discriminant = normalize_i105_discriminant(discriminant)
+    try:
+        return require_account_codec_v1()._render_account_address_v1(canonical, discriminant)
+    except ValueError as error:
+        raise AccountAddressError(str(error)) from error
 
 
 def decode_i105_string(encoded: str, *, expected_discriminant: Optional[int] = None) -> bytes:
-    payload = strip_i105_sentinel(encoded, expected_discriminant=expected_discriminant)
-    digits = decode_i105_digits(payload)
-    if len(digits) <= I105_CHECKSUM_LEN:
-        raise AccountAddressError("i105 address too short")
-    data_digits = digits[:-I105_CHECKSUM_LEN]
-    checksum_digits = digits[-I105_CHECKSUM_LEN:]
-    canonical = decode_base_n(data_digits, I105_BASE)
-    expected = i105_checksum_digits(canonical)
-    if list(expected) != checksum_digits:
-        raise AccountAddressError("i105 checksum mismatch")
-    return canonical
+    strip_i105_sentinel(encoded, expected_discriminant=expected_discriminant)
+    try:
+        return bytes(require_account_codec_v1()._parse_account_address_v1(encoded, expected_discriminant))
+    except ValueError as error:
+        raise AccountAddressError(str(error)) from error
 
 
 def decode_i105_digits(payload: str) -> List[int]:
@@ -631,5 +767,8 @@ def i105_checksum_digits(canonical: bytes) -> List[int]:
 __all__ = [
     "AccountAddress",
     "AccountAddressError",
+    "CurveId",
+    "MultisigMember",
+    "MultisigControllerPayload",
     "I105_WARNING",
 ]

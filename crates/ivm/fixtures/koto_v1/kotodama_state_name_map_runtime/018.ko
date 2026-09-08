@@ -5,12 +5,12 @@
 
             kotoage fn main() -> bool authorize("WriteState") {
                 let first = Entries.ensure(
-                    Name::parse("alice"),
-                    Entry { amount: 41, active: true },
+                    key: Name::parse("alice"),
+                    default: Entry { amount: 41, active: true },
                 );
                 let second = Entries.ensure(
-                    Name::parse("alice"),
-                    Entry { amount: 99, active: false },
+                    key: Name::parse("alice"),
+                    default: Entry { amount: 99, active: false },
                 );
                 return first.amount == 41
                     && first.active

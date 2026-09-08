@@ -65,6 +65,8 @@ pub use axt_binding::{
     verify_axt_proof_envelope, verify_axt_proof_envelope_against_anchor_v1,
     verify_axt_proof_envelope_with_outer_metadata,
 };
+/// Fixed offline quantity-artifact verification; no production admission is granted.
+pub use backend::offline_compact;
 pub use backend::{
     ExecutionMode, PoseidonExecutionMode, clear_execution_mode_observer,
     preflight_native_v1_gpu_backend, set_execution_mode_observer,

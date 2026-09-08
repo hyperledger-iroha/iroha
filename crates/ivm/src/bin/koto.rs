@@ -1,6 +1,18 @@
 //! Unified Kotodama V1 developer command.
+#[path = "koto/editor_lsp.rs"]
+mod editor_lsp;
+#[path = "koto/lsp_transport.rs"]
+mod lsp_transport;
+#[cfg(test)]
 use ivm::kotodama::{
     builtins::{Builtin, BuiltinSurface},
+    diagnostic::{DiagnosticFix, DiagnosticLabel},
+    lexer::{V1_KEYWORDS, V1_OPERATORS},
+    semantic::{V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS},
+    session::{CompileOutput, CompileRequest},
+    source::TextRange,
+};
+use ivm::kotodama::{
     compiler::CompilerOptions,
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticPhase, Severity, SourcePosition, SourceSpan,
@@ -12,17 +24,9 @@ use ivm::kotodama::{
         project_root_for_source, read_source_file,
     },
     formatter::format_source,
-    lexer::{V1_KEYWORDS, V1_OPERATORS},
     linker::SourceModuleUnit,
-    semantic::{V1_LIST_MEMBER_NAMES, V1_ROUNDING_PATHS, V1_SOURCE_TYPE_NAMES, V1_SUM_PATHS},
     session::CompilerSession,
     source::{FrontendBudget, MAX_SOURCE_BYTES, SourceFile, SourceId},
-};
-#[cfg(test)]
-use ivm::kotodama::{
-    diagnostic::{DiagnosticFix, DiagnosticLabel},
-    session::{CompileOutput, CompileRequest},
-    source::TextRange,
 };
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
@@ -84,6 +88,7 @@ const MAX_LSP_DOCUMENT_BYTES: usize = 64 * MAX_SOURCE_BYTES;
 // completions. Registered builtins (including receiver methods), sum paths,
 // rounding paths, types, and bounded-list members are sourced from their
 // canonical compiler tables below.
+#[cfg(test)]
 const V1_CONTEXTUAL_COMPLETIONS: &[(&str, u64)] = &[("json", 14), ("div_round", 2)];
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum DiagnosticFormat {
@@ -258,11 +263,11 @@ fn check_locked_project(driver: &BuildDriver, manifest: &Path) -> (Vec<PathBuf>,
                     let path = source_paths
                         .get(&key)
                         .map_or_else(|| Path::new(&warning.source_name), PathBuf::as_path);
-                    let mut diagnostic = lint_diagnostic(warning.warning, path);
-                    if let Some(span) = &mut diagnostic.primary_span {
-                        span.package_identity = warning.package_identity;
-                    }
-                    diagnostic
+                    warning.warning.to_diagnostic(
+                        &path.display().to_string(),
+                        warning.package_identity.as_deref(),
+                        ivm::kotodama::i18n::detect_language(),
+                    )
                 })
                 .collect();
             (checked, DiagnosticBundle::new(diagnostics))
@@ -708,15 +713,27 @@ fn document(args: Vec<String>) -> Result<(), String> {
     let graph = discover_source_link_request(&path, &project_root, Vec::new(), Vec::new())
         .map_err(|error| error.to_string())?;
     let source_name = graph.root.source_name.clone();
+    let analysis = ivm::kotodama::editor::EditorSnapshot::project(&graph, zk_enabled);
+    let source_id = analysis
+        .sources()
+        .find(|source| source.name() == source_name)
+        .map(SourceFile::id)
+        .ok_or_else(|| {
+            "documentation source is absent from the explicit project graph".to_owned()
+        })?;
+    let source_signatures = analysis.declaration_signatures(source_id);
     let driver = BuildDriver::new(session, "koto-doc");
     let output = driver
         .compile_project(graph, &source_name)
         .map_err(|error| error.to_string())?;
     let rendered = if format == "json" {
-        norito::json::to_json_pretty(&output.manifest)
-            .map_err(|error| format!("render contract interface: {error}"))?
+        norito::json::to_json_pretty(&contract_documentation_json(
+            &output.manifest,
+            &source_signatures,
+        )?)
+        .map_err(|error| format!("render contract interface: {error}"))?
     } else {
-        render_contract_documentation(&output.manifest)
+        render_contract_documentation(&output.manifest, &source_signatures)
     };
     println!("{rendered}");
     Ok(())
@@ -724,8 +741,52 @@ fn document(args: Vec<String>) -> Result<(), String> {
 fn markdown_inline(text: &str) -> String {
     text.replace(['\n', '\r'], " ").replace('`', "\\`")
 }
+fn contract_documentation_json(
+    manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+    signatures: &[ivm::kotodama::editor::EditorSignature],
+) -> Result<norito::json::Value, String> {
+    use norito::json::{Value, object};
+    let signatures = signatures
+        .iter()
+        .map(|signature| {
+            let parameters = signature
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    object([
+                        ("name", Value::from(parameter.name.clone())),
+                        ("type", Value::from(parameter.ty.clone())),
+                        (
+                            "call_mode",
+                            Value::from(if parameter.named {
+                                "named"
+                            } else {
+                                "positional"
+                            }),
+                        ),
+                    ])
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            object([
+                ("name", Value::from(signature.name.clone())),
+                ("parameters", Value::Array(parameters)),
+                ("return_type", Value::from(signature.return_type.clone())),
+            ])
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| error.to_string())?;
+    object([
+        (
+            "manifest",
+            norito::json::to_value(manifest).map_err(|error| error.to_string())?,
+        ),
+        ("source_signatures", Value::Array(signatures)),
+    ])
+    .map_err(|error| error.to_string())
+}
 fn render_contract_documentation(
     manifest: &iroha_data_model::smart_contract::manifest::ContractManifest,
+    source_signatures: &[ivm::kotodama::editor::EditorSignature],
 ) -> String {
     use iroha_data_model::smart_contract::manifest::EntryPointKind;
     use std::fmt::Write as _;
@@ -744,9 +805,9 @@ fn render_contract_documentation(
             .iter()
             .map(|parameter| {
                 format!(
-                    "{} {}",
-                    markdown_inline(&parameter.type_name),
-                    markdown_inline(&parameter.name)
+                    "{}: {}",
+                    markdown_inline(&parameter.name),
+                    markdown_inline(&parameter.type_name)
                 )
             })
             .collect::<Vec<_>>()
@@ -762,6 +823,18 @@ fn render_contract_documentation(
             parameters,
             return_type
         );
+        output
+            .push_str("\nExternal arguments use a JSON record with these declared field names.\n");
+        if let Some(signature) = source_signatures
+            .iter()
+            .find(|signature| signature.name == entrypoint.name)
+        {
+            let _ = writeln!(
+                output,
+                "Source declaration: `{}`",
+                markdown_inline(&signature.label())
+            );
+        }
         let declaration = match entrypoint.kind {
             EntryPointKind::Kotoage => {
                 "Declaration: `kotoage`/`言挙げ` (authorized public mutation)"
@@ -833,18 +906,20 @@ fn render_contract_documentation(
             );
         }
     }
-    if let Some(error_codes) = manifest.error_codes.as_deref()
-        && !error_codes.is_empty()
+    if let Some(error_types) = manifest.error_types.as_deref()
+        && !error_types.is_empty()
     {
         output.push_str("\n## Seiyaku errors\n");
-        for error in error_codes {
-            let _ = writeln!(
-                output,
-                "\n- `{}::{}` = `{}`",
-                markdown_inline(&error.namespace),
-                markdown_inline(&error.name),
-                error.code
-            );
+        for error in error_types {
+            for variant in &error.variants {
+                let _ = writeln!(
+                    output,
+                    "\n- `{}::{}` = `{}`",
+                    markdown_inline(&error.identity),
+                    markdown_inline(&variant.name),
+                    variant.code
+                );
+            }
         }
     }
     output
@@ -989,31 +1064,11 @@ fn check_path(
     ))
 }
 fn lint_diagnostic(warning: ivm::kotodama::lint::LintWarning, path: &Path) -> Diagnostic {
-    let code = warning.diagnostic_code();
-    let (line, column) = warning
-        .source
-        .as_ref()
-        .map_or((1, 1), |span| (span.line.max(1), span.column.max(1)));
-    let position = SourcePosition { line, column };
-    let span = SourceSpan {
-        package_identity: None,
-        source: Some(path.display().to_string()),
-        start: position,
-        end: position,
-        byte_range: None,
-    };
-    let mut diagnostic = Diagnostic::warning(
-        code,
-        DiagnosticPhase::Semantic,
-        warning.localized_message(ivm::kotodama::i18n::detect_language()),
-        Some(span),
-    );
-    diagnostic.notes.push(format!(
-        "lint `{}` in category `{}`",
-        warning.code,
-        warning.category.as_str()
-    ));
-    diagnostic
+    warning.to_diagnostic(
+        &path.display().to_string(),
+        None,
+        ivm::kotodama::i18n::detect_language(),
+    )
 }
 fn language_server(args: Vec<String>) -> Result<(), String> {
     let (zk_enabled, project_manifest) = parse_lsp_options(args)?;
@@ -1022,17 +1077,49 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
         .map(load_source_project_manifest)
         .transpose()
         .map_err(|error| error.to_string())?;
-    let stdin = std::io::stdin();
+    let inbox = lsp_transport::Inbox::new();
+    let reader = inbox.clone();
+    let _reader = std::thread::Builder::new()
+        .name("koto-lsp-input".to_owned())
+        .spawn(move || reader.read_from(&mut std::io::stdin().lock()))
+        .map_err(|error| format!("start LSP input reader: {error}"))?;
     let stdout = std::io::stdout();
-    let mut input = stdin.lock();
-    let mut output = stdout.lock();
+    let result = language_server_dispatch(
+        &inbox,
+        &mut stdout.lock(),
+        project_manifest.as_deref(),
+        project,
+        zk_enabled,
+    );
+    inbox.close();
+    result
+}
+
+fn language_server_dispatch(
+    inbox: &lsp_transport::Inbox,
+    transport_output: &mut impl Write,
+    project_manifest: Option<&Path>,
+    mut project: Option<LoadedSourceProject>,
+    zk_enabled: bool,
+) -> Result<(), String> {
     let mut documents = HashMap::<String, String>::new();
+    let mut versions = HashMap::<String, i64>::new();
+    let mut published_diagnostic_uris = BTreeSet::new();
+    let mut editor_cache = HashMap::<String, editor_lsp::Workspace>::new();
     let session = CompilerSession::new(CompilerOptions {
         force_zk: zk_enabled,
         ..CompilerOptions::default()
     });
     let driver = BuildDriver::new(session, "koto-lsp");
-    while let Some(message) = read_lsp_message(&mut input)? {
+    while let Some(pending) = inbox.next()? {
+        if inbox.reject_before_analysis(&pending, transport_output)? {
+            continue;
+        }
+        let message = &pending.message;
+        // Keep the compiler and immutable semantic workspace on this dispatcher thread.
+        // The input thread can invalidate work while this operation is being analyzed.
+        let mut output = Vec::new();
+        let mut next_diagnostic_uris = None;
         let method = message
             .get("method")
             .and_then(norito::json::Value::as_str)
@@ -1055,6 +1142,18 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
                         .pointer("/params/textDocument/text")
                         .and_then(norito::json::Value::as_str),
                 ) {
+                    let version = message
+                        .pointer("/params/textDocument/version")
+                        .and_then(norito::json::Value::as_i64);
+                    if let Some(version) = version {
+                        if versions
+                            .get(uri)
+                            .is_some_and(|previous| *previous >= version)
+                        {
+                            continue;
+                        }
+                    }
+                    editor_cache.clear();
                     if let Err(message) = store_lsp_document(&mut documents, uri, text) {
                         publish_lsp_notification(
                             &mut output,
@@ -1065,12 +1164,23 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
                             ]),
                         )?;
                     }
-                    publish_lsp_project_diagnostics(
-                        &mut output,
-                        &driver,
-                        &documents,
-                        project.as_ref(),
-                    )?;
+                    if documents.contains_key(uri) {
+                        if let Some(version) = version {
+                            versions.insert(uri.to_owned(), version);
+                        }
+                    } else {
+                        versions.remove(uri);
+                    }
+                    if inbox.is_current(&pending) {
+                        next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
+                            &mut output,
+                            &driver,
+                            &documents,
+                            project.as_ref(),
+                            &versions,
+                            &published_diagnostic_uris,
+                        )?);
+                    }
                 }
             }
             Some("textDocument/didChange") => {
@@ -1082,6 +1192,18 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
                         .pointer("/params/contentChanges/0/text")
                         .and_then(norito::json::Value::as_str),
                 ) {
+                    let version = message
+                        .pointer("/params/textDocument/version")
+                        .and_then(norito::json::Value::as_i64);
+                    if let Some(version) = version {
+                        if versions
+                            .get(uri)
+                            .is_some_and(|previous| *previous >= version)
+                        {
+                            continue;
+                        }
+                    }
+                    editor_cache.clear();
                     if let Err(message) = store_lsp_document(&mut documents, uri, text) {
                         publish_lsp_notification(
                             &mut output,
@@ -1092,12 +1214,23 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
                             ]),
                         )?;
                     }
-                    publish_lsp_project_diagnostics(
-                        &mut output,
-                        &driver,
-                        &documents,
-                        project.as_ref(),
-                    )?;
+                    if documents.contains_key(uri) {
+                        if let Some(version) = version {
+                            versions.insert(uri.to_owned(), version);
+                        }
+                    } else {
+                        versions.remove(uri);
+                    }
+                    if inbox.is_current(&pending) {
+                        next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
+                            &mut output,
+                            &driver,
+                            &documents,
+                            project.as_ref(),
+                            &versions,
+                            &published_diagnostic_uris,
+                        )?);
+                    }
                 }
             }
             Some("textDocument/didClose") => {
@@ -1106,24 +1239,76 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
                     .and_then(norito::json::Value::as_str)
                 {
                     documents.remove(uri);
-                    publish_lsp_notification(
-                        &mut output,
-                        "textDocument/publishDiagnostics",
-                        json_object(vec![
-                            ("uri", norito::json::Value::from(uri)),
-                            ("diagnostics", norito::json::Value::Array(Vec::new())),
-                        ]),
-                    )?;
-                    publish_lsp_project_diagnostics(
+                    versions.remove(uri);
+                    editor_cache.clear();
+                    if inbox.is_current(&pending) {
+                        next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
+                            &mut output,
+                            &driver,
+                            &documents,
+                            project.as_ref(),
+                            &versions,
+                            &published_diagnostic_uris,
+                        )?);
+                    }
+                }
+            }
+            Some(
+                method @ ("textDocument/completion"
+                | "textDocument/hover"
+                | "textDocument/signatureHelp"
+                | "textDocument/definition"
+                | "textDocument/references"
+                | "textDocument/prepareRename"
+                | "textDocument/rename"),
+            ) => {
+                let uri = message
+                    .pointer("/params/textDocument/uri")
+                    .and_then(norito::json::Value::as_str)
+                    .unwrap_or("");
+                // A locked graph may span every open URI. Retain one bounded graph snapshot,
+                // rather than duplicating the full graph once for each queried document.
+                editor_cache.retain(|key, _| key == uri);
+                let workspace = editor_cache.entry(uri.to_owned()).or_insert_with(|| {
+                    editor_lsp::Workspace::new(&documents, project.as_ref(), uri, zk_enabled)
+                        .with_versions(&versions)
+                });
+                match workspace.response(method, message) {
+                    Ok(result) => write_lsp_response(&mut output, id, result)?,
+                    Err(error) => write_lsp_error(&mut output, id, -32602, &error)?,
+                }
+            }
+            Some("workspace/didChangeWatchedFiles" | "textDocument/didSave") => {
+                editor_cache.clear();
+                if let Some(path) = project_manifest {
+                    match load_source_project_manifest(path) {
+                        Ok(loaded) => project = Some(loaded),
+                        Err(error) => {
+                            project = None;
+                            publish_lsp_notification(
+                                &mut output,
+                                "window/showMessage",
+                                json_object(vec![
+                                    ("type", 1_u64.into()),
+                                    (
+                                        "message",
+                                        format!("Kotodama project reload failed: {error}").into(),
+                                    ),
+                                ]),
+                            )?;
+                        }
+                    }
+                }
+                if inbox.is_current(&pending) {
+                    next_diagnostic_uris = Some(publish_lsp_project_diagnostics(
                         &mut output,
                         &driver,
                         &documents,
                         project.as_ref(),
-                    )?;
+                        &versions,
+                        &published_diagnostic_uris,
+                    )?);
                 }
-            }
-            Some("textDocument/completion") => {
-                write_lsp_response(&mut output, id, lsp_completion_items())?;
             }
             Some("textDocument/codeAction") => {
                 let actions = message
@@ -1172,6 +1357,11 @@ fn language_server(args: Vec<String>) -> Result<(), String> {
                 write_lsp_error(&mut output, id, -32601, "method not found")?;
             }
             Some(_) | None => {}
+        }
+        if inbox.complete(&pending, transport_output, &output)? {
+            if let Some(uris) = next_diagnostic_uris {
+                published_diagnostic_uris = uris;
+            }
         }
     }
     Ok(())
@@ -1267,7 +1457,13 @@ fn read_bounded_lsp_header_line(
         }
     }
 }
+#[cfg(test)]
 fn read_lsp_message(input: &mut impl BufRead) -> Result<Option<norito::json::Value>, String> {
+    read_lsp_message_frame(input).map(|frame| frame.map(|(message, _)| message))
+}
+fn read_lsp_message_frame(
+    input: &mut impl BufRead,
+) -> Result<Option<(norito::json::Value, usize)>, String> {
     let mut content_length = None;
     let mut line = Vec::new();
     for _ in 0..MAX_LSP_HEADERS {
@@ -1315,7 +1511,7 @@ fn read_lsp_message(input: &mut impl BufRead) -> Result<Option<norito::json::Val
         .read_exact(&mut body)
         .map_err(|error| format!("read LSP message: {error}"))?;
     norito::json::from_slice(&body)
-        .map(Some)
+        .map(|message| Some((message, length)))
         .map_err(|error| format!("decode LSP JSON: {error}"))
 }
 fn write_lsp_message(output: &mut impl Write, message: &norito::json::Value) -> Result<(), String> {
@@ -1450,7 +1646,7 @@ fn collect_lsp_workspace_diagnostics(
     let Some(project) = project else {
         return collect_lsp_project_diagnostics(driver, documents);
     };
-    let Some((graph, source_uris, project_documents)) =
+    let Some((graph, source_uris, project_documents, _)) =
         lsp_project_with_open_overlays(project, documents)
     else {
         return collect_lsp_project_diagnostics(driver, documents);
@@ -1470,10 +1666,11 @@ fn collect_lsp_workspace_diagnostics(
                 let Some(uri) = source_uris.get(&key) else {
                     continue;
                 };
-                let mut diagnostic = lint_diagnostic(warning.warning, Path::new(uri));
-                if let Some(span) = &mut diagnostic.primary_span {
-                    span.package_identity = warning.package_identity;
-                }
+                let diagnostic = warning.warning.to_diagnostic(
+                    uri,
+                    warning.package_identity.as_deref(),
+                    ivm::kotodama::i18n::detect_language(),
+                );
                 grouped.entry(uri.clone()).or_default().push(diagnostic);
             }
         }
@@ -1534,10 +1731,38 @@ fn lsp_project_with_open_overlays(
     ivm::kotodama::linker::SourceLinkRequest,
     BTreeMap<ProjectSourceKey, String>,
     HashSet<String>,
+    Option<ivm::kotodama::driver::ProjectManifestSource>,
 )> {
+    let manifest_overlay = project.manifest.as_ref().and_then(|manifest| {
+        documents
+            .iter()
+            .find(|(uri, _)| lsp_file_uri_path(uri).as_deref() == Some(manifest.path()))
+    });
+    let reloaded = manifest_overlay
+        .map(|(_, text)| {
+            ivm::kotodama::driver::load_source_project_manifest_with_text(
+                project
+                    .manifest
+                    .as_ref()
+                    .expect("manifest overlay owner")
+                    .path(),
+                text,
+            )
+        })
+        .transpose()
+        .ok()?;
+    let project = reloaded.as_ref().unwrap_or(project);
     let mut graph = project.graph.clone();
-    let mut source_uris = BTreeMap::new();
+    let mut source_uris = project
+        .source_paths
+        .iter()
+        .filter_map(|(key, path)| lsp_path_file_uri(path).map(|uri| (key.clone(), uri)))
+        .collect::<BTreeMap<_, _>>();
+    let mut overlaid = BTreeSet::new();
     let mut project_documents = HashSet::new();
+    if let Some((uri, _)) = manifest_overlay {
+        project_documents.insert(uri.clone());
+    }
     let mut ordered = documents.iter().collect::<Vec<_>>();
     ordered.sort_by(|(left, _), (right, _)| left.cmp(right));
     for (uri, source) in ordered {
@@ -1551,7 +1776,7 @@ fn lsp_project_with_open_overlays(
         else {
             continue;
         };
-        if source_uris.contains_key(key) {
+        if !overlaid.insert(key.clone()) {
             continue;
         }
         if replace_project_source(&mut graph, key, source) {
@@ -1559,7 +1784,29 @@ fn lsp_project_with_open_overlays(
             project_documents.insert(uri.clone());
         }
     }
-    (!source_uris.is_empty()).then_some((graph, source_uris, project_documents))
+    (!source_uris.is_empty()).then_some((
+        graph,
+        source_uris,
+        project_documents,
+        project.manifest.clone(),
+    ))
+}
+fn lsp_path_file_uri(path: &Path) -> Option<String> {
+    let text = path.to_str()?;
+    let mut uri = String::from("file://");
+    if !text.starts_with('/') {
+        uri.push('/');
+    }
+    for byte in text.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(*byte, b'/' | b'-' | b'_' | b'.' | b'~' | b':')
+        {
+            uri.push(char::from(*byte));
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(uri, "%{byte:02X}");
+        }
+    }
+    Some(uri)
 }
 fn replace_project_source(
     graph: &mut ivm::kotodama::linker::SourceLinkRequest,
@@ -1707,30 +1954,37 @@ fn publish_lsp_project_diagnostics(
     driver: &BuildDriver,
     documents: &HashMap<String, String>,
     project: Option<&LoadedSourceProject>,
-) -> Result<(), String> {
+    versions: &HashMap<String, i64>,
+    previously_published: &BTreeSet<String>,
+) -> Result<BTreeSet<String>, String> {
     let diagnostics = collect_lsp_workspace_diagnostics(driver, documents, project);
-    let mut uris = documents.keys().collect::<Vec<_>>();
-    uris.sort();
-    for uri in uris {
-        let source = documents
-            .get(uri)
-            .expect("an open LSP URI retains its source");
+    let current_uris = documents
+        .keys()
+        .chain(diagnostics.keys())
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    for uri in current_uris.union(previously_published) {
+        let source = documents.get(uri).map_or("", String::as_str);
         let values = diagnostics
             .get(uri)
             .into_iter()
             .flat_map(|bundle| bundle.diagnostics.iter())
             .map(|diagnostic| lsp_diagnostic_value(diagnostic, source))
             .collect();
+        let mut params = vec![
+            ("uri", norito::json::Value::from(uri.as_str())),
+            ("diagnostics", norito::json::Value::Array(values)),
+        ];
+        if let Some(version) = versions.get(uri) {
+            params.push(("version", (*version).into()));
+        }
         publish_lsp_notification(
             output,
             "textDocument/publishDiagnostics",
-            json_object(vec![
-                ("uri", norito::json::Value::from(uri.as_str())),
-                ("diagnostics", norito::json::Value::Array(values)),
-            ]),
+            json_object(params),
         )?;
     }
-    Ok(())
+    Ok(current_uris)
 }
 fn lsp_initialize_result() -> norito::json::Value {
     json_object(vec![(
@@ -1739,13 +1993,34 @@ fn lsp_initialize_result() -> norito::json::Value {
             ("textDocumentSync", norito::json::Value::from(1_u64)),
             (
                 "completionProvider",
-                json_object(vec![("resolveProvider", norito::json::Value::from(false))]),
+                json_object(vec![
+                    ("resolveProvider", norito::json::Value::from(false)),
+                    (
+                        "triggerCharacters",
+                        norito::json::Value::Array(vec![".".into(), ":".into()]),
+                    ),
+                ]),
             ),
             (
                 "documentFormattingProvider",
                 norito::json::Value::from(true),
             ),
             ("codeActionProvider", norito::json::Value::from(true)),
+            ("hoverProvider", true.into()),
+            ("definitionProvider", true.into()),
+            ("referencesProvider", true.into()),
+            (
+                "renameProvider",
+                json_object(vec![("prepareProvider", true.into())]),
+            ),
+            (
+                "signatureHelpProvider",
+                json_object(vec![(
+                    "triggerCharacters",
+                    norito::json::Value::Array(vec!["(".into(), ",".into(), ":".into()]),
+                )]),
+            ),
+            ("positionEncoding", "utf-16".into()),
         ]),
     )])
 }
@@ -1776,10 +2051,46 @@ fn lsp_diagnostics(session: &CompilerSession, uri: &str, source: &str) -> Vec<no
         .collect()
 }
 fn lsp_diagnostic_value(diagnostic: &Diagnostic, source: &str) -> norito::json::Value {
+    let source = diagnostic
+        .primary_source
+        .as_ref()
+        .map_or(source, |file| file.text());
     let range = diagnostic.primary_span.as_ref().map_or_else(
         || lsp_range(0, 0, 0, 1),
         |span| lsp_source_span_range(source, span),
     );
+    let mut message = diagnostic.message.clone();
+    for note in &diagnostic.notes {
+        message.push_str("\n\nnote: ");
+        message.push_str(note);
+    }
+    if let Some(help) = &diagnostic.help {
+        message.push_str("\n\nhelp: ");
+        message.push_str(help);
+    }
+    let related = diagnostic
+        .labels
+        .iter()
+        .enumerate()
+        .filter_map(|(index, label)| {
+            let uri = label.span.source.as_deref()?;
+            let label_source = diagnostic
+                .label_sources
+                .get(index)
+                .and_then(Option::as_ref)
+                .map_or("", |file| file.text());
+            Some(json_object(vec![
+                (
+                    "location",
+                    json_object(vec![
+                        ("uri", norito::json::Value::from(uri)),
+                        ("range", lsp_source_span_range(label_source, &label.span)),
+                    ]),
+                ),
+                ("message", norito::json::Value::from(label.message.clone())),
+            ]))
+        })
+        .collect::<Vec<_>>();
     json_object(vec![
         ("range", range),
         ("code", norito::json::Value::from(diagnostic.code.clone())),
@@ -1791,10 +2102,17 @@ fn lsp_diagnostic_value(diagnostic: &Diagnostic, source: &str) -> norito::json::
             }),
         ),
         ("source", norito::json::Value::from("kotodama")),
+        ("relatedInformation", norito::json::Value::Array(related)),
         (
-            "message",
-            norito::json::Value::from(diagnostic.message.clone()),
+            "codeDescription",
+            json_object(vec![(
+                "href",
+                norito::json::Value::from(
+                    "https://docs.iroha.tech/blockchain/smart-contracts#diagnostics-and-editor",
+                ),
+            )]),
         ),
+        ("message", norito::json::Value::from(message)),
     ])
 }
 #[cfg(test)]
@@ -1868,17 +2186,28 @@ fn lsp_code_actions_from_bundle(
     norito::json::Value::Array(actions)
 }
 fn lsp_source_span_range(source: &str, span: &SourceSpan) -> norito::json::Value {
-    span.byte_range.map_or_else(
-        || {
-            lsp_range(
-                span.start.line.saturating_sub(1) as u64,
-                span.start.column.saturating_sub(1) as u64,
-                span.end.line.saturating_sub(1) as u64,
-                span.end.column.saturating_sub(1) as u64,
-            )
-        },
-        |range| lsp_text_range(source, range),
-    )
+    span.byte_range
+        .filter(|range| range.end as usize <= source.len() && !source.is_empty())
+        .map_or_else(
+            || {
+                let (start_line, start_character) = lsp_source_position(source, &span.start);
+                let (end_line, end_character) = lsp_source_position(source, &span.end);
+                lsp_range(start_line, start_character, end_line, end_character)
+            },
+            |range| lsp_text_range(source, range),
+        )
+}
+fn lsp_source_position(source: &str, position: &SourcePosition) -> (u64, u64) {
+    let line = position.line.saturating_sub(1);
+    let column = position.column.saturating_sub(1);
+    let character = source
+        .split('\n')
+        .nth(line)
+        .filter(|_| !source.is_empty())
+        .map_or(column, |text| {
+            text.chars().take(column).map(char::len_utf16).sum()
+        });
+    (line as u64, character as u64)
 }
 fn lsp_text_range(source: &str, range: ivm::kotodama::source::TextRange) -> norito::json::Value {
     let (start_line, start_character) = lsp_offset_position(source, range.start);
@@ -1915,6 +2244,7 @@ fn lsp_range(
         ("end", lsp_position(end_line, end_character)),
     ])
 }
+#[cfg(test)]
 fn lsp_completion_items() -> norito::json::Value {
     let mut labels = BTreeSet::new();
     let mut items = Vec::new();
@@ -2027,11 +2357,11 @@ mod tests {
                 source_name: Some("vault.ko"),
             })
             .expect("compile documentation fixture");
-        let markdown = render_contract_documentation(&output.manifest);
+        let markdown = render_contract_documentation(&output.manifest, &[]);
         for expected in [
             "# Vault",
             "## `kotoage` / `言挙げ`, views, and lifecycle",
-            "### `deposit(int amount)`",
+            "### `deposit(amount: int) -> ()`",
             "Declaration: `kotoage`/`言挙げ` (authorized public mutation)",
             "Declaration: `view` (read-only call)",
             "Lifecycle declaration: `hajimari`/`始まり`",
@@ -2040,11 +2370,57 @@ mod tests {
             "## Durable state",
             "`int` `balance`",
             "## Seiyaku errors",
-            "`VaultError::Empty` = `7`",
+            "`Vault::VaultError::Empty` = `7`",
         ] {
             assert!(
                 markdown.contains(expected),
                 "generated documentation omitted {expected:?}:\n{markdown}"
+            );
+        }
+    }
+    #[test]
+    fn source_documentation_preserves_call_modes_and_named_external_records() {
+        use ivm::kotodama::editor::EditorSnapshot;
+        for (declaration, mode) in [("int amount", "named"), ("int _ amount", "positional")] {
+            let source =
+                format!("seiyaku Labels {{ view fn echo({declaration}) -> int {{ amount }} }}");
+            let snapshot = EditorSnapshot::single("labels.ko", &source, false);
+            let signatures = snapshot.declaration_signatures(SourceId(0));
+            let output = CompilerSession::default()
+                .build(CompileRequest {
+                    source: &source,
+                    source_name: Some("labels.ko"),
+                })
+                .expect("compile source documentation fixture");
+            let markdown = render_contract_documentation(&output.manifest, &signatures);
+            assert!(
+                markdown.contains(&format!("Source declaration: `echo({declaration}) -> int`")),
+                "{markdown}"
+            );
+            assert!(markdown.contains("### `echo(amount: int) -> int`"));
+            let json = contract_documentation_json(&output.manifest, &signatures).unwrap();
+            let echo = json
+                .get("source_signatures")
+                .and_then(norito::json::Value::as_array)
+                .unwrap()
+                .iter()
+                .find(|value| {
+                    value.get("name").and_then(norito::json::Value::as_str) == Some("echo")
+                })
+                .unwrap();
+            let parameter = &echo
+                .get("parameters")
+                .and_then(norito::json::Value::as_array)
+                .unwrap()[0];
+            assert_eq!(
+                parameter
+                    .get("call_mode")
+                    .and_then(norito::json::Value::as_str),
+                Some(mode)
+            );
+            assert_eq!(
+                output.manifest.entrypoints.as_ref().unwrap()[0].params[0].name,
+                "amount"
             );
         }
     }
@@ -2323,7 +2699,7 @@ mod tests {
         let project = root.join("kotodama.project.json");
         std::fs::write(
             &app,
-            "seiyaku App { view fn run() -> int { return Math::value(1); } }",
+            "seiyaku App { view fn run() -> int { return Math::value(unused: 1); } }",
         )
         .expect("write project root");
         std::fs::write(
@@ -2694,10 +3070,9 @@ mod tests {
     fn lsp_quick_fixes_are_exact_current_document_workspace_edits() {
         let session = CompilerSession::default();
         let uri = "file:///workspace/fixes.ko";
-        let mixed =
-            "seiyaku C { fn target(int first, int second) {} fn f() { target(1, second: 2); } }";
-        let mixed_actions = lsp_code_action_items(&session, uri, mixed);
-        let mixed_action = mixed_actions
+        let indexed = "seiyaku C { fn write() { var List<int, 2> values = [1]; values[0] = 2; } }";
+        let indexed_actions = lsp_code_action_items(&session, uri, indexed);
+        let indexed_action = indexed_actions
             .as_array()
             .expect("code action array")
             .iter()
@@ -2705,53 +3080,47 @@ mod tests {
                 action
                     .pointer("/diagnostics/0/code")
                     .and_then(norito::json::Value::as_str)
-                    == Some("E_MIXED_CALL_ARGUMENTS")
+                    == Some("E_LIST_UNSAFE_INDEX")
             })
-            .expect("mixed-call quick fix");
+            .expect("checked-list quick fix");
         assert_eq!(
-            mixed_action
+            indexed_action
                 .pointer("/kind")
                 .and_then(norito::json::Value::as_str),
             Some("quickfix")
         );
-        let mixed_edit = mixed_action
+        let indexed_edit = indexed_action
             .pointer("/edit/changes")
             .and_then(|changes| changes.get(uri))
             .and_then(norito::json::Value::as_array)
             .and_then(|edits| edits.first())
-            .expect("mixed-call workspace edit");
+            .expect("checked-list workspace edit");
         assert_eq!(
-            mixed_edit
+            indexed_edit
                 .get("newText")
                 .and_then(norito::json::Value::as_str),
-            Some("first: 1")
+            Some("values.set(index: 0, value: 2);")
         );
-        let start = mixed_edit
+        let start = indexed_edit
             .pointer("/range/start/character")
             .and_then(norito::json::Value::as_u64)
-            .expect("mixed edit start") as usize;
-        let end = mixed_edit
+            .expect("indexed edit start") as usize;
+        let end = indexed_edit
             .pointer("/range/end/character")
             .and_then(norito::json::Value::as_u64)
-            .expect("mixed edit end") as usize;
-        assert_eq!(&mixed[start..end], "1");
+            .expect("indexed edit end") as usize;
+        assert_eq!(&indexed[start..end], "values[0] = 2;");
         let unresolved = "seiyaku C { fn f() { target(1, second: 2); } }";
         let unresolved_diagnostics = collect_lsp_diagnostics(&session, uri, unresolved);
         assert!(unresolved_diagnostics.diagnostics.iter().any(|diagnostic| {
-            diagnostic.code == "E_MIXED_CALL_ARGUMENTS" && diagnostic.fix.is_none()
+            diagnostic.severity == Severity::Error && diagnostic.fix.is_none()
         }));
         let unresolved_actions = lsp_code_action_items(&session, uri, unresolved);
         assert!(
             unresolved_actions
                 .as_array()
                 .expect("code action array")
-                .iter()
-                .all(|action| {
-                    action
-                        .pointer("/diagnostics/0/code")
-                        .and_then(norito::json::Value::as_str)
-                        != Some("E_MIXED_CALL_ARGUMENTS")
-                }),
+                .is_empty(),
             "an unresolved call must not receive a guessed parameter-name edit"
         );
         let positional =
@@ -2898,7 +3267,141 @@ mod tests {
                 .all(|diagnostic| diagnostic.code != "E_PROJECT_MANIFEST_REQUIRED"),
             "an explicit LSP project must provide graph authority"
         );
+        // Unopened dependencies stay in the semantic graph and retain their exact text.
+        let documents = HashMap::new();
+        let workspace = editor_lsp::Workspace::new(&documents, Some(&project), &app_uri, false);
+        let root_source = &project.graph.root.source;
+        let request = norito::json!({"params": {"textDocument": {"uri": (app_uri.clone())}, "position": {"line": 0, "character": (root_source.find("value()").unwrap())}, "context": {"includeDeclaration": true}, "newName": "renamed"}});
+        let module_uri = lsp_path_file_uri(&module.canonicalize().unwrap()).unwrap();
+        let definition = workspace
+            .response("textDocument/definition", &request)
+            .unwrap();
+        assert_eq!(
+            definition
+                .pointer("/uri")
+                .and_then(norito::json::Value::as_str),
+            Some(module_uri.as_str())
+        );
+        let references = workspace
+            .response("textDocument/references", &request)
+            .unwrap();
+        assert_eq!(references.as_array().unwrap().len(), 2);
+        let renamed = workspace.response("textDocument/rename", &request).unwrap();
+        assert_eq!(
+            renamed
+                .pointer("/documentChanges")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            3,
+            "owned exports rename the root reference, declaration, and exact manifest token together"
+        );
+        let mut invalid_project = project.clone();
+        let invalid_source = "module Math { /* 金庫😀 */ fn value() -> int { return missing; } }";
+        invalid_project.graph.packages[0].modules[0].source = invalid_source.to_owned();
+        let diagnostics =
+            collect_lsp_workspace_diagnostics(&driver, &documents, Some(&invalid_project));
+        let diagnostic = diagnostics[&module_uri]
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "K2002")
+            .expect("unopened dependency error");
+        assert_eq!(
+            diagnostic.primary_source.as_ref().unwrap().text(),
+            invalid_source
+        );
+        let rendered = lsp_diagnostic_value(diagnostic, "");
+        let expected_character = invalid_source[..invalid_source.find("missing").unwrap()]
+            .encode_utf16()
+            .count() as u64;
+        assert_eq!(
+            rendered
+                .pointer("/range/start/character")
+                .and_then(norito::json::Value::as_u64),
+            Some(expected_character)
+        );
+        invalid_project.graph.packages[0].modules[0].source = "module Math { /* 金庫😀 */ fn value() -> int { 7 } fn helper(int unused) -> int { 1 } }".to_owned();
+        let diagnostics =
+            collect_lsp_workspace_diagnostics(&driver, &documents, Some(&invalid_project));
+        let warning = diagnostics[&module_uri]
+            .diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == "K5003")
+            .expect("unopened dependency lint");
+        assert_eq!(
+            warning.primary_source.as_ref().unwrap().package_identity(),
+            Some("example/math@1.0.0")
+        );
+        let captured = warning.primary_source.as_ref().unwrap().text();
+        let range = warning.primary_span.as_ref().unwrap().byte_range.unwrap();
+        assert_eq!(
+            &captured[range.start as usize..range.end as usize],
+            "unused"
+        );
+        assert_eq!(
+            lsp_diagnostic_value(warning, "")
+                .pointer("/range/start/character")
+                .and_then(norito::json::Value::as_u64),
+            Some(captured[..range.start as usize].encode_utf16().count() as u64)
+        );
         std::fs::remove_dir_all(root).expect("remove LSP project root");
+    }
+    #[test]
+    fn lsp_diagnostics_project_scalar_columns_and_captured_related_sources_to_utf16() {
+        let source = SourceFile::new(SourceId(0), "file:///日本語.ko", "金庫😀x\n次😀y");
+        let primary = SourceSpan {
+            package_identity: None,
+            source: Some(source.name().to_owned()),
+            start: SourcePosition { line: 1, column: 4 },
+            end: SourcePosition { line: 1, column: 5 },
+            byte_range: None,
+        };
+        let mut diagnostic = Diagnostic::error(
+            "K2002",
+            DiagnosticPhase::Resolve,
+            "unresolved x",
+            Some(primary),
+        );
+        diagnostic.labels.push(DiagnosticLabel {
+            span: SourceSpan {
+                package_identity: None,
+                source: Some(source.name().to_owned()),
+                start: SourcePosition { line: 2, column: 3 },
+                end: SourcePosition { line: 2, column: 4 },
+                byte_range: None,
+            },
+            message: "関連する定義 y".to_owned(),
+        });
+        diagnostic
+            .notes
+            .push("この値は現在のスコープにありません。".to_owned());
+        diagnostic.help = Some("使う前に値を宣言してください。".to_owned());
+        diagnostic.capture_source(&source);
+        let rendered = lsp_diagnostic_value(&diagnostic, "the editor has a newer buffer");
+        assert_eq!(rendered.pointer("/range"), Some(&lsp_range(0, 4, 0, 5)));
+        assert_eq!(
+            rendered.pointer("/relatedInformation/0/location/range"),
+            Some(&lsp_range(1, 3, 1, 4))
+        );
+        assert_eq!(
+            rendered
+                .pointer("/message")
+                .and_then(norito::json::Value::as_str),
+            Some(
+                "unresolved x\n\nnote: この値は現在のスコープにありません。\n\nhelp: 使う前に値を宣言してください。"
+            )
+        );
+        assert_eq!(
+            rendered
+                .pointer("/relatedInformation/0/message")
+                .and_then(norito::json::Value::as_str),
+            Some("関連する定義 y")
+        );
+        assert_eq!(
+            lsp_source_position("", &SourcePosition { line: 3, column: 9 }),
+            (2, 8)
+        );
     }
     #[test]
     fn lsp_options_require_one_explicit_project_value() {

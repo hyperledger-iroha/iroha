@@ -6,7 +6,16 @@ use crate::{account::AccountId, asset::id::AssetDefinitionId};
 ///
 /// The canonical Norito frame supplies the V1 schema identity and declared layout. The full
 /// domainless account controller is included; display prefixes and aliases are never key material.
-#[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::Encode,
+    norito::Decode,
+    norito::NoritoSchema,
+    iroha_schema::IntoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::fastpq::FastpqBalanceKeyV1")]
 pub struct FastpqBalanceKeyV1 {
     /// Canonical asset definition identity.

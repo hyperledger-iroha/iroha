@@ -53,4 +53,4 @@ ed25519-dalek = "2.2.0"
 http = { workspace = true }
 
 [package.metadata.maturin]
-name = "iroha_python._crypto"
+name = "iroha_native._crypto"

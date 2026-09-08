@@ -27,7 +27,7 @@ pub const DYNAMIC_ACCESS_HINT_KEY_TYPES_V1: &[&str] = &[
     "Name",
 ];
 /// Exact V1 sources of a statically proven dynamic-access bound.
-pub const DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1: &[&str] = &["range", "take"];
+pub const DYNAMIC_ACCESS_HINT_BOUND_KINDS_V1: &[&str] = &["page", "take"];
 /// Exact keywords and compiler-reserved state declaration names.
 pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "authorize",
@@ -73,7 +73,11 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "Option",
     "Result",
     "List",
+    "ListError",
+    "NumericError",
     "StateMap",
+    "StateCursor",
+    "StatePage",
     "Secret",
     "AccountView",
     "AssetView",
@@ -87,8 +91,12 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "SoracloudRequest",
     "SoracloudResponse",
     "state_map_get",
+    "__kotodama_state_page",
+    "__kotodama_state_take",
     "__kotodama_list_len",
     "__kotodama_list_get",
+    "__kotodama_list_set",
+    "__kotodama_list_push",
     "__kotodama_list_try_set",
     "__kotodama_list_try_push",
     "__kotodama_list_pop",
@@ -96,6 +104,8 @@ pub const DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1: &[&str] = &[
     "__kotodama_list_take",
     "__kotodama_list_enumerate",
     "__kotodama_decimal_div_round",
+    "__kotodama_decimal_mul_div_round",
+    "__kotodama_quantity_mul_div_round",
     "__kotodama_quantity_div_round",
     "__kotodama_quantity_ratio_round",
     "__kotodama_decimal_to_int_trunc",
@@ -133,7 +143,7 @@ impl fmt::Display for DynamicAccessHintV1Error {
                 "base_key must be `state:` followed by one canonical state declaration identifier"
             }
             Self::KeyType => "key_type must be an active Kotodama V1 StateMap key type",
-            Self::BoundKind => "bound_kind must be exactly `range` or `take`",
+            Self::BoundKind => "bound_kind must be exactly `page` or `take`",
             Self::MaxKeys => "max_keys must be in 1..=64",
         })
     }
@@ -244,7 +254,7 @@ mod tests {
             "ledger:Orders",
         ] {
             assert_eq!(
-                validate_dynamic_access_hint_v1(&hint(invalid, "int", "range", 1)),
+                validate_dynamic_access_hint_v1(&hint(invalid, "int", "page", 1)),
                 Err(DynamicAccessHintV1Error::BaseKey),
                 "{invalid:?} must reject"
             );
@@ -254,12 +264,12 @@ mod tests {
     fn aliases_unknown_values_and_out_of_range_bounds_reject() {
         for invalid in ["Int", "Numeric", "Amount", "json", "AccountID", " int"] {
             assert_eq!(
-                validate_dynamic_access_hint_v1(&hint("state:Orders", invalid, "range", 1)),
+                validate_dynamic_access_hint_v1(&hint("state:Orders", invalid, "page", 1)),
                 Err(DynamicAccessHintV1Error::KeyType),
                 "{invalid:?} must reject"
             );
         }
-        for invalid in ["", "loop", "Take", "range ", "bounded"] {
+        for invalid in ["", "loop", "Take", "page ", "range", "bounded"] {
             assert_eq!(
                 validate_dynamic_access_hint_v1(&hint("state:Orders", "int", invalid, 1)),
                 Err(DynamicAccessHintV1Error::BoundKind),

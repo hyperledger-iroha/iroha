@@ -1,4 +1,4 @@
-//! Bounded test-only model artifact adapters for the fixed SHAKE candidate.
+//! Bounded offline model artifact adapters for the fixed SHAKE candidate.
 //!
 //! Public expectations and all AXT context come from the caller. Transport facts
 //! are exact-compared before any child proof is decoded. One enclosing Norito
@@ -133,6 +133,7 @@ fn finish_artifact<V: CompactTransferValue>(
 }
 
 /// Offline candidate identity only; the production qualification registry stays empty.
+#[cfg(test)]
 pub(in crate::backend) fn diagnostic_profile_id() -> FastpqCompactProfileIdV1 {
     profile_id_for::<u64>()
 }
@@ -177,27 +178,46 @@ fn profile_id_for<V: CompactTransferValue>() -> FastpqCompactProfileIdV1 {
 
 /// Verify ordinary model bytes under the fixed candidate and caller-expected inputs.
 /// No artifact field selects proof semantics or a protocol implementation.
+#[cfg(test)]
 pub(in crate::backend) fn verify_ordinary_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_ordinary_artifact_for::<u64>(bytes, expected, limits)
+    verify_ordinary_artifact_for::<u64>(bytes, expected, None, limits)
 }
 
 /// Verify a complete ordinary QuantityValueV1 artifact under its fixed profile.
 /// The caller supplies expected inputs; advertised metadata cannot select a format.
+#[cfg(test)]
 pub(in crate::backend) fn verify_quantity_ordinary_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_ordinary_artifact_for::<FastpqQuantityUnits>(bytes, expected, limits)
+    verify_ordinary_artifact_for::<FastpqQuantityUnits>(bytes, expected, None, limits)
+}
+
+/// Verify the fixed quantity route with an independently expected complete statement digest.
+/// This mandatory normal-library input is checked before carrier or child verification.
+pub(in crate::backend) fn verify_bound_quantity_ordinary_artifact(
+    bytes: &[u8],
+    expected: &PublicIO,
+    expected_statement_digest: [u8; 32],
+    limits: ArtifactLimits,
+) -> Result<VerifiedArtifact, ArtifactError> {
+    verify_ordinary_artifact_for::<FastpqQuantityUnits>(
+        bytes,
+        expected,
+        Some(expected_statement_digest),
+        limits,
+    )
 }
 
 fn verify_ordinary_artifact_for<V: CompactTransferValue>(
     bytes: &[u8],
     expected: &PublicIO,
+    expected_statement_digest: Option<[u8; 32]>,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
     norito::core::with_decode_limits_scope(limits.total_decode, || {
@@ -216,6 +236,11 @@ fn verify_ordinary_artifact_for<V: CompactTransferValue>(
                     &artifact.statement,
                     limits.public_statement.max_public_bytes,
                 )?;
+                if expected_statement_digest.is_some_and(|expected| digest != expected) {
+                    return Err(Error::PublicIoMismatch {
+                        field: "compact_artifact_public_statement_digest",
+                    });
+                }
                 let bundle = verify_shake_transfer_bundle(
                     prepared,
                     expected,
@@ -239,29 +264,50 @@ fn verify_ordinary_artifact_for<V: CompactTransferValue>(
 
 /// Verify AXT model bytes against every independently supplied caller expectation.
 /// The artifact cannot substitute its own binding, mirrors, metadata or preimages.
+#[cfg(test)]
 pub(in crate::backend) fn verify_axt_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_axt_artifact_for::<u64>(bytes, expected, context, limits)
+    verify_axt_artifact_for::<u64>(bytes, expected, None, context, limits)
 }
 
 /// Verify a complete AXT QuantityValueV1 artifact with independent caller context.
 /// All binding, mirrors and remote preimages remain mandatory under this route.
+#[cfg(test)]
 pub(in crate::backend) fn verify_quantity_axt_artifact(
     bytes: &[u8],
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
-    verify_axt_artifact_for::<FastpqQuantityUnits>(bytes, expected, context, limits)
+    verify_axt_artifact_for::<FastpqQuantityUnits>(bytes, expected, None, context, limits)
+}
+
+/// Verify the fixed AXT quantity route with a mandatory independent statement digest.
+/// All AXT context and complete statement identity remain caller expectations.
+pub(in crate::backend) fn verify_bound_quantity_axt_artifact(
+    bytes: &[u8],
+    expected: &PublicIO,
+    expected_statement_digest: [u8; 32],
+    context: AxtVerificationContext<'_>,
+    limits: ArtifactLimits,
+) -> Result<VerifiedArtifact, ArtifactError> {
+    verify_axt_artifact_for::<FastpqQuantityUnits>(
+        bytes,
+        expected,
+        Some(expected_statement_digest),
+        context,
+        limits,
+    )
 }
 
 fn verify_axt_artifact_for<V: CompactTransferValue>(
     bytes: &[u8],
     expected: &PublicIO,
+    expected_statement_digest: Option<[u8; 32]>,
     context: AxtVerificationContext<'_>,
     limits: ArtifactLimits,
 ) -> Result<VerifiedArtifact, ArtifactError> {
@@ -282,6 +328,11 @@ fn verify_axt_artifact_for<V: CompactTransferValue>(
                     &artifact.statement,
                     limits.public_statement.max_public_bytes,
                 )?;
+                if expected_statement_digest.is_some_and(|expected| digest != expected) {
+                    return Err(Error::PublicIoMismatch {
+                        field: "compact_artifact_public_statement_digest",
+                    });
+                }
                 let bundle = verify_shake_axt_transfer_bundle(
                     prepared,
                     expected,

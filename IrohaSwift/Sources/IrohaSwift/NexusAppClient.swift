@@ -892,7 +892,7 @@ private enum SwiftNexusTransferPayloadEncoder {
             guard trimmed.utf8.elementsEqual(value.utf8) else {
                 throw CanonicalNoritoError.invalidAccountId(value)
             }
-            let address = try AccountAddress.parseEncodedSwiftOnly(
+            let address = try AccountAddress.parseCanonicalI105(
                 trimmed,
                 expectedPrefix: accountChainDiscriminant
             )

@@ -128,9 +128,9 @@ fn write_diagnostic_tables(out_dir: &Path) {
     let explanations = parse_versioned_table(
         DIAGNOSTIC_EXPLANATIONS_SPEC_PATH,
         DIAGNOSTIC_EXPLANATIONS_ASSET,
-        "kotodama-diagnostic-explanations-v1\t235",
+        "kotodama-diagnostic-explanations-v1\t247",
         &["code", "phase", "summary", "help"],
-        235,
+        247,
     );
     let mut seen_codes = BTreeSet::new();
     let mut generated = String::from(

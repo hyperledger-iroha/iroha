@@ -12,7 +12,7 @@
             }
 
             fn score(Ledger entry) -> int {
-                var value = read_counter(entry);
+                var value = read_counter(entry: entry);
                 if (entry.flag) {
                     value = value + 1;
                 }
@@ -21,7 +21,7 @@
 
             kotoage fn main() -> int authorize("WriteState") {
                 ledger = Ledger { counter: 7, flag: true };
-                return score(ledger);
+                return score(entry: ledger);
             }
         }
     

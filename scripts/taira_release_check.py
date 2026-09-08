@@ -55,6 +55,21 @@ STAGES = (
         "taira_public_reset::host::tests::process_runner_deadline_kills_descendant_holding_output_pipes",
         "taira_public_reset::host::tests::process_runner_enforces_one_absolute_timeout",
         "taira_public_reset::host::tests::process_runner_handles_child_that_closes_stdin_early",
+        "taira_public_reset::host::tests::process_runner_preserves_rejection_after_child_closes_stdin",
+        "taira_public_reset::host::tests::process_runner_deadline_reaps_child_after_stdin_closure",
+    )),
+    ("canonical receipt namespace", (
+        "taira_public_reset::host::tests::host_receipt_names_cover_every_action_and_artifact_role",
+        "taira_public_reset::host::tests::receipt_names_reject_path_control_and_unicode_escape",
+    )),
+    ("systemd operation and validator lifecycle", (
+        "taira_public_reset::host::tests::manager_evidence_stays_pending_until_exact_terminal_job",
+        "taira_public_reset::host::tests::manager_recovery_uses_immutable_mutation_deadline_but_observes_terminal_state",
+        "taira_public_reset::host::tests::manager_evidence_rejects_wrong_or_duplicate_exec_identity",
+        "taira_public_reset::host::tests::manager_evidence_accepts_captured_systemd_numeric_exit_after_deadline",
+        "taira_public_reset::host::tests::manager_evidence_requires_exact_numeric_exit_code_and_status",
+        "taira_public_reset::host::tests::manager_evidence_keeps_unexecuted_and_running_operations_pending",
+        "taira_public_reset::host::tests::validator_restart_evidence_requires_running_service_and_settled_job",
     )),
     ("read-only host preflight", (
         "taira_public_reset::host::tests::preflight_dispatches_five_read_only_hosts_without_runtime_custody",

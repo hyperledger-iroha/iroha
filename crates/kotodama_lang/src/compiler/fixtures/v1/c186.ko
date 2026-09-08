@@ -5,7 +5,7 @@
             }
 
             view fn exposed(int value) -> int {
-                return identity(value);
+                return identity(value: value);
             }
         }
         

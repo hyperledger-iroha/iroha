@@ -17,10 +17,10 @@ seiyaku ShortCircuitAcceptance {
   }
 
   kotoage fn run() -> int authorize("WriteState") {
-    let false_and = false && bump(true);
-    let true_or = true || bump(false);
-    let true_and = true && bump(true);
-    let false_or = false || bump(true);
+    let false_and = false && bump(result: true);
+    let true_or = true || bump(result: false);
+    let true_and = true && bump(result: true);
+    let false_or = false || bump(result: true);
 
     require(!false_and, LogicError::FalseAndChangedResult);
     require(true_or, LogicError::TrueOrChangedResult);

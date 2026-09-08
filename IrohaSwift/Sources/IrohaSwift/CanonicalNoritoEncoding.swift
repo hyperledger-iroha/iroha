@@ -817,7 +817,7 @@ public enum CanonicalNorito {
         do {
             let chainDiscriminant = try AccountAddress
                 .inspectI105NetworkPrefix(trimmed).chainDiscriminant
-            let address = try AccountAddress.parseEncodedSwiftOnly(
+            let address = try AccountAddress.parseCanonicalI105(
                 trimmed,
                 expectedPrefix: chainDiscriminant
             )

@@ -1,6 +1,6 @@
 //! Canonical identity validation and framed encoding for Python instruction codecs.
 
-use iroha_data_model::{domain::DomainId, name::Name};
+use iroha_data_model::{account::AccountAddress, domain::DomainId, name::Name};
 use pyo3::{
     Bound, Py, PyResult, Python,
     exceptions::{PyRuntimeError, PyValueError},
@@ -15,6 +15,87 @@ pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(encode_account_id_v1, module)?)?;
     module.add_function(wrap_pyfunction!(encode_domain_id_v1, module)?)?;
     module.add_function(wrap_pyfunction!(encode_name_v1, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_account_address_v1, module)?)?;
+    module.add_function(wrap_pyfunction!(parse_account_address_v1, module)?)?;
+    module.add_function(wrap_pyfunction!(render_account_address_v1, module)?)?;
+    module.add_function(wrap_pyfunction!(validate_sccp_account_id_v1, module)?)?;
+    Ok(())
+}
+
+fn canonical_address(bytes: &[u8]) -> PyResult<AccountAddress> {
+    if bytes.is_empty() || bytes.len() > MAX_IDENTITY_FRAME_BYTES {
+        return Err(PyValueError::new_err(
+            "account address must contain 1..67108864 bytes",
+        ));
+    }
+    AccountAddress::from_canonical_bytes(bytes)
+        .map_err(|error| PyValueError::new_err(format!("invalid account address: {error}")))
+}
+
+/// Admit complete canonical address bytes using the Rust key and policy owner.
+#[pyo3::pyfunction]
+#[pyo3(name = "_validate_account_address_v1")]
+fn validate_account_address_v1(bytes: &[u8]) -> PyResult<()> {
+    canonical_address(bytes).map(|_| ())
+}
+
+/// Decode one exact I105 literal into its complete canonical controller bytes.
+#[pyo3::pyfunction]
+#[pyo3(name = "_parse_account_address_v1", signature = (value, expected_discriminant=None))]
+fn parse_account_address_v1(
+    py: Python<'_>,
+    value: &str,
+    expected_discriminant: Option<u16>,
+) -> PyResult<Py<PyBytes>> {
+    super::require_non_blank_unpadded(value, "account address")?;
+    if value.len() > MAX_IDENTITY_FRAME_BYTES {
+        return Err(PyValueError::new_err(
+            "account address literal exceeds the V1 byte limit",
+        ));
+    }
+    let address = AccountAddress::parse_encoded(value, expected_discriminant)
+        .map_err(|error| PyValueError::new_err(format!("invalid account address: {error}")))?;
+    let canonical_hex = address
+        .canonical_hex()
+        .map_err(|error| PyValueError::new_err(format!("invalid account address: {error}")))?;
+    let bytes = hex::decode(canonical_hex.strip_prefix("0x").ok_or_else(|| {
+        PyRuntimeError::new_err("Rust account address omitted its canonical hex prefix")
+    })?)
+    .map_err(|error| PyRuntimeError::new_err(format!("Rust account address hex: {error}")))?;
+    Ok(Py::from(PyBytes::new(py, &bytes)))
+}
+
+/// Render admitted canonical controller bytes using an exact chain discriminant.
+#[pyo3::pyfunction]
+#[pyo3(name = "_render_account_address_v1")]
+fn render_account_address_v1(bytes: &[u8], discriminant: u16) -> PyResult<String> {
+    canonical_address(bytes)?
+        .to_i105_for_discriminant(discriminant)
+        .map_err(|error| PyValueError::new_err(format!("invalid account address: {error}")))
+}
+
+/// Admit the SCCP V1 bare AccountId layout: exactly COMPACT_LEN and a u16 byte ceiling.
+#[pyo3::pyfunction]
+#[pyo3(name = "_validate_sccp_account_id_v1")]
+fn validate_sccp_account_id_v1(payload: &[u8]) -> PyResult<()> {
+    if payload.is_empty() || payload.len() > usize::from(u16::MAX) {
+        return Err(PyValueError::new_err(
+            "SCCP AccountId must contain 1..65535 bytes",
+        ));
+    }
+    let frame = norito::core::frame_bare_with_header_flags::<iroha_data_model::account::AccountId>(
+        payload, 0x02,
+    )
+    .map_err(|error| PyValueError::new_err(format!("invalid SCCP AccountId: {error}")))?;
+    let account: iroha_data_model::account::AccountId = norito::decode_canonical(&frame)
+        .map_err(|error| PyValueError::new_err(format!("invalid SCCP AccountId: {error}")))?;
+    let encoded = norito::encode_canonical(&account)
+        .map_err(|error| PyValueError::new_err(format!("invalid SCCP AccountId: {error}")))?;
+    if encoded != frame {
+        return Err(PyValueError::new_err(
+            "SCCP AccountId must use exact canonical COMPACT_LEN bytes",
+        ));
+    }
     Ok(())
 }
 
@@ -121,6 +202,10 @@ mod tests {
             assert!(module.hasattr("_encode_account_id_v1").unwrap());
             assert!(module.hasattr("_encode_domain_id_v1").unwrap());
             assert!(module.hasattr("_encode_name_v1").unwrap());
+            assert!(module.hasattr("_validate_account_address_v1").unwrap());
+            assert!(module.hasattr("_parse_account_address_v1").unwrap());
+            assert!(module.hasattr("_render_account_address_v1").unwrap());
+            assert!(module.hasattr("_validate_sccp_account_id_v1").unwrap());
 
             let members = (1..=2)
                 .map(|seed| {
@@ -138,6 +223,30 @@ mod tests {
             );
             assert!(encode_account_id_v1(py, &format!(" {literal}")).is_err());
             assert!(encode_account_id_v1(py, "merchant@banka.paynet").is_err());
+            let raw = parse_account_address_v1(py, &literal, None).unwrap();
+            validate_account_address_v1(raw.as_bytes(py)).unwrap();
+            let rendered = render_account_address_v1(raw.as_bytes(py), 753).unwrap();
+            assert_eq!(
+                parse_account_address_v1(py, &rendered, Some(753))
+                    .unwrap()
+                    .as_bytes(py),
+                raw.as_bytes(py)
+            );
+            assert!(parse_account_address_v1(py, &format!(" {rendered}"), Some(753)).is_err());
+            assert!(parse_account_address_v1(py, &rendered, Some(1)).is_err());
+            assert!(super::super::PyAccountId::new(&rendered).is_ok());
+            assert!(super::super::PyAccountId::new(&format!("{rendered} ")).is_err());
+            let _layout = norito::core::DecodeFlagsGuard::enter(0x02);
+            let (bare, flags) = norito::codec::encode_with_header_flags(&account);
+            assert_eq!(flags, 0x02);
+            validate_sccp_account_id_v1(&bare).unwrap();
+            assert!(validate_sccp_account_id_v1(b"x").is_err());
+            let mut trailing = bare;
+            trailing.push(0);
+            assert!(validate_sccp_account_id_v1(&trailing).is_err());
+            let identity = [vec![2, 0, 1, 32, 1], vec![0; 31]].concat();
+            assert!(validate_account_address_v1(&identity).is_err());
+            assert!(render_account_address_v1(&identity, 753).is_err());
 
             let (canonical, frame) = encode_domain_id_v1(py, "例え.SORA").unwrap();
             assert_eq!(canonical, "xn--r8jz45g.sora");

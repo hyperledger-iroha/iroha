@@ -210,7 +210,7 @@ test("bundle-size targets retain audited ceilings, lazy baselines, and browser g
       },
       {
         label: "kotodamaCompiler/browser.js (browser)",
-        limitKb: 53,
+        limitKb: 56,
         lazyChunks: [],
         forbidNodeInputs: true,
         forbidGlobalBuffer: true,
@@ -299,7 +299,7 @@ test("bundle-size check gates the remote Kotodama compiler browser export", () =
   assert.match(target.entryPoint, /dist[/\\]kotodamaCompiler[/\\]browser\.js$/u);
   assert.equal(target.forbidNodeInputs, true);
   assert.equal(target.forbidGlobalBuffer, true);
-  assert.equal(target.limitKb, 53);
+  assert.equal(target.limitKb, 56);
 });
 
 test("browser graph guard detects every forbidden Node-only edge", () => {
@@ -692,7 +692,7 @@ test("remaining bundle targets retain exact pinned-esbuild baselines", async () 
   }
 });
 
-test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer shims", async () => {
+test("Kotodama compiler browser export stays below 56 KiB without Node or Buffer shims", async () => {
   const target = BUNDLE_TARGETS.find(({ label }) =>
     label.includes("kotodamaCompiler/browser"),
   );
@@ -714,11 +714,14 @@ test("Kotodama compiler browser export stays below 53 KiB without Node or Buffer
     findForbiddenBrowserInputs(Object.keys(result.metafile.inputs)),
     [],
   );
-  assert.equal(Object.keys(result.metafile.inputs).length, 6);
-  assert.equal(result.outputFiles[0].contents.byteLength, 52_928);
-  assert.ok(
-    result.outputFiles[0].contents.byteLength <= Math.floor(52_156 * 1.05),
-    "Kotodama compiler browser export regressed more than 5% from the protected pre-reset tree",
+  // This first-release baseline includes nominal errors, Unit, and cursor/page
+  // validation; it replaces the earlier flat-error compiler surface only.
+  assert.equal(Object.keys(result.metafile.inputs).length, 7);
+  assert.equal(result.outputFiles[0].contents.byteLength, 56_823);
+  assert.equal(
+    target.limitKb * 1024 - result.outputFiles[0].contents.byteLength,
+    521,
+    "Kotodama compiler browser ceiling must retain its audited V1 headroom",
   );
   assert.ok(result.outputFiles[0].contents.byteLength <= target.limitKb * 1024);
   assert.doesNotMatch(

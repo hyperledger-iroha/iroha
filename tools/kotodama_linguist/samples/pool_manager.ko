@@ -15,11 +15,17 @@ seiyaku PoolManager {
         "Admin"
     ) {
         let quantity zero = 0;
-        let reserve_a = ReserveA.ensure(pool, zero);
-        let reserve_b = ReserveB.ensure(pool, zero);
+        let reserve_a = ReserveA.ensure(key: pool, default: zero);
+        let reserve_b = ReserveB.ensure(key: pool, default: zero);
         let pool_account = PoolAccount.get(pool).unwrap_or(trader);
+        // Sample settlement policy: round the asset-B quote down to 18 decimal places.
         let quoted = (reserve_a == zero) ? amount_b : min_value(
-            a: reserve_b * (amount_a / reserve_a),
+            a: reserve_b.mul_div_round(
+                multiplier: decimal::from_quantity(amount_a),
+                divisor: decimal::from_quantity(reserve_a),
+                scale: 18,
+                mode: Rounding::floor,
+            ),
             b: amount_b,
         );
         if (quoted > zero) {

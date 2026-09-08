@@ -5026,6 +5026,7 @@ include!("v2_lifecycle_work_registry_recovered_wal.rs");
 include!("v2_lifecycle_work_registry_validate_recovery.rs");
 include!("v2_lifecycle_work_registry_validate_execution.rs");
 include!("v2_lifecycle_work_registry_validate_sidecar.rs");
+include!("v2_lifecycle_work_registry_body_retirement.rs");
 #[cfg(test)]
 mod tests {
     include!("tests/v2_lifecycle_work_registry_00.rs");

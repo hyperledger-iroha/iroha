@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::governance::verify_tally(1);
+  ledger::governance::verify_tally(request: 1);
 }
 
 }

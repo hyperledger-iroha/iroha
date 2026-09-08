@@ -129,7 +129,7 @@ _REPLY_WRITER_DEADLINE_NETWORK_TEST_SHA256 = {
 
 _REPLY_WRITER_DEADLINE_WORKER_ITEM_SHA256 = {
     "PendingExactOutput::handoff_applied_height_to_durable_reconstruction": (
-        "e78d702c927524d363d59d1a098bfd6649d6d399e3f0252faac9d500c77b5a80"
+        "250dd7b0180479d98870b90703d5ba1ee522d4b25b00719fe337f67713332da0"
     ),
     "PendingExactOutput::drive_with_budget_ack_and_durable_history": (
         "334da253eab1b11913ae2f909d162c31f8e2022c4f11fa3aec141b3644a44d52"

@@ -4,7 +4,7 @@ seiyaku ListRuntime {
                     let _contains = values.contains(1);
                     let _first = values.get(0);
                     var List<int, 4> copy = [];
-                    let _pushed = copy.try_push(1);
+                    let _ = copy.try_push(1);
                     return length;
                 }
                 #[test]

@@ -2303,9 +2303,9 @@ class HttpClientTransport private constructor(
 
     private fun sameCanonicalHijiriQuoteAccount(left: String, right: String): Boolean =
         try {
-            AccountAddress.parseEncodedIgnoringCurveSupport(left, null).canonicalBytes
+            AccountAddress.parseEncoded(left, null).canonicalBytes
                 .contentEquals(
-                    AccountAddress.parseEncodedIgnoringCurveSupport(right, null).canonicalBytes,
+                    AccountAddress.parseEncoded(right, null).canonicalBytes,
                 )
         } catch (_: AccountAddressException) {
             false

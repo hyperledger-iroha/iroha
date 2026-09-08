@@ -472,7 +472,12 @@ fn row_usage_json(usage: RowUsage) -> Result<norito::json::Value> {
         ("total_rows", json_value(&usage.total_rows)?),
         ("transfer_rows", json_value(&usage.transfer_rows)?),
         ("non_transfer_rows", json_value(&usage.non_transfer_rows())?),
+        ("mint_rows", json_value(&usage.mint_rows)?),
+        ("burn_rows", json_value(&usage.burn_rows)?),
+        ("role_grant_rows", json_value(&usage.role_grant_rows)?),
+        ("role_revoke_rows", json_value(&usage.role_revoke_rows)?),
         ("meta_set_rows", json_value(&usage.meta_set_rows)?),
+        ("permission_rows", json_value(&usage.permission_rows)?),
         ("transfer_ratio", json_value(&ratio)?),
     ])
 }
@@ -558,7 +563,33 @@ mod tests {
             "release evidence must not round away the count-derived ratio"
         );
     }
-
+    #[test]
+    fn row_usage_json_preserves_every_operation_and_permission_count() {
+        let value = row_usage_json(RowUsage {
+            total_rows: 21,
+            transfer_rows: 1,
+            mint_rows: 2,
+            burn_rows: 3,
+            role_grant_rows: 4,
+            role_revoke_rows: 5,
+            meta_set_rows: 6,
+            permission_rows: 9,
+        })
+        .expect("serialize all row counts");
+        for (field, expected) in [
+            ("total_rows", 21),
+            ("transfer_rows", 1),
+            ("non_transfer_rows", 20),
+            ("mint_rows", 2),
+            ("burn_rows", 3),
+            ("role_grant_rows", 4),
+            ("role_revoke_rows", 5),
+            ("meta_set_rows", 6),
+            ("permission_rows", 9),
+        ] {
+            assert_eq!(value[field].as_u64(), Some(expected), "{field}");
+        }
+    }
     #[derive(Parser, Debug)]
     #[command(no_binary_name = true)]
     struct Wrapper {

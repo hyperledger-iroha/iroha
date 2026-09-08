@@ -41,6 +41,9 @@ public enum ToriiEntrypointValueTypeNodeKindV1
     Result,
     List,
     Leaf,
+    Unit,
+    Error,
+    StateCursor,
 }
 
 /// <summary>Named product metadata for a flat boundary-schema node.</summary>
@@ -75,6 +78,10 @@ public sealed record class ToriiEntrypointValueTypeNodeV1
     public ToriiEntrypointListTypeNodeV1? ListValue { get; init; }
 
     public ToriiEntrypointValueKindV1? LeafKind { get; init; }
+
+    public ToriiContractErrorTypeDescriptor? ErrorValue { get; init; }
+
+    public ToriiEntrypointValueKindV1? CursorKeyKind { get; init; }
 }
 
 /// <summary>Exact flat preorder value schema used at a Kotodama V1 public boundary.</summary>
@@ -281,14 +288,27 @@ public sealed record class ToriiContractStateDescriptor
     public string TypeName { get; init; } = string.Empty;
 }
 
-/// <summary>One stable application error code.</summary>
-public sealed record class ToriiContractErrorCodeDescriptor
+/// <summary>One named nonzero code within a nominal error type.</summary>
+public sealed record class ToriiContractErrorVariantDescriptor
 {
-    public string Namespace { get; init; } = string.Empty;
-
     public string Name { get; init; } = string.Empty;
 
     public uint Code { get; init; }
+}
+
+/// <summary>Exact package and source identity with its canonical finite variant schema.</summary>
+public sealed record class ToriiContractErrorTypeDescriptor
+{
+    private ToriiContractErrorVariantDescriptor[] variants = Array.Empty<ToriiContractErrorVariantDescriptor>();
+
+    public string Identity { get; init; } = string.Empty;
+
+    public IReadOnlyList<ToriiContractErrorVariantDescriptor> Variants
+    {
+        get => ToriiListSnapshots.CopyRequired(variants);
+        init => variants = ToriiListSnapshots.CopyNonNullItems(value, nameof(Variants))
+            ?? Array.Empty<ToriiContractErrorVariantDescriptor>();
+    }
 }
 
 /// <summary>One localized text in a <c>kotoba</c> table.</summary>
@@ -330,7 +350,7 @@ public sealed record class ToriiContractManifest
     private string? abiHash;
     private ToriiContractEntrypointDescriptor[]? entrypoints;
     private ToriiContractStateDescriptor[]? states;
-    private ToriiContractErrorCodeDescriptor[]? errorCodes;
+    private ToriiContractErrorTypeDescriptor[]? errorTypes;
     private ToriiContractKotobaTranslationEntry[]? kotoba;
 
     public string? SeiyakuName { get; init; }
@@ -367,12 +387,12 @@ public sealed record class ToriiContractManifest
         init => states = value is null ? null : ToriiListSnapshots.CopyNonNullItems(value, nameof(States));
     }
 
-    public IReadOnlyList<ToriiContractErrorCodeDescriptor>? ErrorCodes
+    public IReadOnlyList<ToriiContractErrorTypeDescriptor>? ErrorTypes
     {
-        get => errorCodes is null ? null : ToriiListSnapshots.CopyRequired(errorCodes);
-        init => errorCodes = value is null
+        get => errorTypes is null ? null : ToriiListSnapshots.CopyRequired(errorTypes);
+        init => errorTypes = value is null
             ? null
-            : ToriiListSnapshots.CopyNonNullItems(value, nameof(ErrorCodes));
+            : ToriiListSnapshots.CopyNonNullItems(value, nameof(ErrorTypes));
     }
 
     public IReadOnlyList<ToriiContractKotobaTranslationEntry>? Kotoba

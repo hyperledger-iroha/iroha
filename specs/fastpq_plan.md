@@ -7,7 +7,7 @@ only witnessed transfers; the supply, permission, and metadata tree relations
 remain incomplete and those operations fail closed in that profile. Authenticated
 AXT statements separately admit witnessed transfers or opaque metadata carriers.
 
-Cryptographic qualification note (2026-09-05): production qualification is
+Cryptographic qualification note (2026-09-08): production qualification is
 unavailable. The current 136-query record does not meet even the corrected
 arithmetic model after accounting for the conservative quotient degree and
 four-point FRI terminal. The selected completion target is succinct verification;
@@ -16,6 +16,17 @@ established. Fp4 aggregation and a joint trace/quotient FRI degree check are
 implemented; coherent fixture and test validation remains in progress. See [the production readiness goals](fastpq_production_readiness.md)
 and Appendix A. Independent protocol-specific qROM and final-artifact digest
 review remain mandatory.
+
+The selected bounded-opening quantity verifier is now available to normal callers
+through `fastpq_prover::offline_compact`. Fresh ordinary/AXT single and ordered
+two-segment proofs verify without their private witnesses, and both complete
+artifact routes pass cumulative-limit and independent-context tests. The fixed
+candidate uses 375 queries from 401 sampler candidates. Its 909-test normal library
+suite passes; this does not qualify the cryptography or supply authenticated source
+expectations. Node admission still uses replay. Execution resource ownership, D7
+publication, finalized source binding, AXT authorization and release qualification
+remain required; the [current evidence](fastpq_production_readiness.md#current-optimizations-integration)
+records the exact scope and remaining gates.
 
 ## Implemented release boundary
 

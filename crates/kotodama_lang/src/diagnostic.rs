@@ -2,6 +2,7 @@
 use crate::source::{SourceFile, TextRange};
 use norito::json::{self, Value};
 use std::{error::Error as StdError, fmt};
+mod source_rendering;
 /// Maximum number of diagnostics returned for one compilation request.
 ///
 /// The cap bounds memory and renderer work for adversarial source files while
@@ -180,6 +181,12 @@ pub struct Diagnostic {
     pub help: Option<String>,
     /// Optional machine-applicable replacement.
     pub fix: Option<DiagnosticFix>,
+    /// Immutable source captured when the primary diagnostic was produced.
+    ///
+    /// Source text is presentation data and is never added to JSON/SARIF records.
+    pub primary_source: Option<SourceFile>,
+    /// Immutable source for each related label, in label order.
+    pub label_sources: Vec<Option<SourceFile>>,
 }
 impl Diagnostic {
     /// Construct a native compiler error with an explicit stable code and span.
@@ -201,6 +208,8 @@ impl Diagnostic {
             notes: Vec::new(),
             help,
             fix: None,
+            primary_source: None,
+            label_sources: Vec::new(),
         }
     }
     /// Construct a non-fatal warning with an explicit stable code and span.
@@ -222,7 +231,34 @@ impl Diagnostic {
             notes: Vec::new(),
             help,
             fix: None,
+            primary_source: None,
+            label_sources: Vec::new(),
         }
+    }
+    /// Retain source text for matching primary and related locations.
+    ///
+    /// Capture precedes frontend path remapping, so later rendering cannot accidentally
+    /// display an edited file or a different dependency with the same logical path.
+    pub fn capture_source(&mut self, source: &SourceFile) {
+        let owns = |span: &SourceSpan| {
+            span.source.as_deref() == Some(source.name())
+                && span.package_identity.as_deref() == source.package_identity()
+        };
+        if self.primary_span.as_ref().is_some_and(owns) {
+            self.primary_source = Some(source.clone());
+        }
+        self.label_sources.resize(self.labels.len(), None);
+        for (label, captured) in self.labels.iter().zip(&mut self.label_sources) {
+            if owns(&label.span) {
+                *captured = Some(source.clone());
+            }
+        }
+    }
+    /// Capture the immutable source while constructing this diagnostic.
+    #[must_use]
+    pub fn with_source(mut self, source: &SourceFile) -> Self {
+        self.capture_source(source);
+        self
     }
     /// Return the canonical JSON representation used by every diagnostic renderer.
     pub fn to_json_value(&self) -> Value {
@@ -383,6 +419,12 @@ pub struct DiagnosticBundle {
     pub diagnostics: Vec<Diagnostic>,
 }
 impl DiagnosticBundle {
+    /// Attach one immutable source snapshot to every matching diagnostic location.
+    pub fn capture_source(&mut self, source: &SourceFile) {
+        for diagnostic in &mut self.diagnostics {
+            diagnostic.capture_source(source);
+        }
+    }
     /// Build a bundle and normalize it into deterministic source order.
     pub fn new(mut diagnostics: Vec<Diagnostic>) -> Self {
         fn compare(left: &Diagnostic, right: &Diagnostic) -> std::cmp::Ordering {
@@ -468,8 +510,11 @@ impl DiagnosticBundle {
                 if let Some(range) = span.byte_range {
                     let _ = write!(output, " [bytes {}..{}]", range.start, range.end);
                 }
+                if let Some(source) = &diagnostic.primary_source {
+                    source_rendering::render(&mut output, source, span);
+                }
             }
-            for label in &diagnostic.labels {
+            for (index, label) in diagnostic.labels.iter().enumerate() {
                 let source = display_source_span(&label.span);
                 let _ = write!(
                     output,
@@ -482,6 +527,9 @@ impl DiagnosticBundle {
                 );
                 if let Some(range) = label.span.byte_range {
                     let _ = write!(output, " [bytes {}..{}]", range.start, range.end);
+                }
+                if let Some(Some(source)) = diagnostic.label_sources.get(index) {
+                    source_rendering::render(&mut output, source, &label.span);
                 }
             }
             for note in &diagnostic.notes {
@@ -714,7 +762,7 @@ mod tests {
             "E_INVALID_IDENTIFIER",
             "E_RESERVED_DECLARATION",
             "E_INVALID_MODULE_ITEM",
-            "E_DUPLICATE_ERROR_CODE",
+            "E_CONFLICTING_ERROR_TYPE",
             "E_DUPLICATE_MESSAGE",
             "E_INVALID_SOURCE_PATH",
             "E_DUPLICATE_SOURCE",
@@ -834,6 +882,40 @@ mod tests {
             human.contains("seiyaku.ko:3:5-3:6"),
             "human renderer must preserve the full primary and label range"
         );
+    }
+    #[test]
+    fn captured_source_survives_frontend_path_remapping() {
+        let source = SourceFile::new(
+            crate::source::SourceId(0),
+            "source.ko",
+            "let 日本 = missing;\n",
+        );
+        let start = source.text().find("missing").expect("fixture name") as u32;
+        let mut diagnostic = Diagnostic::error(
+            "K2002",
+            DiagnosticPhase::Resolve,
+            "unknown name",
+            Some(SourceSpan::from_range(
+                &source,
+                TextRange::new(start, start + 7),
+            )),
+        );
+        diagnostic.labels.push(DiagnosticLabel {
+            span: SourceSpan::from_range(&source, TextRange::new(4, 10)),
+            message: "binding is here".to_owned(),
+        });
+        diagnostic.capture_source(&source);
+        diagnostic
+            .primary_span
+            .as_mut()
+            .expect("primary span")
+            .source = Some("file:///new/source.ko".to_owned());
+        let bundle = DiagnosticBundle::single(diagnostic);
+        let human = bundle.render_human();
+        assert!(human.contains("let 日本 = missing;\n      |            ^^^^^^^"));
+        assert!(human.contains("let 日本 = missing;\n      |     ^^^^"));
+        assert!(human.contains("file:///new/source.ko"));
+        assert!(!bundle.render_json().expect("JSON").contains("let 日本"));
     }
     #[test]
     fn bundle_order_and_fanout_are_deterministic_and_bounded() {

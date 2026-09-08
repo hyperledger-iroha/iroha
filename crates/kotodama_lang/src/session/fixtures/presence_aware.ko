@@ -13,6 +13,6 @@
                 }
 
                 view fn echo(int value) -> int {
-                    return get(value);
+                    return get(value: value);
                 }
             }

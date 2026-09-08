@@ -16,11 +16,11 @@ seiyaku MixedTailRuntime {
   }
 
   view fn run() -> int {
-    via_if(true)
-      + via_if(false)
-      + via_if_let(Option::some(4))
-      + via_if_let(Option::none)
-      + via_match(Option::some(5))
-      + via_match(Option::none)
+    via_if(flag: true)
+      + via_if(flag: false)
+      + via_if_let(value: Option::some(4))
+      + via_if_let(value: Option::none)
+      + via_match(value: Option::some(5))
+      + via_match(value: Option::none)
   }
 }

@@ -240,7 +240,7 @@ object ConnectCrypto {
         return try {
             val canonicalAccount = requireCanonicalI105Address(accountId ?: "", "accountId")
             val signatory = AccountAddress.fromI105(canonicalAccount, null)
-                .singleKeyPayloadIgnoringCurveSupport() ?: return false
+                .singleKeyPayload() ?: return false
             if (signatory.curveId != 0x01 ||
                 !Ed25519PublicKeyAdmission.isValid(signatory.publicKey)
             ) {

@@ -6,12 +6,13 @@
 //! result is returned. The outer canonical frame is a distinct prototype schema.
 //!
 //! TODO: Qualify aggregate protocol security, resources and authenticated caller
-//! integration before production use. This test-only bundle does not change any
+//! integration before production use. This offline bundle does not change any
 //! production default or grant source-state authority or finality.
 
+#[cfg(test)]
 use fastpq_isi::FASTPQ_FINAL_V1;
 use iroha_data_model::privacy::GoldilocksDigest384V1;
-use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload};
+use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
 
 use super::compact_value_domain::CompactTransferValue;
 use super::{
@@ -48,6 +49,7 @@ pub(super) struct BundleLimits {
     pub(super) segment: VerifyLimits,
 }
 
+#[cfg(test)]
 impl Default for BundleLimits {
     fn default() -> Self {
         let segment = VerifyLimits::default();
@@ -160,6 +162,7 @@ impl VerifiedBundle {
 }
 
 /// Verify the complete ordered ordinary bundle using only caller public facts.
+#[cfg(test)]
 pub(super) fn verify_transfer_bundle<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -205,10 +208,12 @@ fn verify_transfer_bundle_with<V: CompactTransferValue>(
             MAX_DECODE_DEPTH,
         ),
         || {
-            let wire = if verifier.is_shake() {
-                decode_shake_wire(bytes, count, limits, verifier)?
-            } else {
-                decode_wire(bytes, count, limits)?
+            let wire = match verifier {
+                #[cfg(test)]
+                SharedVerifier::Prototype => decode_wire(bytes, count, limits)?,
+                SharedVerifier::ShakeCandidate { .. } => {
+                    decode_shake_wire(bytes, count, limits, verifier)?
+                }
             };
             let batch = PublicTransferBatch::new(
                 prepared,
@@ -252,6 +257,7 @@ fn verify_transfer_bundle_with<V: CompactTransferValue>(
 /// The outer carrier never supplies execution authority, AXT binding/mirrors or
 /// source endpoints. Every segment statement binds the original whole AXT facts
 /// and remote occurrence list; a successful prefix is never returned.
+#[cfg(test)]
 pub(super) fn verify_axt_transfer_bundle<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
@@ -306,10 +312,12 @@ fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
             MAX_DECODE_DEPTH,
         ),
         || {
-            let wire = if verifier.is_shake() {
-                decode_shake_axt_wire(bytes, count, limits, verifier)?
-            } else {
-                decode_axt_wire(bytes, count, limits)?
+            let wire = match verifier {
+                #[cfg(test)]
+                SharedVerifier::Prototype => decode_axt_wire(bytes, count, limits)?,
+                SharedVerifier::ShakeCandidate { .. } => {
+                    decode_shake_axt_wire(bytes, count, limits, verifier)?
+                }
             };
             let batch = AxtTransferBatch::new(
                 prepared,
@@ -392,6 +400,7 @@ pub(super) fn verify_shake_axt_transfer_bundle<V: CompactTransferValue>(
 }
 
 /// Encode a bounded candidate ordinary carrier; child proof validity is separate.
+#[cfg(test)]
 pub(super) fn encode_shake_wire(
     wire: &ShakeBundleWire,
     count: usize,
@@ -417,6 +426,7 @@ pub(super) fn encode_shake_wire(
 }
 
 /// Encode a bounded nominal candidate AXT carrier without replacing caller context.
+#[cfg(test)]
 pub(super) fn encode_shake_axt_wire(
     wire: &ShakeAxtBundleWire,
     count: usize,
@@ -494,6 +504,7 @@ fn decode_shake_axt_wire(
 }
 
 /// Serialize a bounded carrier; this helper does not verify its child frames.
+#[cfg(test)]
 pub(super) fn encode_wire(
     wire: &BundleWire,
     expected_count: usize,
@@ -507,6 +518,7 @@ pub(super) fn encode_wire(
 }
 
 /// Encode a bounded nominal AXT carrier without verifying its child frames.
+#[cfg(test)]
 pub(super) fn encode_axt_wire(
     wire: &AxtBundleWire,
     expected_count: usize,
@@ -528,6 +540,7 @@ pub(super) fn encode_axt_wire(
     Ok(norito::encode_canonical(wire)?)
 }
 
+#[cfg(test)]
 fn decode_wire(bytes: &[u8], expected_count: usize, limits: BundleLimits) -> Result<BundleWire> {
     let wire = norito::decode_canonical_with_limits(
         bytes,
@@ -537,6 +550,7 @@ fn decode_wire(bytes: &[u8], expected_count: usize, limits: BundleLimits) -> Res
     Ok(wire)
 }
 
+#[cfg(test)]
 fn decode_axt_wire(
     bytes: &[u8],
     expected_count: usize,
@@ -556,6 +570,7 @@ fn decode_axt_wire(
     Ok(wire)
 }
 
+#[cfg(test)]
 fn wire_decode_limits(
     bytes: &[u8],
     expected_count: usize,
@@ -599,6 +614,7 @@ fn wire_decode_limits_for(
     ))
 }
 
+#[cfg(test)]
 fn preflight_count(count: usize, limits: BundleLimits) -> Result<()> {
     preflight_count_for(count, limits, SharedVerifier::Prototype)
 }
@@ -624,6 +640,7 @@ fn preflight_count_for(count: usize, limits: BundleLimits, verifier: SharedVerif
     check_limit("max_bundle_queries", queries, limits.max_total_queries)
 }
 
+#[cfg(test)]
 fn preflight_wire(wire: &BundleWire, expected_count: usize, limits: BundleLimits) -> Result<()> {
     preflight_wire_parts(
         wire.version,
@@ -634,6 +651,7 @@ fn preflight_wire(wire: &BundleWire, expected_count: usize, limits: BundleLimits
     )
 }
 
+#[cfg(test)]
 fn preflight_wire_parts(
     version: u16,
     intermediate_roots: &[[u8; 32]],

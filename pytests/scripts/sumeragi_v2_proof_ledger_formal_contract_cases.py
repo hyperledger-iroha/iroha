@@ -390,6 +390,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_lifecycle_work_registry_validate_recovery.rs'),
         Path('v2_lifecycle_work_registry_validate_execution.rs'),
         Path('v2_lifecycle_work_registry_validate_sidecar.rs'),
+        Path('v2_lifecycle_work_registry_body_retirement.rs'),
         Path('tests/v2_lifecycle_work_registry_00.rs'),
         Path('tests/v2_lifecycle_work_registry_01.rs'),
         Path('tests/v2_lifecycle_work_registry_02.rs'),
@@ -508,6 +509,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('v2_effects_recovered_fetch_and_pipeline_types.rs'),
         Path('v2_effects_recovered_lifecycle_output_service.rs'),
         Path('v2_effects_lifecycle_admission_settlement.rs'),
+        Path('v2_effects_body_retirement.rs'),
         Path('v2_effects_runner_decision_cleanup_plan.rs'),
         Path('v2_effects_test_consumer_wrappers.rs'),
         Path('tests/v2_effects_main_00.rs'),
@@ -517,6 +519,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('tests/v2_effects_main_04.rs'),
         Path('tests/v2_effects_main_05.rs'),
         Path('tests/v2_effects_03_locked_body_and_sidecar.rs'),
+        Path('tests/v2_effects_certified_body_fence_supersession.rs'),
     ),
     Path('crates/iroha_core/src/sumeragi/v2_lane_work.rs'): (
         Path('v2_lane_work/canonical_executed_block_application_repair.rs'),
@@ -4115,6 +4118,10 @@ def test_production_trace_certificate_rejects_direct_release_stutter_drift(
         (
             "state_replay_post_carrier_evidence_repair",
             "IN_FLIGHT_FIRST_RELEASE_ACTION_REPAIR_POST_CARRIER",
+        ),
+        (
+            "replica_queue_disposition_observation",
+            "IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE",
         ),
     ),
 )

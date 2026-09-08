@@ -14,7 +14,7 @@
 
             kotoage fn main() -> int authorize("WriteState") {
                 Entries[Name::parse("alice")] = Entry { amount: 41, active: true };
-                return read_score(Name::parse("alice"));
+                return read_score(key: Name::parse("alice"));
             }
         }
     

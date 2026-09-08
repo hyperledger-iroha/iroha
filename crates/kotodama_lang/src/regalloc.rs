@@ -574,12 +574,16 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
         }
         Instr::NumericRound {
             dividend,
+            multiplier,
             divisor,
             scale,
             mode,
             ..
         } => {
             visit(*dividend);
+            if let Some(multiplier) = multiplier {
+                visit(*multiplier);
+            }
             visit(*divisor);
             visit(*scale);
             visit(*mode);
@@ -640,6 +644,13 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
             }
         }
         Instr::CoreQueryGet { key, .. } => visit(*key),
+        Instr::StateScan {
+            base, after, limit, ..
+        } => {
+            visit(*base);
+            visit(*after);
+            visit(*limit);
+        }
         Instr::CoreQueryPage { offset, limit, .. } => {
             visit(*offset);
             visit(*limit);
@@ -1135,12 +1146,16 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         NumericRound {
             dividend,
+            multiplier,
             divisor,
             scale,
             mode,
             ..
         } => {
             f(*dividend);
+            if let Some(multiplier) = multiplier {
+                f(*multiplier);
+            }
             f(*divisor);
             f(*scale);
             f(*mode);
@@ -1169,15 +1184,21 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             entrypoint,
             payload,
             ..
-        }
-        | ExpectRejectAs {
-            actor,
-            entrypoint,
-            payload,
         } => {
             f(*actor);
             f(*entrypoint);
             f(*payload);
+        }
+        ExpectRejectAs {
+            actor,
+            entrypoint,
+            payload,
+            expectation,
+        } => {
+            f(*actor);
+            f(*entrypoint);
+            f(*payload);
+            f(*expectation);
         }
         ActorAccount { actor, .. } | ActorPublicKey { actor, .. } => f(*actor),
         ActorSign { actor, message, .. } => {
@@ -1307,8 +1328,13 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*right);
         }
         Assert { cond } => f(*cond),
-        AbortIf { cond, code } => {
+        AbortIf {
+            cond,
+            descriptor,
+            code,
+        } => {
             f(*cond);
+            f(*descriptor);
             f(*code);
         }
         Info { msg } => f(*msg),
@@ -1581,14 +1607,11 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             f(*value);
         }
         StateDel { path } => f(*path),
-        StateKeys {
-            prefix,
-            offset,
-            limit,
-            ..
+        StateScan {
+            base, after, limit, ..
         } => {
-            f(*prefix);
-            f(*offset);
+            f(*base);
+            f(*after);
             f(*limit);
         }
         StateMapKeyAt {
@@ -1764,7 +1787,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Load64Imm { dest, .. }
         | Instr::Load64 { dest, .. }
         | Instr::StateGet { dest, .. }
-        | Instr::StateKeys { dest, .. }
         | Instr::StateMapKeyAt { dest, .. }
         | Instr::StateValueEncode { dest, .. }
         | Instr::StateHas { dest, .. }
@@ -1901,6 +1923,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::CallMulti { .. }
         | Instr::InvokeEntrypointAsMulti { .. }
         | Instr::MapLoadPair { .. }
+        | Instr::StateScan { .. }
         | Instr::CoreQueryPage { .. } => None,
     }
 }
@@ -1910,6 +1933,18 @@ pub(crate) fn visit_instr_defs<F: FnMut(Temp)>(instruction: &Instr, mut visit: F
         visit(dest);
     }
     match instruction {
+        Instr::StateScan {
+            page,
+            next,
+            count,
+            examined,
+            ..
+        } => {
+            visit(*page);
+            visit(*next);
+            visit(*count);
+            visit(*examined);
+        }
         Instr::MapLoadPair {
             dest_key, dest_val, ..
         } => {

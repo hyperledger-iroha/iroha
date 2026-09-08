@@ -1,4 +1,4 @@
-"""First-release structural and canonical-I105 AccountId tests."""
+"""First-release Rust-owned key admission and canonical-I105 AccountId tests."""
 
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-# Load the dependency-free internal module without importing the package root;
-# the latter also imports the optional-at-test-time ``blake3`` dependency.
+# Load the transport adapter without unrelated HTTP imports; identity operations
+# still require the real packaged native owner, with no codec substitute.
 MODULE_PATH = Path(__file__).resolve().parents[1] / "_account_id.py"
 MODULE_SPEC = importlib.util.spec_from_file_location(
     "iroha_torii_client_account_id_test_module", MODULE_PATH
@@ -64,6 +64,39 @@ SM2_DISTID = b"1234567812345678"
 SM2_PAYLOAD = len(SM2_DISTID).to_bytes(2, "big") + SM2_DISTID + SM2_GENERATOR
 
 
+def _fixture_i105(raw: bytes) -> str:
+    # Only test data construction: admit no identity and bypass no production guard.
+    # This independently computes a checksum-valid envelope so parse negatives test
+    # key admission rather than accidentally failing the checksum first.
+    value = int.from_bytes(raw, "big")
+    digits = []
+    while value:
+        value, digit = divmod(value, 105)
+        digits.append(digit)
+    digits.reverse()
+    values = []
+    bits = accumulator = 0
+    for byte in raw:
+        accumulator = (accumulator << 8) | byte
+        bits += 8
+        while bits >= 5:
+            bits -= 5
+            values.append((accumulator >> bits) & 31)
+    if bits:
+        values.append((accumulator << (5 - bits)) & 31)
+    hrp = "snx"
+    expanded = [ord(c) >> 5 for c in hrp] + [0] + [ord(c) & 31 for c in hrp]
+    checksum = 1
+    for value in expanded + values + [0] * 6:
+        top = checksum >> 25
+        checksum = ((checksum & 0x1FFFFFF) << 5) ^ value
+        for bit, generator in enumerate((0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)):
+            if (top >> bit) & 1:
+                checksum ^= generator
+    checksum ^= 0x2BC830A3
+    return "sora" + "".join(ACCOUNT_ID.I105_ALPHABET[digit] for digit in digits + [(checksum >> (5 * (5 - i))) & 31 for i in range(6)])
+
+
 def test_canonical_i105_parser_accepts_valid_single_key_account() -> None:
     assert ACCOUNT_ID.encode_i105_account_id(VALID_SINGLE_CANONICAL, 0x02F1) == VALID_SINGLE_I105
     assert (
@@ -101,35 +134,20 @@ def test_canonical_i105_parser_accepts_extended_mldsa_single_key() -> None:
     assert ACCOUNT_ID.decode_canonical_i105_account_id(encoded) == canonical
 
 
-@pytest.mark.parametrize(
-    ("curve", "public_key"),
-    [
-        (1, ED25519_RFC8032_PUBLIC_KEY_1),
-        (2, bytes([0xA5]) * 1_952),
-        (3, bytes([0x11]) * 48),
-        (4, SECP256K1_GENERATOR),
-        (5, bytes([0x12]) * 96),
-        (10, bytes([0x13]) * 64),
-        (11, bytes([0x14]) * 64),
-        (12, bytes([0x15]) * 64),
-        (13, bytes([0x16]) * 128),
-        (14, bytes([0x17]) * 128),
-        (15, SM2_PAYLOAD),
-    ],
-)
-def test_structural_parser_covers_the_closed_release_curve_inventory(
-    curve: int, public_key: bytes
-) -> None:
-    canonical = _single_controller(curve, public_key)
+@pytest.mark.parametrize("item", json.loads((Path(__file__).resolve().parents[3] / "fixtures/account/multisig_wire_v1.json").read_text())["positive"][:11], ids=lambda item: item["name"])
+def test_native_parser_covers_the_closed_release_curve_inventory(item) -> None:
+    canonical = bytes.fromhex(item["canonical_address_hex"])
+    curve = canonical[2]
+    public_key = canonical[4 if canonical[1] == 0 else 5:]
+    assert _single_controller(curve, public_key) == canonical
     encoded = ACCOUNT_ID.encode_i105_account_id(canonical, 0x02F1)
-
     assert ACCOUNT_ID.decode_canonical_i105_account_id(encoded) == canonical
 
 
 def test_canonical_i105_parser_rejects_noncanonical_sentinel_rerender() -> None:
     noncanonical = "n753" + VALID_SINGLE_I105.removeprefix("sora")
 
-    with pytest.raises(ValueError, match="canonical rendering"):
+    with pytest.raises(ValueError, match="unsupported account address format"):
         ACCOUNT_ID.decode_canonical_i105_account_id(noncanonical)
 
 
@@ -137,20 +155,24 @@ def test_extended_controller_tag_rejects_a_compact_key_length() -> None:
     canonical = (
         b"\x02\x02\x01\x00\x20" + ED25519_RFC8032_PUBLIC_KEY_1
     )
-    encoded = ACCOUNT_ID.encode_i105_account_id(canonical, 0x02F1)
+    encoded = _fixture_i105(canonical)
+    with pytest.raises(ValueError):
+        ACCOUNT_ID.encode_i105_account_id(canonical, 0x02F1)
 
-    with pytest.raises(ValueError, match="compact controller tag"):
+    with pytest.raises(ValueError, match="invalid length"):
         ACCOUNT_ID.decode_canonical_i105_account_id(encoded)
 
 
 def test_checksum_valid_zero_key_literal_is_not_an_account_id() -> None:
     malformed = b"\x02\x00\x01\x20" + bytes(32)
     assert (
-        ACCOUNT_ID.encode_i105_account_id(malformed, 0x02F1)
+        _fixture_i105(malformed)
         == CHECKSUM_VALID_ZERO_KEY_I105
     )
 
-    with pytest.raises(ValueError, match="invalid public-key material"):
+    with pytest.raises(ValueError, match="invalid public key"):
+        ACCOUNT_ID.encode_i105_account_id(malformed, 0x02F1)
+    with pytest.raises(ValueError, match="invalid public key"):
         ACCOUNT_ID.decode_canonical_i105_account_id(CHECKSUM_VALID_ZERO_KEY_I105)
 
 
@@ -179,7 +201,7 @@ def test_parser_matches_shared_ed25519_admission_vectors() -> None:
     [
         (
             b"\x0a\x00\x01\x20" + ED25519_RFC8032_PUBLIC_KEY_1,
-            "header class",
+            "unsupported account address format",
         ),
         (VALID_SINGLE_CANONICAL + b"\x00", "trailing"),
         (
@@ -196,7 +218,7 @@ def test_parser_matches_shared_ed25519_admission_vectors() -> None:
             b"\x0a\x01\x01\x00\x02\x00\x02"
             + _member(ED25519_RFC8032_PUBLIC_KEY_1, 1)
             + _member(ED25519_RFC8032_PUBLIC_KEY_2, 1),
-            "canonical order",
+            "canonical key order",
         ),
         (
             b"\x0a\x01\x01\x00\x01\x00\x02"
@@ -219,7 +241,8 @@ def test_parser_matches_shared_ed25519_admission_vectors() -> None:
 def test_controller_invariants_reject_checksum_valid_malformed_literals(
     canonical: bytes, message: str
 ) -> None:
-    encoded = ACCOUNT_ID.encode_i105_account_id(canonical, 0x02F1)
-
+    encoded = _fixture_i105(canonical)
+    with pytest.raises(ValueError, match=message):
+        ACCOUNT_ID.encode_i105_account_id(canonical, 0x02F1)
     with pytest.raises(ValueError, match=message):
         ACCOUNT_ID.decode_canonical_i105_account_id(encoded)

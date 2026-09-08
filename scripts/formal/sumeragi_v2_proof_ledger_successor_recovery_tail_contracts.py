@@ -2418,7 +2418,7 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
             "select_blocked_ordinary_lane_local_ingress(receiver, permit)?",
             "inbound.message().is_lane_local()",
             "return Err(V2RunnerError::Service(",
-            "lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)",
+            "lane_work.accept_lane_message_with_ingress_ownership(inbound, active_view)?",
             "Ok(true)",
         ),
     )
@@ -2458,34 +2458,8 @@ if !selected_ingress_is_certified_body_response(cut.selected_occurrence().inboun
         ),
     )
     decided_serve = item("runner", "commit_certified_serve")
-    require_order(
-        "runner",
-        decided_serve,
-        "terminal certified Serve guarded durable response",
-        (
-            "self.take_inbound()?",
-            "self.take_bound_leader_wire()?",
-            "message.validate_version()",
-            "ConsensusMessageV2Payload::CertifiedBodyRequest(request)",
-            "scope.permits_height(request.round.height, self.executor.context().height)",
-            "if !scope.permits_subject(request.subject, self.decided_subject)",
-            "mark_leader_wire_volatile(self.receiver, &ingress_ownership)?",
-            "return Ok(())",
-            "let Some(reply_routes) = reply_routes",
-            "reply_routes.semantic_target() != &sender",
-            "let response_peer = sender.clone()",
-            "let terminal_ownership = ingress_ownership.clone()",
-            "serve_block_sync_while_guarded(",
-            "block_sync_server.serve_historical_body(kura, request, &sender, local_key)",
-            "post_durable_history_response_on_reply_routes_with_permit(",
-            "response_peer",
-            "reply_routes",
-            "ingress_ownership",
-            "response",
-            "permit",
-            "finalize_bound_block_sync_serve(",
-            "|| mark_leader_wire_volatile(self.receiver, &terminal_ownership)",
-        ),
+    _require_decided_certified_serve_source_contracts(
+        paths["runner"], decided_serve, errors,
     )
     decided_drain = item("runner", "drain_decided_lane_recovery_ingress")
     require_order(

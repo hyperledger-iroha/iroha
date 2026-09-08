@@ -20,6 +20,10 @@ macro_rules! define_v1_keywords {
                 _ => return None,
             })
         }
+        pub(crate) fn v1_keyword_spelling(kind: &TokenKind) -> Option<&'static str> {
+            $(if matches!(kind, TokenKind::$variant) { return Some($spelling); })+
+            None
+        }
         #[cfg(test)]
         const V1_KEYWORD_TOKEN_KINDS: &[TokenKind] = &[$(TokenKind::$variant),+];
     };
@@ -105,6 +109,8 @@ pub enum TokenKind {
     ColonColon,
     Percent,
     Dot,
+    /// Explicit rest marker in a named struct pattern.
+    DotDot,
     LBracket,
     RBracket,
     Question,
@@ -274,6 +280,7 @@ fn lexical_diagnostic(
             byte_range: Some(range),
         }),
     )
+    .with_source(source)
 }
 fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, String> {
     let lowered = match kind {
@@ -351,6 +358,7 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         SyntaxKind::Colon => TokenKind::Colon,
         SyntaxKind::ColonColon => TokenKind::ColonColon,
         SyntaxKind::Dot => TokenKind::Dot,
+        SyntaxKind::DotDot => TokenKind::DotDot,
         SyntaxKind::Question => TokenKind::Question,
         SyntaxKind::Hash => TokenKind::Hash,
         SyntaxKind::ErrorToken => {
@@ -373,6 +381,8 @@ fn lower_token_kind(kind: SyntaxKind, text: &str) -> Result<Option<TokenKind>, S
         | SyntaxKind::NamedArgument
         | SyntaxKind::StructLiteral
         | SyntaxKind::StructLiteralField
+        | SyntaxKind::StructPattern
+        | SyntaxKind::StructPatternField
         | SyntaxKind::ListExpr
         | SyntaxKind::ListComprehension
         | SyntaxKind::JsonObjectExpr
@@ -606,6 +616,8 @@ mod tests {
     fn canonical_keyword_table_drives_lexer_tokens_without_drift() {
         assert_eq!(V1_KEYWORDS.len(), V1_KEYWORD_TOKEN_KINDS.len());
         for (spelling, expected) in V1_KEYWORDS.iter().zip(V1_KEYWORD_TOKEN_KINDS) {
+            let canonical = super::v1_keyword_spelling(expected).expect("keyword reverse spelling");
+            assert_eq!(super::v1_keyword_kind(canonical).as_ref(), Some(expected));
             let tokens = lex(spelling).expect("canonical keyword must lex");
             assert_eq!(&tokens[0].kind, expected, "keyword `{spelling}`");
         }

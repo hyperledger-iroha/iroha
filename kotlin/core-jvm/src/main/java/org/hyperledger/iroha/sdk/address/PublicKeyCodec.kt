@@ -8,7 +8,13 @@ class PublicKeyPayload(
     @JvmField val curveId: Int,
     keyBytes: ByteArray,
 ) {
-    private val _keyBytes: ByteArray = keyBytes.copyOf()
+    private val _keyBytes: ByteArray = keyBytes.also {
+        AccountAddressNative.requireSingleSize(curveId, it.size)
+    }.copyOf()
+
+    init {
+        AccountAddressNative.validateSingle(curveId, _keyBytes)
+    }
 
     val keyBytes: ByteArray get() = _keyBytes.copyOf()
 }
@@ -20,7 +26,8 @@ class PublicKeyPayload(
  * when the literal is not a valid multihash key.
  */
 fun decodePublicKeyLiteral(literal: String?): PublicKeyPayload? {
-    if (literal.isNullOrBlank()) return null
+    if (literal == null || literal.length > 2 * (AccountAddressNative.MAX_PUBLIC_KEY_BYTES + 20) + 32) return null
+    if (literal.isBlank()) return null
     if (isPublicKeyLiteralWhitespace(literal.first()) || isPublicKeyLiteralWhitespace(literal.last())) return null
     var encoded = literal
     var algorithmPrefix: String? = null
@@ -34,19 +41,25 @@ fun decodePublicKeyLiteral(literal: String?): PublicKeyPayload? {
     if ((encoded.length and 1) == 1) return null
     if (!encoded.matches(Regex("(?i)[0-9a-f]+"))) return null
     val bytes = hexToBytes(encoded)
-    val code = Varint.decode(bytes, 0)
-    val len = Varint.decode(bytes, code.nextOffset())
-    if (len.value() > Int.MAX_VALUE) return null
+    val code: Varint.DecodeResult
+    val len: Varint.DecodeResult
+    try {
+        code = Varint.decode(bytes, 0)
+        len = Varint.decode(bytes, code.nextOffset())
+    } catch (_: IllegalArgumentException) {
+        return null
+    }
+    if (len.value() !in 1..AccountAddressNative.MAX_PUBLIC_KEY_BYTES.toLong()) return null
     val payloadOffset = len.nextOffset()
     val payloadLength = len.value().toInt()
-    if (payloadOffset + payloadLength != bytes.size) return null
+    if (payloadLength != bytes.size - payloadOffset) return null
     val curveId = curveIdForMultihashCode(code.value())
     if (curveId < 0) return null
     if (algorithmPrefix != null && algorithmPrefix != algorithmForCurveId(curveId)) return null
     val keyBytes = bytes.copyOfRange(payloadOffset, payloadOffset + payloadLength)
     if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) return null
     if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(keyBytes)) return null
-    return PublicKeyPayload(curveId, keyBytes)
+    return admitDecodedPublicKey(curveId, keyBytes)
 }
 
 private fun isPublicKeyLiteralWhitespace(character: Char): Boolean =
@@ -54,35 +67,39 @@ private fun isPublicKeyLiteralWhitespace(character: Char): Boolean =
 
 /** Encodes the multihash public key literal from the given curve id and key bytes. */
 fun encodePublicKeyMultihash(curveId: Int, keyBytes: ByteArray): String {
+    AccountAddressNative.requireSingleSize(curveId, keyBytes.size)
+    val ownedKey = keyBytes.copyOf()
     val codeVarint = Varint.encode(multihashCodeForCurveId(curveId))
-    requireValidPublicKeyForEncoding(curveId, keyBytes)
-    val lenVarint = Varint.encode(keyBytes.size.toLong())
-    val builder = StringBuilder((codeVarint.size + lenVarint.size + keyBytes.size) * 2)
+    requireValidPublicKeyForEncoding(curveId, ownedKey)
+    val lenVarint = Varint.encode(ownedKey.size.toLong())
+    val builder = StringBuilder((codeVarint.size + lenVarint.size + ownedKey.size) * 2)
     appendHexLower(builder, codeVarint)
     appendHexLower(builder, lenVarint)
-    appendHexUpper(builder, keyBytes)
+    appendHexUpper(builder, ownedKey)
     return builder.toString()
 }
 
 /** Encodes a public key as Iroha's compact Norito payload (`algorithm tag || key bytes`). */
 fun compactPublicKeyPayload(curveId: Int, keyBytes: ByteArray): ByteArray {
+    AccountAddressNative.requireSingleSize(curveId, keyBytes.size)
+    val ownedKey = keyBytes.copyOf()
     val tag = compactAlgorithmTagForCurveId(curveId)
-    requireValidPublicKeyForEncoding(curveId, keyBytes)
-    val payload = ByteArray(1 + keyBytes.size)
+    requireValidPublicKeyForEncoding(curveId, ownedKey)
+    val payload = ByteArray(1 + ownedKey.size)
     payload[0] = tag.toByte()
-    System.arraycopy(keyBytes, 0, payload, 1, keyBytes.size)
+    System.arraycopy(ownedKey, 0, payload, 1, ownedKey.size)
     return payload
 }
 
 /** Decodes Iroha's compact Norito public-key payload. */
 fun decodeCompactPublicKeyPayload(payload: ByteArray?): PublicKeyPayload? {
-    if (payload == null || payload.isEmpty()) return null
+    if (payload == null || payload.size !in 2..AccountAddressNative.MAX_PUBLIC_KEY_BYTES + 1) return null
     val curveId = curveIdForCompactAlgorithmTag(payload[0].toInt() and 0xFF)
     if (curveId < 0) return null
     val keyBytes = payload.copyOfRange(1, payload.size)
     if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(keyBytes)) return null
     if (curveId == 0x02 && !MlDsaPublicKeyAdmission.isValid(keyBytes)) return null
-    return PublicKeyPayload(curveId, keyBytes)
+    return admitDecodedPublicKey(curveId, keyBytes)
 }
 
 /** Returns the canonical algorithm label for the curve id, or `null` when unknown. */
@@ -102,12 +119,20 @@ fun algorithmForCurveId(curveId: Int): String? = when (curveId) {
 }
 
 private fun requireValidPublicKeyForEncoding(curveId: Int, keyBytes: ByteArray) {
+    AccountAddressNative.validateSingle(curveId, keyBytes)
     require(curveId != 0x01 || Ed25519PublicKeyAdmission.isValid(keyBytes)) {
         "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup"
     }
     require(curveId != 0x02 || MlDsaPublicKeyAdmission.isValid(keyBytes)) {
         "invalid ML-DSA-65 public key: expected ${MlDsaPublicKeyAdmission.PUBLIC_KEY_LENGTH} nonzero bytes"
     }
+}
+
+private fun admitDecodedPublicKey(curveId: Int, keyBytes: ByteArray): PublicKeyPayload? = try {
+    PublicKeyPayload(curveId, keyBytes)
+} catch (error: AccountAddressException) {
+    if (error.code == AccountAddressErrorCode.NATIVE_BRIDGE_UNAVAILABLE) throw error
+    null
 }
 
 private fun compactAlgorithmTagForCurveId(curveId: Int): Int = when (curveId) {

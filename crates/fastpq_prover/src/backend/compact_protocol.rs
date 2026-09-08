@@ -1,6 +1,6 @@
-//! Private single-phase compact AIR proof integration with bounded verification.
+//! Private compact AIR engine for bounded candidate verification.
 //!
-//! This prototype commits complete base-field LDE rows before full-Fp4 column
+//! The test prover commits complete base-field LDE rows before full-Fp4 column
 //! mixing, commits the mixed oracle before independent Fp4 constraint alphas,
 //! then commits the quotient before joint trace/quotient FRI challenges. The
 //! verifier checks only bounded authenticated openings and caller-fixed AIR and
@@ -15,20 +15,28 @@
 
 use fastpq_isi::{FASTPQ_FINAL_V1, GoldilocksDigest384V1 as Digest};
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
-use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload};
+use norito::{NoritoDeserialize, NoritoSerialize};
+#[cfg(test)]
 use rayon::prelude::*;
 
 use super::{
-    AirQuotientDomain, ExecutionMode, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1,
-    JointFriBatch, MerkleNodeCache, MerkleTreeRoleV1, Transcript, build_merkle_levels_with_mode,
-    fixed_domain::FixedTraceDomain, hash_air_composition_leaf, hash_air_trace_row,
-    hash_air_trace_rows_with_mode, hash_fp4_single_leaves_with_role, hash_lde_chunk_fp4,
-    sample_queries,
+    AirQuotientDomain, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1, JointFriBatch,
+    MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
+};
+#[cfg(test)]
+use super::{
+    ExecutionMode, MerkleNodeCache, Transcript, build_merkle_levels_with_mode,
+    hash_air_composition_leaf, hash_air_trace_row, hash_air_trace_rows_with_mode,
+    hash_fp4_single_leaves_with_role, hash_lde_chunk_fp4, sample_queries,
 };
 use crate::{
     Error, Result,
+    proof::{VerifyLimits, compact_fri_support},
+};
+#[cfg(test)]
+use crate::{
     fft::Planner,
-    proof::{FriQueryOpening, PublicIO, VerifyLimits, compact_fri_support},
+    proof::{FriQueryOpening, PublicIO},
 };
 
 #[path = "compact_protocol/shared_openings.rs"]
@@ -36,8 +44,11 @@ pub(super) mod shared_openings;
 
 #[path = "compact_protocol/profile.rs"]
 mod profile;
-use profile::{Binding, Protocol, ProtocolTranscript};
+#[cfg(test)]
+use profile::ProtocolTranscript;
+use profile::{Binding, Protocol};
 
+#[cfg(test)]
 const PROTOCOL_TAG: &str = "fastpq:prototype:compact-single-phase:v1";
 const MAX_CONSTRAINTS: usize = 1024;
 
@@ -55,10 +66,12 @@ pub(super) struct FixedAirSchema {
 }
 
 /// Prepared prover callback; mutable captures may retain per-proof scratch space.
+#[cfg(test)]
 pub(super) type ProverEvaluator<'a> =
     Box<dyn FnMut(usize, u64, &[u64], &[u64]) -> Result<Vec<u64>> + Send + 'a>;
 
 /// Immutable prover preparation shared across jobs; each evaluator owns its scratch.
+#[cfg(test)]
 pub(super) trait PreparedAir: Sync {
     /// Create a worker-local evaluator borrowing only immutable prepared data.
     fn evaluator(&self) -> ProverEvaluator<'_>;
@@ -79,6 +92,7 @@ pub(super) trait FixedAir: Sync {
     /// Evaluate every base-field numerator at x from complete current/next rows.
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>>;
     /// Prepare prover-only acceleration without changing the verifier relation.
+    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>>
     where
         Self: Sized,
@@ -87,10 +101,12 @@ pub(super) trait FixedAir: Sync {
     }
 }
 
+#[cfg(test)]
 struct DirectPrepared<'a, R: FixedAir + ?Sized> {
     relation: &'a R,
 }
 
+#[cfg(test)]
 impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
     fn evaluator(&self) -> ProverEvaluator<'_> {
         Box::new(move |_, point, current, next| self.relation.evaluate(point, current, next))
@@ -98,6 +114,7 @@ impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
 }
 
 /// Private typed proof; its Norito schema is distinct from production ProofV1.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(schema_name = "fastpq_prover::compact_prototype::SinglePhaseProofV1")]
 pub(super) struct CompactProof {
@@ -108,6 +125,7 @@ pub(super) struct CompactProof {
     queries: Vec<CompactQuery>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CompactQuery {
     index: u32,
@@ -123,6 +141,7 @@ struct CompactQuery {
 }
 
 /// Measured successful verification work; no counter depends on a private trace.
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct VerificationWork {
     /// Exact canonical framed proof bytes, counted before cryptographic hashing.
@@ -147,6 +166,7 @@ struct Geometry {
 }
 
 impl Geometry {
+    #[cfg(test)]
     fn new(relation: &impl FixedAir) -> Result<Self> {
         Self::for_protocol(relation, Protocol::Prototype)
     }
@@ -195,6 +215,7 @@ impl Geometry {
 }
 
 /// Reusable committed prover data. It is never constructed by verification.
+#[cfg(test)]
 struct PreparedTrace {
     geometry: Geometry,
     columns: Vec<Vec<u64>>,
@@ -203,11 +224,13 @@ struct PreparedTrace {
     bound_statement: Option<Vec<u8>>,
 }
 
+#[cfg(test)]
 struct CommittedTree {
     levels: Vec<Vec<Digest>>,
     leaf_count: usize,
 }
 
+#[cfg(test)]
 impl CommittedTree {
     fn from_leaves(leaves: &[Digest], role: MerkleTreeRoleV1) -> Result<Self> {
         if leaves.is_empty() || !leaves.len().is_power_of_two() {
@@ -242,15 +265,18 @@ impl CommittedTree {
 }
 
 /// Prove the exact fixed AIR using canonical base subgroup evaluations.
+#[cfg(test)]
 pub(super) fn prove(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<CompactProof> {
     let trace = prepare_trace(relation, columns)?;
     prove_prepared(relation, &trace)
 }
 
+#[cfg(test)]
 fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<PreparedTrace> {
     prepare_trace_for(relation, columns, Protocol::Prototype)
 }
 
+#[cfg(test)]
 fn prepare_trace_for(
     relation: &impl FixedAir,
     columns: &[Vec<u64>],
@@ -310,6 +336,7 @@ fn prepare_trace_for(
     })
 }
 
+#[cfg(test)]
 fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<CompactProof> {
     let geometry = &trace.geometry;
     if relation.schema() != geometry.schema {
@@ -433,6 +460,7 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
 
 // Hash and transcript orchestration differ by descriptor; the fold arithmetic,
 // domain schedule and retained opening owner are shared by both implementations.
+#[cfg(test)]
 fn fold_protocol_layers(
     evaluations: &[GoldilocksFp4V1],
     geometry: &Geometry,
@@ -506,6 +534,7 @@ fn fold_protocol_layers(
 ///
 /// The supplied limits are trusted caller policy. Production defaults remain
 /// 512 KiB; a larger diagnostic envelope must be selected explicitly by tests.
+#[cfg(test)]
 pub(super) fn verify(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -516,6 +545,7 @@ pub(super) fn verify(
     Ok(work)
 }
 
+#[cfg(test)]
 fn verify_recorded(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -632,6 +662,7 @@ fn verify_recorded(
     Ok(())
 }
 
+#[cfg(test)]
 fn preflight(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -755,6 +786,7 @@ fn preflight(
     Ok(bytes)
 }
 
+#[cfg(test)]
 fn initialise_transcript(
     relation: &impl FixedAir,
     geometry: &Geometry,
@@ -783,6 +815,7 @@ fn initialise_transcript(
     Ok(transcript)
 }
 
+#[cfg(test)]
 fn challenges(transcript: &mut Transcript, tag: &str, count: usize) -> Vec<GoldilocksFp4V1> {
     (0..count)
         .map(|index| transcript.challenge_extension(&format!("{tag}:{index}")))
@@ -801,6 +834,7 @@ fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4
     Ok(value)
 }
 
+#[cfg(test)]
 fn fill_row(columns: &[Vec<u64>], index: usize, row: &mut [u64]) {
     for (value, column) in row.iter_mut().zip(columns) {
         *value = column[index];
@@ -811,6 +845,7 @@ fn next_index(index: usize, lde_rows: usize) -> usize {
     (index + FASTPQ_FINAL_V1.fri.blowup_factor as usize) % lde_rows
 }
 
+#[cfg(test)]
 fn authenticate(
     cache: &mut MerkleNodeCache,
     role: MerkleTreeRoleV1,
@@ -869,6 +904,7 @@ fn shape(details: &str) -> Error {
 /// The 680 hash slots are followed by eight independently mixed public digest
 /// limb equalities at fixed export row407. This does not claim a public preimage
 /// or zero knowledge; it demonstrates meaningful public binding in the engine.
+#[cfg(test)]
 pub(super) struct HashDigestAir {
     ledger: super::compact_hash_quotient::CompactHashQuotient,
     public_digest: [u8; 32],
@@ -876,6 +912,7 @@ pub(super) struct HashDigestAir {
     export_point: u64,
 }
 
+#[cfg(test)]
 impl HashDigestAir {
     /// Fix the complete public digest before any proof challenge.
     pub(super) fn new(public_digest: [u8; 32]) -> Result<Self> {
@@ -924,6 +961,7 @@ impl HashDigestAir {
     }
 }
 
+#[cfg(test)]
 impl FixedAir for HashDigestAir {
     fn schema(&self) -> FixedAirSchema {
         FixedAirSchema {
@@ -956,11 +994,13 @@ impl FixedAir for HashDigestAir {
     }
 }
 
+#[cfg(test)]
 struct PreparedHashDigest<'a> {
     relation: &'a HashDigestAir,
     cycle: super::compact_hash_quotient::ProverMaskCycle<'a>,
 }
 
+#[cfg(test)]
 impl PreparedAir for PreparedHashDigest<'_> {
     fn evaluator(&self) -> ProverEvaluator<'_> {
         let mut scratch = self.relation.ledger.evaluation_scratch::<u64>();
@@ -1052,8 +1092,9 @@ mod tests {
             }
         }
         let digest = WireDigest::new([0; 6]).unwrap();
+        // Fp4 payloads are the canonical 32-byte carrier, without struct framing.
         for (rows, width, constraints, expected_bytes) in
-            [(512, 310, 688, 1_762_083), (65_536, 342, 923, 2_865_251)]
+            [(512, 310, 688, 1_737_603), (65_536, 342, 923, 2_826_491)]
         {
             let air = ShapeOnly(FixedAirSchema {
                 trace_rows: rows,
@@ -1208,7 +1249,7 @@ mod tests {
         assert!(work.row_leaves <= 272);
         assert_eq!(work.oracle_leaves, 272);
         assert_eq!(work.terminal_degree_checks, 1);
-        assert!(work.proof_bytes < 1_762_083);
+        assert!(work.proof_bytes < 1_737_603);
         assert!(matches!(
             verify_shared(&air, &shared, VerifyLimits::default()),
             Err(Error::VerifierLimitExceeded {

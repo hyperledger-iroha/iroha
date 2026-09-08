@@ -10,23 +10,29 @@
 //! frame uses the same equations with a caller-fixed SHAKE transcript and hashes.
 //!
 //! TODO: Qualify the selected transcript profile and complete resource envelope
-//! before production admission. This test-only module raises no default limit;
+//! before production admission. The candidate verifier raises no default limit;
 //! sharing Merkle paths does not guarantee the 512 KiB production byte target.
 
-use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
+use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use super::*;
 use crate::backend::{
-    fold_fri_coset, hash_fri_chunk,
-    merkle_multiproof::{MultiproofLimits, MultiproofPlan, SiblingPosition},
-    merkle_node_hash,
+    fold_fri_coset,
+    merkle_multiproof::{MultiproofLimits, MultiproofPlan},
 };
+
+#[cfg(test)]
+use crate::backend::{hash_fri_chunk, merkle_multiproof::SiblingPosition, merkle_node_hash};
 
 #[path = "shared_openings/codec.rs"]
 pub(in crate::backend) mod codec;
 
-/// Canonical complete openings with one sibling frontier per committed oracle.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+/// Internal complete-opening payload shared by candidate verification and test codecs.
+/// Canonical serialization counts its fixed-layout frame; prototype decoding is test-only.
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize)]
+#[cfg_attr(test, derive(NoritoDeserialize))]
 #[norito(schema_name = "fastpq_prover::compact_prototype::SharedProofV1")]
 pub(in crate::backend) struct SharedProof {
     row_root: WireDigest,
@@ -61,6 +67,7 @@ pub(in crate::backend) struct ShakeSharedProof {
 }
 
 impl ShakeSharedProof {
+    #[cfg(test)]
     fn from_shared(proof: SharedProof) -> Self {
         Self {
             row_root: proof.row_root,
@@ -150,6 +157,7 @@ struct Challenges {
 
 // This is deliberately the parent's current sequence verbatim. Shared wire
 // positions/values are not appended: they represent the same committed proof.
+#[cfg(test)]
 fn replay_challenges(
     relation: &impl FixedAir,
     geometry: &Geometry,
@@ -312,6 +320,7 @@ fn exact_frontier(siblings: &[WireDigest], plan: &MultiproofPlan) -> Result<()> 
 /// checked. Selected ancestors are recomputed once to ensure redundant legacy
 /// path material is consistent before it is omitted. A false AIR/degree claim
 /// may still convert: the shared verifier independently rejects that claim.
+#[cfg(test)]
 pub(in crate::backend) fn from_compact(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -320,6 +329,7 @@ pub(in crate::backend) fn from_compact(
     from_compact_for(relation, proof, limits, Protocol::Prototype)
 }
 
+#[cfg(test)]
 fn from_compact_for(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -548,6 +558,7 @@ fn from_compact_for(
     })
 }
 
+#[cfg(test)]
 fn insert_equal<K: Ord, V: PartialEq>(map: &mut BTreeMap<K, V>, key: K, value: V) -> Result<()> {
     match map.entry(key) {
         std::collections::btree_map::Entry::Vacant(entry) => {
@@ -561,6 +572,7 @@ fn insert_equal<K: Ord, V: PartialEq>(map: &mut BTreeMap<K, V>, key: K, value: V
     Ok(())
 }
 
+#[cfg(test)]
 fn extract_frontier(
     binding: &Binding,
     leaf_count: usize,
@@ -800,6 +812,7 @@ fn bounded_frontier(
 }
 
 /// Verify exact shared openings directly, using only bounded authenticated data.
+#[cfg(test)]
 pub(in crate::backend) fn verify_shared(
     relation: &impl FixedAir,
     proof: &SharedProof,
@@ -812,6 +825,7 @@ pub(in crate::backend) fn verify_shared(
 
 /// Prove the fixed SHAKE candidate and encode only canonical shared openings.
 /// The caller supplies diagnostic limits; this does not qualify a production profile.
+#[cfg(test)]
 pub(in crate::backend) fn prove_shake_shared(
     relation: &impl FixedAir,
     columns: &[Vec<u64>],
@@ -845,6 +859,7 @@ pub(in crate::backend) fn verify_shake_shared(
     Ok(work)
 }
 
+#[cfg(test)]
 fn verify_shared_recorded(
     relation: &impl FixedAir,
     proof: &SharedProof,

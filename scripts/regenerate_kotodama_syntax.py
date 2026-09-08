@@ -127,8 +127,12 @@ EXPECTED_DECLARATION_RESERVED_EXTRAS = (
     "SoracloudRequest",
     "SoracloudResponse",
     "state_map_get",
+    "__kotodama_state_page",
+    "__kotodama_state_take",
     "__kotodama_list_len",
     "__kotodama_list_get",
+    "__kotodama_list_set",
+    "__kotodama_list_push",
     "__kotodama_list_try_set",
     "__kotodama_list_try_push",
     "__kotodama_list_pop",
@@ -136,6 +140,8 @@ EXPECTED_DECLARATION_RESERVED_EXTRAS = (
     "__kotodama_list_take",
     "__kotodama_list_enumerate",
     "__kotodama_decimal_div_round",
+    "__kotodama_decimal_mul_div_round",
+    "__kotodama_quantity_mul_div_round",
     "__kotodama_quantity_div_round",
     "__kotodama_quantity_ratio_round",
     "__kotodama_decimal_to_int_trunc",
@@ -512,9 +518,9 @@ def _validate_final_v1_policy(policy: Policy) -> None:
         raise GenerationError(
             "dynamic_access_hints.state_map_key_types must be active source types"
         )
-    if dynamic_access.bound_kinds != ("range", "take"):
+    if dynamic_access.bound_kinds != ("page", "take"):
         raise GenerationError(
-            "dynamic_access_hints.bound_kinds must be ordered range, take"
+            "dynamic_access_hints.bound_kinds must be ordered page, take"
         )
     if dynamic_access.max_keys != 64:
         raise GenerationError("dynamic_access_hints.max_keys must be 64")
@@ -702,12 +708,21 @@ def _rust_array(
 
 
 def render_data_model_identifier_policy(policy: Policy) -> str:
-    return _rust_array(
-        "KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS",
-        policy.forbidden_source_identifiers,
-        "Exact identifier spellings forbidden in every Kotodama V1 source position.",
-        visibility="",
-    )
+    return "\n".join([
+        _rust_array(
+            "KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS",
+            policy.forbidden_source_identifiers,
+            "Exact identifier spellings forbidden in every Kotodama V1 source position.",
+            visibility="",
+        ),
+        _rust_array(
+            "KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS",
+            tuple(dict.fromkeys((*policy.active_source_types, *policy.declaration_reserved_extras,
+                                 *policy.retired_numeric_type_spellings))),
+            "Compiler-owned names forbidden for source-unit and struct declarations.",
+            visibility="",
+        ),
+    ])
 
 
 def render_semantic_policy(policy: Policy) -> str:

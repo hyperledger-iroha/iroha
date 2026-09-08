@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::nft::burn(Name::parse("bad"));
+  ledger::nft::burn(nft: Name::parse("bad"));
 }
 
 }

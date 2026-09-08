@@ -5,8 +5,10 @@ six-lane commitment/transcript construction and the exact 32-byte canonical
 Fp4 codec. The mixed Transfer/MetaSet batch is raw cryptographic test material;
 it does not claim state-transition validity or production qualification.
 
-The encoded proof is 1,831,049 bytes. The fixture test retains the production
-verifier's 512 KiB rejection, then applies a fixed 2 MiB diagnostic cap without relaxing the cryptographic checks. The AXT 1 MiB
+The encoded proof is 1,831,049 bytes. Its transfer rows use the canonical
+`FastpqBalanceKeyV1` frames. The test retains the production verifier's 512 KiB
+rejection, then applies a fixed 2 MiB diagnostic cap without relaxing the
+cryptographic checks. The AXT 1 MiB
 payload cap also excludes this raw fixture. The retired balanced proof files
 have no current consumers and are removed.
 

@@ -75,7 +75,7 @@ fn contract_artifact(entrypoints: Vec<EntrypointDescriptor>) -> (Vec<u8>, Contra
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: embedded_entrypoints,
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let mut code = Vec::new();
@@ -203,8 +203,14 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit,
+                ],
+            },
+        ),
         permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -346,8 +352,14 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
         kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit,
+                ],
+            },
+        ),
         permission: Some("ExecuteForeignAuthorityProbe".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -458,8 +470,14 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit,
+                ],
+            },
+        ),
         permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -594,8 +612,14 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
         kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit,
+                ],
+            },
+        ),
         permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -652,8 +676,14 @@ fn activate_registers_cross_contract_manifest_trigger_callback() {
         kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit,
+                ],
+            },
+        ),
         permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -756,8 +786,14 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
         kind: EntryPointKind::Kotoage,
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(
+            iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![
+                    iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit,
+                ],
+            },
+        ),
         permission: Some("CanEnactGovernance".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),

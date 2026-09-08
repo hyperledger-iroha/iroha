@@ -41,6 +41,7 @@ fn diagnostic(
             byte_range: Some(range),
         }),
     )
+    .with_source(source)
 }
 fn keyword_kind(text: &str) -> SyntaxKind {
     match v1_keyword_kind(text) {

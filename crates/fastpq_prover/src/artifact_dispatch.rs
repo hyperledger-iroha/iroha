@@ -52,7 +52,7 @@ mod tests {
     use std::cell::Cell;
 
     use iroha_data_model::fastpq::{FastpqAxtCompactArtifactV1, FastpqOrdinaryCompactArtifactV1};
-    use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload};
+    use norito::{NoritoDeserialize, NoritoSerialize};
 
     use super::*;
 

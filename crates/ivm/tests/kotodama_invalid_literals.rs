@@ -8,7 +8,7 @@ fn invalid_account_id_literal_reports_error() {
     let src = r#"
         seiyaku InvalidAccount {
           kotoage fn main() authorize("RegisterAccount") {
-            ledger::account::register(AccountId::parse("invalid-account"));
+            ledger::account::register(account: AccountId::parse("invalid-account"));
           }
         }
     "#;
@@ -23,7 +23,7 @@ fn invalid_asset_definition_literal_reports_error() {
     let src = r#"
         seiyaku InvalidAssetDefinition {
           kotoage fn main() authorize("UnregisterAsset") {
-            ledger::asset::unregister(AssetDefinitionId::parse("invalid"));
+            ledger::asset::unregister(asset_definition: AssetDefinitionId::parse("invalid"));
           }
         }
     "#;

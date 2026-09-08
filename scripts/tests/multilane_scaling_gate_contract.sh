@@ -18,6 +18,8 @@ for required in \
   "--trial-command" \
   "--seed-namespace" \
   "--offered-load-tps" \
+  "--drain-seconds" \
+  "--max-submission-lag-ms" \
   "--max-queue-depth" \
   "--max-index-entries" \
   "--max-memory-bytes" \

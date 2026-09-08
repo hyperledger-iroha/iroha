@@ -6,7 +6,7 @@ seiyaku Demo {
 
     kotoage fn bump() -> int authorize("Admin") {
         counter = counter + 1;
-        ledger::domain::register(DomainId::parse("debugcall.universal"));
+        ledger::domain::register(domain: DomainId::parse("debugcall.universal"));
         return counter;
     }
 }

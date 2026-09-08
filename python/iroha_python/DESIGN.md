@@ -14,7 +14,7 @@ applications. It has four responsibilities:
 - **One public Torii client** for typed queries, signed submissions, bounded
   streaming, and higher-level workflows.
 - **Cryptographic and transaction helpers** bridged from the Rust workspace
-  through a `maturin`-built PyO3 extension (`iroha_python._crypto`).
+  through a `maturin`-built PyO3 extension (`iroha_native._crypto`).
 - **Data-model and workflow helpers** exposing Rust-validated identifiers and
   canonical instruction, governance, privacy, SoraFS, and Connect operations.
 
@@ -50,9 +50,10 @@ The Rust crate (`iroha_python_rs`) links against `iroha_crypto`,
 Its crypto bridge enables the same signature families used by the workspace
 (`ed25519`, `secp256k1`, `ml-dsa`, TC26 GOST parameter sets, `bls_normal`,
 `bls_small`, and `sm2`) and exposes them through generic key/sign/verify and
-multihash helpers. `pyproject.toml` configures `maturin` so
-`cargo build --workspace` builds the extension alongside the rest of the
-workspace.
+multihash helpers. `../iroha_native/pyproject.toml` packages this existing
+Rust crate as the transport-independent `iroha-native` wheel. The full SDK and
+Torii account operations depend on this owner directly; the native package
+imports neither transport package.
 
 ## Client and Configuration Boundaries
 
@@ -74,11 +75,14 @@ than introduce a parallel `*_typed` compatibility method.
 
 ## Packaging and Tooling
 
-- `maturin develop` builds the PyO3 extension against the local Rust workspace.
+- `maturin build` from `../iroha_native` packages the PyO3 extension.
 - `pytest` runs the Python parity suite; tests expect the native extension to be
-  available (either via `maturin develop` or an installed wheel).
+  installed from the matching native wheel.
 - `cargo test --workspace` continues to validate the Rust crates, including
   `iroha_python_rs`.
 
-The package metadata builds a single `iroha-python` wheel and source
-distribution through Maturin.
+The full SDK builds a pure `iroha-python` wheel through setuptools. Its pinned
+`iroha-native` dependency is built through Maturin. Release checks authenticate
+both wheels, installed package trees, and the native loader origin before
+executing the SDK. There is no retired module forwarder or build-directory
+search path.

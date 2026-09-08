@@ -202,7 +202,11 @@ fn skip_state_node(nodes: &[StateValueNodeV1], node_index: &mut usize) -> Result
             StateValueNodeV1::Tuple { arity } => usize::from(*arity),
             StateValueNodeV1::Option => 1,
             StateValueNodeV1::Result => 2,
-            StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => 0,
+            StateValueNodeV1::List { .. }
+            | StateValueNodeV1::Leaf(_)
+            | StateValueNodeV1::Unit
+            | StateValueNodeV1::Error(_)
+            | StateValueNodeV1::StateCursor(_) => 0,
         };
         pending = pending.checked_add(children).ok_or(VMError::DecodeError)?;
     }
@@ -238,7 +242,11 @@ fn state_node_word_count(
                 skip_state_node(nodes, node_index)?;
                 skip_state_node(nodes, node_index)?;
             }
-            StateValueNodeV1::List { .. } | StateValueNodeV1::Leaf(_) => {
+            StateValueNodeV1::List { .. }
+            | StateValueNodeV1::Leaf(_)
+            | StateValueNodeV1::Unit
+            | StateValueNodeV1::Error(_)
+            | StateValueNodeV1::StateCursor(_) => {
                 words = words.checked_add(1).ok_or(VMError::DecodeError)?;
             }
         }
@@ -382,6 +390,32 @@ fn validate_state_atoms_recursive(
                             work.push(Work::FinishStream(item_cursor));
                             work.push(Work::Validate(item_cursor));
                         }
+                    }
+                    StateValueNodeV1::StateCursor(key) => {
+                        let Some(StateValueAtomV1::Pointer(envelope)) =
+                            cursor_atoms.get(cursor.atom_index)
+                        else {
+                            return Err(VMError::DecodeError);
+                        };
+                        ivm_abi::state_cursor::validate_cursor_envelope(*key, envelope)?;
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                    }
+                    StateValueNodeV1::Unit | StateValueNodeV1::Error(_) => {
+                        match (node, cursor_atoms.get(cursor.atom_index)) {
+                            (StateValueNodeV1::Unit, Some(StateValueAtomV1::Unit)) => {}
+                            (
+                                StateValueNodeV1::Error(error),
+                                Some(StateValueAtomV1::ErrorCode(code)),
+                            ) if error.variant(*code).is_some() => {}
+                            _ => return Err(VMError::DecodeError),
+                        }
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
                     }
                     StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
                         if !matches!(
@@ -798,6 +832,31 @@ fn encode_state_node(
                             .unwrap_or(usize::MAX),
                         );
                     }
+                    StateValueNodeV1::Unit | StateValueNodeV1::Error(_) => {
+                        let word = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        let atom = match node {
+                            StateValueNodeV1::Unit if word == 0 => StateValueAtomV1::Unit,
+                            StateValueNodeV1::Error(error) => {
+                                let code = u32::try_from(word).map_err(|_| VMError::DecodeError)?;
+                                error.variant(code).ok_or(VMError::DecodeError)?;
+                                StateValueAtomV1::ErrorCode(code)
+                            }
+                            _ => return Err(VMError::DecodeError),
+                        };
+                        outputs
+                            .streams
+                            .get_mut(cursor_output)
+                            .ok_or(VMError::DecodeError)?
+                            .push(atom);
+                    }
                     StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
                         let word = *cursor
                             .words
@@ -818,6 +877,31 @@ fn encode_state_node(
                             .get_mut(cursor_output)
                             .ok_or(VMError::DecodeError)?
                             .push(StateValueAtomV1::Bool(value));
+                    }
+                    StateValueNodeV1::StateCursor(key) => {
+                        let pointer = *cursor
+                            .words
+                            .as_slice()
+                            .get(cursor.word_index)
+                            .ok_or(VMError::DecodeError)?;
+                        cursor.word_index = cursor
+                            .word_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        let (envelope, _) = load_expected_tlv(
+                            context.vm,
+                            pointer,
+                            PointerType::NoritoBytes,
+                            context.resolver,
+                        )?;
+                        ivm_abi::state_cursor::validate_cursor_envelope(*key, envelope)?;
+                        encoded_pointer_bytes =
+                            encoded_pointer_bytes.saturating_add(envelope.len());
+                        outputs
+                            .streams
+                            .get_mut(cursor_output)
+                            .ok_or(VMError::DecodeError)?
+                            .push(StateValueAtomV1::Pointer(envelope.to_vec()));
                     }
                     StateValueNodeV1::Leaf(StateValueKindV1::Bytes) => {
                         let pointer = *cursor
@@ -1258,6 +1342,26 @@ fn plan_state_atoms(
                             work.push(Work::Plan(item_cursor));
                         }
                     }
+                    StateValueNodeV1::Unit | StateValueNodeV1::Error(_) => {
+                        let scalar = match (node, cursor_atoms.get(cursor.atom_index)) {
+                            (StateValueNodeV1::Unit, Some(StateValueAtomV1::Unit)) => 0,
+                            (
+                                StateValueNodeV1::Error(error),
+                                Some(StateValueAtomV1::ErrorCode(code)),
+                            ) if error.variant(*code).is_some() => u64::from(*code),
+                            _ => return Err(VMError::DecodeError),
+                        };
+                        cursor.atom_index = cursor
+                            .atom_index
+                            .checked_add(1)
+                            .ok_or(VMError::DecodeError)?;
+                        push_planned(
+                            &mut values,
+                            &mut outputs,
+                            cursor_output,
+                            PlannedStateWord::Scalar(scalar),
+                        )?;
+                    }
                     StateValueNodeV1::Leaf(StateValueKindV1::Bool) => {
                         let StateValueAtomV1::Bool(value) = cursor_atoms
                             .get(cursor.atom_index)
@@ -1277,7 +1381,7 @@ fn plan_state_atoms(
                             PlannedStateWord::Scalar(u64::from(value)),
                         )?;
                     }
-                    StateValueNodeV1::Leaf(_) => {
+                    StateValueNodeV1::Leaf(_) | StateValueNodeV1::StateCursor(_) => {
                         let StateValueAtomV1::Pointer(envelope) = cursor_atoms
                             .get(cursor.atom_index)
                             .ok_or(VMError::DecodeError)?
@@ -1880,6 +1984,91 @@ mod tests {
             state_value_schema_hash_v1(&bytes),
             *Hash::new(&bytes).as_ref()
         );
+    }
+    #[test]
+    fn cursor_state_roundtrip_preserves_frame_and_rejects_wrong_key_kind() {
+        use iroha_data_model::smart_contract::{
+            entrypoint::EntrypointValueKindV1, state_cursor::StateCursorV1,
+        };
+        let cursor = StateCursorV1 {
+            instance: "local::金庫".into(),
+            map: "balances".parse().unwrap(),
+            schema_hash: [3; 32],
+            key_type: EntrypointValueKindV1::Int,
+            last_key: "balances/00".parse().unwrap(),
+        };
+        let frame = cursor.encode_frame().unwrap();
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::StateCursor(EntrypointValueKindV1::Int)],
+        };
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let pointer = install_pointer(&mut vm, PointerType::NoritoBytes, &frame);
+        let table = vm.alloc_heap(8).unwrap();
+        vm.store_u64(table, pointer).unwrap();
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+        encode_state_value(&mut vm, identity_address).unwrap();
+        let record = vm.register(10);
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, record);
+        decode_state_value(&mut vm, identity_address).unwrap();
+        let words = vm.validate_tlv(vm.register(10)).unwrap();
+        let restored = u64::from_le_bytes(words.payload[1..9].try_into().unwrap());
+        assert_eq!(vm.validate_tlv(restored).unwrap().payload, frame);
+        let wrong = install_schema(
+            &mut vm,
+            &StateValueSchemaV1 {
+                nodes: vec![StateValueNodeV1::StateCursor(EntrypointValueKindV1::Bool)],
+            },
+        );
+        vm.set_register(10, wrong);
+        vm.set_register(11, table);
+        vm.set_register(12, 1);
+        assert!(encode_state_value(&mut vm, identity_address).is_err());
+    }
+    #[test]
+    fn unit_and_nominal_error_state_roundtrip_rejects_invalid_words() {
+        let schema = StateValueSchemaV1 {
+            nodes: vec![
+                StateValueNodeV1::Tuple { arity: 2 },
+                StateValueNodeV1::Unit,
+                StateValueNodeV1::Error(ivm_abi::error_types::list_error_type()),
+            ],
+        };
+        let mut vm = IVM::new(u64::MAX);
+        let schema_pointer = install_schema(&mut vm, &schema);
+        let table = vm.alloc_heap(16).expect("scalar table");
+        vm.store_u64(table, 0).expect("unit");
+        vm.store_u64(table + 8, 2).expect("error code");
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, table);
+        vm.set_register(12, 2);
+        encode_state_value(&mut vm, identity_address).expect("encode nominal scalar state");
+        let record_pointer = vm.register(10);
+        let tlv = vm.validate_tlv(record_pointer).expect("record envelope");
+        let record: StateValueRecordV1 = decode_from_bytes(tlv.payload).expect("record");
+        assert_eq!(
+            record.atoms,
+            vec![StateValueAtomV1::Unit, StateValueAtomV1::ErrorCode(2)]
+        );
+        vm.set_register(10, schema_pointer);
+        vm.set_register(11, record_pointer);
+        decode_state_value(&mut vm, identity_address).expect("decode nominal scalar state");
+        let decoded = vm.validate_tlv(vm.register(10)).expect("decoded table");
+        assert_eq!(
+            &decoded.payload[1..],
+            &[0u64.to_le_bytes(), 2u64.to_le_bytes()].concat()
+        );
+        for (unit, error) in [(1, 2), (0, 0), (0, 3), (0, u64::MAX)] {
+            vm.store_u64(table, unit).expect("unit candidate");
+            vm.store_u64(table + 8, error).expect("error candidate");
+            vm.set_register(10, schema_pointer);
+            vm.set_register(11, table);
+            vm.set_register(12, 2);
+            assert!(encode_state_value(&mut vm, identity_address).is_err());
+        }
     }
     #[test]
     fn aggregate_record_bytes_are_deterministic() {

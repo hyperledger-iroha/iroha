@@ -22,6 +22,9 @@ pub(crate) use coordinator_support::{
 #[path = "v2_lifecycle_body_pipeline_transition.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod body_pipeline_transition;
+/// Exact cancellation of ordinary body work whose reducer owner was superseded.
+#[path = "v2_lifecycle_body_retirement.rs"]
+mod body_retirement;
 /// Atomic seam between digest-only admission and process-local concrete work.
 #[path = "v2_lifecycle_concrete_admission.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -139,6 +142,9 @@ pub(in crate::sumeragi) use ledger::{
     LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerError, LifecycleLedgerV1,
     PublishedFinalizedLifecycleRetainedFloorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
     open_complete_tip_predecessor_storage,
+};
+pub(in crate::sumeragi) use work_registry::{
+    CancelledCertifiedBodyWorkV1, CertifiedBodyRetirementMaterialV1,
 };
 #[cfg(all(test, feature = "bls"))]
 /// Run the two release-bound CompleteTip disk-retirement regressions.

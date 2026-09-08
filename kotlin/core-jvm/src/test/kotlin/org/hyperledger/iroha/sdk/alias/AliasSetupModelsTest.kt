@@ -732,7 +732,7 @@ class AliasSetupModelsTest {
     fun feeSponsorProgramIdentityIgnoresI105Discriminant() {
         val sponsor = account(0x11)
         val alternateSponsor = AccountAddress
-            .parseEncodedIgnoringCurveSupport(sponsor, null)
+            .parseEncoded(sponsor, null)
             .toI105(42)
         val program = FeeSponsorProgramId(sponsor, "public-reset")
         val alternateProgram = FeeSponsorProgramId(alternateSponsor, "public-reset")

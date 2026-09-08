@@ -38,7 +38,6 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_STATE_GET | 0x50 |  |
 | SYSCALL_STATE_SET | 0x51 |  |
 | SYSCALL_STATE_DEL | 0x52 |  |
-| SYSCALL_STATE_KEYS | 0x10030 |  |
 | SYSCALL_STATE_HAS | 0x10031 |  |
 | SYSCALL_STATE_LEN | 0x10032 |  |
 | SYSCALL_STATE_COUNT | 0x10033 |  |
@@ -46,6 +45,7 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_STATE_VALUE_ENCODE | 0x10035 |  |
 | SYSCALL_STATE_VALUE_DECODE | 0x10036 |  |
 | SYSCALL_STATE_PATH_FROM_NAME | 0x10037 |  |
+| SYSCALL_STATE_SCAN | 0x10038 |  |
 | SYSCALL_DECODE_INT | 0x53 |  |
 | SYSCALL_TLV_LEN | 0x77 |  |
 | SYSCALL_JSON_GET_JSON | 0x79 |  |
@@ -203,6 +203,7 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_DECIMAL_TRY_TO_INT_EXACT | 0x1012D |  |
 | SYSCALL_DECIMAL_TO_INT_TRUNC | 0x1012E |  |
 | SYSCALL_DECIMAL_TO_INT_ROUND | 0x1012F |  |
+| SYSCALL_DECIMAL_MUL_DIV_ROUND | 0x10130 |  |
 | SYSCALL_QUANTITY_TRY_FROM_INT | 0x10140 |  |
 | SYSCALL_QUANTITY_TRY_FROM_DECIMAL | 0x10141 |  |
 | SYSCALL_QUANTITY_TO_DECIMAL | 0x10142 |  |
@@ -219,6 +220,7 @@ This file is generated from the ABI-v1 syscall specification and `crates/ivm_abi
 | SYSCALL_QUANTITY_LE | 0x1014D |  |
 | SYSCALL_QUANTITY_GT | 0x1014E |  |
 | SYSCALL_QUANTITY_GE | 0x1014F |  |
+| SYSCALL_QUANTITY_MUL_DIV_ROUND | 0x10150 |  |
 | SYSCALL_JSON_GET_INT | 0x10160 |  |
 | SYSCALL_JSON_GET_DECIMAL | 0x10161 |  |
 | SYSCALL_JSON_GET_QUANTITY | 0x10162 |  |

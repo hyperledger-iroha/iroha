@@ -225,6 +225,18 @@ input, not a local gateway pack.
 
 ## 10. Security & Privacy
 - Content digests use BLAKE3. Raw payloads never persist outside quarantine.
+- Quarantine V1 envelopes, immutable object-ID metadata and AEAD header/chunk
+  preimages use the fixed canonical Norito frame. Wrapped-key context derives
+  from the canonical header digest with its existing domain separation.
+  Caller decode flags cannot change object identity or authenticated context
+  during seal, range reads, key rewrap or restart. All envelope consumers share
+  bounded canonical admission: alternate layouts and compressed frames are
+  rejected before key-provider access, while configured byte/allocation limits,
+  chunk limits and exact index, payload-digest and AEAD checks remain enforced.
+  The envelope allocation allowance derives from actual frame length and the
+  schema's nested field, alignment-copy and owned-chunk charges. It intersects
+  Norito's general ceiling and every stricter caller limit. Maximum-input and
+  alignment regressions must demonstrate admission without weakening those caps.
 - Access to quarantine requires Just-In-Time approvals; all accesses logged.
 - Runner sandboxes untrusted content, enforcing 512 MiB memory limits and 120s
   wall-clock guards.

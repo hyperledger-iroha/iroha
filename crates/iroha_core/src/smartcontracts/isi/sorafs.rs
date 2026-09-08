@@ -484,14 +484,14 @@ fn prepare_pin_admission_accounting(
         }
         let parent_record = world.pin_manifests().get(parent_digest).ok_or_else(|| {
             invalid_parameter(format!(
-                "successor manifest {} referenced by {} is not registered",
+                "predecessor manifest {} referenced by successor {} is not registered",
                 manifest_hex(parent_digest),
                 manifest_hex(digest)
             ))
         })?;
         if !matches!(parent_record.status, PinStatus::Approved(_)) {
             return Err(invalid_parameter(format!(
-                "successor manifest {} must be approved and live before registering {}",
+                "predecessor manifest {} must be approved and live before registering successor {}",
                 manifest_hex(parent_digest),
                 manifest_hex(digest)
             )));
@@ -1665,12 +1665,16 @@ fn has_permission(
     authority: &AccountId,
     permission: &str,
 ) -> bool {
-    let required = Permission::new(permission.to_owned(), iroha_primitives::json::Json::new(()));
     state_transaction
         .world
         .account_permissions
         .get(authority)
-        .is_some_and(|perms| perms.contains(&required))
+        .is_some_and(|perms| {
+            perms.iter().any(|grant| {
+                // Raw canonical JSON preserves the distinction between null and "null".
+                grant.name() == permission && grant.payload().get().as_str() == "null"
+            })
+        })
 }
 fn require_permission(
     state_transaction: &StateTransaction<'_, '_>,
@@ -9441,56 +9445,7 @@ mod sorafs_tests {
         )
         .expect("seed canonical automatic replication providers");
     }
-    fn insert_manifest_with_status(
-        stx: &mut crate::state::StateTransaction<'_, '_>,
-        digest: ManifestDigest,
-        chunk_digest: [u8; 32],
-        successor_of: Option<ManifestDigest>,
-        status: PinStatus,
-    ) {
-        let policy = default_policy();
-        let content_length = default_content_length();
-        let mut record = PinManifestRecord::new(
-            digest,
-            root_cid_for_manifest(digest),
-            default_chunker(),
-            chunk_digest,
-            por_root_for_manifest(digest),
-            content_length,
-            policy,
-            alice(),
-            5,
-            None,
-            successor_of,
-            Metadata::default(),
-        );
-        match status {
-            PinStatus::Pending => {}
-            PinStatus::Approved(epoch) => {
-                let amount = stx
-                    .world
-                    .sorafs_pricing
-                    .get()
-                    .public_pin_fee(
-                        policy.storage_class,
-                        content_length,
-                        policy.min_replicas,
-                        5,
-                        policy.retention_epoch,
-                    )
-                    .expect("fixture public pin fee");
-                record.record_pin_fee_payment(PinFeePayment {
-                    paid_by: alice(),
-                    fee_asset_id: stx.gov.sorafs_pin_fee_asset_id.clone(),
-                    treasury_account_id: stx.gov.sorafs_pin_fee_treasury_account.clone(),
-                    amount,
-                });
-                record.approve(epoch, None);
-            }
-            PinStatus::Retired(epoch) => record.retire(epoch, None),
-        }
-        insert_pin_record_with_accounting(stx, record);
-    }
+    include!("sorafs/pin_lifecycle_fixture.rs");
     fn insert_pin_record_with_accounting(
         stx: &mut crate::state::StateTransaction<'_, '_>,
         record: PinManifestRecord,
@@ -10375,24 +10330,31 @@ mod sorafs_tests {
         }
         .execute(&alice(), &mut stx)
         .expect_err("a governed owner without an owner-funded reserve must fail");
-        assert!(matches!(
-            missing_record_error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("no owner-funded reserve account")
-        ));
+        assert!(
+            matches!(
+                &missing_record_error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message == &format!("provider {provider} has no owner-funded reserve account")
+            ),
+            "unexpected missing-reserve rejection: {missing_record_error:?}"
+        );
         seed_governed_capacity_provider(&mut stx, provider, &alice(), Quantity::zero());
         let error = RegisterCapacityDeclaration {
             record: declaration,
         }
         .execute(&alice(), &mut stx)
         .expect_err("a governed owner without the declared bonded stake must fail");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("owner-funded native reserve")
-        ));
+        assert!(
+            matches!(
+                &error,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("declares stake ")
+                    && message.ends_with("but its unslashed custody-backed bond holds 0")
+            ),
+            "unexpected zero-bond rejection: {error:?}"
+        );
         assert_eq!(stx.world.provider_owners.get(&provider), Some(&alice()));
         assert!(stx.world.capacity_declarations.get(&provider).is_none());
     }
@@ -11925,10 +11887,15 @@ mod sorafs_tests {
             )) => message,
             other => panic!("unexpected error: {other:?}"),
         };
-        assert!(
-            message.contains("is not registered"),
-            "unexpected error message: {message}"
+        assert_eq!(
+            message,
+            format!(
+                "predecessor manifest {} referenced by successor {} is not registered",
+                manifest_hex(&second_digest()),
+                manifest_hex(&default_digest()),
+            )
         );
+        assert!(stx.world.pin_manifests.get(&default_digest()).is_none());
         assert_pin_fee_balances_unchanged(
             &stx,
             &alice(),
@@ -11960,9 +11927,22 @@ mod sorafs_tests {
             )) => message,
             other => panic!("unexpected error: {other:?}"),
         };
-        assert!(
-            message.contains("must be approved and live before registering successor"),
-            "unexpected error message: {message}"
+        assert_eq!(
+            message,
+            format!(
+                "predecessor manifest {} must be approved and live before registering successor {}",
+                manifest_hex(&second_digest()),
+                manifest_hex(&default_digest()),
+            )
+        );
+        assert!(stx.world.pin_manifests.get(&default_digest()).is_none());
+        assert_eq!(
+            stx.world
+                .pin_manifests
+                .get(&second_digest())
+                .unwrap()
+                .status,
+            PinStatus::Pending
         );
         assert_pin_fee_balances_unchanged(
             &stx,
@@ -12169,12 +12149,13 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         stx.gov.sorafs_pin_policy.max_lineage_depth = 1;
-        insert_manifest_with_status(
+        insert_manifest_with_status_at_epoch(
             &mut stx,
             second_digest(),
             [0xEE; 32],
             None,
             PinStatus::Approved(4),
+            4,
         );
         insert_manifest_with_status(
             &mut stx,
@@ -12306,6 +12287,18 @@ mod sorafs_tests {
         let mut stx = block.transaction();
         seed_test_call_hash(&mut stx);
         let (envelope, signature_hex, _) = registered_manifest_approval_envelope(&mut stx);
+        let pending = stx
+            .world
+            .pin_manifests
+            .get(&default_digest())
+            .unwrap()
+            .clone();
+        let automatic_order_id = derive_sorafs_auto_replication_order_id_v1(&default_digest());
+        let automatic_order = stx
+            .world
+            .replication_orders
+            .get(&automatic_order_id)
+            .cloned();
         let inert_signature_hex = hex::encode([0_u8; 64]);
         let mut invalid_json =
             String::from_utf8(envelope.clone()).expect("envelope is valid UTF-8 JSON");
@@ -12317,8 +12310,17 @@ mod sorafs_tests {
             "approval must reject all-zero signature material",
         );
         assert!(
-            message.contains("signature payload must not be all zero"),
+            message.contains("invalid council signature material")
+                && message.contains("signature payload must not be empty or all zero"),
             "unexpected error message: {message}"
+        );
+        assert_eq!(
+            stx.world.pin_manifests.get(&default_digest()),
+            Some(&pending)
+        );
+        assert_eq!(
+            stx.world.replication_orders.get(&automatic_order_id),
+            automatic_order.as_ref()
         );
     }
     #[test]
@@ -14099,53 +14101,6 @@ mod sorafs_tests {
         );
     }
     #[test]
-    fn issue_replication_order_rejects_duplicates() {
-        let state = make_state();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        insert_manifest_with_status(
-            &mut stx,
-            default_digest(),
-            default_chunk_digest(),
-            None,
-            PinStatus::Approved(1),
-        );
-        let order_id = ReplicationOrderId::new([0x55; 32]);
-        let providers = vec![
-            ProviderId::new([0x21; 32]),
-            ProviderId::new([0x22; 32]),
-            ProviderId::new([0x23; 32]),
-        ];
-        seed_provider_owners(&mut stx, &providers, &alice());
-        let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order_for_epoch_window(order_struct, 1, 10);
-        let issue = IssueReplicationOrder {
-            order_id,
-            order_payload: payload.clone(),
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        };
-        issue
-            .execute(&alice(), &mut stx)
-            .expect("issue replication order");
-        let duplicate = IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 21,
-            deadline_epoch: 41,
-            musubi_archive: None,
-        };
-        let err = duplicate
-            .execute(&alice(), &mut stx)
-            .expect_err("duplicate order must fail");
-        assert!(matches!(
-            err,
-            InstructionExecutionError::InvariantViolation(_)
-        ));
-    }
-    #[test]
     fn issue_replication_order_rejects_target_below_policy() {
         let state = make_state();
         let mut block = state.block(block_header());
@@ -14434,100 +14389,6 @@ mod sorafs_tests {
         ));
     }
     #[test]
-    fn complete_replication_order_updates_status() {
-        let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        insert_manifest_with_status(
-            &mut stx,
-            default_digest(),
-            default_chunk_digest(),
-            None,
-            PinStatus::Approved(1),
-        );
-        let order_id = ReplicationOrderId::new([0x77; 32]);
-        let providers = vec![
-            ProviderId::new([0x31; 32]),
-            ProviderId::new([0x32; 32]),
-            ProviderId::new([0x33; 32]),
-            ProviderId::new([0x34; 32]),
-        ];
-        seed_provider_owners(&mut stx, &providers, &alice());
-        let order_struct = replication_order_struct(order_id, default_digest(), &providers, 3);
-        let payload = encode_replication_order_for_epoch_window(order_struct, 1, 10);
-        IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("issue replication order");
-        let complete = completion_instruction(order_id, providers[0], 2, &alice());
-        complete
-            .execute(&alice(), &mut stx)
-            .expect("complete replication order");
-        SetProviderIngestCompletionAuthority::new(
-            providers[0],
-            Some(completion_authority(&alice(), 1)),
-            completion_authority(&alice(), 2),
-        )
-        .execute(&alice(), &mut stx)
-        .expect("rotate completion authority after the retained completion");
-        completion_instruction(order_id, providers[0], 2, &alice())
-            .execute(&alice(), &mut stx)
-            .expect("exact retained completion replay remains idempotent after policy rotation");
-        let conflicting_replay = completion_instruction(order_id, providers[0], 3, &alice())
-            .execute(&alice(), &mut stx)
-            .expect_err("completion replay at a different epoch must fail");
-        assert!(matches!(
-            conflicting_replay,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("different retained completion context")
-        ));
-        let partial_record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("order stored");
-        assert_eq!(partial_record.provider_completions.len(), 1);
-        assert_eq!(partial_record.status, ReplicationOrderStatus::Pending);
-        completion_instruction(order_id, providers[1], 3, &alice())
-            .execute(&alice(), &mut stx)
-            .expect("second provider completion");
-        assert_eq!(
-            stx.world
-                .replication_orders
-                .get(&order_id)
-                .expect("order stored")
-                .status,
-            ReplicationOrderStatus::Pending
-        );
-        completion_instruction(order_id, providers[2], 4, &alice())
-            .execute(&alice(), &mut stx)
-            .expect("target provider completion");
-        let surplus_completion = completion_instruction(order_id, providers[3], 5, &alice())
-            .execute(&alice(), &mut stx)
-            .expect_err("completed redundancy target must reject surplus completion");
-        assert!(matches!(
-            surplus_completion,
-            InstructionExecutionError::InvariantViolation(message)
-                if message.contains("reached its redundancy target at epoch 4")
-        ));
-        let record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("order stored");
-        assert!(matches!(
-            record.status,
-            ReplicationOrderStatus::Completed(epoch) if epoch == 4
-        ));
-        assert_eq!(record.provider_completions.len(), 3);
-    }
-    #[test]
     fn completion_after_deadline_fails_without_changing_pending_order() {
         let state = make_state_with_completion_anchor();
         let mut block = state.block(block_header_at_epoch(16));
@@ -14597,57 +14458,6 @@ mod sorafs_tests {
         exact_retry
             .execute(&alice(), &mut stx)
             .expect("an exact retained completion replay remains idempotent after the deadline");
-    }
-    #[test]
-    fn future_dated_completion_fails_without_mutating_the_order() {
-        let state = make_state_with_completion_anchor();
-        let mut block = state.block(block_header());
-        let mut stx = block.transaction();
-        seed_test_call_hash(&mut stx);
-        insert_manifest_with_status(
-            &mut stx,
-            default_digest(),
-            default_chunk_digest(),
-            None,
-            PinStatus::Approved(1),
-        );
-        let order_id = ReplicationOrderId::new([0x72; 32]);
-        let providers = vec![
-            ProviderId::new([0x27; 32]),
-            ProviderId::new([0x28; 32]),
-            ProviderId::new([0x29; 32]),
-        ];
-        seed_provider_owners(&mut stx, &providers, &alice());
-        let payload = encode_replication_order_for_epoch_window(
-            replication_order_struct(order_id, default_digest(), &providers, 3),
-            1,
-            10,
-        );
-        IssueReplicationOrder {
-            order_id,
-            order_payload: payload,
-            issued_epoch: 1,
-            deadline_epoch: 10,
-            musubi_archive: None,
-        }
-        .execute(&alice(), &mut stx)
-        .expect("issue order");
-        let error = completion_instruction(order_id, providers[0], 6, &alice())
-            .execute(&alice(), &mut stx)
-            .expect_err("a completion cannot claim a future consensus second");
-        assert!(matches!(
-            error,
-            InstructionExecutionError::InvalidParameter(
-                InvalidParameterError::SmartContract(message)
-            ) if message.contains("completion_epoch 6 is later than current consensus epoch 5")
-        ));
-        let record = stx
-            .world
-            .replication_orders
-            .get(&order_id)
-            .expect("order remains");
-        assert!(record.provider_completions.is_empty());
-        assert_eq!(record.status, ReplicationOrderStatus::Pending);
     }
     #[test]
     fn expire_replication_order_is_deadline_bound_and_idempotent() {
@@ -18176,4 +17986,5 @@ mod sorafs_tests {
     }
     include!("sorafs/repair_query_tail_tests.rs");
     include!("sorafs/canonical_accounting_tests.rs");
+    include!("sorafs/replication_lifecycle_tests.rs");
 }

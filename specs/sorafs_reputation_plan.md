@@ -242,6 +242,14 @@ publication authority.
   `RegisterCapacityDispute` is the only capacity-dispute intake path and
   appends the revision-one `Opened` journal event in the same transaction.
   Telemetry penalties and alerts do not create disputes.
+- Recorder-policy source-time intervals include their own activation and exclude
+  the successor activation. A new cutover must occur strictly after the validated
+  journal terminal's authoritative record time, before either policy record is
+  written. Record times never decrease and each source time is at most its record
+  time, so this constant-time terminal check protects every retained interval.
+  Exact historical policy/authority replay is resolved before new-cutover
+  admission and preserves the original activation; rotation never rewrites
+  committed events or their policy history.
 - `FindSorafsReputationJournalEvents` returns an exclusive-cursor page from one
   immutable finalized view. `FindSorafsReputationJournalEventBySourceId`
   resolves the latest canonical event for one nonzero source at the caller's
@@ -664,7 +672,9 @@ publication authority.
   deployment policy and cannot become authority.
 
 ## Testing Strategy
-- Native journal tests cover strict policy rotation/predecessor forks, recorder
+- Native journal tests cover same-time cutover rejection without state or event
+  mutation, later committed cutover with exact historical replay, strict policy
+  rotation/predecessor forks, recorder
   authority and exact permission payloads, source/provider/policy/block-time
   binding, global sequence and per-block index continuity, historical replay,
   stale policy rejection, forged/orphan indexes and tails, bounded fixed-view

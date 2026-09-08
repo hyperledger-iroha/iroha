@@ -28,6 +28,7 @@ public sealed class AccountControllerV1Tests
             var address = AccountAddress.Parse(item.GetProperty("i105").GetString()!, 753);
             Assert.Equal(Convert.FromHexString(item.GetProperty("canonical_address_hex").GetString()!), address.CanonicalBytes());
             var payload = Convert.FromHexString(item.GetProperty("account_id_payload_hex").GetString()!);
+            Assert.Equal(payload, SccpReplayPrincipalV1.SoraAccount(payload).Bytes);
             var actual = new TransactionEncodingContext(address.ToI105()).EncodeAccountId(address.ToI105());
             Assert.Equal(payload, actual);
             var frame = Convert.FromHexString(item.GetProperty("account_id_frame_hex").GetString()!);
@@ -71,13 +72,17 @@ public sealed class AccountControllerV1Tests
     [InlineData(CurveId.Gost256C, 12, 7, "gost3410-2012-256-paramset-c", 64)]
     [InlineData(CurveId.Gost512A, 13, 8, "gost3410-2012-512-paramset-a", 128)]
     [InlineData(CurveId.Gost512B, 14, 9, "gost3410-2012-512-paramset-b", 128)]
-    [InlineData(CurveId.Sm2, 15, 10, "sm2", 67)]
+    [InlineData(CurveId.Sm2, 15, 10, "sm2", 83)]
     public void PublishedCurveEnvelopesMapToFinalNoritoTags(CurveId curve, int curveId, int tag, string name, int length)
     {
-        // These synthetic envelope values test representation, not group admission.
-        var key = Enumerable.Repeat((byte)1, length).ToArray();
-        if (curve == CurveId.Secp256k1) key[0] = 2;
-        if (curve == CurveId.Sm2) { key[0] = 0; key[1] = 0; key[2] = 4; }
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cargo.toml"))) directory = directory.Parent;
+        Assert.NotNull(directory);
+        using var fixtures = JsonDocument.Parse(File.ReadAllBytes(Path.Combine(directory.FullName, "fixtures/account/multisig_wire_v1.json")));
+        var fixture = fixtures.RootElement.GetProperty("positive").EnumerateArray().Single(item => item.GetProperty("name").GetString() == name);
+        var canonical = Convert.FromHexString(fixture.GetProperty("canonical_address_hex").GetString()!);
+        var key = canonical[(canonical[1] == 0 ? 4 : 5)..];
+        Assert.Equal(length, key.Length);
         var address = AccountAddress.FromPublicKey(key, curve);
         Assert.Equal(curveId, (byte)curve); Assert.Equal(name, address.Algorithm);
         var encoded = new TransactionEncodingContext(address.ToI105()).EncodeAccountId(address.ToI105());
@@ -90,6 +95,65 @@ public sealed class AccountControllerV1Tests
         reader.RequireEnd(); publicKey.RequireEnd();
         foreach (var invalid in new[] { new byte[length], new byte[length - 1], new byte[length + 1] })
             Assert.Throws<AccountAddressException>(() => AccountAddress.FromPublicKey(invalid, curve));
+    }
+
+    [Fact]
+    public void CanonicalAccountParsersRejectSurroundingUnicodeWhitespace()
+    {
+        const string literal = "sorauﾛ1P2PMｲbjRｦ2jrLFﾁｽｸFjjBヱYﾜｴ3ﾋNRjﾌｸﾆｺNXcfﾒXSKXAW";
+        foreach (var whitespace in new[] { " ", "\t", "\r\n", "\u00a0", "\u2003", "\u202f", "\u3000" })
+        foreach (var invalid in new[] { whitespace + literal, literal + whitespace })
+            Assert.Equal(AccountAddressErrorCode.UnsupportedAddressFormat,
+                Assert.Throws<AccountAddressException>(() => AccountAddress.Parse(invalid)).Code);
+    }
+
+    [Fact]
+    public void SccpSingleControllerRejectsOversizedAndMalformedCompactPayloads()
+    {
+        var oversizedKey = new CanonicalNoritoWriter();
+        oversizedKey.WriteUInt64LittleEndian((ulong)ushort.MaxValue + 2);
+        var authority = new CanonicalNoritoWriter();
+        authority.WriteUInt32LittleEndian(0);
+        authority.WriteField(oversizedKey.ToArray());
+        Assert.ThrowsAny<ArgumentException>(() => SccpReplayPrincipalV1.SoraAccount(authority.ToArray()));
+        foreach (var bytes in new[] { new byte[] { 0, 0, 0, 0 }, new byte[] { 2, 0, 0, 0 }, new byte[] { 0, 0, 0, 0, 0 } })
+            Assert.ThrowsAny<ArgumentException>(() => SccpReplayPrincipalV1.SoraAccount(bytes));
+    }
+
+    [Fact]
+    public void PublicAccountConstructorsRequireCompleteNativeAdmission()
+    {
+        var key = Keys(1)[0];
+        if (AccountAddressNative.IsAvailable)
+            Assert.NotNull(AccountAddress.FromPublicKey(key));
+        else
+            Assert.Equal(AccountAddressErrorCode.NativeBridgeUnavailable,
+                Assert.Throws<AccountAddressException>(() => AccountAddress.FromPublicKey(key)).Code);
+    }
+
+    [Fact]
+    public void CompleteNativeAdmissionRejectsMalformedCurvePoints()
+    {
+        Assert.True(AccountAddressNative.IsAvailable, "The final SDK requires the real ABI-23 address validator.");
+        var cases = new List<(CurveId Curve, byte[] Key)>
+        {
+            (CurveId.Ed25519, new byte[] { 1 }.Concat(new byte[31]).ToArray()),
+            (CurveId.Ed25519, Enumerable.Repeat((byte)255, 32).ToArray()),
+            (CurveId.Secp256k1, new byte[] { 2 }.Concat(Enumerable.Repeat((byte)255, 32)).ToArray()),
+            (CurveId.BlsNormal, Enumerable.Repeat((byte)255, 48).ToArray()),
+            (CurveId.BlsSmall, Enumerable.Repeat((byte)255, 96).ToArray()),
+            (CurveId.Sm2, new byte[] { 0, 0, 4 }.Concat(Enumerable.Repeat((byte)255, 64)).ToArray()),
+        };
+        foreach (var curve in new[] { CurveId.Gost256A, CurveId.Gost256B, CurveId.Gost256C, CurveId.Gost512A, CurveId.Gost512B })
+            cases.Add((curve, Enumerable.Repeat((byte)255, curve is CurveId.Gost512A or CurveId.Gost512B ? 128 : 64).ToArray()));
+        foreach (var (curve, key) in cases)
+        {
+            var error = Assert.Throws<AccountAddressException>(() => AccountAddress.FromPublicKey(key, curve));
+            Assert.Equal(AccountAddressErrorCode.InvalidPublicKey, error.Code);
+            var canonical = new byte[] { 2, 0, (byte)curve, (byte)key.Length }.Concat(key).ToArray();
+            Assert.Equal(AccountAddressErrorCode.InvalidPublicKey,
+                Assert.Throws<AccountAddressException>(() => AccountAddress.FromCanonicalBytes(canonical)).Code);
+        }
     }
 
     [Fact]

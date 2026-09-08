@@ -23,15 +23,15 @@
             }
 
             view fn main() -> int {
-                let List<Envelope, 2> values = [ok(7, true), err(5)];
+                let List<Envelope, 2> values = [ok(last: 7, ready: true), err(code: 5)];
 
                 // Every needle below is freshly allocated. Equality must use
                 // the declared aggregate schema rather than handle identity.
-                if !values.contains(ok(7, true)) { return -1; }
-                if !values.contains(err(5)) { return -2; }
+                if !values.contains(ok(last: 7, ready: true)) { return -1; }
+                if !values.contains(err(code: 5)) { return -2; }
 
                 // Same shape with a different nested Option payload.
-                if values.contains(ok(8, true)) { return -3; }
+                if values.contains(ok(last: 8, ready: true)) { return -3; }
 
                 // Equal capacity does not make different active lengths equal.
                 let short = Envelope {
@@ -54,8 +54,8 @@
                     outcome: Result::ok((9, true)),
                 };
                 if values.contains(different_outer_option_branch) { return -6; }
-                if values.contains(ok(7, false)) { return -7; }
-                if values.contains(err(6)) { return -8; }
+                if values.contains(ok(last: 7, ready: false)) { return -7; }
+                if values.contains(err(code: 6)) { return -8; }
 
                 1
             }

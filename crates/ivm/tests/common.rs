@@ -167,8 +167,10 @@ fn assemble_contract_syscalls_with_states(
             kind: EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("Execute".to_owned()),
             read_keys: Vec::new(),
             write_keys,
@@ -178,7 +180,7 @@ fn assemble_contract_syscalls_with_states(
             entry_pc: 0,
         }],
         states,
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
     };
     let mut program = ProgramMetadata::default().encode();
     program.extend_from_slice(&interface.encode_section());

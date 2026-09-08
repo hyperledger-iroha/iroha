@@ -4,6 +4,6 @@
     } else {
       return 2;
     }
-    for (dead_key, dead_value) in Entries.range(1, 5) {
+    for (dead_key, dead_value) in Entries.page(after: Option::none, limit: 4).items {
       let _copy = dead_value;
     }

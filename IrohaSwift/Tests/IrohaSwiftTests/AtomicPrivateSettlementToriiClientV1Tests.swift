@@ -140,7 +140,9 @@ final class AtomicPrivateSettlementToriiClientV1Tests: XCTestCase {
         #if canImport(Darwin)
         try AtomicPrivateSettlementNativeResponseVerifierV1().requireAvailable()
         #else
-        throw XCTSkip("the native Apple bridge is only available on Darwin")
+        XCTAssertThrowsError(try AtomicPrivateSettlementNativeResponseVerifierV1().requireAvailable()) { error in
+            XCTAssertEqual(error as? AtomicPrivateSettlementNativeVerifierErrorV1, .bridgeUnavailable)
+        }
         #endif
     }
 

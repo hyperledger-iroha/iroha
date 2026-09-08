@@ -231,12 +231,12 @@ const fn default_parameter_names(arity: usize) -> &'static [&'static str] {
 /// Source argument policy attached to a builtin declaration.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum BuiltinCallPolicy {
-    /// Positional or named arguments are admitted unless the semantic
-    /// repeated-type/effect policy requires names.
+    /// All declared source parameters require their names.
     #[default]
-    Flexible,
-    /// Pagination calls always require explicit `offset` and `limit` names.
-    Pagination,
+    Named,
+    /// This many leading declaration parameters are explicitly positional.
+    /// An implicit method receiver consumes the first declaration slot.
+    PositionalPrefix(usize),
 }
 /// Canonical security and lowering metadata for one builtin.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -282,7 +282,6 @@ pub enum Builtin {
     StateGet,
     StateSet,
     StateDel,
-    StateKeys,
     StateHas,
     StateLen,
     StateCount,
@@ -321,6 +320,8 @@ pub enum Builtin {
     TestInvokeEntrypointAs,
     #[strum(serialize = "expect_reject_as")]
     TestExpectRejectAs,
+    #[strum(serialize = "expect_any_reject_as")]
+    TestExpectAnyRejectAs,
     #[strum(serialize = "actor_account")]
     TestActorAccount,
     #[strum(serialize = "actor_public_key")]
@@ -550,7 +551,6 @@ impl Builtin {
             "state_get" => Self::StateGet,
             "state_set" => Self::StateSet,
             "state_del" => Self::StateDel,
-            "state_keys" => Self::StateKeys,
             "state_has" => Self::StateHas,
             "state_len" => Self::StateLen,
             "state_count" => Self::StateCount,
@@ -586,6 +586,7 @@ impl Builtin {
             "invoke_entrypoint" => Self::TestInvokeEntrypoint,
             "invoke_entrypoint_as" => Self::TestInvokeEntrypointAs,
             "expect_reject_as" => Self::TestExpectRejectAs,
+            "expect_any_reject_as" => Self::TestExpectAnyRejectAs,
             "actor_account" => Self::TestActorAccount,
             "actor_public_key" => Self::TestActorPublicKey,
             "actor_sign" => Self::TestActorSign,
@@ -821,7 +822,6 @@ impl Builtin {
             Self::StateGet => "state::get",
             Self::StateSet => "state::set",
             Self::StateDel => "state::delete",
-            Self::StateKeys => "state::keys",
             Self::StateHas => "state::contains",
             Self::StateLen => "state::len",
             Self::StateCount => "state::count",
@@ -852,6 +852,7 @@ impl Builtin {
             Self::TestInvokeEntrypoint => "test::invoke_kotoage",
             Self::TestInvokeEntrypointAs => "test::invoke_kotoage_as",
             Self::TestExpectRejectAs => "test::expect_reject_as",
+            Self::TestExpectAnyRejectAs => "test::expect_any_reject_as",
             Self::TestActorAccount => "test::actor_account",
             Self::TestActorPublicKey => "test::actor_public_key",
             Self::TestActorSign => "test::actor_sign",
@@ -1085,6 +1086,7 @@ impl Builtin {
             | Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
+            | Self::TestExpectAnyRejectAs
             | Self::TestActorAccount
             | Self::TestActorPublicKey
             | Self::TestActorSign
@@ -1172,7 +1174,6 @@ impl Builtin {
             | Self::GetOrDefault
             | Self::GetOr
             | Self::StateGet
-            | Self::StateKeys
             | Self::StateHas
             | Self::StateLen
             | Self::StateCount => BuiltinAccess::StateRead,
@@ -1207,6 +1208,7 @@ impl Builtin {
             | Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
+            | Self::TestExpectAnyRejectAs
             | Self::SoracloudReadCommittedState
             | Self::SoracloudEmitStateMutation
             | Self::SoracloudEmitMailboxMessage
@@ -1239,6 +1241,7 @@ impl Builtin {
             Self::TestInvokeEntrypoint
             | Self::TestInvokeEntrypointAs
             | Self::TestExpectRejectAs
+            | Self::TestExpectAnyRejectAs
             | Self::TestActorAccount
             | Self::TestActorPublicKey
             | Self::TestActorSign => BuiltinMode::TestFunctionOnly,
@@ -1388,7 +1391,6 @@ impl Builtin {
             Self::StateGet => &[s::SYSCALL_STATE_GET],
             Self::StateSet => &[s::SYSCALL_STATE_SET],
             Self::StateDel => &[s::SYSCALL_STATE_DEL],
-            Self::StateKeys => &[s::SYSCALL_STATE_KEYS],
             Self::StateHas => &[s::SYSCALL_STATE_HAS],
             Self::StateLen => &[s::SYSCALL_STATE_LEN],
             Self::StateCount => &[s::SYSCALL_STATE_COUNT],
@@ -1427,7 +1429,9 @@ impl Builtin {
                 s::SYSCALL_STATE_DEL,
             ],
             Self::TestInvokeEntrypointAs => &[s::SYSCALL_KOTO_TEST_INVOKE_ENTRYPOINT_AS],
-            Self::TestExpectRejectAs => &[s::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS],
+            Self::TestExpectRejectAs | Self::TestExpectAnyRejectAs => {
+                &[s::SYSCALL_KOTO_TEST_EXPECT_REJECT_AS]
+            }
             Self::TestActorAccount => &[s::SYSCALL_KOTO_TEST_ACTOR_ACCOUNT],
             Self::TestActorPublicKey => &[s::SYSCALL_KOTO_TEST_ACTOR_PUBLIC_KEY],
             Self::TestActorSign => &[s::SYSCALL_KOTO_TEST_ACTOR_SIGN],
@@ -1721,7 +1725,6 @@ impl Builtin {
             Self::StateGet => S::new(&["bytes"], "bytes"),
             Self::StateSet => S::new(&["bytes", "bytes"], "()"),
             Self::StateDel => S::new(&["bytes"], "()"),
-            Self::StateKeys => S::new(&["bytes", "int", "int"], "bytes"),
             Self::StateHas => S::new(&["bytes"], "bool"),
             Self::StateLen | Self::StateCount => S::new(&["bytes"], "int"),
             Self::QueryExecuteNorito
@@ -1768,7 +1771,16 @@ impl Builtin {
             Self::AssertEq => S::new(&["int", "int"], "()"),
             Self::TestInvokeEntrypoint => S::new(&["string", "Json"], "T"),
             Self::TestInvokeEntrypointAs => S::new(&["string", "string", "Json"], "T"),
-            Self::TestExpectRejectAs => S::new(&["string", "string", "Json"], "()"),
+            Self::TestExpectRejectAs => S::new(
+                &[
+                    "string",
+                    "string",
+                    "Json",
+                    "ErrorEnum::Variant|test::Rejection",
+                ],
+                "()",
+            ),
+            Self::TestExpectAnyRejectAs => S::new(&["string", "string", "Json"], "()"),
             Self::TestActorAccount => S::new(&["string"], "AccountId"),
             Self::TestActorPublicKey => S::new(&["string"], "bytes"),
             Self::TestActorSign => S::new(&["string", "bytes"], "bytes"),
@@ -1850,7 +1862,7 @@ impl Builtin {
             Self::TransferV1BatchBegin | Self::TransferV1BatchEnd => S::new(&[], "()"),
             Self::TransferV1BatchApply => S::new(&["bytes"], "()"),
             Self::TransferBatch => S::new(
-                &["(AccountId,AccountId,AssetDefinitionId,quantity)..."],
+                &["List<(AccountId,AccountId,AssetDefinitionId,quantity),N>"],
                 "()",
             ),
             Self::AxtBegin => S::new(&["AxtDescriptor"], "()"),
@@ -1989,7 +2001,6 @@ impl Builtin {
             | Self::StateLen
             | Self::StateCount => signature.with_names(&["path"]),
             Self::StateSet => signature.with_names(&["path", "value"]),
-            Self::StateKeys => signature.with_names(&["path", "offset", "limit"]),
             Self::QueryGetAccount => signature.with_names(&["id"]),
             Self::QueryGetAsset => signature.with_names(&["id"]),
             Self::QueryGetAssetDefinition => signature.with_names(&["id"]),
@@ -2024,8 +2035,11 @@ impl Builtin {
             Self::Require => signature.with_names(&["condition", "error"]),
             Self::AssertEq => signature.with_names(&["actual", "expected"]),
             Self::TestInvokeEntrypoint => signature.with_names(&["kotoage", "arguments"]),
-            Self::TestInvokeEntrypointAs | Self::TestExpectRejectAs => {
+            Self::TestInvokeEntrypointAs | Self::TestExpectAnyRejectAs => {
                 signature.with_names(&["actor", "kotoage", "arguments"])
+            }
+            Self::TestExpectRejectAs => {
+                signature.with_names(&["actor", "kotoage", "arguments", "expected"])
             }
             Self::TestActorAccount | Self::TestActorPublicKey => signature.with_names(&["actor"]),
             Self::TestActorSign => signature.with_names(&["actor", "payload"]),
@@ -2072,8 +2086,15 @@ impl Builtin {
                 signature.with_names(&["asset_definition", "name", "scale", "owner", "mintable"])
             }
             Self::UnregisterAsset => signature.with_names(&["asset_definition"]),
+            Self::RegisterPeer | Self::UnregisterPeer => signature.with_names(&["peer"]),
+            Self::RegisterTrigger | Self::UnregisterTrigger => signature.with_names(&["trigger"]),
             Self::SetTriggerEnabled => signature.with_names(&["trigger", "enabled"]),
             Self::CreateRole => signature.with_names(&["role", "permissions"]),
+            Self::DeleteRole => signature.with_names(&["role"]),
+            Self::AddSignatory | Self::RemoveSignatory => {
+                signature.with_names(&["account", "signatory"])
+            }
+            Self::SetAccountQuorum => signature.with_names(&["account", "quorum"]),
             Self::GrantRole | Self::RevokeRole => signature.with_names(&["account", "role"]),
             Self::GrantPermission | Self::RevokePermission => {
                 signature.with_names(&["account", "permission"])
@@ -2085,14 +2106,39 @@ impl Builtin {
                 signature.with_names(&["offer", "asset_definition", "amount", "evidence"])
             }
             Self::EscrowOpenDispute => signature.with_names(&["offer", "evidence"]),
+            Self::EscrowAccept
+            | Self::EscrowMarkPaymentSent
+            | Self::EscrowRelease
+            | Self::EscrowCancel => signature.with_names(&["offer"]),
             Self::EscrowResolveDispute => {
                 signature.with_names(&["offer", "buyer_amount", "seller_amount", "evidence"])
             }
             Self::TransferV1BatchApply => signature.with_names(&["batch"]),
+            Self::TransferBatch => signature.with_names(&["transfers"]),
+            Self::SetExecutionDepth => signature.with_names(&["depth"]),
+            Self::AxtBegin => signature.with_names(&["descriptor"]),
             Self::AxtTouch => signature.with_names(&["dataspace", "proof"]),
             Self::VerifyDsProof => signature.with_names(&["dataspace", "proof"]),
             Self::UseAssetHandle => signature.with_names(&["handle", "operation", "proof"]),
             Self::VrfVerify => signature.with_names(&["request"]),
+            Self::DeactivateContractInstance
+            | Self::RemoveSmartContractBytes
+            | Self::RegisterSmartContractCode
+            | Self::RegisterSmartContractBytes
+            | Self::ActivateContractInstance
+            | Self::ZkVerifyBatch
+            | Self::ZkVoteVerifyBallot
+            | Self::ZkVoteVerifyTally
+            | Self::VrfVerifyBatch
+            | Self::SoracloudReadCommittedState
+            | Self::SoracloudEmitStateMutation
+            | Self::SoracloudEmitMailboxMessage
+            | Self::SoracloudAppendJournal
+            | Self::SoracloudPublishCheckpoint
+            | Self::SoracloudReadConfig
+            | Self::SoracloudReadSecretEnvelope => signature.with_names(&["request"]),
+            Self::GetPrivateInput => signature.with_names(&["index"]),
+            Self::Path => signature.with_names(&["path", "key"]),
             Self::Sm2Verify => {
                 signature.with_names(&["message", "signature", "public_key", "distid"])
             }
@@ -2160,21 +2206,55 @@ impl Builtin {
     }
     /// Return the source argument policy attached to this builtin.
     pub const fn call_policy(self) -> BuiltinCallPolicy {
-        if matches!(
-            self,
-            Self::KeysTake2
-                | Self::ValuesTake2
-                | Self::KeysValuesTake2
-                | Self::StateKeys
-                | Self::QueryPageAccounts
-                | Self::QueryPageAssets
-                | Self::QueryPageAssetDefinitions
-                | Self::QueryPageDomains
-                | Self::QueryPageNfts
-        ) {
-            BuiltinCallPolicy::Pagination
-        } else {
-            BuiltinCallPolicy::Flexible
+        use BuiltinCallPolicy::{Named, PositionalPrefix};
+        match self {
+            Self::PointerConstructor(_)
+            | Self::StateGet
+            | Self::StateDel
+            | Self::StateHas
+            | Self::StateLen
+            | Self::StateCount
+            | Self::QueryExecuteNorito
+            | Self::QueryGetContractManifest
+            | Self::QueryGetAccount
+            | Self::QueryGetAsset
+            | Self::QueryGetAssetDefinition
+            | Self::QueryGetDomain
+            | Self::QueryGetNft
+            | Self::QueryGetParameter
+            | Self::QueryGetContractInstance
+            | Self::DebugPrint
+            | Self::DebugLog
+            | Self::Info
+            | Self::TestActorAccount
+            | Self::TestActorPublicKey
+            | Self::BytesLen
+            | Self::GetPrivateInput
+            | Self::Pubkgen
+            | Self::Sm3Hash
+            | Self::Sha256Hash
+            | Self::Sha3Hash
+            | Self::Blake2b256Hash
+            | Self::Keccak256Hash
+            | Self::IrohaHash
+            | Self::WrappingNeg
+            | Self::Isqrt
+            | Self::Abs
+            | Self::Assert => PositionalPrefix(1),
+            Self::Require
+            | Self::Contains
+            | Self::StateMapRemove
+            | Self::Path
+            | Self::GetInt
+            | Self::GetDecimal
+            | Self::GetQuantity
+            | Self::GetJson
+            | Self::GetName
+            | Self::GetAccountId
+            | Self::GetAssetDefinitionId
+            | Self::GetNftId
+            | Self::GetBlobHex => PositionalPrefix(2),
+            _ => Named,
         }
     }
     /// Return the canonical builtin registry record.
@@ -2449,10 +2529,41 @@ mod tests {
                 "dataspace"
             ]
         );
+        assert_eq!(Builtin::StateSet.call_policy(), BuiltinCallPolicy::Named);
+        for builtin in Builtin::all() {
+            if builtin.source_name().starts_with("ledger::")
+                && builtin.call_policy() == BuiltinCallPolicy::Named
+            {
+                assert!(
+                    builtin
+                        .signature()
+                        .parameter_names
+                        .iter()
+                        .all(|name| !matches!(*name, "first" | "second" | "third" | "fourth")),
+                    "ledger operation {builtin:?} must publish meaningful labels"
+                );
+            }
+        }
+        for (builtin, names) in [
+            (Builtin::AddSignatory, &["account", "signatory"][..]),
+            (Builtin::SetAccountQuorum, &["account", "quorum"][..]),
+            (Builtin::RegisterTrigger, &["trigger"][..]),
+            (Builtin::DeleteRole, &["role"][..]),
+            (Builtin::RegisterPeer, &["peer"][..]),
+        ] {
+            assert_eq!(builtin.signature().parameter_names, names);
+            assert_eq!(builtin.call_policy(), BuiltinCallPolicy::Named);
+        }
         assert_eq!(
-            Builtin::StateKeys.call_policy(),
-            BuiltinCallPolicy::Pagination
+            Builtin::BytesLen.call_policy(),
+            BuiltinCallPolicy::PositionalPrefix(1)
         );
+        assert_eq!(
+            Builtin::GetInt.call_policy(),
+            BuiltinCallPolicy::PositionalPrefix(2)
+        );
+        assert_eq!(Builtin::GetOr.call_policy(), BuiltinCallPolicy::Named);
+        assert_eq!(Builtin::AssertEq.call_policy(), BuiltinCallPolicy::Named);
     }
     #[test]
     fn native_transfer_control_and_recovery_registry_is_exact() {
@@ -2637,7 +2748,7 @@ mod tests {
             assert_eq!(plural.signature().parameters, &["int", "int"]);
             assert_eq!(plural.signature().parameter_names, &["offset", "limit"]);
             assert_eq!(plural.signature().return_type, format!("QueryPage<{view}>"));
-            assert_eq!(plural.call_policy(), BuiltinCallPolicy::Pagination);
+            assert_eq!(plural.call_policy(), BuiltinCallPolicy::Named);
             assert_eq!(
                 plural.operation_syscalls(),
                 &[ivm_abi::syscalls::SYSCALL_CORE_QUERY_PAGE]
@@ -2965,7 +3076,7 @@ mod tests {
         );
         assert_eq!(
             Builtin::TestExpectRejectAs.signature().parameter_names,
-            &["actor", "kotoage", "arguments"]
+            &["actor", "kotoage", "arguments", "expected"]
         );
     }
     #[test]

@@ -1,0 +1,163 @@
+{
+  "manifest": {
+    "entrypoints": [
+      {
+        "name": "inspect",
+        "kind": {
+          "kind": "View",
+          "value": null
+        },
+        "params": [],
+        "return_type": "Result<(), example/vault@1.0.0::金庫::拒否>",
+        "return_schema": {
+          "nodes": [
+            {
+              "kind": "Result",
+              "value": null
+            },
+            {
+              "kind": "Unit",
+              "value": null
+            },
+            {
+              "kind": "Error",
+              "value": {
+                "identity": "example/vault@1.0.0::金庫::拒否",
+                "variants": [
+                  {
+                    "name": "不足",
+                    "code": 1
+                  },
+                  {
+                    "name": "CapacityExceeded",
+                    "code": 2
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "resume",
+        "kind": {
+          "kind": "View",
+          "value": null
+        },
+        "params": [],
+        "return_type": "Option<StateCursor<int>>",
+        "return_schema": {
+          "nodes": [
+            {
+              "kind": "Option",
+              "value": null
+            },
+            {
+              "kind": "StateCursor",
+              "value": {
+                "kind": "Int",
+                "value": null
+              }
+            }
+          ]
+        }
+      },
+      {
+        "name": "scan",
+        "kind": {
+          "kind": "View",
+          "value": null
+        },
+        "params": [],
+        "return_type": "StatePage<int, bool, 8>",
+        "return_schema": {
+          "nodes": [
+            {
+              "kind": "Struct",
+              "value": {
+                "name": "StatePage",
+                "fields": [
+                  "items",
+                  "next"
+                ]
+              }
+            },
+            {
+              "kind": "List",
+              "value": {
+                "capacity": 8
+              }
+            },
+            {
+              "kind": "Tuple",
+              "value": 2
+            },
+            {
+              "kind": "Leaf",
+              "value": {
+                "kind": "Int",
+                "value": null
+              }
+            },
+            {
+              "kind": "Leaf",
+              "value": {
+                "kind": "Bool",
+                "value": null
+              }
+            },
+            {
+              "kind": "Option",
+              "value": null
+            },
+            {
+              "kind": "StateCursor",
+              "value": {
+                "kind": "Int",
+                "value": null
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "states": [
+      {
+        "name": "status",
+        "type_name": "Result<(), example/vault@1.0.0::金庫::拒否>"
+      },
+      {
+        "name": "continuation",
+        "type_name": "Option<StateCursor<int>>"
+      },
+      {
+        "name": "batch",
+        "type_name": "StatePage{items: List<(int, bool), 8>, next: Option<StateCursor<int>>}"
+      }
+    ],
+    "error_types": [
+      {
+        "identity": "example/vault@1.0.0::金庫::拒否",
+        "variants": [
+          {
+            "name": "不足",
+            "code": 1
+          },
+          {
+            "name": "CapacityExceeded",
+            "code": 2
+          }
+        ]
+      },
+      {
+        "identity": "kotodama::OtherError",
+        "variants": [
+          {
+            "name": "OtherFailure",
+            "code": 1
+          }
+        ]
+      }
+    ]
+  }
+}

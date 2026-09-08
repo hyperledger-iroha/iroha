@@ -6364,12 +6364,9 @@ mod tests {
                     rejected_key,
                 ),
             );
-            assert!(
-                collect_kaigi_relay_registry(&stx.world)
-                    .expect_err("final V1 restore must reject over-cap registry")
-                    .to_string()
-                    .contains("final V1 capacity")
-            );
+            let error = collect_kaigi_relay_registry(&stx.world)
+                .expect_err("final V1 restore must reject over-cap registry");
+            assert_smart_contract_error(error, "final V1 capacity");
             assert_eq!(
                 validated_kaigi_relay_registry_count(stx).expect("validate over-cap registry"),
                 KAIGI_RELAY_REGISTRY_MAX_ENTRIES_V1 + 1

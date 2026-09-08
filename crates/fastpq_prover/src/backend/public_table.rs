@@ -9,9 +9,11 @@
 //! challenges, and use these evaluations in the complete pair/binding AIR. This
 //! helper does not authenticate caller-provided rows or replace mandatory replay.
 
+#[cfg(test)]
+use super::GoldilocksFp4V1;
 use super::{
-    GOLDILOCKS_MODULUS, GoldilocksFp4V1, add_mod, field_inverse, field_pow,
-    fixed_domain::FixedTraceDomain, mul_mod, sub_mod,
+    GOLDILOCKS_MODULUS, add_mod, field_inverse, field_pow, fixed_domain::FixedTraceDomain, mul_mod,
+    sub_mod,
 };
 use crate::{Error, Result, trace::DEFAULT_MAX_TRACE_COLUMNS};
 use fastpq_isi::StarkParameterSet;
@@ -31,6 +33,7 @@ impl<'a> PublicTablePolynomial<'a> {
     /// `max_public_rows` must come from the verifier's authenticated schema and
     /// resource policy, not an untrusted proof field. The caller must additionally
     /// enforce combined public-input byte limits before constructing this view.
+    #[cfg(test)]
     pub(super) fn new(
         params: &StarkParameterSet,
         trace_rows: usize,
@@ -174,6 +177,7 @@ impl<'a> PublicTablePolynomial<'a> {
     /// Coefficients must be derived after binding the public statement. This is
     /// also the public-table side of an affine tuple compression; add its fixed
     /// shift separately in the surrounding pair/bus relation.
+    #[cfg(test)]
     pub(super) fn evaluate_mixed(
         &self,
         point: u64,

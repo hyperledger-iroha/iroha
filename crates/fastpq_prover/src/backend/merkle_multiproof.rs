@@ -17,8 +17,11 @@
 //! bounded raw-byte admission before production integration. This helper changes
 //! neither production proof encoding nor verification.
 
-use fastpq_isi::{GoldilocksDigest384DomainPrefixV1, GoldilocksDigest384V1 as Digest};
+#[cfg(test)]
+use fastpq_isi::GoldilocksDigest384DomainPrefixV1;
+use fastpq_isi::GoldilocksDigest384V1 as Digest;
 
+#[cfg(test)]
 use super::{MERKLE_NODE_PHASE_V1, MerkleTreeRoleV1, digest_domain_prefix_v1, hash_at_prefix_v1};
 use crate::{Error, Result};
 
@@ -27,6 +30,7 @@ use crate::{Error, Result};
 // consume memory without avoiding any further work. Role and FRI round belong
 // to this private per-tree owner; every call still hashes its exact index and
 // both complete child digests as two separately framed fields.
+#[cfg(test)]
 struct LevelPrefixHasher {
     role: MerkleTreeRoleV1,
     prefix: Option<(usize, GoldilocksDigest384DomainPrefixV1<'static>)>,
@@ -34,6 +38,7 @@ struct LevelPrefixHasher {
     prefix_builds: usize,
 }
 
+#[cfg(test)]
 impl LevelPrefixHasher {
     fn new(role: MerkleTreeRoleV1) -> Self {
         Self {
@@ -206,6 +211,7 @@ impl MultiproofPlan {
     }
 
     /// Return the exact ordered sibling locations for prover extraction.
+    #[cfg(test)]
     pub(super) fn sibling_positions(&self) -> &[SiblingPosition] {
         &self.siblings
     }
@@ -220,6 +226,7 @@ impl MultiproofPlan {
     /// Every level length is checked before extraction. Selected leaves and
     /// siblings must reconstruct the supplied tree root under the requested
     /// role. Unqueried cached subtrees need not be rehashed or reallocated.
+    #[cfg(test)]
     pub(super) fn open(
         &self,
         role: MerkleTreeRoleV1,
@@ -235,6 +242,7 @@ impl MultiproofPlan {
     ///
     /// The callback receives only coordinates derived from trusted geometry.
     /// All cached level widths are checked before the first hash invocation.
+    #[cfg(test)]
     pub(super) fn open_with(
         &self,
         levels: &[Vec<Digest>],
@@ -275,6 +283,7 @@ impl MultiproofPlan {
     /// Leaf and sibling counts are checked before any hashing. Native `Digest`
     /// constructors/decoders reject every coordinate at or above the modulus;
     /// no raw bytes or unchecked scalar conversions enter this helper.
+    #[cfg(test)]
     pub(super) fn verify(
         &self,
         role: MerkleTreeRoleV1,

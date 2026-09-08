@@ -85,7 +85,8 @@ fn transfer_fixture(rows: usize) -> TransitionBatch {
             (receiver, receiver_before, receiver_before + amount),
         ] {
             batch.push(StateTransition::new(
-                format!("asset/{asset}/{owner}").into_bytes(),
+                iroha_data_model::fastpq::transfer_balance_key(&asset, &owner)
+                    .expect("canonical balance key"),
                 before.to_le_bytes().to_vec(),
                 after.to_le_bytes().to_vec(),
                 OperationKind::Transfer,

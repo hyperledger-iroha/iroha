@@ -3216,7 +3216,7 @@ fn encode_signed_orderbook_payload<T>(
 where
     T: norito::core::NoritoSerialize,
 {
-    norito::to_bytes(payload).map_err(|err| OrderbookPayloadSigningError::Encode {
+    norito::encode_canonical(payload).map_err(|err| OrderbookPayloadSigningError::Encode {
         schema,
         reason: err.to_string(),
     })
@@ -3779,15 +3779,12 @@ fn decode_cancel_asset_lock_reference(bytes: &[u8]) -> Result<CancelAssetLockWir
         CANCEL_ASSET_LOCK_REFERENCE_MAX_BYTES_V1.saturating_mul(2),
         8,
     );
-    let instruction: CancelAssetLockWireV1 =
-        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| error.to_string())?;
-    let canonical = norito::to_bytes(&instruction).map_err(|error| error.to_string())?;
-    if canonical != bytes {
-        return Err(
-            "CancelAssetLock payload is not the exact canonical Norito encoding".to_owned(),
-        );
-    }
-    Ok(instruction)
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => {
+            "CancelAssetLock payload is not the exact canonical Norito encoding".to_owned()
+        }
+        other => other.to_string(),
+    })
 }
 /// Validates a Norito-encoded [`ReplicationOrderV1`] and emits a reference outcome.
 #[must_use]
@@ -5270,15 +5267,12 @@ where
         maximum_bytes.saturating_mul(2),
         PDP_REFERENCE_DECODE_MAX_DEPTH_V1,
     );
-    let payload: T =
-        norito::decode_from_bytes_with_limits(bytes, limits).map_err(|error| error.to_string())?;
-    let canonical = norito::to_bytes(&payload).map_err(|error| error.to_string())?;
-    if canonical != bytes {
-        return Err(format!(
-            "{schema} payload is not the exact canonical Norito encoding"
-        ));
-    }
-    Ok(payload)
+    norito::decode_canonical_with_limits(bytes, limits).map_err(|error| match error {
+        norito::Error::NonCanonicalEncoding => {
+            format!("{schema} payload is not the exact canonical Norito encoding")
+        }
+        other => other.to_string(),
+    })
 }
 fn pdp_decode_error(
     schema: &'static str,
@@ -8664,4 +8658,5 @@ mod tests {
     }
     include!("reference/tests/replication_and_cancel_validation.rs");
     include!("reference/tests/canonical_signed_frames.rs");
+    include!("reference/tests/bounded_frames.rs");
 }

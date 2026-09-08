@@ -222,6 +222,71 @@ validation directory. The post-custody terminal source baseline passes.
 Current-model Apalache, Verus and the coordinated Rust execution remain open;
 the earlier-model 18-step attempt cannot qualify the correction.
 
+The final repaired-model/source selection passes 54 checks in 459.49 seconds,
+including full production acceptance and all new custody/release/bridge controls.
+All nine registered source/doc hashes remain unchanged; the original 103 helper/
+test ASTs and 22 mutation mappings remain. Ordinary ingress also passes 24 copied
+baselines and 24 fully rehashed semantic controls before its two reviewed owner
+seals change. The final independent owner checker reports zero errors. That
+contract now retains exact authenticated worker handoff/settlement and the
+separate guarded CommitQC response. The last full 71-error diagnostic predates
+these corrections; no new full-gate result is claimed. Configuration and the
+separate decided-lane recovery owner remain under review.
+
+Configuration geometry now passes the complete Root owner and 24 independently
+rehashed semantic/order controls before and after its single reviewed seal update.
+Decided-body serving passes 72 copied baselines and 72 rehashed controls before
+adding 19 reviewed owner seals; canonical and existing-fixture acceptance then
+report zero errors. Existing test registrations/assertions and all 22 frozen
+runtime/model inputs remain. Evidence is retained in `config-geometry-review/`
+and `decided-serve-review/` under the durable validation directory.
+The shared Core capture at `2026-09-07T04:28:27.890002Z` passes compilation in
+564.617 seconds with all 22 scoped inputs unchanged. Its command was locked but
+not offline; unrelated Node sources changed outside the artifact dependency graph.
+The first copied-binary run completes 89 exact regressions with **39 pass/50 fail**,
+unchanged source/binary hashes and no skips. A separate real-wrapper test also
+fails: production minted the old model digest while authentication required the
+repaired digest, rejecting otherwise-valid ownership transitions.
+
+The four-file correction is ready at `05:01:04Z`: update only the four production
+model-identity words; expand real wrapper coverage to 25 producer/committee
+combinations plus altered-witness/source checks; fix production network and
+committed-manifest Queue setup in three application tests; use four nonzero BLS
+fixture seeds. All prior assertions remain. Exact failures, preimages, manifests
+and static verification are in `core-runtime-failure-review/` and
+`kura-replica-failure-triage/` under the durable validation directory. Rebuild and
+rerun all 89 plus the real wrapper test before claiming these repairs pass.
+
+Lifecycle certified-serving source checks pass 46/46. Four lane-output owners
+pass 43 independently rehashed controls before and after their four reviewed
+seal updates. Existing registrations and assertions remain; remaining source
+contracts and the complete diagnostic remain open.
+
+The Verus harness finishes naturally at `04:57:42Z` with exit zero and 1,690/221
+verified, zero errors. Its preserved evidence driver refuses qualification:
+172 was the historical expected second count, and `v2_core/tests.rs` changed
+within the 48-input inventory during the run. Audit the actual proof census and
+input closure, then rerun on a fresh stable scope; do not replace the count alone.
+Current-model Apalache remains live separately from the old-model run. No closure
+state changes.
+
+The second shared build terminates with exit 101 after 474.53 seconds, before
+producing a Core executable: SoraFS fixture key ownership and a missing nested
+Torii test module block compilation. The four-file repair has no runtime result
+yet. An actual production trace baseline also fails: its occurrence counter
+confuses the new activation guard with a dispatch arm. Structural review then
+finds 28 real shared-kernel/TLA actions, while registration retains only 27, and
+the 28th replica Queue-release helper bypasses the production witness wrapper.
+Repair the parser, exhaustive registration and real wrapper together; preserve
+all old action entries and test assertions. This is a source/evidence gap, not a
+demonstrated live exploit.
+
+Ingress effects and tombstone reconciliation passes 81 copied positives and 81
+fully rehashed negatives before updating four old seals and adding nine direct
+owner seals. Current tombstone inventory is 28 reads/nine guards plus two typed
+assignments. Exact preimages, semantic controls and unchanged runtime hashes are
+retained in `ingress-effects-review/`; the full source gate remains open.
+
 ## 2026-08-19 mutable-development closure snapshot
 
 - The checkout remains an unsigned, dirty mutable-development tree. Its
@@ -2274,6 +2339,26 @@ at least 1.5 times median committed throughput and p95 latency no worse than
 warmup policy, queue depths, offered/accepted/committed counts, CPU/memory/disk
 limits, lane/index/disk maxima, hardware identity, configuration, and source
 hash. No current benchmark artifact closes this gate.
+
+The strict unreleased V1 schema now requires fixed open-loop offers and a
+hash-bound per-transaction trace, explicit admission responses and exact global
+state-resolved Applied observations. Warmup drains before measurement; every
+accepted measurement transaction must complete by the bounded drain deadline.
+Throughput counts only in-window commits, while complete-cohort p95 includes the
+drain tail. Independent acknowledgment/commit windows preserve honest response
+races. Measurement and drain resource maxima both count. There is no old
+aggregate-only acceptance path. Validator tests pass 56 cases/86 subcases and
+runner integration passes 13 cases/nine subcases; every original test and
+assertion remains. These are synthetic contract checks, retained under
+`scaling-trace-contract/` and `scaling-runner-review/`, not scaling measurements.
+
+The real trial collector is also outstanding. The orchestrator accepts an external
+`--trial-command`; current `tx_load.py` supplies aggregate estimates and the CLI
+ping batch discards per-transaction confirmation results. The owner must provide
+an executable collector using the existing deployment/load paths, with exact
+transaction identities, offer/admission/commit timing, resource samples and fresh
+identity observations. Only then can the strict raw-sample validator and five
+paired measurements qualify throughput and latency.
 
 ### G-SDK — cross-SDK diagnostics and Native V2 parity
 

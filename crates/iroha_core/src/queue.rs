@@ -30218,14 +30218,17 @@ pub mod tests {
     fn bounded_pending_snapshot_charges_stale_front_pruning_to_scan_budget() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let state = State::new(world_with_test_domains(), kura, query_handle);
+        let mut state = State::new(world_with_test_domains(), kura, query_handle);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let first = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &first);
         let first_hash = first.hash_as_entrypoint();
         let second = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &second);
         let second_hash = second.hash_as_entrypoint();
         let third = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &third);
         let third_hash = third.hash_as_entrypoint();
         queue.push(first, state.view()).expect("push first");
         queue.push(second, state.view()).expect("push second");

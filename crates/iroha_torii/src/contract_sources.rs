@@ -2953,19 +2953,23 @@ mod tests {
     }
     #[test]
     fn pseudo_source_uses_branded_entrypoint_syntax() {
-        let descriptor = |name: &str, kind| EntrypointDescriptor {
+        let descriptor = |name: &str, kind| {
+            EntrypointDescriptor {
             name: name.to_owned(),
             kind,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: (kind == EntryPointKind::Kotoage).then(|| "Run".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
             access_hints_complete: Some(true),
             access_hints_skipped: Vec::new(),
             triggers: Vec::new(),
+        }
         };
         let mut run = descriptor("run", EntryPointKind::Kotoage);
         run.params.push(
@@ -3018,7 +3022,7 @@ mod tests {
             access_set_hints: None,
             entrypoints: Some(vec![typed]),
             states: None,
-            error_codes: None,
+            error_types: None,
             kotoba: None,
             provenance: None,
         };

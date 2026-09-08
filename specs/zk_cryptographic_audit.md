@@ -1,6 +1,6 @@
 # Iroha ZK Cryptographic Audit
 
-Original findings: 2026-08-23. Current implementation reconciliation: 2026-09-06.
+Original findings: 2026-08-23. Current implementation reconciliation: 2026-09-07.
 
 This is a repository-owned finding and disposition record, not an independent
 cryptographic audit certificate. Remediation statements describe source changes
@@ -923,6 +923,89 @@ FFI, and package-type parity, passes 62 tests with no skips. Native regression
 validation and a current provenance-checked local native package are pending.
 This finding does not claim that transport provenance alone grants production
 readiness or authorizes a transaction.
+
+### ZK-AUDIT-33: FASTPQ balance identity depended on account display configuration
+
+Severity: High for deterministic witness construction; no live consensus split
+is demonstrated.
+
+Status: Corrected in the shared model encoder, Core producer and prover. The
+focused model/prover selection passes 181 tests and all 11 Core integration
+tests pass. The regenerated 1,138,854-byte raw64 proof passes independent replay
+under its diagnostic budget; it still exceeds the production 512-KiB cap.
+
+Both balance-key helpers formerly concatenated the asset and account display
+strings. `AccountId` display uses an ambient chain discriminant, so the same
+canonical account could acquire different balance keys, paths and tree roots
+when that display setting changed. Parsing the resulting string in the trace
+also treated presentation text as the asset identity boundary.
+
+`iroha_data_model::fastpq::transfer_balance_key` now exclusively encodes the
+canonical Norito frame for `FastpqBalanceKeyV1`, with the asset definition and
+complete domainless account controller in declared field order. Trace projection
+strictly decodes that schema and takes the asset's 16-byte UUID. Display strings,
+alternate Norito layouts and other schemas are rejected without another decoder.
+The regression crosses four display discriminants with all ten declared caller
+layouts and checks identical key bytes, transfer paths and roots. Core fixtures
+also cover all eleven account algorithms and complete multisig controllers.
+The exact generated key fixture covers all 16 complete controllers. These
+results are not four-validator qualification. Subsequent coupled canonical
+batch/proof publication corrections are awaiting the next combined capture.
+
+### ZK-AUDIT-34: Managed SDK address admission accepted malformed curve keys
+
+Severity: High for canonical identity parity; on-chain acceptance of those keys
+is not demonstrated.
+
+Status: Remediation and native-package verification are in progress. Existing
+full-controller fixture passes do not close this finding.
+
+Public construction and parsing accepted eleven of twelve malformed vectors in
+C#, nine in Swift, JavaScript and Kotlin, and seven in each Python address
+implementation. The vectors include out-of-range secp256k1
+coordinates, invalid BLS encodings, invalid GOST coordinates and malformed SM2
+points. C# also admitted invalid Ed25519 representatives. Swift and JavaScript
+performed stricter Ed25519 checks, but their checks for the other affected curves
+were only structural. Length and algorithm tags cannot establish canonical
+public-key validity or subgroup membership.
+
+The remediation routes public address admission through the existing Rust ABI
+owner and fails closed when that owner is unavailable. It must preserve exact
+full-controller fixtures, reject every malformed vector through constructors and
+parsers, and execute against each actual final native package. Managed-only
+diagnostics and mocked native calls cannot close that package gate. Exact vectors
+and before-fix observations are retained under
+`target/privacy-release-evidence/2026-09-07-recovery/sdk-final/key-admission-audit.json`.
+
+Kotlin now uses a fixed eleven-algorithm catalog and one JNI admission method;
+the process-global curve selector and alternate parser APIs are removed.
+Fresh-process absence checks cover eight public entry points. Python separates
+the native owner into the transport-independent `iroha-native` distribution,
+with exact identity validation shared by the full SDK and Torii. Their source
+compile and absence checks do not replace installed native package execution.
+
+### ZK-AUDIT-35: Kotlin public-key multihash length narrowed a signed u64
+
+Severity: Medium for canonical SDK wire admission; on-chain acceptance is not
+demonstrated.
+
+Status: Source corrected and the bounded decoder regression passes. Actual
+rebuilt JNI positive/negative account suites remain pending.
+
+`Varint.decode` returns the bits of a decoded u64 in a signed `Long`. The public
+key decoder checked only its upper signed bound before narrowing to `Int`.
+The canonical length prefix `a0808080808080808001` represents `2^63 + 32` but
+narrowed to 32, allowing a valid Ed25519 key to satisfy a malformed enclosing
+length. Native cryptographic admission alone cannot detect this discarded
+envelope information.
+
+The decoder now requires the decoded value to be in `1..65535` before narrowing
+and compares it with the exact remaining bytes by subtraction. Truncated,
+overflowing and nonminimal varints return `null`; native-unavailable errors are
+preserved. Regressions cover the exact wrapping vector, other oversized lengths,
+truncation and pre-copy input bounds. Encoding snapshots caller key bytes before
+admission and publication, preventing validation of one mutable value followed
+by publication of another. The complete Rust key validator remains mandatory.
 
 ## Dependency Assumptions
 

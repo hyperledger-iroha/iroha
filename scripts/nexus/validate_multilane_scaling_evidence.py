@@ -21,8 +21,9 @@ import secrets
 import stat
 import statistics
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
+from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn, Sequence
 
@@ -31,6 +32,7 @@ EVIDENCE_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.evidence.v1"
 RUN_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.run.v1"
 IDENTITY_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.identity.v1"
 REPORT_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.validation.v1"
+TRACE_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.trace.v1"
 EXPECTED_PAIR_COUNT = 5
 MIN_INTERVAL_SAMPLES = 20
 MIN_LATENCY_SAMPLES = 100
@@ -41,6 +43,10 @@ SEED_DERIVATION = "sha256(seed_namespace + ':' + decimal_pair_index)"
 MAX_BUNDLE_FILE_COUNT = 256
 MAX_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
 MAX_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
+MAX_TRANSACTION_TRACE_ROWS = 1_000_000
+MAX_DRAIN_SECONDS = 300
+NANOSECONDS_PER_SECOND = 1_000_000_000
+LOGICAL_ID_DERIVATION = "sha256(seed + ':' + cohort + ':' + decimal_sequence)"
 
 REQUIRED_TOOLING = (
     ("localnet", "scripts/deploy_localnet.sh"),
@@ -49,6 +55,9 @@ REQUIRED_TOOLING = (
 )
 
 _DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+# The SDK's is_canonical_signed_transaction_hash_text and Hash::prehashed
+# require lowercase hex with the final least-significant bit set.
+_TRANSACTION_HASH_RE = re.compile(r"^[0-9a-f]{63}[13579bdf]$")
 _REVISION_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _SEED_NAMESPACE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _SAFE_PATH_COMPONENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -95,6 +104,8 @@ _WORKLOAD_FIELDS = {
     "offered_load_tps",
     "warmup_seconds",
     "measurement_seconds",
+    "drain_seconds",
+    "max_submission_lag_ms",
     "min_interval_samples",
     "min_latency_samples",
     "max_offered_load_deviation_fraction",
@@ -136,6 +147,8 @@ _RAW_RUN_FIELDS = {
     "status",
     "summary",
     "samples",
+    "warmup",
+    "drain",
     "artifacts",
 }
 _STATUS_FIELDS = {"outcome", "skipped", "failure"}
@@ -173,6 +186,20 @@ _RUN_ARTIFACT_FIELDS = {
     "lifecycle_snapshot",
     "metrics_snapshot",
     "load_generator_log",
+    "transaction_trace",
+}
+_COUNT_FIELDS = {"offered_count", "accepted_count", "committed_count"}
+_TRACE_FIELDS = {
+    "schema", "pair_index", "variant", "seed", "clock",
+    "logical_id_derivation", "transaction_hash_source", "transactions",
+}
+_TRANSACTION_FIELDS = {
+    "cohort", "sequence", "logical_id", "hash", "scheduled_offset_ns",
+    "offer_offset_ns", "submission_lag_ns", "acknowledgment", "applied",
+}
+_ACK_FIELDS = {"offset_ns", "hash", "status", "rejection"}
+_APPLIED_FIELDS = {
+    "offset_ns", "hash", "scope", "resolved_from", "status", "block_height",
 }
 
 
@@ -196,6 +223,10 @@ class RunMetrics:
     latency_sample_count: int
     latencies_ms: tuple[float, ...]
     maxima: dict[str, int]
+    cohort_accepted_count: int = 0
+    drain_accepted_count: int = 0
+    drain_committed_count: int = 0
+    drain_rejected_count: int = 0
 
 
 def _fail(message: str) -> NoReturn:
@@ -407,13 +438,14 @@ def _require_number(
     minimum: float | None = None,
     strictly_positive: bool = False,
 ) -> float:
-    if (
-        not isinstance(value, (int, float))
-        or isinstance(value, bool)
-        or not math.isfinite(value)
-    ):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
         _fail(f"{label} must be a finite number")
-    number = float(value)
+    try:
+        number = float(value)
+    except OverflowError:
+        _fail(f"{label} must be a finite number")
+    if not math.isfinite(number):
+        _fail(f"{label} must be a finite number")
     if strictly_positive and number <= 0:
         _fail(f"{label} must be greater than zero")
     if minimum is not None and number < minimum:
@@ -534,6 +566,268 @@ def _same_number(actual: float, expected: float) -> bool:
     return math.isclose(actual, expected, rel_tol=1e-12, abs_tol=1e-12)
 
 
+def _nanoseconds(value: Any, label: str, *, scale: int = NANOSECONDS_PER_SECOND) -> int:
+    """Require exact integer nanoseconds, without rounding a declared boundary."""
+
+    number = _require_number(value, label, minimum=0)
+    exact = Fraction(str(number)) * scale
+    if exact.denominator != 1 or exact > (1 << 63) - 1:
+        _fail(f"{label} must represent exact bounded integer nanoseconds")
+    return int(exact)
+
+
+def _offset_ns(value: Any, label: str) -> int:
+    """Read a signed, bounded monotonic-clock offset; booleans are invalid."""
+
+    if type(value) is not int or not -(1 << 63) < value < (1 << 63):
+        _fail(f"{label} must be a bounded integer nanosecond offset")
+    return value
+
+
+def _schedule(workload: dict[str, Any]) -> tuple[Fraction, int, int, int, int]:
+    """Check a fixed open-loop schedule before allocating or reading trace rows."""
+
+    rate = Fraction(str(workload["offered_load_tps"]))
+    warmup = _nanoseconds(workload["warmup_seconds"], "workload.warmup_seconds")
+    measurement = _nanoseconds(workload["measurement_seconds"], "workload.measurement_seconds")
+    drain = _nanoseconds(workload["drain_seconds"], "workload.drain_seconds")
+    lag = _nanoseconds(workload["max_submission_lag_ms"], "workload.max_submission_lag_ms", scale=1_000_000)
+    if drain == 0 or drain > MAX_DRAIN_SECONDS * NANOSECONDS_PER_SECOND:
+        _fail(f"workload.drain_seconds must be positive and at most {MAX_DRAIN_SECONDS}")
+    if warmup + measurement + 2 * drain >= 1 << 63:
+        _fail("workload phase boundaries exceed bounded nanosecond offsets")
+    period = Fraction(NANOSECONDS_PER_SECOND, 1) / rate
+    if period < 1 or lag > period / 4:
+        _fail("workload.max_submission_lag_ms must not exceed one quarter of an arrival period")
+    row_count = math.ceil(rate * warmup / NANOSECONDS_PER_SECOND) + math.ceil(
+        rate * measurement / NANOSECONDS_PER_SECOND
+    )
+    if row_count > MAX_TRANSACTION_TRACE_ROWS:
+        _fail(f"workload schedule exceeds the {MAX_TRANSACTION_TRACE_ROWS} transaction trace row bound")
+    return period, warmup, measurement, drain, lag
+
+
+def _reconcile_event_samples(
+    samples: list[Any],
+    events: dict[str, list[tuple[int, int, float]]],
+    *,
+    label: str,
+    final_inclusive: bool,
+) -> None:
+    """Bind interval counters and latency arrays to independent observed events."""
+
+    ordered = {name: sorted(values) for name, values in events.items()}
+    positions = {name: 0 for name in events}
+    for index, sample in enumerate(samples):
+        start = _nanoseconds(sample["start_offset_seconds"], f"{label}[{index}].start_offset_seconds")
+        end = _nanoseconds(sample["end_offset_seconds"], f"{label}[{index}].end_offset_seconds")
+        for name, values in ordered.items():
+            first = positions[name]
+            position = first
+            while position < len(values) and (
+                values[position][0] < end
+                or (final_inclusive and index == len(samples) - 1 and values[position][0] == end)
+            ):
+                if values[position][0] < start:
+                    _fail(f"{label}[{index}] leaves a transaction event outside its interval")
+                position += 1
+            if sample[name] != position - first:
+                _fail(f"{label}[{index}].{name} disagrees with transaction trace events")
+            if name == "committed_count":
+                expected = [value[2] for value in values[first:position]]
+                recorded = sample["commit_latencies_ms"]
+                if len(recorded) != len(expected) or any(
+                    not _same_number(actual, wanted)
+                    for actual, wanted in zip(recorded, expected)
+                ):
+                    _fail(f"{label}[{index}].commit_latencies_ms disagrees with complete transaction trace latencies")
+            positions[name] = position
+    if any(positions[name] != len(values) for name, values in ordered.items()):
+        _fail(f"{label} omits transaction trace events")
+
+
+def _validate_run_trace(
+    raw: dict[str, Any],
+    metrics: RunMetrics,
+    *,
+    evidence_root: Path,
+    workload: dict[str, Any],
+    budgets: dict[str, Any],
+    seen_transaction_hashes: set[str],
+) -> RunMetrics:
+    """Require a complete scheduled cohort, exact state completion, and its drain."""
+
+    label = f"pair {metrics.pair_index} {metrics.variant}"
+    period, warmup_ns, measurement_ns, drain_ns, lag_bound = _schedule(workload)
+    trace = _require_object(load_json(
+        evidence_root / raw["artifacts"]["transaction_trace"]["path"],
+        f"{label} transaction trace",
+    ), f"{label} transaction trace")
+    _require_exact_fields(trace, _TRACE_FIELDS, f"{label} transaction trace")
+    expected_header = {
+        "schema": TRACE_SCHEMA,
+        "pair_index": metrics.pair_index,
+        "variant": metrics.variant,
+        "seed": raw["seed"],
+        "clock": "monotonic_nanoseconds_relative_to_measurement_start",
+        "logical_id_derivation": LOGICAL_ID_DERIVATION,
+        "transaction_hash_source": "iroha_data_model::transaction::SignedTransaction::hash",
+    }
+    for name, expected in expected_header.items():
+        if trace[name] != expected or type(trace[name]) is not type(expected):
+            _fail(f"{label} transaction trace.{name} does not match its declared provenance")
+    rows = _require_list(trace["transactions"], f"{label} transaction trace.transactions")
+    warmup_count = math.ceil(Fraction(warmup_ns, 1) / period)
+    measurement_count = math.ceil(Fraction(measurement_ns, 1) / period)
+    if len(rows) > MAX_TRANSACTION_TRACE_ROWS or len(rows) != warmup_count + measurement_count:
+        _fail(f"{label} transaction trace has missing or extra scheduled requests or exceeds its row bound")
+
+    events = {phase: {name: [] for name in _COUNT_FIELDS} for phase in ("measurement", "drain")}
+    warmup_counts = dict.fromkeys(_COUNT_FIELDS, 0)
+    cohort_latencies: list[float] = []
+    drain_rejected_count = 0
+    for index, row_raw in enumerate(rows):
+        row_label = f"{label} transaction trace.transactions[{index}]"
+        row = _require_object(row_raw, row_label)
+        _require_exact_fields(row, _TRANSACTION_FIELDS, row_label)
+        is_warmup = index < warmup_count
+        cohort = "warmup" if is_warmup else "measurement"
+        sequence = index + 1 if is_warmup else index - warmup_count + 1
+        if row["cohort"] != cohort or type(row["sequence"]) is not int or row["sequence"] != sequence:
+            _fail(f"{row_label} has a missing, duplicate, or reordered scheduled cohort/sequence")
+        logical_id = hashlib.sha256(f"{raw['seed']}:{cohort}:{sequence}".encode("ascii")).hexdigest()
+        if row["logical_id"] != logical_id:
+            _fail(f"{row_label}.logical_id does not match the pair-seeded request")
+        tx_hash = _require_text(row["hash"], f"{row_label}.hash")
+        if _TRANSACTION_HASH_RE.fullmatch(tx_hash) is None:
+            _fail(f"{row_label}.hash is not a canonical signed transaction hash")
+        if tx_hash in seen_transaction_hashes:
+            _fail(f"{row_label}.hash duplicates a transaction identity in this matrix")
+        seen_transaction_hashes.add(tx_hash)
+        phase_start = -(warmup_ns + drain_ns) if is_warmup else 0
+        phase_end = -drain_ns if is_warmup else measurement_ns
+        scheduled = phase_start + math.floor((sequence - 1) * period)
+        if _offset_ns(row["scheduled_offset_ns"], f"{row_label}.scheduled_offset_ns") != scheduled:
+            _fail(f"{row_label} reschedules the fixed open-loop offer")
+        offer = _offset_ns(row["offer_offset_ns"], f"{row_label}.offer_offset_ns")
+        lag = _offset_ns(row["submission_lag_ns"], f"{row_label}.submission_lag_ns")
+        if lag != offer - scheduled or not 0 <= lag <= lag_bound or offer >= phase_end:
+            _fail(f"{row_label} misses the fixed submission-lag bound or offer window")
+        ack = _require_object(row["acknowledgment"], f"{row_label}.acknowledgment")
+        _require_exact_fields(ack, _ACK_FIELDS, f"{row_label}.acknowledgment")
+        ack_offset = _offset_ns(ack["offset_ns"], f"{row_label}.acknowledgment.offset_ns")
+        deadline = 0 if is_warmup else measurement_ns + drain_ns
+        if ack["hash"] != tx_hash or ack["status"] not in ("Accepted", "Rejected"):
+            _fail(f"{row_label} acknowledgment has an unknown status or mismatched transaction identity")
+        if ack_offset < offer or ack_offset > deadline or (is_warmup and ack_offset == 0):
+            _fail(f"{row_label} acknowledgment is before offer, after the drain deadline, or leaves warmup undrained")
+        accepted = ack["status"] == "Accepted"
+        applied_offset: int | None = None
+        latency = 0.0
+        if accepted:
+            if ack["rejection"] is not None:
+                _fail(f"{row_label} Accepted acknowledgment must have null rejection")
+            applied = _require_object(row["applied"], f"{row_label}.applied")
+            _require_exact_fields(applied, _APPLIED_FIELDS, f"{row_label}.applied")
+            if (
+                applied["hash"] != tx_hash or applied["scope"] != "global"
+                or applied["resolved_from"] != "state" or applied["status"] != "Applied"
+            ):
+                _fail(f"{row_label} accepted transaction lacks exact authoritative global StateApplied")
+            height = _require_int(applied["block_height"], f"{row_label}.applied.block_height", minimum=1)
+            if height > (1 << 64) - 1:
+                _fail(f"{row_label}.applied.block_height exceeds the authoritative u64 height bound")
+            applied_offset = _offset_ns(applied["offset_ns"], f"{row_label}.applied.offset_ns")
+            # A response may race a state observation; do not reorder either event.
+            if applied_offset <= offer or applied_offset > deadline or (is_warmup and applied_offset == 0):
+                _fail(f"{row_label} StateApplied is before offer, after the drain deadline, or leaves warmup undrained")
+            latency = (applied_offset - offer) / 1_000_000
+        else:
+            _require_text(ack["rejection"], f"{row_label}.acknowledgment.rejection")
+            if row["applied"] is not None:
+                _fail(f"{row_label} admission rejection cannot also claim StateApplied")
+        if is_warmup:
+            warmup_counts["offered_count"] += 1
+            warmup_counts["accepted_count"] += int(accepted)
+            warmup_counts["committed_count"] += int(accepted)
+            continue
+        events["measurement"]["offered_count"].append((offer, sequence, 0.0))
+        if not accepted and ack_offset >= measurement_ns:
+            drain_rejected_count += 1
+        if accepted:
+            ack_phase = "measurement" if ack_offset < measurement_ns else "drain"
+            events[ack_phase]["accepted_count"].append((ack_offset, sequence, 0.0))
+            assert applied_offset is not None
+            applied_phase = "measurement" if applied_offset < measurement_ns else "drain"
+            events[applied_phase]["committed_count"].append((applied_offset, sequence, latency))
+            cohort_latencies.append(latency)
+
+    warmup = _require_object(raw["warmup"], f"{label}.warmup")
+    _require_exact_fields(warmup, _COUNT_FIELDS, f"{label}.warmup")
+    for name, expected in warmup_counts.items():
+        if _require_int(warmup[name], f"{label}.warmup.{name}") != expected:
+            _fail(f"{label}.warmup.{name} disagrees with its separate fully drained cohort")
+    _reconcile_event_samples(raw["samples"], events["measurement"], label=f"{label}.samples", final_inclusive=False)
+
+    drain = _require_object(raw["drain"], f"{label}.drain")
+    _require_exact_fields(drain, {"summary", "samples"}, f"{label}.drain")
+    summary = _require_object(drain["summary"], f"{label}.drain.summary")
+    _require_exact_fields(summary, _SUMMARY_FIELDS, f"{label}.drain.summary")
+    samples = _require_list(drain["samples"], f"{label}.drain.samples")
+    if not samples or len(samples) > MAX_TRANSACTION_TRACE_ROWS:
+        _fail(f"{label}.drain.samples must contain bounded, complete drain observations")
+    max_interval = max(
+        _nanoseconds(sample["end_offset_seconds"], "measurement interval end")
+        - _nanoseconds(sample["start_offset_seconds"], "measurement interval start")
+        for sample in raw["samples"]
+    )
+    totals = dict.fromkeys(_COUNT_FIELDS, 0)
+    drain_maxima = dict.fromkeys(_BUDGET_FIELDS, 0)
+    previous_end = measurement_ns
+    for index, sample_raw in enumerate(samples):
+        sample_label = f"{label}.drain.samples[{index}]"
+        sample = _require_object(sample_raw, sample_label)
+        _require_exact_fields(sample, _SAMPLE_FIELDS, sample_label)
+        if type(sample["sequence"]) is not int or sample["sequence"] != index + 1:
+            _fail(f"{sample_label}.sequence is unordered")
+        start = _nanoseconds(sample["start_offset_seconds"], f"{sample_label}.start_offset_seconds")
+        end = _nanoseconds(sample["end_offset_seconds"], f"{sample_label}.end_offset_seconds")
+        if start != previous_end or not 0 < end - start <= max_interval or end > measurement_ns + drain_ns:
+            _fail(f"{sample_label} is unordered, leaves a drain gap, or weakens observation cadence")
+        previous_end = end
+        for name in _COUNT_FIELDS:
+            totals[name] += _require_int(sample[name], f"{sample_label}.{name}")
+        latencies = _require_list(sample["commit_latencies_ms"], f"{sample_label}.commit_latencies_ms")
+        if len(latencies) != sample["committed_count"]:
+            _fail(f"{sample_label} must contain one latency for every committed transaction")
+        for latency in latencies:
+            _require_number(latency, f"{sample_label}.commit_latencies_ms", strictly_positive=True)
+        for name in _BUDGET_FIELDS:
+            observed = _require_int(sample[name.removesuffix("_max")], f"{sample_label}.{name}")
+            if observed > budgets[name]:
+                _fail(f"{sample_label} exceeds {name} budget during drain")
+            drain_maxima[name] = max(drain_maxima[name], observed)
+    if previous_end != measurement_ns + drain_ns:
+        _fail(f"{label}.drain.samples do not exactly cover the bounded drain window")
+    for name, expected in (totals | drain_maxima).items():
+        if _require_int(summary[name], f"{label}.drain.summary.{name}") != expected:
+            _fail(f"{label}.drain.summary.{name} is inconsistent with raw drain samples")
+    _reconcile_event_samples(samples, events["drain"], label=f"{label}.drain.samples", final_inclusive=True)
+    if len(cohort_latencies) != metrics.accepted_count + totals["accepted_count"]:
+        _fail(f"{label} accepted cohort accounting disagrees with complete StateApplied observations")
+    return replace(
+        metrics,
+        p95_latency_ms=_nearest_rank_p95(cohort_latencies),
+        latency_sample_count=len(cohort_latencies),
+        latencies_ms=tuple(cohort_latencies),
+        maxima={name: max(metrics.maxima[name], drain_maxima[name]) for name in _BUDGET_FIELDS},
+        cohort_accepted_count=len(cohort_latencies),
+        drain_accepted_count=totals["accepted_count"],
+        drain_committed_count=totals["committed_count"],
+        drain_rejected_count=drain_rejected_count,
+    )
+
+
 def _validate_raw_run(
     raw: Any,
     *,
@@ -651,6 +945,8 @@ def _validate_raw_run(
         _fail(f"{label}.summary.committed_count exceeds accepted_count")
 
     samples = _require_list(run["samples"], f"{label}.samples")
+    if len(samples) > MAX_TRANSACTION_TRACE_ROWS:
+        _fail(f"{label}.samples exceeds the bounded interval sample count")
     minimum_intervals = workload["min_interval_samples"]
     if len(samples) < minimum_intervals:
         _fail(
@@ -929,6 +1225,16 @@ def validate_evidence(
             "evidence manifest.workload.measurement_seconds",
             strictly_positive=True,
         ),
+        "drain_seconds": _require_number(
+            workload["drain_seconds"],
+            "evidence manifest.workload.drain_seconds",
+            strictly_positive=True,
+        ),
+        "max_submission_lag_ms": _require_number(
+            workload["max_submission_lag_ms"],
+            "evidence manifest.workload.max_submission_lag_ms",
+            minimum=0,
+        ),
         "min_interval_samples": _require_int(
             workload["min_interval_samples"],
             "evidence manifest.workload.min_interval_samples",
@@ -953,6 +1259,7 @@ def validate_evidence(
             "evidence manifest.workload.max_offered_load_deviation_fraction "
             f"must be exactly {MAX_OFFERED_LOAD_DEVIATION_FRACTION}"
         )
+    _schedule(workload_values)
 
     budgets = _require_object(manifest["budgets"], "evidence manifest.budgets")
     _require_exact_fields(budgets, _BUDGET_FIELDS, "evidence manifest.budgets")
@@ -1063,6 +1370,7 @@ def validate_evidence(
     seen_log_paths: set[Path] = set()
     seen_support_paths: set[Path] = set()
     metrics: list[RunMetrics] = []
+    raw_runs: list[dict[str, Any]] = []
     for sequence, (entry_raw, expected) in enumerate(
         zip(runs, expected_order),
         start=1,
@@ -1114,6 +1422,7 @@ def validate_evidence(
         if raw_path == log_path:
             _fail(f"{label} cannot use the raw sample file as its command log")
         raw = load_json(raw_path, f"{label} raw samples")
+        raw_runs.append(raw)
         metrics.append(
             _validate_raw_run(
                 raw,
@@ -1137,6 +1446,7 @@ def validate_evidence(
     baseline_one_lane_ids: tuple[str, ...] | None = None
     baseline_four_lane_ids: tuple[str, ...] | None = None
     baseline_offered_count: int | None = None
+    seen_transaction_hashes: set[str] = set()
     for pair_index in range(1, EXPECTED_PAIR_COUNT + 1):
         one = metrics[(pair_index - 1) * 2]
         four = metrics[(pair_index - 1) * 2 + 1]
@@ -1158,6 +1468,16 @@ def validate_evidence(
                 f"pair {pair_index} offered count drifted across trials: "
                 f"{one.offered_count} != {baseline_offered_count}"
             )
+        one = _validate_run_trace(
+            raw_runs[(pair_index - 1) * 2], one,
+            evidence_root=root, workload=workload_values, budgets=budget_values,
+            seen_transaction_hashes=seen_transaction_hashes,
+        )
+        four = _validate_run_trace(
+            raw_runs[(pair_index - 1) * 2 + 1], four,
+            evidence_root=root, workload=workload_values, budgets=budget_values,
+            seen_transaction_hashes=seen_transaction_hashes,
+        )
         one_runs.append(one)
         four_runs.append(four)
         pairs.append(
@@ -1177,6 +1497,14 @@ def validate_evidence(
                 "four_lane_interval_samples": four.interval_sample_count,
                 "one_lane_latency_samples": one.latency_sample_count,
                 "four_lane_latency_samples": four.latency_sample_count,
+                "one_lane_cohort_accepted_count": one.cohort_accepted_count,
+                "four_lane_cohort_accepted_count": four.cohort_accepted_count,
+                "one_lane_drain_accepted_count": one.drain_accepted_count,
+                "four_lane_drain_accepted_count": four.drain_accepted_count,
+                "one_lane_drain_committed_count": one.drain_committed_count,
+                "four_lane_drain_committed_count": four.drain_committed_count,
+                "one_lane_drain_rejected_count": one.drain_rejected_count,
+                "four_lane_drain_rejected_count": four.drain_rejected_count,
                 "one_lane_resource_maxima": one.maxima,
                 "four_lane_resource_maxima": four.maxima,
             }
@@ -1232,6 +1560,7 @@ def validate_evidence(
     return {
         "pair_count": EXPECTED_PAIR_COUNT,
         "run_count": expected_run_count,
+        "latency_scope": "complete accepted measurement cohort, offer to client-observed global StateApplied, including drain",
         "one_lane_median_committed_throughput_tps": one_median,
         "four_lane_median_committed_throughput_tps": four_median,
         "four_to_one_median_throughput_ratio": throughput_ratio,

@@ -18,7 +18,7 @@
                     payload: payload,
                     tag_length: tag_length,
                 );
-                ledger::trigger::set_enabled(Name::parse("scheduled"), enabled);
+                ledger::trigger::set_enabled(trigger: Name::parse("scheduled"), enabled: enabled);
                 let _vrf = crypto::vrf::verify(request: payload);
             }
         

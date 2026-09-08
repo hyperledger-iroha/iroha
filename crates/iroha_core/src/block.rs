@@ -29987,21 +29987,6 @@ pub(crate) mod tests {
         unexpected_leg.participant_settlement =
             iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
                 unexpected_leg.lane_id,
-                unexpected_leg.participant_settlement.dataspace_id(),
-                unexpected_leg.participant_settlement.lane_incarnation(),
-                unexpected_leg
-                    .participant_settlement
-                    .participant_lane_block_height(),
-                unexpected_leg
-                    .participant_settlement
-                    .authority_context_height(),
-                None,
-                unexpected_leg.participant_settlement.source_ids().to_vec(),
-            )
-            .expect("valid conflicting Native control identity");
-        unexpected_leg.participant_settlement =
-            iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
-                unexpected_leg.participant_settlement.lane_id(),
                 unexpected_leg.dataspace_id,
                 unexpected_leg.participant_settlement.lane_incarnation(),
                 unexpected_leg
@@ -30010,9 +29995,7 @@ pub(crate) mod tests {
                 unexpected_leg
                     .participant_settlement
                     .authority_context_height(),
-                unexpected_leg
-                    .participant_settlement
-                    .previous_native_settlement_hash(),
+                None,
                 unexpected_leg.participant_settlement.source_ids().to_vec(),
             )
             .expect("valid conflicting Native control identity");

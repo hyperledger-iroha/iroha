@@ -417,8 +417,14 @@ final class NativeBridgeLoaderTests: XCTestCase {
 
         var root = URL(fileURLWithPath: #filePath)
         for _ in 0..<4 { root.deleteLastPathComponent() }
+        // Match the package's authenticated artifact input when qualification uses
+        // an external XCFramework instead of a repository-local build output.
+        let artifactDirectory = ProcessInfo.processInfo.environment[
+            "MOBILE_SDK_APPLE_ARTIFACT_DIR"
+        ].map { URL(fileURLWithPath: $0, isDirectory: true) }
+            ?? root.appendingPathComponent("dist", isDirectory: true)
         let url = stagedBridgeURL(
-            root: root.appendingPathComponent("dist/NoritoBridge.xcframework"),
+            root: artifactDirectory.appendingPathComponent("NoritoBridge.xcframework"),
             identifier: identifier
         )
         try requireNativeTestCapability(

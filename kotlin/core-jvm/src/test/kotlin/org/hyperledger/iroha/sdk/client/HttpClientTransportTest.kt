@@ -102,7 +102,7 @@ class HttpClientTransportTest {
             "/api/v1/accounts/$accountId/identifiers/claim-receipt",
             executor.lastRequest.uri.path,
         )
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(accountId, null).canonicalHex(), executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertEquals(AccountAddress.parseEncoded(accountId, null).canonicalHex(), executor.lastRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
         assertEquals(
             org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy.ONE_SHOT,
             executor.lastRequest.replayPolicy,
@@ -1415,6 +1415,40 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun contractCallPreservesUnitAndNestedOptionTags() {
+        val fixture = loadSharedFixture("fixtures/kotodama/entrypoint_argument_record_v1.json")
+        val boundary = obj(fixture, "torii_boundary")
+        val invocation = ContractInvocation(
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            ByteArray(32) { 0x11 },
+            string(boundary, "entrypoint"),
+            hexToBytes(string(obj(fixture, "entrypoint_argument_record_v1"), "norito_hex")),
+        )
+        for (value in listOf(
+            """{"some":null}""",
+            """{"none":true}""",
+            """{"some":{"none":true}}""",
+            """{"some":{"some":null}}""",
+        )) {
+            val payload = mapOf("value" to JsonParser.parse(value))
+            val executor = StubResponseExecutor(503, "boundary reached".toByteArray(StandardCharsets.UTF_8))
+            val transport = HttpClientTransport(executor, signedClientConfig("https://fixture.invalid"))
+            assertFailsWith<CompletionException> {
+                transport.prepareContractCall(
+                    authority = string(boundary, "authority"),
+                    feePayment = FeePaymentJson.parse(boundary["fee_payment"], "fee_payment"),
+                    contractAlias = string(boundary, "contract_alias"),
+                    entrypoint = string(boundary, "entrypoint"),
+                    payload = payload,
+                    draftIntent = ContractCallDraftIntent(invocation, emptyMap()),
+                ).join()
+            }
+            val sent = JsonParser.parse(readBody(executor.lastRequest)) as Map<*, *>
+            assertEquals(payload, sent["payload"], value)
+        }
+    }
+
+    @Test
     fun proposeMultisigPostsNativeNoritoInstructionPayloadsAndParsesResponse() {
         val instructionBytes = NoritoJavaCodecAdapter.encodeInstructionBox(
             InstructionBox.fromWirePayload(
@@ -2598,7 +2632,7 @@ class HttpClientTransportTest {
     fun quoteFeesUsesControllerIdentityAndAllowsCanonicalAliasAuth() {
         val canonicalAuthority = testAccountId(0x1d)
         val alternateAuthority =
-            AccountAddress.parseEncodedIgnoringCurveSupport(canonicalAuthority, null).toI105(42)
+            AccountAddress.parseEncoded(canonicalAuthority, null).toI105(42)
         val executor = StubResponseExecutor(
             200,
             authorityFeeQuoteResponse(canonicalAuthority),
@@ -2912,7 +2946,7 @@ class HttpClientTransportTest {
 
         FeePaymentJson.parseQuote(quoteBytes()).validateForDraft(intent, authority)
         val alternateSponsor =
-            AccountAddress.parseEncodedIgnoringCurveSupport(sponsor, null).toI105(42)
+            AccountAddress.parseEncoded(sponsor, null).toI105(42)
         val alternateIntent = FeePaymentIntent.sponsor(
             FeeSponsorProgramId(alternateSponsor, "wallet_fx"),
             3,
@@ -2951,7 +2985,7 @@ class HttpClientTransportTest {
     fun getFeeSponsorProgramSignsExactSelectorAndParsesLifecycle() {
         val sponsor = testMultisigAccountId()
         val responseSponsor =
-            AccountAddress.parseEncodedIgnoringCurveSupport(sponsor, null).toI105(42)
+            AccountAddress.parseEncoded(sponsor, null).toI105(42)
         val executor = StubResponseExecutor(
             statusCode = 200,
             body = """
@@ -3876,7 +3910,7 @@ class HttpClientTransportTest {
         val request = assertNotNull(executor.lastRequest)
         assertEquals("POST", request.method)
         assertEquals("https://torii.example/api/v1/aliases/setup/plan", request.uri.toString())
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals(AccountAddress.parseEncoded(authority, null).canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         @Suppress("UNCHECKED_CAST")
         val sent = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals(1L, sent["schema_version"])
@@ -3948,7 +3982,7 @@ class HttpClientTransportTest {
             "https://torii.example/api/v1/aliases/lease/renew/plan",
             lifecycleHttpRequest.uri.toString(),
         )
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(authority, null).canonicalHex(), lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals(AccountAddress.parseEncoded(authority, null).canonicalHex(), lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
         val lifecycleJson = readBody(lifecycleHttpRequest)
         assertFalse(lifecycleJson.contains("private_key"))
         assertFalse(lifecycleJson.contains("payment_proof"))
@@ -4190,7 +4224,7 @@ class HttpClientTransportTest {
         assertEquals("merchant@banka.paynet", response.get().items.single().alias)
         val request = assertNotNull(executor.lastRequest)
         assertEquals("https://torii.example/api/v1/aliases/by-account", request.uri.toString())
-        assertEquals(AccountAddress.parseEncodedIgnoringCurveSupport(account, null).canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertEquals(AccountAddress.parseEncoded(account, null).canonicalHex(), request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
         assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-list-nonce-1")
     }
 

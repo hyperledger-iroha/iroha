@@ -101,6 +101,8 @@ pub enum ResolvedValueTarget {
     Const(SymbolId),
     /// Stable declared error code.
     ErrorCode(u32),
+    /// Three-segment variant path authenticated by the locked type import graph.
+    ImportedErrorVariant,
     /// Compiler-owned value such as a rounding mode or JSON null.
     Intrinsic,
     /// State supplied by an explicitly typed standalone-test target.
@@ -115,8 +117,12 @@ pub enum ResolvedTypeTarget {
     Builtin,
     /// User-defined struct declaration.
     Struct(SymbolId),
+    /// Nominal payloadless error enum declaration.
+    ErrorEnum(SymbolId),
     /// Struct supplied by an explicitly typed standalone-test target.
     ExternalStruct,
+    /// Two-segment type path authenticated by the locked package export graph.
+    ExternalType,
 }
 /// One resolved named type use.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -269,6 +275,8 @@ pub struct ResolvedCall {
     pub source: crate::source::SourceRange,
     /// Exact source range of the called name.
     pub name_source: crate::source::SourceRange,
+    /// Exact source-order argument labels; positional arguments have no label range.
+    pub argument_name_sources: Vec<Option<crate::source::SourceRange>>,
     /// Owning function declaration, when the call occurs in a function.
     pub owner: Option<NodeId>,
     /// Source spelling.
@@ -297,6 +305,10 @@ impl ResolvedProgram {
     #[must_use]
     pub const fn source_map(&self) -> &AstSourceMap {
         &self.facts.source_map
+    }
+    /// Retain parser-owned source identities for compiler lint diagnostics.
+    pub(crate) const fn lint_facts(&self) -> &AstFacts {
+        &self.facts
     }
     /// Return the immutable target/scope/binding arena required by typing.
     pub(crate) fn arena(&self) -> Arc<ResolvedArena> {
@@ -1216,14 +1228,20 @@ fn resolve_type(
     source: &SourceFile,
     fact: &TypeUseFact,
     structs: &BTreeMap<String, SymbolId>,
+    errors: &BTreeMap<String, SymbolId>,
     external_structs: &BTreeSet<String>,
+    resolve_imports: bool,
 ) -> Result<ResolvedTypeUse, Box<Diagnostic>> {
     let target = if builtin_type(&fact.name) {
         ResolvedTypeTarget::Builtin
     } else if let Some(symbol) = structs.get(&fact.name) {
         ResolvedTypeTarget::Struct(*symbol)
+    } else if let Some(symbol) = errors.get(&fact.name) {
+        ResolvedTypeTarget::ErrorEnum(*symbol)
     } else if external_structs.contains(&fact.name) {
         ResolvedTypeTarget::ExternalStruct
+    } else if resolve_imports && explicit_import_call(&fact.name) {
+        ResolvedTypeTarget::ExternalType
     } else {
         return Err(Box::new(Diagnostic::error(
             "K2002",
@@ -1248,6 +1266,7 @@ fn resolve_type(
 struct GlobalTargets {
     all: BTreeMap<String, SymbolId>,
     structs: BTreeMap<String, SymbolId>,
+    errors: BTreeMap<String, SymbolId>,
     functions: BTreeMap<String, SymbolId>,
     states: BTreeMap<String, SymbolId>,
     consts: BTreeMap<String, SymbolId>,
@@ -1523,7 +1542,9 @@ impl<'a> HirLowerer<'a> {
         let reserved = crate::semantic::is_reserved_source_declaration(name, false);
         let previous = visible.get(name).copied();
         let global = self.globals.all.contains_key(name);
-        if reserved || previous.is_some() || global {
+        if name == "_" {
+            // A discard owns provenance but never enters the value namespace.
+        } else if reserved || previous.is_some() || global {
             let message = if reserved {
                 format!("local binding `{name}` uses a compiler-reserved name")
             } else if previous.is_some() {
@@ -1583,12 +1604,21 @@ impl<'a> HirLowerer<'a> {
             Some(ResolvedValueTarget::Const(*symbol))
         } else if let Some(code) = self.globals.error_codes.get(name) {
             Some(ResolvedValueTarget::ErrorCode(*code))
-        } else if crate::semantic::V1_ROUNDING_PATHS.contains(&name) || name == "null" {
+        } else if crate::semantic::V1_ROUNDING_PATHS.contains(&name)
+            || name == "null"
+            || crate::testing::REJECTION_SELECTORS.contains(&name)
+        {
             Some(ResolvedValueTarget::Intrinsic)
         } else if self.globals.external_states.contains(name) {
             Some(ResolvedValueTarget::ExternalState)
         } else if self.globals.external_consts.contains(name) {
             Some(ResolvedValueTarget::ExternalConst)
+        } else if self.globals.resolve_import_calls
+            && name.rsplit_once("::").is_some_and(|(namespace, variant)| {
+                explicit_import_call(namespace) && !variant.is_empty()
+            })
+        {
+            Some(ResolvedValueTarget::ImportedErrorVariant)
         } else {
             self.globals
                 .external_error_codes
@@ -1612,8 +1642,12 @@ impl<'a> HirLowerer<'a> {
     ) -> Option<ResolvedTypeTarget> {
         if builtin_type(name) {
             Some(ResolvedTypeTarget::Builtin)
+        } else if let Some(symbol) = self.globals.errors.get(name) {
+            Some(ResolvedTypeTarget::ErrorEnum(*symbol))
         } else if self.globals.external_structs.contains(name) {
             Some(ResolvedTypeTarget::ExternalStruct)
+        } else if self.globals.resolve_import_calls && explicit_import_call(name) {
+            Some(ResolvedTypeTarget::ExternalType)
         } else {
             self.globals
                 .structs
@@ -1696,6 +1730,10 @@ impl<'a> HirLowerer<'a> {
                 }
             }
             TypeExpr::Const(_) => {}
+            TypeExpr::ConstExpression(expression) => {
+                let current = std::mem::replace(expression.as_mut(), Expr::IntLiteral(0.into()));
+                **expression = self.wrap_expr(current, scope, &BTreeMap::new());
+            }
             TypeExpr::Source { .. } | TypeExpr::Resolved { .. } => {
                 self.diagnostics.push(Diagnostic::error(
                     "K2099",
@@ -1720,9 +1758,10 @@ impl<'a> HirLowerer<'a> {
         owner: Option<NodeId>,
         source: Option<SourceRange>,
     ) -> Vec<BindingId> {
-        let names = match pattern {
-            Pattern::Name(name) => std::slice::from_ref(name),
-            Pattern::Tuple(names) => names.as_slice(),
+        let names: Vec<&String> = match pattern {
+            Pattern::Name(name) => vec![name],
+            Pattern::Tuple(names) => names.iter().collect(),
+            Pattern::Struct { fields, .. } => fields.iter().map(|field| &field.binding).collect(),
         };
         names
             .iter()
@@ -1944,48 +1983,22 @@ impl<'a> HirLowerer<'a> {
                 }
                 self.wrap_block(body, loop_scope, &mut loop_visible);
             }
-            Statement::ForEachMap {
-                key,
-                value,
-                map,
-                body,
-            } => {
+            Statement::ForEachMap { pat, map, body } => {
                 let current = std::mem::replace(map, Expr::Bool(false));
                 *map = self.wrap_expr(current, scope, visible);
                 let loop_scope = self.new_scope(scope);
                 let mut loop_visible = visible.clone();
-                let (key_node, key_source) =
-                    self.consume_binding_fact(source_node, 0, key, ResolvedBindingKind::Iterator);
-                let mut bindings = vec![self.declare_binding(
+                let bindings = self.declare_pattern(
+                    pat,
                     loop_scope,
                     &mut loop_visible,
-                    key,
                     BindingProperties {
                         kind: ResolvedBindingKind::Iterator,
                         mutable: false,
                     },
-                    key_node,
-                    key_source.or(source),
-                )];
-                if let Some(value) = value {
-                    let (value_node, value_source) = self.consume_binding_fact(
-                        source_node,
-                        1,
-                        value,
-                        ResolvedBindingKind::Iterator,
-                    );
-                    bindings.push(self.declare_binding(
-                        loop_scope,
-                        &mut loop_visible,
-                        value,
-                        BindingProperties {
-                            kind: ResolvedBindingKind::Iterator,
-                            mutable: false,
-                        },
-                        value_node,
-                        value_source.or(source),
-                    ));
-                }
+                    source_node,
+                    source,
+                );
                 self.node_mut(id).bindings = bindings;
                 self.wrap_block(body, loop_scope, &mut loop_visible);
             }
@@ -2075,7 +2088,9 @@ impl<'a> HirLowerer<'a> {
             Expr::StructLiteral { name, fields } => {
                 self.node_mut(id).target = if let Some(symbol) = self.globals.structs.get(name) {
                     Some(ResolvedTarget::StructLiteral(*symbol))
-                } else if self.globals.external_structs.contains(name) {
+                } else if self.globals.external_structs.contains(name)
+                    || (self.globals.resolve_import_calls && explicit_import_call(name))
+                {
                     Some(ResolvedTarget::ExternalStructLiteral)
                 } else {
                     None
@@ -2377,6 +2392,19 @@ fn resolve_with_imports_and_externals(
     resolve_import_calls: bool,
     external: &ExternalResolutionEnvironment,
 ) -> Result<ResolvedProgram, DiagnosticBundle> {
+    resolve_with_imports_and_externals_inner(ast, source, resolve_import_calls, external).map_err(
+        |mut diagnostics| {
+            diagnostics.capture_source(source);
+            diagnostics
+        },
+    )
+}
+fn resolve_with_imports_and_externals_inner(
+    ast: SpannedProgram,
+    source: &SourceFile,
+    resolve_import_calls: bool,
+    external: &ExternalResolutionEnvironment,
+) -> Result<ResolvedProgram, DiagnosticBundle> {
     if ast.facts.source_map.source() != source.id() {
         return Err(DiagnosticBundle::single(Diagnostic::error(
             "K2099",
@@ -2389,6 +2417,7 @@ fn resolve_with_imports_and_externals(
     let mut symbols = Vec::new();
     let mut globals = BTreeMap::<String, (SymbolId, &DeclarationFact)>::new();
     let mut structs = BTreeMap::<String, SymbolId>::new();
+    let mut errors = BTreeMap::<String, SymbolId>::new();
     let mut functions = BTreeMap::<String, SymbolId>::new();
     let mut states = BTreeMap::<String, SymbolId>::new();
     let mut consts = BTreeMap::<String, SymbolId>::new();
@@ -2438,14 +2467,16 @@ fn resolve_with_imports_and_externals(
             DeclarationKind::Struct => {
                 structs.insert(fact.name.clone(), id);
             }
+            DeclarationKind::ErrorEnum => {
+                errors.insert(fact.name.clone(), id);
+            }
             DeclarationKind::State => {
                 states.insert(fact.name.clone(), id);
             }
             DeclarationKind::Const => {
                 consts.insert(fact.name.clone(), id);
             }
-            DeclarationKind::SourceUnit | DeclarationKind::ErrorEnum | DeclarationKind::Trigger => {
-            }
+            DeclarationKind::SourceUnit | DeclarationKind::Trigger => {}
             DeclarationKind::Parameter => unreachable!("parameters were handled above"),
         }
         symbols.push(ResolvedSymbol {
@@ -2468,6 +2499,19 @@ fn resolve_with_imports_and_externals(
             .and_then(|fact| ast.facts.source_map.source_range(fact.node))
     };
     let mut error_codes = BTreeMap::new();
+    for descriptor in [
+        ivm_abi::error_types::list_error_type(),
+        ivm_abi::error_types::numeric_error_type(),
+    ] {
+        let name = descriptor
+            .identity
+            .rsplit("::")
+            .next()
+            .expect("builtin error name");
+        for variant in &descriptor.variants {
+            error_codes.insert(format!("{name}::{}", variant.name), variant.code);
+        }
+    }
     for item in &ast.program.items {
         match item {
             Item::Struct(definition) => {
@@ -2513,7 +2557,15 @@ fn resolve_with_imports_and_externals(
     }
     let mut types = Vec::with_capacity(ast.facts.type_uses.len());
     for fact in &ast.facts.type_uses {
-        match resolve_type(&ast, source, fact, &structs, &external.structs) {
+        match resolve_type(
+            &ast,
+            source,
+            fact,
+            &structs,
+            &errors,
+            &external.structs,
+            resolve_import_calls,
+        ) {
             Ok(resolved) => types.push(resolved),
             Err(diagnostic) => diagnostics.push(*diagnostic),
         }
@@ -2541,6 +2593,11 @@ fn resolve_with_imports_and_externals(
             calls.push(ResolvedCall {
                 node: fact.node,
                 name_node: fact.name_node,
+                argument_name_sources: fact
+                    .argument_name_nodes
+                    .iter()
+                    .map(|node| node.and_then(|node| ast.facts.source_map.source_range(node)))
+                    .collect(),
                 source: ast
                     .facts
                     .source_map
@@ -2596,6 +2653,7 @@ fn resolve_with_imports_and_externals(
             .map(|(name, (id, _))| (name.clone(), *id))
             .collect(),
         structs,
+        errors,
         functions,
         states,
         consts,

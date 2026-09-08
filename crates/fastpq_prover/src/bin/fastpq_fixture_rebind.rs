@@ -10,6 +10,10 @@ use fastpq_prover::{
 };
 use iroha_data_model::fastpq::{FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY};
 use std::{env, fs, path::PathBuf};
+fn decode_input_batch(encoded: &[u8]) -> Result<TransitionBatch, norito::Error> {
+    let model = norito::decode_canonical::<FastpqTransitionBatch>(encoded)?;
+    Ok(transition_batch_from_model(&model))
+}
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     let input = PathBuf::from(args.next().ok_or("missing input batch path")?);
@@ -32,10 +36,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("entry hash must be exactly 32 bytes".into());
     }
     let encoded = fs::read(input)?;
-    let mut batch = match norito::decode_from_bytes::<FastpqTransitionBatch>(&encoded) {
-        Ok(model) => transition_batch_from_model(&model),
-        Err(_) => norito::decode_from_bytes::<TransitionBatch>(&encoded)?,
-    };
+    let mut batch = decode_input_batch(&encoded)?;
     let mut dsid_bytes = [0_u8; 16];
     dsid_bytes[..8].copy_from_slice(&dsid.to_le_bytes());
     batch.public_inputs.dsid = dsid_bytes;
@@ -53,11 +54,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         batch.public_inputs.new_root = new_root;
         batch.metadata.insert(
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
-            norito::to_bytes(&transcripts)?,
+            norito::encode_canonical(&transcripts)?,
         );
     }
     let rebound = transition_batch_to_model(&batch);
-    let canonical = norito::to_bytes(&rebound)?;
+    let canonical = norito::encode_canonical(&rebound)?;
     println!("{}", BASE64_STANDARD.encode(canonical));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn fixture_rebind_accepts_only_the_canonical_model_frame() {
+        use fastpq_prover::PublicInputs;
+        use norito::codec::Encode;
+        let batch =
+            TransitionBatch::new("fastpq-state-transition-stark-v1", PublicInputs::default());
+        let model = transition_batch_to_model(&batch);
+        let canonical = norito::encode_canonical(&model).unwrap();
+        assert_eq!(decode_input_batch(&canonical).unwrap(), batch);
+        let alternate = {
+            let _layout = norito::core::DecodeFlagsGuard::enter(0);
+            norito::to_bytes(&model).unwrap()
+        };
+        assert_ne!(alternate, canonical);
+        for invalid in [
+            norito::encode_canonical(&batch).unwrap(),
+            model.encode(),
+            alternate,
+        ] {
+            assert!(decode_input_batch(&invalid).is_err());
+        }
+    }
 }

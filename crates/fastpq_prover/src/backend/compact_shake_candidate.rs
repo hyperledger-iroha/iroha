@@ -1,4 +1,4 @@
-//! Test-only SHAKE commitment and whole-tape transcript candidate.
+//! Fixed SHAKE commitment and whole-tape transcript candidate for offline verification.
 //!
 //! The profile is not admitted. Full canonical public context is bound into
 //! the prefix of every typed hash input; construction does not authenticate that context.
@@ -8,17 +8,21 @@
 use std::sync::Arc;
 
 use fastpq_isi::GoldilocksDigest384V1 as Digest;
-use iroha_crypto::xof::{Shake256Prefix, shake256_into};
-use norito::{NoritoSerialize, SerializePayload};
+use iroha_crypto::xof::Shake256Prefix;
+#[cfg(test)]
+use iroha_crypto::xof::shake256_into;
+use norito::NoritoSerialize;
 
 use crate::field::{GOLDILOCKS_MODULUS_V1 as MODULUS, GoldilocksFp4V1};
 
 pub(super) const IDENTITY: &[u8] =
-    b"fastpq:compact-shake256:h16:g375:342cols:923slots:65536rows:8blowup:17folds:prefix-body:v1";
+    b"fastpq:compact-shake256:h16:g375:c401:342cols:923slots:65536rows:8blowup:17folds:prefix-body:v1";
 const MAX_CONTEXT_BYTES: usize = 256 * 1024;
 const LDE_ROWS: u32 = 524_288;
 const QUERY_COUNT: usize = 375;
-const QUERY_CANDIDATES: usize = 400;
+const QUERY_CANDIDATES: usize = 401;
+const QUERY_LABEL_BITS: usize = 19;
+const QUERY_TAPE_BYTES: usize = (QUERY_CANDIDATES * QUERY_LABEL_BITS).div_ceil(8);
 const H_TAPE_BYTES: usize = 128;
 
 /// Failure of the isolated candidate's framing, decoding or state machine.
@@ -64,6 +68,7 @@ impl Round {
     }
 
     /// Return the one-based verifier-message ordinal.
+    #[cfg(test)]
     pub(super) const fn ordinal(self) -> u8 {
         self.0
     }
@@ -76,7 +81,7 @@ impl Round {
             3 => 29_584,
             4 => 112,
             5..=21 => 80,
-            22 => 950,
+            22 => QUERY_TAPE_BYTES,
             _ => unreachable!(),
         }
     }
@@ -140,6 +145,7 @@ pub(super) struct Context {
 
 #[derive(Debug)]
 struct AbsorbedPrefix {
+    #[cfg(test)]
     encoded: Vec<u8>,
     state: Shake256Prefix,
 }
@@ -180,7 +186,11 @@ impl Context {
         })?;
         let state = Shake256Prefix::new(&[&encoded]);
         Ok(Self {
-            prefix: Arc::new(AbsorbedPrefix { encoded, state }),
+            prefix: Arc::new(AbsorbedPrefix {
+                #[cfg(test)]
+                encoded,
+                state,
+            }),
         })
     }
 
@@ -330,8 +340,8 @@ fn decode_message(round: Round, raw: &[u8]) -> Result<Message> {
         let mut indices = Vec::with_capacity(QUERY_COUNT);
         for candidate in 0..QUERY_CANDIDATES {
             let mut value = 0_u32;
-            for bit in 0..19 {
-                let offset = 19 * candidate + bit;
+            for bit in 0..QUERY_LABEL_BITS {
+                let offset = QUERY_LABEL_BITS * candidate + bit;
                 value |= u32::from((raw[offset / 8] >> (offset % 8)) & 1) << bit;
             }
             match indices.binary_search(&value) {
@@ -392,6 +402,7 @@ impl Transcript {
     }
 
     /// Return the exact state preceding the next complete verifier message.
+    #[cfg(test)]
     pub(super) fn predecessor(&self) -> Digest {
         self.predecessor
     }
@@ -465,12 +476,12 @@ mod tests {
     }
 
     fn pack_indices(indices: impl IntoIterator<Item = u32>) -> Vec<u8> {
-        let mut raw = vec![0; 950];
+        let mut raw = vec![0; QUERY_TAPE_BYTES];
         for (position, value) in indices.into_iter().take(QUERY_CANDIDATES).enumerate() {
             assert!(value < LDE_ROWS);
-            for bit in 0..19 {
-                raw[(19 * position + bit) / 8] |=
-                    (((value >> bit) & 1) as u8) << ((19 * position + bit) % 8);
+            for bit in 0..QUERY_LABEL_BITS {
+                raw[(QUERY_LABEL_BITS * position + bit) / 8] |=
+                    (((value >> bit) & 1) as u8) << ((QUERY_LABEL_BITS * position + bit) % 8);
             }
         }
         raw
@@ -484,7 +495,7 @@ mod tests {
         assert!(Round::new(0).is_err());
         assert!(Round::new(23).is_err());
         let rounds: Vec<_> = (1..=22).map(|i| Round::new(i).unwrap()).collect();
-        assert_eq!(rounds.iter().map(|r| r.tape_bytes()).sum::<usize>(), 43_046);
+        assert_eq!(rounds.iter().map(|r| r.tape_bytes()).sum::<usize>(), 43_049);
         for (i, round) in rounds.iter().enumerate() {
             assert_eq!(usize::from(round.ordinal()), i + 1);
             if let Some(required) = round.field_coordinates() {
@@ -547,22 +558,27 @@ mod tests {
     #[test]
     fn query_tape_is_exact_sorted_distinct_and_bounded_at_last_candidate() {
         let round = Round::new(22).unwrap();
-        let raw = pack_indices((0..375).rev().chain(std::iter::repeat_n(0, 25)));
+        let raw = pack_indices(
+            (0..375)
+                .rev()
+                .chain(std::iter::repeat_n(0, QUERY_CANDIDATES - QUERY_COUNT)),
+        );
         assert_eq!(
             decode_message(round, &raw).unwrap(),
             Message::Queries((0..375).collect())
         );
-        let late = pack_indices(std::iter::repeat_n(0, 26).chain(1..375));
+        let late =
+            pack_indices(std::iter::repeat_n(0, QUERY_CANDIDATES - QUERY_COUNT + 1).chain(1..375));
         assert_eq!(
             decode_message(round, &late).unwrap(),
             Message::Queries((0..375).collect())
         );
         assert!(matches!(
-            decode_message(round, &[0; 950]),
+            decode_message(round, &[0; QUERY_TAPE_BYTES]),
             Err(CandidateError::TapeExhausted)
         ));
         assert!(matches!(
-            decode_message(round, &[0; 949]),
+            decode_message(round, &[0; QUERY_TAPE_BYTES - 1]),
             Err(CandidateError::TapeLength)
         ));
         let boundary = pack_indices([LDE_ROWS - 1].into_iter().chain(0..374));
@@ -570,6 +586,57 @@ mod tests {
             panic!("query message");
         };
         assert_eq!(values.last(), Some(&(LDE_ROWS - 1)));
+    }
+
+    #[test]
+    fn successor_query_sampler_consumes_candidate_401_and_ignores_only_five_padding_bits() {
+        let round = Round::new(22).unwrap();
+        assert_eq!(QUERY_COUNT, 375);
+        assert_eq!(QUERY_CANDIDATES, 401);
+        assert_eq!(QUERY_TAPE_BYTES, 953);
+        assert_eq!(QUERY_CANDIDATES * QUERY_LABEL_BITS, 7619);
+        assert_eq!((QUERY_CANDIDATES - 1) * QUERY_LABEL_BITS, 950 * 8);
+        assert_eq!(
+            QUERY_TAPE_BYTES * 8 - QUERY_CANDIDATES * QUERY_LABEL_BITS,
+            5
+        );
+        assert!(
+            IDENTITY
+                .windows(b":g375:c401:".len())
+                .any(|part| part == b":g375:c401:")
+        );
+        let first_400 = || (0..374).chain(std::iter::repeat_n(0, 26));
+        let raw = pack_indices(first_400().chain([374]));
+        let expected = Message::Queries((0..375).collect());
+        assert_eq!(decode_message(round, &raw).unwrap(), expected);
+        for padding in 0_u8..32 {
+            let mut padded = raw.clone();
+            padded[952] = (padded[952] & 7) | (padding << 3);
+            assert_eq!(decode_message(round, &padded).unwrap(), expected);
+        }
+        let repeated = pack_indices(first_400().chain([0]));
+        assert!(matches!(
+            decode_message(round, &repeated),
+            Err(CandidateError::TapeExhausted)
+        ));
+        // The last label spans bytes 950..=952; its final three bits are significant.
+        let high = pack_indices(first_400().chain([LDE_ROWS - 1]));
+        assert_eq!(
+            decode_message(round, &high).unwrap(),
+            Message::Queries((0..374).chain([LDE_ROWS - 1]).collect())
+        );
+        let mut changed = high;
+        changed[952] ^= 4;
+        assert_eq!(
+            decode_message(round, &changed).unwrap(),
+            Message::Queries((0..374).chain([LDE_ROWS - 1 - (1 << 18)]).collect())
+        );
+        for length in [950, 952, 954] {
+            assert!(matches!(
+                decode_message(round, &vec![0; length]),
+                Err(CandidateError::TapeLength)
+            ));
+        }
     }
 
     #[test]
@@ -757,7 +824,10 @@ mod tests {
                 .unwrap(),
             bh
         );
-        assert!(c.chain_frame(Round(22), vec![0; 950], root).is_err());
+        assert!(
+            c.chain_frame(Round(22), vec![0; QUERY_TAPE_BYTES], root)
+                .is_err()
+        );
         assert!(c.chain_frame(Round(1), vec![0; 47], root).is_err());
     }
 
@@ -823,7 +893,7 @@ mod tests {
                 .unwrap();
         assert_eq!(
             hex::encode(&c.prefix.encoded),
-            "4e52543000004fdd12ac5e6affa7dc0020d925a07956008d000000000000000dfd4ed02952f21902020100625a000000000000006661737470713a636f6d706163742d7368616b653235363a6831363a673337353a333432636f6c733a393233736c6f74733a3635353336726f77733a38626c6f7775703a3137666f6c64733a7072656669782d626f64793a7631261e000000000000006669786564207075626c69632063616e64696461746520636f6e74657874"
+            "4e52543000004fdd12ac5e6affa7dc0020d925a07956009200000000000000263b808fe774e20b02020100675f000000000000006661737470713a636f6d706163742d7368616b653235363a6831363a673337353a633430313a333432636f6c733a393233736c6f74733a3635353336726f77733a38626c6f7775703a3137666f6c64733a7072656669782d626f64793a7631261e000000000000006669786564207075626c69632063616e64696461746520636f6e74657874"
         );
         assert_eq!(
             hex::encode(&encoded),
@@ -833,19 +903,19 @@ mod tests {
         c.expand(&encoded, &mut raw);
         assert_eq!(
             hex::encode(raw),
-            "1b124b38187f2b0c47d3e1a6fe202e9d5e3c06b5cae1c3fd5fbe3774b7fad606344d6eff3cb46f7785f616408d58422d12471f70c9fbd4d0069dd001faace0517e592ca7bb8ef461efb2a32f625080a3e1dbfa650bfcaeaf3864f3fa5e5362b85cef792ba3cac8f4a43b18bfa5cdae1c7cc7978402613fdc4dff02bfe517349a"
+            "15a77b743718a950590e1883df6ec7985f7d134e4042ad579df0104539ea7acd4a606b8a981d289b74592a968f821a66baf7a2d27489d6ddba39f13f7cedf3df335af74ba20774c75fb28477021cc011292bd8eb309c594cad6a97f26df72fd301b899d6cee0ffee6e9417c9b83bcb1ec341845e4b3f0c98fc60dc178882cd9a"
         );
         let root = c.hash_leaf(Oracle::Mixed, 0, &[0; 32]).unwrap();
         assert_eq!(
             hex::encode(root.to_le_bytes()),
-            "1b124b38187f2b0c47d3e1a6fe202e9d5e3c06b5cae1c3fd5fbe3774b7fad606344d6eff3cb46f7785f616408d58422d"
+            "15a77b743718a950590e1883df6ec7985f7d134e4042ad579df0104539ea7acd4a606b8a981d289b74592a968f821a66"
         );
     }
 
     #[test]
     fn canonical_input_lengths_keep_context_once_and_body_work_bounded() {
         let c = Context::new(&vec![0; MAX_CONTEXT_BYTES]).unwrap();
-        assert_eq!(c.prefix.encoded.len(), 262_297);
+        assert_eq!(c.prefix.encoded.len(), 262_302);
         let row = c.frame(1, 1, 0, 0, 0, H_TAPE_BYTES, vec![vec![0; 342 * 8]]);
         assert_eq!(norito::encode_canonical(&row).unwrap().len(), 2817);
         let parent = c.frame(2, 1, 0, 1, 0, H_TAPE_BYTES, vec![vec![0; 48], vec![0; 48]]);
@@ -926,12 +996,12 @@ mod tests {
         assert_eq!(round.ordinal(), 1);
         assert_eq!(
             hex::encode(raw),
-            "efe24717b872ecaef30c5b7feff38ec4439c0d14ea1aee210ec6f1fa70cb1ba58cbb8dd366174cb5f631301afbacfe22"
+            "343f90e3854092b180adf8b291a03857a47c62af13de8314cf9cb178720c656e42dd41dc0e245aa07bcae130182d9342"
         );
         transcript.commit(Digest::default()).unwrap();
         assert_eq!(
             hex::encode(transcript.predecessor().to_le_bytes()),
-            "55c3747cc39e0bbf5fc2d9778b55ce8f3317b6ba3913f11ead129572a2a3a0ee63c70b4762c56a6504254eab8a8192de"
+            "11cae1e579a7989a33ecb7357e6fbc3c49ff1e2fc71e5aeafbc38704800205875cf4167029e93ea5159df935f7755190"
         );
     }
 }

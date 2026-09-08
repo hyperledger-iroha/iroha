@@ -2931,7 +2931,7 @@ struct UnitRestartEvidence {
 impl UnitRestartEvidence {
     fn is_terminal_active(&self) -> bool {
         self.active_state == "active"
-            && !matches!(self.sub_state.as_str(), "start" | "stop" | "running")
+            && self.sub_state == "running"
             && matches!(self.job.as_str(), "" | "0")
     }
 }
@@ -7928,6 +7928,18 @@ fn classify_manager_operation_evidence(
     if values["LoadState"] == "not-found" {
         return Ok(ManagerOperationEvidence::Absent);
     }
+    // `systemctl show` exposes the numeric waitid(2) CLD_* code here.
+    // The human-readable `code=exited` belongs to the separate ExecStart
+    // rendering; it is not the ExecMainCode property representation.
+    let main_code = values["ExecMainCode"];
+    if !matches!(main_code, "0" | "1" | "2" | "3" | "4" | "5" | "6") {
+        return Err(eyre!("manager ExecMainCode is not a canonical CLD code"));
+    }
+    let main_status = values["ExecMainStatus"]
+        .parse::<u8>()
+        .ok()
+        .filter(|status| status.to_string() == values["ExecMainStatus"])
+        .ok_or_else(|| eyre!("manager ExecMainStatus is not a canonical exit or signal status"))?;
     let job = values["Job"];
     if !matches!(job, "" | "0")
         || matches!(
@@ -7958,14 +7970,16 @@ fn classify_manager_operation_evidence(
     if values["ActiveState"] == "active"
         && values["SubState"] == "exited"
         && values["Result"] == "success"
-        && values["ExecMainCode"] == "exited"
-        && values["ExecMainStatus"] == "0"
+        && main_code == "1"
+        && main_status == 0
     {
         return Ok(ManagerOperationEvidence::Applied);
     }
     if values["ActiveState"] == "failed"
         || values["Result"] != "success"
-        || values["ExecMainStatus"] != "0"
+        || main_status != 0
+        || matches!(main_code, "2" | "3" | "4" | "5" | "6")
+        || (values["ActiveState"] == "active" && values["SubState"] == "exited")
     {
         return Ok(ManagerOperationEvidence::Rejected);
     }
@@ -10603,6 +10617,7 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
     let mut file_range = 0..0;
     let mut stdin_complete = false;
     let mut stdin_aborted = false;
+    let mut stdin_error = None;
     let mut stdout_bytes = Vec::new();
     let mut stderr_bytes = Vec::new();
     let mut stdout_eof = false;
@@ -10710,8 +10725,13 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
                         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
                     ) => {}
                 Err(error) => {
-                    terminate_owned_child(&mut child)?;
-                    return Err(error).wrap_err("failed to stream bounded child stdin");
+                    // A rejecting child may close stdin before emitting its diagnostic.
+                    // Keep the same bounded drain and deadline so its exit and stderr
+                    // survive, including when the diagnostic exceeds pipe capacity.
+                    stdin_error = Some(error);
+                    stdin_aborted = true;
+                    drop(stdin.take());
+                    made_progress = true;
                 }
             }
             if stdin_complete {
@@ -10800,13 +10820,19 @@ fn run_bounded_process(spec: &ProcessSpec) -> Result<ProcessOutput> {
             }
         }
     }
-    if !stdin_complete {
+    let status = status.expect("loop exits only after child status");
+    if status.success() && !stdin_complete {
+        if let Some(error) = stdin_error {
+            return Err(error).wrap_err("child exited before consuming its exact framed stdin");
+        }
         return Err(eyre!(
             "child exited before consuming its exact framed stdin"
         ));
     }
+    // Nonzero exits remain failures at the existing require_success boundary,
+    // with the child's bounded stderr instead of a secondary local pipe error.
     Ok(ProcessOutput {
-        status: status.expect("loop exits only after child status"),
+        status,
         stdout: stdout_bytes,
         stderr: stderr_bytes,
     })
@@ -16863,7 +16889,9 @@ fn validate_receipt_name(name: &str) -> Result<()> {
         || name.len() > 128
         || !name.ends_with(".json")
         || !name.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(byte, b'-' | b'_' | b'.')
         })
     {
         return Err(eyre!("receipt name escaped the closed local namespace"));
@@ -18576,6 +18604,88 @@ mod tests {
     }
 
     #[test]
+    fn host_receipt_names_cover_every_action_and_artifact_role() {
+        // The same list builds the test inputs and an exhaustive enum match:
+        // adding a HostAction without testing its receipt name cannot compile.
+        macro_rules! all_host_actions {
+            ($($variant:ident),+ $(,)?) => {{
+                let actions = [$(HostAction::$variant),+];
+                for action in &actions {
+                    match action { $(HostAction::$variant => (),)+ }
+                }
+                actions
+            }};
+        }
+        let actions = all_host_actions!(
+            Preflight,
+            Upload,
+            Stage,
+            InrouStageUpload,
+            Stop,
+            Install,
+            Reset,
+            Preseed,
+            Start,
+            Restart,
+            EdgeStage,
+            EdgeCutover,
+            EdgeVerify,
+            Seal,
+            Cleanup,
+            Rollback,
+            MutationReserve,
+        );
+        let roles = super::super::VALIDATOR_ARTIFACT_ROLES
+            .iter()
+            .chain(&super::super::EDGE_ARTIFACT_ROLES)
+            .copied()
+            .collect::<BTreeSet<_>>();
+        let mut names = BTreeSet::new();
+        for action in actions {
+            assert_eq!(HostAction::parse(action.label()).unwrap(), action);
+            if action == HostAction::Upload {
+                for role in &roles {
+                    let name = host_receipt_name(action, role)
+                        .unwrap_or_else(|error| panic!("canonical upload role {role}: {error}"));
+                    assert_eq!(name, format!("upload-{role}.json"));
+                    validate_receipt_name(&name).expect("shared receipt namespace");
+                    assert!(names.insert(name), "canonical receipt names must be unique");
+                }
+            } else {
+                let name = host_receipt_name(action, "")
+                    .unwrap_or_else(|error| panic!("canonical action {action:?}: {error}"));
+                assert_eq!(name, format!("{}.json", action.label()));
+                validate_receipt_name(&name).expect("shared receipt namespace");
+                assert!(names.insert(name), "canonical receipt names must be unique");
+            }
+        }
+        // The upload fixture uses the exact inventory role constants, so a new
+        // canonical artifact role automatically participates in this gate.
+        assert!(names.contains("upload-iroha3d.json"));
+        assert!(names.contains("upload-iroha_cli.json"));
+        assert!(names.contains("inrou_stage_upload.json"));
+    }
+
+    #[test]
+    fn receipt_names_reject_path_control_and_unicode_escape() {
+        for name in [
+            "", ".", "..", "receipt", "../receipt.json", "/receipt.json",
+            "dir/receipt.json", "dir\\receipt.json", "receipt.json/..",
+            "receipt.json\0", "receipt.json\n", "receipt.json\r", "receipt\t.json",
+            "receipt name.json", "Receipt.json", "réceipt.json", "receipt．json",
+        ] {
+            assert!(validate_receipt_name(name).is_err(), "unsafe receipt {name:?}");
+        }
+        let longest = format!("{}.json", "a".repeat(123));
+        validate_receipt_name(&longest).expect("exact 128-byte bound");
+        assert!(validate_receipt_name(&format!("a{longest}")).is_err());
+        for role in ["", "../iroha_cli", "iroha/cli", "iroha\\cli", "iroha.cli", "iroha-cli", "iroha_cli\0", "iroha_cli\n", "iróha_cli"] {
+            assert!(host_receipt_name(HostAction::Upload, role).is_err(), "unsafe role {role:?}");
+        }
+        assert!(host_receipt_name(HostAction::Upload, &"a".repeat(65)).is_err());
+    }
+
+    #[test]
     fn host_progress_requires_explicit_nullable_prepared_action_slot() {
         let admitted = progress_admission();
         let progress = initial_host_progress(&admitted);
@@ -19142,10 +19252,108 @@ time.sleep(30)
             deadline: Instant::now() + Duration::from_secs(2),
         })
         .expect_err("early child exit must reject an incomplete framed stdin");
-        assert!(
-            error.to_string().contains("stdin") || error.to_string().contains("stream"),
-            "unexpected error: {error:?}"
+        assert_eq!(
+            error.to_string(),
+            "child exited before consuming its exact framed stdin"
         );
+    }
+
+    #[test]
+    fn process_runner_preserves_rejection_after_child_closes_stdin() {
+        const DIAGNOSTIC_SIZE: usize = 2 * 1024 * 1024;
+        let output = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys
+os.close(0)
+sys.stdout.buffer.write(b'fixture-stdout-must-not-enter-errors')
+sys.stdout.buffer.flush()
+sys.stderr.buffer.write(b'e' * (2 * 1024 * 1024))
+sys.stderr.buffer.write(b'\nfixture-remote-rejection\n')
+sys.stderr.buffer.flush()
+os._exit(23)
+"#
+                .into(),
+                "fixture-argument-must-not-enter-errors".into(),
+            ],
+            stdin_prefix: b"fixture-input-must-not-enter-errors".repeat(128 * 1024),
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs(5),
+        })
+        .expect("rejection must preserve the child's exit status and full bounded diagnostic");
+        assert_eq!(output.status.code(), Some(23));
+        assert_eq!(
+            output.stderr.len(),
+            DIAGNOSTIC_SIZE + b"\nfixture-remote-rejection\n".len()
+        );
+        assert!(
+            output.stderr[..DIAGNOSTIC_SIZE]
+                .iter()
+                .all(|byte| *byte == b'e')
+        );
+        assert!(output.stderr.ends_with(b"\nfixture-remote-rejection\n"));
+        let error = require_success(output, "fixture dispatch")
+            .expect_err("a rejected incomplete frame must never become success");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("fixture dispatch failed with"));
+        assert!(diagnostic.contains("23"));
+        assert!(diagnostic.ends_with("\nfixture-remote-rejection\n"));
+        assert!(!diagnostic.contains("fixture-stdout-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-argument-must-not-enter-errors"));
+        assert!(!diagnostic.contains("fixture-input-must-not-enter-errors"));
+    }
+
+    #[test]
+    fn process_runner_deadline_reaps_child_after_stdin_closure() {
+        use std::os::{fd::OwnedFd, unix::net::UnixStream};
+        let (mut observer, held) = UnixStream::pair().expect("owned child witness socket");
+        observer
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let held = File::from(OwnedFd::from(held));
+        let descriptor = held.as_raw_fd();
+        let started = Instant::now();
+        let error = run_bounded_process(&ProcessSpec {
+            program: PathBuf::from("/usr/bin/python3"),
+            args: vec![
+                "-I".into(),
+                "-c".into(),
+                r#"
+import os, sys, time
+os.close(0)
+os.write(int(sys.argv[1]), str(os.getpid()).encode('ascii'))
+time.sleep(30)
+"#
+                .into(),
+                descriptor.to_string().into(),
+            ],
+            stdin_prefix: vec![b'x'; 4 * 1024 * 1024],
+            stdin_file: None,
+            stdin_files: Vec::new(),
+            inherited_files: vec![held],
+            deadline: Instant::now() + Duration::from_secs(1),
+        })
+        .expect_err("a child closing stdin then hanging must obey the original deadline");
+        let diagnostic = error.to_string();
+        assert!(diagnostic.contains("exceeded its absolute deadline"));
+        assert!(diagnostic.contains("stdin_complete=false"));
+        assert!(diagnostic.contains("child_exit_observed=false"));
+        let mut witness = String::new();
+        observer
+            .read_to_string(&mut witness)
+            .expect("terminated child must release its inherited socket");
+        let pid = rustix::process::Pid::from_raw(witness.parse().expect("child PID witness"))
+            .expect("positive child PID");
+        assert!(matches!(
+            rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::NOHANG),
+            Err(rustix::io::Errno::CHILD)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(4));
     }
 
     #[test]
@@ -20782,7 +20990,7 @@ time.sleep(30)
 
     fn manager_evidence(active: &str, sub: &str, result: &str, status: &str, job: &str) -> Vec<u8> {
         format!(
-            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=exited\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
+            "LoadState=loaded\nActiveState={active}\nSubState={sub}\nResult={result}\nExecMainCode=1\nExecMainStatus={status}\nInvocationID=0123456789abcdef0123456789abcdef\nExecStart={{ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl restart taira-validator-1.service ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\nJob={job}\n"
         )
         .into_bytes()
     }
@@ -20814,6 +21022,128 @@ time.sleep(30)
             .expect("rejected evidence"),
             ManagerOperationEvidence::Rejected
         );
+    }
+
+    #[test]
+    fn manager_evidence_accepts_captured_systemd_numeric_exit_after_deadline() {
+        let mut intent = manager_intent_fixture();
+        intent.verb = "stop".to_owned();
+        intent.target_unit = "iroha3d-taira-validator-1.service".to_owned();
+        // Actual systemctl show properties from a completed retained oneshot.
+        // ExecMainCode is numeric even though ExecStart renders code=exited.
+        let captured = b"ActiveState=active\nExecMainCode=1\nExecMainStatus=0\nExecStart={ path=/usr/bin/systemctl ; argv[]=/usr/bin/systemctl stop iroha3d-taira-validator-1.service ; ignore_errors=no ; start_time=[Mon 2026-09-07 23:57:26 UTC] ; stop_time=[Mon 2026-09-07 23:57:26 UTC] ; pid=25862 ; code=exited ; status=0 }\nInvocationID=b706c56d582b49e5b9e580fdd5d4ee14\nJob=\nLoadState=loaded\nResult=success\nSubState=exited\n";
+        assert_eq!(
+            classify_manager_operation_at(captured, &intent, intent.action_deadline_unix_ms + 1,)
+                .expect("retained successful stop remains observable after its mutation deadline"),
+            ManagerOperationEvidence::Applied
+        );
+    }
+
+    #[test]
+    fn manager_evidence_requires_exact_numeric_exit_code_and_status() {
+        let intent = manager_intent_fixture();
+        let completed = String::from_utf8(manager_evidence("active", "exited", "success", "0", ""))
+            .expect("UTF-8 fixture");
+        for code in ["0", "2", "3", "4", "5", "6"] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert_eq!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent)
+                    .expect("canonical numeric non-exit code"),
+                ManagerOperationEvidence::Rejected,
+                "active/exited cannot prove success with CLD code {code}"
+            );
+        }
+        for code in [
+            "",
+            "exited",
+            "01",
+            "+1",
+            "-1",
+            "1 ",
+            " 1",
+            "7",
+            "2147483648",
+        ] {
+            let evidence = completed.replace("ExecMainCode=1\n", &format!("ExecMainCode={code}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainCode {code:?} must not be accepted"
+            );
+        }
+        for status in ["", "00", "+0", "-1", "0 ", " 0", "256", "success"] {
+            let evidence =
+                completed.replace("ExecMainStatus=0\n", &format!("ExecMainStatus={status}\n"));
+            assert!(
+                classify_manager_operation_evidence(evidence.as_bytes(), &intent).is_err(),
+                "malformed ExecMainStatus {status:?} must not be accepted"
+            );
+        }
+        for status in ["1", "15", "255"] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence("failed", "failed", "exit-code", status, ""),
+                    &intent,
+                )
+                .expect("canonical nonzero status"),
+                ManagerOperationEvidence::Rejected
+            );
+        }
+    }
+
+    #[test]
+    fn manager_evidence_keeps_unexecuted_and_running_operations_pending() {
+        let intent = manager_intent_fixture();
+        let unexecuted =
+            String::from_utf8(manager_evidence("inactive", "dead", "success", "0", ""))
+                .expect("UTF-8 fixture")
+                .replace("ExecMainCode=1\n", "ExecMainCode=0\n");
+        assert_eq!(
+            classify_manager_operation_evidence(unexecuted.as_bytes(), &intent)
+                .expect("no process has exited yet"),
+            ManagerOperationEvidence::Pending
+        );
+        for (active, sub, job) in [
+            ("activating", "start", "123"),
+            ("active", "running", ""),
+            ("active", "exited", "123"),
+        ] {
+            assert_eq!(
+                classify_manager_operation_evidence(
+                    &manager_evidence(active, sub, "success", "0", job),
+                    &intent,
+                )
+                .expect("outstanding manager work"),
+                ManagerOperationEvidence::Pending
+            );
+        }
+    }
+
+    #[test]
+    fn validator_restart_evidence_requires_running_service_and_settled_job() {
+        let mut evidence = UnitRestartEvidence {
+            invocation: "0123456789abcdef0123456789abcdef".to_owned(),
+            active_enter_monotonic_ms: 1,
+            boot_id: "01234567-89ab-cdef-0123-456789abcdef".to_owned(),
+            active_state: "active".to_owned(),
+            sub_state: "running".to_owned(),
+            job: String::new(),
+        };
+        assert!(evidence.is_terminal_active());
+        evidence.job = "0".to_owned();
+        assert!(evidence.is_terminal_active());
+        for (active, sub, job) in [
+            ("active", "exited", ""),
+            ("active", "start", ""),
+            ("active", "stop", ""),
+            ("active", "running", "123"),
+            ("activating", "running", ""),
+            ("failed", "failed", ""),
+        ] {
+            evidence.active_state = active.to_owned();
+            evidence.sub_state = sub.to_owned();
+            evidence.job = job.to_owned();
+            assert!(!evidence.is_terminal_active(), "{active}/{sub} job={job}");
+        }
     }
 
     #[test]

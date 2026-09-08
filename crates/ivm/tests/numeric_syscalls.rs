@@ -269,12 +269,12 @@ where
     prefixes
 }
 #[test]
-fn abi_contains_exactly_the_52_numeric_calls_and_rejects_retired_numbers() {
+fn abi_contains_exactly_the_54_numeric_calls_and_rejects_retired_numbers() {
     let numbers = (0x01_0100..=0x01_0113)
-        .chain(0x01_0120..=0x01_012f)
-        .chain(0x01_0140..=0x01_014f)
+        .chain(0x01_0120..=0x01_0130)
+        .chain(0x01_0140..=0x01_0150)
         .collect::<Vec<_>>();
-    assert_eq!(numbers.len(), 52);
+    assert_eq!(numbers.len(), 54);
     let vm = IVM::new(u64::MAX);
     let host = DefaultHost::new();
     for number in numbers {
@@ -297,8 +297,8 @@ fn abi_contains_exactly_the_52_numeric_calls_and_rejects_retired_numbers() {
 #[test]
 fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
     let expected = (0x01_0100..=0x01_0113)
-        .chain(0x01_0120..=0x01_012f)
-        .chain(0x01_0140..=0x01_014f)
+        .chain(0x01_0120..=0x01_0130)
+        .chain(0x01_0140..=0x01_0150)
         .collect::<BTreeSet<_>>();
     let mut covered = BTreeSet::new();
     for (syscall, raw, expected) in [
@@ -526,6 +526,26 @@ fn every_shipping_numeric_syscall_executes_with_a_semantic_assertion() {
     {
         let vm = run_quantity_binary(syscall, "1", "2");
         assert_eq!(vm.register(10), u64::from(expected_value));
+        covered.insert(syscall);
+    }
+    for syscall in [
+        syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND,
+        syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND,
+    ] {
+        let vm = run_fused(
+            syscall,
+            &"3".parse().unwrap(),
+            &"2".parse().unwrap(),
+            &"7".parse().unwrap(),
+            2,
+            RoundingModeV1::Floor,
+        );
+        let actual = if syscall == syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND {
+            result_decimal(&vm)
+        } else {
+            result_quantity(&vm).into_numeric()
+        };
+        assert_eq!(actual.to_string(), "0.85");
         covered.insert(syscall);
     }
     assert_eq!(
@@ -1814,4 +1834,108 @@ fn allocation_failure_is_fully_charged_and_never_publishes_result_registers() {
         .expect("failed staged context");
     assert!(context.phase_charge(SyscallMeteringPhase::OutputSerialization) > 0);
     assert_eq!(context.completion(), Some(SyscallCompletion::Trap));
+}
+
+fn run_fused(
+    syscall: u32,
+    value: &Numeric,
+    multiplier: &Numeric,
+    divisor: &Numeric,
+    scale: u32,
+    mode: RoundingModeV1,
+) -> IVM {
+    let mut vm = vm_for(syscall, u64::MAX);
+    let value = if syscall == syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND {
+        install_quantity(
+            &mut vm,
+            &Quantity::from_canonical_numeric(value.clone()).unwrap(),
+        )
+    } else {
+        install_decimal(&mut vm, value)
+    };
+    let multiplier = install_decimal(&mut vm, multiplier);
+    let divisor = install_decimal(&mut vm, divisor);
+    let scale = install_int(&mut vm, &BigInt::from(u64::from(scale)));
+    for (register, value) in [value, multiplier, divisor, scale, mode.tag(), 0]
+        .into_iter()
+        .enumerate()
+    {
+        vm.set_register(10 + register, value);
+    }
+    vm.run().expect("fused numeric execution");
+    vm
+}
+#[test]
+fn fused_numeric_keeps_overflowing_intermediates_and_rounds_once_in_every_mode() {
+    use iroha_primitives::numeric::RoundingMode;
+    let maximum = Numeric::new(max_int(), 0);
+    for syscall in [
+        syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND,
+        syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND,
+    ] {
+        let vm = run_fused(
+            syscall,
+            &maximum,
+            &maximum,
+            &maximum,
+            0,
+            RoundingModeV1::Floor,
+        );
+        let actual = if syscall == syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND {
+            result_decimal(&vm)
+        } else {
+            result_quantity(&vm).into_numeric()
+        };
+        assert_eq!(actual, maximum);
+        for (tag, mode) in [
+            (RoundingModeV1::TowardZero, RoundingMode::TowardZero),
+            (RoundingModeV1::AwayFromZero, RoundingMode::AwayFromZero),
+            (RoundingModeV1::Floor, RoundingMode::Floor),
+            (RoundingModeV1::Ceil, RoundingMode::Ceil),
+            (RoundingModeV1::NearestEven, RoundingMode::NearestEven),
+            (RoundingModeV1::NearestAway, RoundingMode::NearestAway),
+            (
+                RoundingModeV1::NearestTowardZero,
+                RoundingMode::NearestTowardZero,
+            ),
+        ] {
+            let value: Numeric = "7.13".parse().unwrap();
+            let multiplier: Numeric = "1.17".parse().unwrap();
+            let divisor: Numeric = "3".parse().unwrap();
+            let expected = value
+                .try_decimal_mul_div_round(&multiplier, &divisor, 2, mode)
+                .unwrap();
+            let vm = run_fused(syscall, &value, &multiplier, &divisor, 2, tag);
+            let actual = if syscall == syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND {
+                result_decimal(&vm)
+            } else {
+                result_quantity(&vm).into_numeric()
+            };
+            assert_eq!(actual, expected, "{syscall:#x} {tag:?}");
+            assert!(vm.last_staged_syscall_context().unwrap().charged() > 0);
+        }
+    }
+}
+#[test]
+fn fused_numeric_gas_exhaustion_is_fatal_before_unfunded_work() {
+    let phases = collect_oog_prefixes(syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND, |vm| {
+        let value = install_decimal(vm, &"11.23".parse().unwrap());
+        let multiplier = install_decimal(vm, &"17.4".parse().unwrap());
+        let divisor = install_decimal(vm, &"7".parse().unwrap());
+        let scale = install_int(vm, &BigInt::from(2_u64));
+        for (register, value) in [
+            value,
+            multiplier,
+            divisor,
+            scale,
+            RoundingModeV1::NearestEven.tag(),
+            0,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            vm.set_register(10 + register, value);
+        }
+    });
+    assert!(!phases.is_empty());
 }

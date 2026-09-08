@@ -1,4 +1,4 @@
-//! MCP forwarding, security, and registry policy tests.
+//! MCP projection, authentication and registry security regressions.
 
 use super::*;
 
