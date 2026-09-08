@@ -1,9 +1,9 @@
-# Taira CLI release checks
+# Taira release checks
 
 Run either `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` before the Taira four-binary Linux
-release build. Both compile a native `iroha_cli` harness and the focused Torii
-`taira_app_contracts` integration harness with six Cargo jobs
+release build. Both compile focused CLI, Core, proof, Torii and consensus
+harnesses plus native network binaries with six Cargo jobs
 and report build, stage and test durations. Python 3.11+, the repository Rust
 toolchain, and previously fetched dependencies are required; Cargo runs offline.
 
@@ -15,6 +15,36 @@ fresh onboarding receipt uses service time for its lifetime; committed height,
 hash and ledger time remain the anchor for state and lease observations. These
 contract tests use real route and ledger code with disposable inputs; they do
 not replace the deployed four-validator consensus and public application checks.
+
+The Core gate exercises the real candidate provider with multiple routable lanes.
+Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
+transactions require their autonomous reservations, and actual reservation
+conflicts still defer ordinary work. A regression in any of these paths stops
+preparation before the Linux release build.
+
+The proof gate produces and verifies fully witnessed eight- and sixteen-row
+transfers with the default resource limits, checks the maximum admitted proof
+shape against its canonical frame, and rejects proofs beyond explicit limits.
+Payload accounting and framed persistence use separate ceilings derived from
+the same canonical geometry. The CLI confirmation gate follows a queued hash
+through its exact Applied wire proof, retaining ambiguous expiry as pending and
+rejecting malformed or failed status responses without resubmission.
+
+The final native gate launches four validators from the freshly emitted native
+`iroha3d` binary using the same three-route fixture as the consensus integration
+suite. It requires one exact ordinary transaction to reach Applied on every
+validator. Cargo emits both node and client paths explicitly; fallback builds and
+sandbox skips are disabled. The focused `taira_consensus_contracts` harness avoids
+compiling the full consensus suite, and keeps private fixture logs in the warm
+target for failure diagnosis.
+
+For a testnet attempt stuck on an unresolved canary before edge staging,
+`iroha taira public-reset abandon` takes the original signed inventory,
+authorization and SSH custody, `--expected-journal-sha256`, and the explicit
+`--abandon-pending-mutations` flag. It preserves the exact unresolved journal
+before running ordinary rollback; cache expiry never becomes a chain rejection.
+Keep the original fixed host dispatcher until rollback completes. Use the
+original journal digest again to resume an interrupted abandonment.
 
 Ordinary checks use the existing sibling `.taira-testnet-build-targets/routine`
 directory. `--target-dir` or `TAIRA_TESTNET_CARGO_TARGET_DIR` can select another

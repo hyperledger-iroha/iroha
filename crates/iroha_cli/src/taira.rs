@@ -541,6 +541,9 @@ pub struct WriteCanary {
     /// Inherited descriptor for the exact Applied predecessor envelope during preparation.
     #[arg(long, value_name = "FD")]
     pub prerequisite_envelope_fd: Option<u32>,
+    /// Read-only confirmation budget in seconds; the caller owns the outer child deadline.
+    #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout_secs: u64,
     /// Emit a stable JSON receipt.
     #[arg(long)]
     pub json: bool,
@@ -4673,7 +4676,7 @@ fn submit_exact_prepared_operation(
             let _ = client.wait_for_transaction_applied(
                 submitted,
                 TransactionWaitOptions {
-                    timeout: Duration::from_millis(DEFAULT_WRITE_STATUS_TIMEOUT_MS),
+                    timeout: Duration::from_secs(args.timeout_secs),
                     poll_interval: Duration::from_millis(500),
                 },
             );
@@ -5123,11 +5126,26 @@ fn submit_server_prepared_operation(
     validated: &ValidatedPreparedOperation,
     expected_fee_payment: &FeePaymentIntent,
 ) -> Result<PreparedRecoveryClassification> {
+    let deadline = Instant::now()
+        .checked_add(Duration::from_secs(args.timeout_secs))
+        .ok_or_else(|| eyre!("prepared server submission deadline overflow"))?;
     let signer = resolve_canary_signer(config)?;
-    let client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let mut client = IrohaClient::new(write_canary_config(config, public_root, &signer)?);
+    let request_budget = Duration::from_secs(args.timeout_secs);
+    client.torii_request_timeout = if client.torii_request_timeout.is_zero() {
+        request_budget
+    } else {
+        client.torii_request_timeout.min(request_budget)
+    };
     let classification = classify_exact_prepared_operation(&client, validated)?;
     if !submit_required_after_classification(&validated.envelope.binding, &classification)? {
-        return Ok(classification);
+        return await_exact_prepared_operation(
+            &client,
+            validated,
+            classification,
+            deadline,
+            Duration::from_millis(500),
+        );
     }
     let submitted = match &validated.envelope.operation {
         PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
@@ -5166,7 +5184,13 @@ fn submit_server_prepared_operation(
                 PreparedRecoveryClassification::Absent => Err(error).wrap_err(
                     "exact server-prepared transaction submission failed before observability",
                 ),
-                reconciled => Ok(reconciled),
+                reconciled => await_exact_prepared_operation(
+                    &client,
+                    validated,
+                    reconciled,
+                    deadline,
+                    Duration::from_millis(500),
+                ),
             };
         }
     };
@@ -5175,17 +5199,66 @@ fn submit_server_prepared_operation(
             terminal_kind: "Rejected".to_owned(),
         }),
         PreparedTransactionOutcomeV1::Applied | PreparedTransactionOutcomeV1::Pending => {
-            match classify_exact_prepared_operation(&client, validated)? {
-                PreparedRecoveryClassification::Absent => {
-                    Ok(PreparedRecoveryClassification::Pending {
-                        terminal_kind: "AcceptedNotVisible".to_owned(),
-                    })
-                }
-                reconciled => Ok(reconciled),
-            }
+            let classification = classify_exact_prepared_operation(&client, validated)?;
+            await_exact_prepared_operation(
+                &client,
+                validated,
+                classification,
+                deadline,
+                Duration::from_millis(500),
+            )
         }
     }
 }
+/// Poll only the already authenticated transaction; submission is never repeated here.
+fn await_exact_prepared_operation(
+    client: &IrohaClient,
+    validated: &ValidatedPreparedOperation,
+    mut classification: PreparedRecoveryClassification,
+    deadline: Instant,
+    poll_interval: Duration,
+) -> Result<PreparedRecoveryClassification> {
+    if poll_interval.is_zero() {
+        eyre::bail!("prepared confirmation poll interval must be positive");
+    }
+    loop {
+        if matches!(
+            classification,
+            PreparedRecoveryClassification::Applied { .. }
+                | PreparedRecoveryClassification::Rejected { .. }
+        ) {
+            return Ok(classification);
+        }
+        if classification == PreparedRecoveryClassification::Absent {
+            classification = PreparedRecoveryClassification::Pending {
+                terminal_kind: "AcceptedNotVisible".to_owned(),
+            };
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(classification);
+        }
+        std::thread::sleep(poll_interval.min(remaining));
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Ok(classification);
+        }
+        let mut bounded_client = client.clone();
+        // One classification performs at most a status read, a compatibility probe,
+        // and its one-item committed query. Keep their combined I/O within the budget.
+        let request_budget = remaining / 3;
+        if request_budget.is_zero() {
+            return Ok(classification);
+        }
+        bounded_client.torii_request_timeout = if client.torii_request_timeout.is_zero() {
+            request_budget
+        } else {
+            client.torii_request_timeout.min(request_budget)
+        };
+        classification = classify_exact_prepared_operation(&bounded_client, validated)?;
+    }
+}
+
 fn write_canary_config(
     config: &Config,
     public_root: &str,
@@ -7712,6 +7785,271 @@ mod tests {
         }
     }
 
+    fn queued_onboarding_fixture() -> ValidatedPreparedOperation {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let fixture: Value = json::from_str(include_str!(
+            "../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        ))
+        .unwrap();
+        let vector = fixture
+            .pointer("/vectors")
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|value| {
+                value.pointer("/name").and_then(Value::as_str) == Some("onboarding_prepared")
+            })
+            .unwrap();
+        let prepared: AccountOnboardingPreparedTransactionV1 =
+            json::from_value(vector.pointer("/response").unwrap().clone()).unwrap();
+        let transaction = iroha::client::verify_account_onboarding_prepared_transaction_v1(
+            json::from_value(vector.pointer("/network_id").unwrap().clone()).unwrap(),
+            &prepared.receipt.body.request,
+            &prepared,
+            &prepared.receipt,
+            &prepared.binding,
+            &prepared.fee_payment,
+        )
+        .expect("actual signed onboarding fixture must satisfy SDK closure");
+        let wire = hex::decode(&prepared.signed_transaction_wire_hex).unwrap();
+        let mut envelope = final_canary_envelope_fixture();
+        envelope.operation = PreparedTransactionOperationV1::OnboardingPrepared(prepared);
+        let envelope_bytes = json::to_vec(&envelope).unwrap();
+        ValidatedPreparedOperation {
+            envelope,
+            transaction: Some(transaction),
+            wire: Some(wire),
+            envelope_bytes,
+        }
+    }
+
+    fn prepared_status_response(
+        transaction: &SignedTransaction,
+        kind: &str,
+        source: &str,
+    ) -> MockResponse {
+        MockResponse::json(
+            200,
+            json::to_value(&PipelineTransactionStatusResponse::new(
+                hex::encode(transaction.hash().as_ref()),
+                iroha_torii_shared::PipelineTransactionStatus {
+                    kind: kind.to_owned(),
+                    block_height: (kind == "Applied").then_some(2),
+                },
+                "global".to_owned(),
+                source.to_owned(),
+            ))
+            .unwrap(),
+        )
+    }
+
+    #[test]
+    fn prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire() {
+        use iroha::data_model::{
+            query::{
+                CommittedTransaction, QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple,
+                QueryResponse,
+            },
+            transaction::{DataTriggerSequence, TransactionResult},
+        };
+        let validated = queued_onboarding_fixture();
+        let transaction = validated.transaction().unwrap().clone();
+        let result = TransactionResult::new(Ok(DataTriggerSequence::default()));
+        let committed = CommittedTransaction {
+            block_hash: HashOf::from_untyped_unchecked(Hash::new(b"confirmed block")),
+            entrypoint_hash: transaction.hash_as_entrypoint(),
+            entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+            entrypoint: TransactionEntrypoint::External(transaction.clone()),
+            result_hash: result.hash(),
+            result_proof: iroha_crypto::MerkleProof::from_audit_path(0, Vec::new()),
+            result,
+            merge_inclusion: None,
+        };
+        let query = QueryResponse::Iterable(QueryOutput {
+            batch: QueryOutputBatchBoxTuple::from_batch(QueryOutputBatchBox::CommittedTransaction(
+                vec![committed],
+            )),
+            remaining_items: Some(0),
+            has_more: false,
+            continue_cursor: None,
+        });
+        let query_bytes = norito::to_bytes(&query).unwrap();
+        let polls = AtomicUsize::new(0);
+        let server = spawn_mock_http(4, move |request| match path_only(&request.path) {
+            "/v1/pipeline/transactions/status" => {
+                assert!(request.path.contains("scope=global"));
+                if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+                    prepared_status_response(&transaction, "Queued", "queue")
+                } else {
+                    prepared_status_response(&transaction, "Applied", "state")
+                }
+            }
+            "/v1/node/capabilities" => MockResponse::json(
+                200,
+                norito::json!({
+                    "data_model_version": (iroha::data_model::DATA_MODEL_VERSION)
+                }),
+            ),
+            "/v1/query" => MockResponse {
+                status: 200,
+                content_type: "application/x-norito",
+                headers: Vec::new(),
+                body: query_bytes.clone(),
+            },
+            other => panic!("confirmation must never submit: {other}"),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let outcome = await_exact_prepared_operation(
+            &IrohaClient::new(config),
+            &validated,
+            PreparedRecoveryClassification::Absent,
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_millis(1),
+        )
+        .expect("queued submission must wait for its exact committed transaction");
+        assert_eq!(
+            outcome,
+            PreparedRecoveryClassification::Applied {
+                block_height: Some(2),
+                evidence: validated
+                    .transaction()
+                    .unwrap()
+                    .hash_as_entrypoint()
+                    .to_string(),
+            }
+        );
+        let requests = finish_mock(server);
+        assert_eq!(requests.len(), 4);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "POST")
+                .count(),
+            1
+        );
+        assert_eq!(path_only(&requests.last().unwrap().path), "/v1/query");
+    }
+
+    #[test]
+    fn prepared_server_confirmation_preserves_fixed_failure_and_deadline() {
+        for kind in ["Rejected", "Expired"] {
+            let validated = queued_onboarding_fixture();
+            let transaction = validated.transaction().unwrap().clone();
+            let server = spawn_mock_http(1, move |_| {
+                prepared_status_response(&transaction, kind, "state")
+            });
+            let mut config = crate::fallback_config();
+            config.torii_api_url = Url::parse(&server.base_url).unwrap();
+            let client = IrohaClient::new(config);
+            let outcome = await_exact_prepared_operation(
+                &client,
+                &validated,
+                PreparedRecoveryClassification::Absent,
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_millis(1),
+            )
+            .unwrap();
+            assert_eq!(
+                outcome,
+                PreparedRecoveryClassification::Rejected {
+                    terminal_kind: kind.to_owned(),
+                }
+            );
+            assert_eq!(finish_mock(server).len(), 1);
+            let pending = PreparedRecoveryClassification::Pending {
+                terminal_kind: "Queued".to_owned(),
+            };
+            assert_eq!(
+                await_exact_prepared_operation(
+                    &client,
+                    &validated,
+                    pending,
+                    Instant::now(),
+                    Duration::from_secs(1),
+                )
+                .unwrap(),
+                PreparedRecoveryClassification::Pending {
+                    terminal_kind: "Queued".to_owned(),
+                },
+                "an elapsed deadline must retain the last observation without another request"
+            );
+        }
+        let validated = queued_onboarding_fixture();
+        let transaction = validated.transaction().unwrap().clone();
+        let server = spawn_mock_http(100, move |_| {
+            prepared_status_response(&transaction, "Expired", "cache")
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        let client = IrohaClient::new(config);
+        let first = classify_exact_prepared_operation(&client, &validated).unwrap();
+        let started = Instant::now();
+        let outcome = await_exact_prepared_operation(
+            &client,
+            &validated,
+            first,
+            started + Duration::from_millis(100),
+            Duration::from_millis(10),
+        )
+        .unwrap();
+        assert_eq!(
+            outcome,
+            PreparedRecoveryClassification::Pending {
+                terminal_kind: "Expired".to_owned(),
+            },
+            "cache expiry cannot become a definitive failure at the wait deadline"
+        );
+        assert!(started.elapsed() < Duration::from_secs(2));
+        assert!(finish_mock(server).len() > 1);
+    }
+
+    #[test]
+    fn prepared_server_confirmation_rejects_malformed_status_without_resubmission() {
+        let validated = queued_onboarding_fixture();
+        let server = spawn_mock_http(1, |_| {
+            MockResponse::json(
+                200,
+                norito::json!({
+                    "hash": "substituted", "scope": "global", "resolved_from": "state",
+                    "status": {"kind": "Applied", "block_height": 2}
+                }),
+            )
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        assert!(
+            await_exact_prepared_operation(
+                &IrohaClient::new(config),
+                &validated,
+                PreparedRecoveryClassification::Absent,
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_millis(1),
+            )
+            .is_err()
+        );
+        assert_eq!(finish_mock(server).len(), 1);
+        let server = spawn_mock_http(1, |_| MockResponse::text(503, "unavailable"));
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse(&server.base_url).unwrap();
+        assert!(
+            await_exact_prepared_operation(
+                &IrohaClient::new(config),
+                &validated,
+                PreparedRecoveryClassification::Pending {
+                    terminal_kind: "Queued".to_owned()
+                },
+                Instant::now() + Duration::from_secs(5),
+                Duration::from_millis(1),
+            )
+            .is_err()
+        );
+        let requests = finish_mock(server);
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].method, "GET");
+    }
+
     #[test]
     fn prepared_envelope_rejects_legacy_zero_or_multi_operation_shapes() {
         for operations in [norito::json!([]), norito::json!([{}, {}])] {
@@ -8142,6 +8480,7 @@ mod tests {
             submit_prepared_envelope_fd: None,
             recover_prepared_envelope_fd: None,
             prerequisite_envelope_fd: None,
+            timeout_secs: 120,
             json: true,
         }
     }
@@ -8184,7 +8523,7 @@ mod tests {
         status: u16,
         content_type: &'static str,
         headers: Vec<(&'static str, String)>,
-        body: String,
+        body: Vec<u8>,
     }
     fn fixture_key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -8241,15 +8580,16 @@ mod tests {
                 status,
                 content_type: "application/json",
                 headers: Vec::new(),
-                body: json::to_json(&value).expect("mock JSON response"),
+                body: json::to_vec(&value).expect("mock JSON response"),
             }
         }
         fn text(status: u16, body: impl Into<String>) -> Self {
+            let body: String = body.into();
             Self {
                 status,
                 content_type: "text/plain",
                 headers: Vec::new(),
-                body: body.into(),
+                body: body.into_bytes(),
             }
         }
     }
@@ -8369,7 +8709,7 @@ mod tests {
             503 => "Service Unavailable",
             _ => "OK",
         };
-        let body = response.body.as_bytes();
+        let body = response.body.as_slice();
         write!(
             stream,
             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n",
@@ -8677,8 +9017,7 @@ mod tests {
                 (reqwest::header::ETAG.as_str(), etag),
                 ("x-content-type-options", "nosniff".to_owned()),
             ],
-            body: String::from_utf8(expected.document_bytes)
-                .expect("canonical discovery document is UTF-8"),
+            body: expected.document_bytes,
         }
     }
 
@@ -8817,7 +9156,7 @@ mod tests {
                 reqwest::header::LOCATION.as_str(),
                 "https://attacker.invalid/substituted".to_owned(),
             )],
-            body: String::new(),
+            body: Vec::new(),
         });
         let error = fetch_exact_inrou_public_discovery_document(
             &inrou_public_discovery_http_client(),

@@ -12,6 +12,7 @@ This crate hosts cross-component tests for Iroha.
   - `consensus_and_da`
   - `nexus_and_streaming`
 - Target a harness directly with `cargo test -p integration_tests --test <harness>`.
+- The focused `taira_consensus_contracts` target requires four real validators, three public routable lanes, and the exact signed Ordinary transaction to become state-resolved Applied while all four peers advance beyond genesis. It shares the existing multi-route NPoS/DA genesis fixture, keeps production proof defaults, and fails sandbox skips. Prebuild the native `iroha3d` daemon and select it with `TEST_NETWORK_BIN_IROHAD`; set `IROHA_TEST_SKIP_BUILD=1` and run `cargo test --locked -p integration_tests --test taira_consensus_contracts four_peer_multiroute_ordinary_transaction_reaches_applied -- --exact --nocapture`. The maintained Taira release gate supplies these binaries from the same warm native build before the Linux build.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
 - Exact test filters are now module-qualified inside the grouped harnesses; for example:
   `cargo test -p integration_tests --test core_api asset::client_add_asset_quantities_should_increase_asset_amounts -- --exact --nocapture`

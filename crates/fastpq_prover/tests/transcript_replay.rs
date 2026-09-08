@@ -6,8 +6,8 @@ use fastpq_prover::{
 use norito::core::to_bytes;
 use std::{fs, path::Path};
 const FIXTURE_NAME: &str = "v1_raw_transcript_64.bin";
-// This mixed raw fixture opens all 136 queries and exceeds the production
-// 512-KiB proof budget. Keep its finite diagnostic budget explicit; this is
+// This mixed raw fixture opens all 136 queries. Keep its finite diagnostic
+// budget explicit even when the default resource profile admits its size; this is
 // neither a state-transition admission test nor an AXT payload-size exception.
 const RAW_FIXTURE_MAX_PROOF_BYTES: usize = 2 * 1024 * 1024;
 mod common;
@@ -46,12 +46,20 @@ fn v1_raw_transcript_64_fixture_verifies() {
     );
     let proof: Proof = norito::decode_from_bytes(&expected).expect("decode proof");
     assert!(matches!(
-        verify_raw_statement(&batch, &proof),
+        verify_raw_statement_with_limits(
+            &batch,
+            &proof,
+            VerifyLimits {
+                max_proof_bytes: 512 * 1024,
+                ..VerifyLimits::default()
+            }
+        ),
         Err(Error::VerifierLimitExceeded {
             limit: "max_proof_bytes",
             ..
         })
     ));
+    verify_raw_statement(&batch, &proof).expect("raw fixture fits derived default resources");
     let limits = VerifyLimits {
         max_proof_bytes: RAW_FIXTURE_MAX_PROOF_BYTES,
         ..VerifyLimits::default()

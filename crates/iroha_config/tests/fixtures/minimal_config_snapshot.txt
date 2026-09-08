@@ -1418,7 +1418,7 @@ Root {
             poseidon_mode: Cpu,
             proof_sidecar_queue_cap: 1024,
             proof_sidecar_max_bytes: Bytes(
-                1048576,
+                2372261,
             ),
             proof_sidecar_max_retries: 16,
             device_class: None,

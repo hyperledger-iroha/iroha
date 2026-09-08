@@ -182,6 +182,9 @@ pub const AIR_COMPOSITION_ALPHA_COUNT: usize = AIR_BOOLEAN_RESIDUE_COUNT
     + AIR_RELATION_RESIDUE_COUNT
     + AIR_STABLE_RESIDUE_COUNT
     + transfer_integer_air::CONSTRAINT_COUNT;
+const _: () = assert!(
+    AIR_COMPOSITION_ALPHA_COUNT == fastpq_isi::resource_limits::FASTPQ_REPLAY_AIR_ALPHA_COUNT_V1
+);
 /// Conservative exclusive quotient degree bound as a multiple of the trace length.
 pub const AIR_QUOTIENT_DEGREE_EXPANSION_V1: usize =
     fastpq_isi::FASTPQ_COMPOSITION_DEGREE_EXPANSION_V1 as usize;
@@ -2179,7 +2182,7 @@ pub fn hash_fri_chunk(
 /// Returns [`Error::FriArity`] unless `arity` is the sole V1 binary-FRI arity.
 pub fn lde_chunk_size(arity: u32) -> Result<usize> {
     ensure_binary_fri_arity(arity)?;
-    Ok(64)
+    Ok(fastpq_isi::resource_limits::FASTPQ_LDE_CHUNK_VALUES_V1)
 }
 
 fn ensure_binary_fri_arity(arity: u32) -> Result<()> {

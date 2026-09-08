@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Catch Taira CLI release regressions before expensive cross-compilation.
+"""Catch Taira application, consensus and proof regressions before cross-compilation.
 
-Requires Python 3.11+ and the repository Rust toolchain. Compile native CLI and
-Torii contract harnesses with isolated Cargo configuration and fixture-only inputs.
+Requires Python 3.11+ and the repository Rust toolchain. Compile focused native
+harnesses and run a four-peer network with isolated Cargo and fixture-only inputs.
 The existing sibling .taira-testnet-build-targets/routine lane is the default;
 --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR may select another development
 lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
@@ -20,6 +20,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 
@@ -161,6 +162,18 @@ STAGES = (
         "taira_public_reset::host::tests::journaled_restart_readiness_preserves_its_pre_restart_deadline",
         "taira_public_reset::host::tests::journaled_restart_readiness_stops_on_expired_authorization_or_ambiguous_restart",
     )),
+    ("explicit unresolved testnet abandonment", (
+        "taira_public_reset::executor_model::tests::abandonment_admits_original_signed_revision_without_relaxing_current_dispatcher_identity",
+        "taira_public_reset::executor_model::tests::abandonment_cli_requires_explicit_flag_digest_and_original_authority",
+        "taira_public_reset::executor_model::tests::abandonment_preserves_exact_unresolved_evidence_before_rollback_and_after_crash",
+        "taira_public_reset::executor_model::tests::abandonment_rejects_wrong_digest_edge_and_proven_state_without_host_actions",
+        "taira_public_reset::executor_model::tests::abandonment_partial_rollback_resumes_only_remaining_hosts_with_original_digest",
+    )),
+    ("server-prepared transaction confirmation", (
+        "taira::tests::prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire",
+        "taira::tests::prepared_server_confirmation_preserves_fixed_failure_and_deadline",
+        "taira::tests::prepared_server_confirmation_rejects_malformed_status_without_resubmission",
+    )),
     ("stopped owner runtime cleanup", (
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_releases_only_empty_own_workers_and_replays",
         "taira_public_reset::host::stopped_runtime::tests::stopped_owner_cleanup_rejects_live_nested_forged_and_replaced_workers",
@@ -205,20 +218,53 @@ TORII_STAGES = (("routed onboarding and faucet contracts", (
     "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
 )),)
 
+CORE_STAGES = (("multi-route ordinary transaction progress", (
+    "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
+    "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
+    "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
+)),)
+
+PROOF_STAGES = (("canonical proof resource bounds", (
+    "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
+    "proof::tests::raw_fixture_verifier_preserves_explicit_admission_limits",
+    "proof::tests::enforce_verify_limits_allows_values_at_exact_boundaries",
+    "proof::tests::verify_limits_reject_oversized_proof_payload",
+)),)
+
+PROOF_FLOW_STAGES = (("default proof production and verification", (
+    "resource_profile::public_transfer_default_profile_accepts_eight_rows",
+    "resource_profile::public_transfer_default_profile_accepts_sixteen_rows",
+)),)
+
+NETWORK_STAGES = (("four-validator multi-route transaction commit", (
+    "four_peer_multiroute_ordinary_transaction_reaches_applied",
+)),)
+
+HARNESS_TARGETS = {
+    "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
+    "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
+    "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
+    "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
+    "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
+    "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "integration_tests", "--test", "taira_consensus_contracts"]),
+}
+
 
 class CheckError(Exception):
     """A build or selected regression did not pass."""
 
 
-def compile_command(root: Path, env: dict[str, str], *, torii: bool = False) -> list[str]:
-    selection = ["-p", "iroha_torii", "--test", "taira_app_contracts"] if torii else ["-p", "iroha_cli", "--bin", "iroha"]
+def compile_command(root: Path, env: dict[str, str], *, harness: str = "cli") -> list[str]:
+    if harness not in HARNESS_TARGETS:
+        raise CheckError("invalid native regression harness selection")
+    selection = HARNESS_TARGETS[harness][3]
     return [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
             "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
             *selection, "--no-run",
             "--message-format=json-render-diagnostics"]
 
 
-def test_artifact(line: str, *, torii: bool = False) -> str | None:
+def test_artifact(line: str, *, harness: str = "cli") -> str | None:
     try:
         event = json.loads(line)
     except json.JSONDecodeError:
@@ -226,7 +272,7 @@ def test_artifact(line: str, *, torii: bool = False) -> str | None:
     if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
         return None
     target = event.get("target", {})
-    name, kind = ("taira_app_contracts", "test") if torii else ("iroha", "bin")
+    _, name, kind, _ = HARNESS_TARGETS[harness]
     if (target.get("name") == name and kind in target.get("kind", [])
             and event.get("profile", {}).get("test") is True):
         executable = event.get("executable")
@@ -251,9 +297,10 @@ def show_build_diagnostic(line: str) -> None:
             sys.stderr.flush()
 
 
-def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (), torii: bool = False) -> str:
-    command = compile_command(root, env, torii=torii)
-    label = "native Torii contracts" if torii else "native CLI"
+def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (),
+                    harness: str = "cli") -> str:
+    command = compile_command(root, env, harness=harness)
+    label = HARNESS_TARGETS[harness][0]
     print(f"[taira-check] build {label} test harness", flush=True)
     started = time.monotonic()
     artifacts: set[str] = set()
@@ -262,7 +309,7 @@ def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
-            artifact = test_artifact(line, torii=torii)
+            artifact = test_artifact(line, harness=harness)
             if artifact is not None:
                 artifacts.add(artifact)
         code = child.wait()
@@ -314,6 +361,61 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
         print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
 
 
+def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> dict[str, str]:
+    """Use real Cargo artifacts so the network harness never starts a fallback build."""
+    command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
+               "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
+               "-p", "irohad", "--bin", "iroha3d", "-p", "iroha_cli", "--bin", "iroha",
+               "--message-format=json-render-diagnostics"]
+    print("[taira-check] build native network binaries", flush=True)
+    started = time.monotonic()
+    artifacts: dict[str, str] = {}
+    with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
+        assert child.stdout is not None
+        for line in child.stdout:
+            show_build_diagnostic(line)
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(event, dict) or event.get("reason") != "compiler-artifact":
+                continue
+            target = event.get("target", {})
+            name = target.get("name")
+            executable = event.get("executable")
+            if (name in ("iroha3d", "iroha") and "bin" in target.get("kind", [])
+                    and event.get("profile", {}).get("test") is False
+                    and isinstance(executable, str) and executable):
+                if name in artifacts and artifacts[name] != executable:
+                    raise CheckError("native network binary has conflicting Cargo artifacts")
+                artifacts[name] = executable
+        code = child.wait()
+    if code or set(artifacts) != {"iroha3d", "iroha"}:
+        raise CheckError(f"native network build did not produce both executable artifacts (exit {code})")
+    print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
+    return artifacts
+
+
+def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+    binaries = compile_network_binaries(root, env, lock_fds)
+    harness = compile_harness(root, env, lock_fds=lock_fds, harness="network")
+    # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
+    directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
+    network_env = env | {
+        "TEST_NETWORK_BIN_IROHAD": binaries["iroha3d"],
+        "TEST_NETWORK_BIN_IROHA": binaries["iroha"],
+        "IROHA_TEST_TARGET_DIR": env["CARGO_TARGET_DIR"],
+        "TEST_NETWORK_TMP_DIR": str(directory),
+        "IROHA_TEST_SKIP_BUILD": "1",
+        "IROHA_FAIL_ON_SANDBOX_SKIP": "1",
+        "IROHA_TEST_REQUIRE_NETWORK": "1",
+        "IROHA_TEST_SERIALIZE_NETWORKS": "1",
+    }
+    print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
+    run_stages(harness, fixture_root, network_env, NETWORK_STAGES, lock_fds)
+
+
 def run_checks(root: Path, *, environment: dict[str, str] | None = None,
                source_commit: str | None = None, lock_fds: tuple[int, ...] = ()) -> None:
     if sys.platform not in {"darwin", "linux"}:
@@ -332,13 +434,17 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     harness = compile_harness(root, env, lock_fds=lock_fds)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
     run_stages(harness, fixture_root, env, STAGES, lock_fds)
-    if TORII_STAGES:
-        torii_harness = compile_harness(root, env, lock_fds=lock_fds, torii=True)
-        run_stages(torii_harness, fixture_root, env, TORII_STAGES, lock_fds)
+    for name, stages in (("core", CORE_STAGES), ("proof", PROOF_STAGES),
+                         ("proof-flows", PROOF_FLOW_STAGES), ("torii", TORII_STAGES)):
+        if stages:
+            selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
+            run_stages(selected_harness, fixture_root, env, stages, lock_fds)
+    if NETWORK_STAGES:
+        run_network_checks(root, fixture_root, env, lock_fds)
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
-    count = sum(len(names) for _, names in STAGES + TORII_STAGES)
+    count = sum(len(names) for _, names in STAGES + CORE_STAGES + PROOF_STAGES + PROOF_FLOW_STAGES + TORII_STAGES + NETWORK_STAGES)
     print(f"[taira-check] PASS: {count} regressions in {time.monotonic() - started:.1f}s", flush=True)
 
 

@@ -38,19 +38,31 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertIsNone(gate.test_artifact("[cargo-fast] normal progress"))
 
     def test_torii_selection_requires_shipping_external_contract_harness(self):
-        command = gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}, torii=True)
+        command = gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}, harness="torii")
         self.assertIn("iroha_torii", command)
         self.assertIn("taira_app_contracts", command)
         self.assertNotIn("--lib", command)
         self.assertNotIn("--no-default-features", command)
         event = {"reason": "compiler-artifact", "target": {"name": "taira_app_contracts", "kind": ["test"]},
                  "profile": {"test": True}, "executable": "/warm/taira-contracts"}
-        self.assertEqual(gate.test_artifact(json.dumps(event), torii=True), event["executable"])
+        self.assertEqual(gate.test_artifact(json.dumps(event), harness="torii"), event["executable"])
         self.assertIsNone(gate.test_artifact(json.dumps(event)))
         for changes in ({"profile": {"test": False}}, {"executable": None},
                         {"target": {"name": "torii_core_routes", "kind": ["test"]}},
                         {"target": {"name": "taira_app_contracts", "kind": ["lib"]}}):
-            self.assertIsNone(gate.test_artifact(json.dumps(event | changes), torii=True))
+            self.assertIsNone(gate.test_artifact(json.dumps(event | changes), harness="torii"))
+
+    def test_core_selection_requires_the_actual_library_test_artifact(self):
+        command = gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}, harness="core")
+        self.assertEqual(command[8:11], ["-p", "iroha_core", "--lib"])
+        event = {"reason": "compiler-artifact", "target": {"name": "iroha_core", "kind": ["lib"]},
+                 "profile": {"test": True}, "executable": "/warm/core-contracts"}
+        self.assertEqual(gate.test_artifact(json.dumps(event), harness="core"), event["executable"])
+        self.assertIsNone(gate.test_artifact(json.dumps(event)))
+        self.assertIsNone(gate.test_artifact(json.dumps(event | {"profile": {"test": False}}), harness="core"))
+        for selection in ({"harness": "unreviewed"}, {"harness": ""}):
+            with self.assertRaises(gate.CheckError):
+                gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}, **selection)
 
     def test_failed_build_preserves_rendered_compiler_error(self):
         diagnostic = "error[E0308]: synthetic fixture type mismatch\n"
@@ -120,6 +132,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
              patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]) as run, \
              patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
+             patch.object(gate, "CORE_STAGES", ()), \
+             patch.object(gate, "NETWORK_STAGES", ()), \
+             patch.object(gate, "PROOF_STAGES", ()), \
+             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
              patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
             gate.run_checks(Path("/frozen"), environment={"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}, source_commit="a" * 40, lock_fds=(77, 88))
         self.assertEqual([call.kwargs["cwd"] for call in run.call_args_list], [Path("/warm"), Path("/warm")])
@@ -135,6 +151,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
              patch.object(gate.subprocess, "run", side_effect=results) as run, \
              patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
+             patch.object(gate, "CORE_STAGES", ()), \
+             patch.object(gate, "NETWORK_STAGES", ()), \
+             patch.object(gate, "PROOF_STAGES", ()), \
+             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
              patch.object(gate, "TORII_STAGES", ()), contextlib.redirect_stdout(io.StringIO()):
             gate.run_checks(Path("/mutable"), environment=env, lock_fds=(77,))
         self.assertEqual(git.call_count, 2)
@@ -153,14 +173,32 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with patch.object(gate, "compile_harness", side_effect=["/warm/cli", "/warm/routes"]) as compile, \
              patch.object(gate.subprocess, "run", side_effect=results) as run, \
              patch.object(gate, "STAGES", (("CLI", ("cli",)),)), \
+             patch.object(gate, "CORE_STAGES", ()), \
+             patch.object(gate, "NETWORK_STAGES", ()), \
+             patch.object(gate, "PROOF_STAGES", ()), \
+             patch.object(gate, "PROOF_FLOW_STAGES", ()), \
              patch.object(gate, "TORII_STAGES", (("Torii", ("route",)),)), \
              contextlib.redirect_stdout(output), contextlib.redirect_stderr(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "route.*exit 101"):
                 gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 2)
-        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "torii": True})
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harness": "torii"})
         self.assertTrue(all(call.kwargs["cwd"] == Path("/warm") and call.kwargs["pass_fds"] == (77,)
                             for call in run.call_args_list))
+        self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_failed_core_progress_stops_before_torii_or_release_success(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+        output = io.StringIO()
+        with patch.object(gate, "compile_harness", side_effect=["/warm/cli", "/warm/core"]) as compile, \
+             patch.object(gate, "run_stages", side_effect=[None, gate.CheckError("ordinary transaction stalled")]) as run, \
+             contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(gate.CheckError, "ordinary transaction stalled"):
+                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+        self.assertEqual(compile.call_count, 2)
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harness": "core"})
+        self.assertEqual(run.call_args.args[3], gate.CORE_STAGES)
+        self.assertEqual(run.call_args.args[4], (77,))
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_unisolated_low_level_check_is_rejected_before_git_or_cargo(self):
@@ -169,6 +207,44 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.run_checks(Path("/mutable"), environment={})
         git.assert_not_called()
         compile.assert_not_called()
+
+    def test_network_build_accepts_only_both_real_binary_artifacts(self):
+        events = [{"reason": "compiler-artifact", "target": {"name": name, "kind": ["bin"]},
+                   "profile": {"test": False}, "executable": "/warm/" + name}
+                  for name in ("iroha3d", "iroha")]
+        for selected, accepted in ((events, True), (events[:1], False),
+                                   ([event | {"profile": {"test": True}} for event in events], False)):
+            child = MagicMock()
+            child.stdout = io.StringIO("\n".join(json.dumps(event) for event in selected))
+            child.wait.return_value = 0
+            process = MagicMock()
+            process.__enter__.return_value = child
+            with patch.object(gate.subprocess, "Popen", return_value=process) as spawn, contextlib.redirect_stdout(io.StringIO()):
+                if accepted:
+                    result = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (77,))
+                    self.assertEqual(result, {"iroha3d": "/warm/iroha3d", "iroha": "/warm/iroha"})
+                else:
+                    with self.assertRaisesRegex(gate.CheckError, "both executable artifacts"):
+                        gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (77,))
+            self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
+            self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
+            self.assertNotIn("iroha3d_taira", spawn.call_args.args[0])
+
+    def test_network_gate_forbids_fallback_builds_and_sandbox_skips(self):
+        env = {"CARGO_TARGET_DIR": "/warm"}
+        with patch.object(gate, "compile_network_binaries", return_value={"iroha3d": "/warm/node", "iroha": "/warm/client"}), \
+             patch.object(gate, "compile_harness", return_value="/warm/network"), \
+             patch.object(gate.tempfile, "mkdtemp", return_value="/warm/private-fixture") as fixture, \
+             patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
+            gate.run_network_checks(Path("/frozen"), Path("/warm"), env, (77, 88))
+        selected = run.call_args.args[2]
+        for key in ("IROHA_TEST_SKIP_BUILD", "IROHA_FAIL_ON_SANDBOX_SKIP", "IROHA_TEST_REQUIRE_NETWORK", "IROHA_TEST_SERIALIZE_NETWORKS"):
+            self.assertEqual(selected[key], "1")
+        self.assertEqual(selected["TEST_NETWORK_BIN_IROHAD"], "/warm/node")
+        self.assertEqual(selected["TEST_NETWORK_BIN_IROHA"], "/warm/client")
+        self.assertEqual(selected["TEST_NETWORK_TMP_DIR"], "/warm/private-fixture")
+        self.assertEqual(run.call_args.args[3:], (gate.NETWORK_STAGES, (77, 88)))
+        self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
 
 
 if __name__ == "__main__":

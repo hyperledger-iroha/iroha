@@ -105,6 +105,8 @@ enum PublicResetCommand {
     Preflight(PublicResetPreflight),
     /// Execute the admitted reset with pinned SSH and runtime signing inputs.
     Apply(PublicResetApply),
+    /// Abandon an unresolved pre-edge testnet canary, preserve its evidence, and roll back.
+    Abandon(PublicResetAbandon),
     /// Internal fixed-protocol host dispatcher. Requests are read only from stdin.
     #[command(name = "host-dispatch", hide = true)]
     HostDispatch(host::PublicResetHost),
@@ -134,6 +136,19 @@ struct PublicResetPreflight {
     /// Runtime-only owner-private pinned OpenSSH known-hosts file.
     #[arg(long, value_name = "PATH")]
     known_hosts: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+struct PublicResetAbandon {
+    /// Original signed reset inputs and pinned SSH custody.
+    #[command(flatten)]
+    inputs: PublicResetPreflight,
+    /// Exact SHA-256 of the original recovery-pending journal, including its newline.
+    #[arg(long, value_name = "SHA256")]
+    expected_journal_sha256: String,
+    /// Explicitly discard the unproven testnet without asserting a transaction outcome.
+    #[arg(long, required = true)]
+    abandon_pending_mutations: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -474,6 +489,46 @@ impl PublicReset {
                     "ok",
                     "public reset completed with immutable receipts",
                 )
+            }
+            PublicResetCommand::Abandon(args) => {
+                if !args.abandon_pending_mutations {
+                    return Err(eyre!("abandonment requires --abandon-pending-mutations"));
+                }
+                let inputs = &args.inputs;
+                let (admitted, _chain_guard) = admit_signed_inputs_for_controller(
+                    &inputs.inventory,
+                    &inputs.authorization,
+                    &inputs.trusted_public_key,
+                    &inputs.ssh_identity,
+                    &inputs.known_hosts,
+                    ControllerAdmission::AbandonOriginalTarget,
+                )?;
+                let journal_dir = Path::new(JOURNAL_ROOT);
+                let executor_model::JournalOpen::Resumable(mut journal) =
+                    executor_model::DurableJournal::classify(journal_dir, &admitted)?
+                else {
+                    return Err(eyre!("abandonment requires an existing unresolved journal"));
+                };
+                let mut transport = host::RollbackSshTransport::new(&admitted, journal_dir)?;
+                let receipt = executor_model::abandon_pending_attempt(
+                    &admitted.inventory,
+                    &mut transport,
+                    &mut journal,
+                    &args.expected_journal_sha256,
+                )?;
+                let mut result = report(
+                    &admitted,
+                    "abandon",
+                    "rolled_back",
+                    "unresolved testnet evidence preserved; all four validators rolled back",
+                );
+                if let Value::Object(fields) = &mut result {
+                    fields.insert(
+                        "abandonment_receipt".into(),
+                        Value::String(receipt.display().to_string()),
+                    );
+                }
+                result
             }
             PublicResetCommand::HostDispatch(args) => {
                 args.run(std::io::stdin().lock(), &mut output)?;
@@ -987,8 +1042,34 @@ fn admit_signed_inputs(
     ssh_identity: &Path,
     known_hosts: &Path,
 ) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
+    admit_signed_inputs_for_controller(
+        inventory_path,
+        authorization_path,
+        trusted_key_path,
+        ssh_identity,
+        known_hosts,
+        ControllerAdmission::CurrentExecutable,
+    )
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ControllerAdmission {
+    CurrentExecutable,
+    // The new controller can roll back an original signed target only through its
+    // retained dispatcher; the dispatcher still admits its own exact executable.
+    AbandonOriginalTarget,
+}
+
+fn admit_signed_inputs_for_controller(
+    inventory_path: &Path,
+    authorization_path: &Path,
+    trusted_key_path: &Path,
+    ssh_identity: &Path,
+    known_hosts: &Path,
+    admission: ControllerAdmission,
+) -> Result<(AdmittedReset, ChainDiscriminantGuard)> {
     let (inventory, inventory_bytes, chain_guard) = read_inventory(inventory_path, "inventory")?;
-    validate_inventory(&inventory)?;
+    validate_inventory_for_controller(&inventory, admission)?;
     validate_shared_validator_closure(&inventory)?;
     // Reject unsupported placement before opening any deployment credential.
     validate_fixed_executable(Path::new(SSH), "OpenSSH client")?;
@@ -1356,6 +1437,13 @@ fn authorization_message(claims: &AuthorizationClaimsV1) -> Result<Vec<u8>> {
 }
 
 fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
+    validate_inventory_for_controller(inventory, ControllerAdmission::CurrentExecutable)
+}
+
+fn validate_inventory_for_controller(
+    inventory: &InventoryV1,
+    admission: ControllerAdmission,
+) -> Result<()> {
     if inventory.schema != INVENTORY_SCHEMA_V1 {
         return Err(eyre!("inventory schema must be `{INVENTORY_SCHEMA_V1}`"));
     }
@@ -1402,7 +1490,7 @@ fn validate_inventory(inventory: &InventoryV1) -> Result<()> {
         ));
     }
     validate_nonce(&inventory.authorization_nonce)?;
-    validate_revision(&inventory.revision)?;
+    validate_revision_for_controller(&inventory.revision, admission)?;
     validate_timeout_policy(inventory)?;
     validate_inrou(&inventory.inrou_canary)?;
     validate_canary_onboarding_request(&inventory.canary_onboarding_request)?;
@@ -1572,6 +1660,13 @@ fn assembled_inventory_bytes(inventory: &InventoryV1) -> Result<Vec<u8>> {
 }
 
 fn validate_revision(revision: &RevisionV1) -> Result<()> {
+    validate_revision_for_controller(revision, ControllerAdmission::CurrentExecutable)
+}
+
+fn validate_revision_for_controller(
+    revision: &RevisionV1,
+    admission: ControllerAdmission,
+) -> Result<()> {
     if revision.branch != SOURCE_BRANCH {
         return Err(eyre!("revision branch must be exact `{SOURCE_BRANCH}`"));
     }
@@ -1599,10 +1694,14 @@ fn validate_revision(revision: &RevisionV1) -> Result<()> {
     if revision.target != BUILD_TARGET
         || revision.profile != BUILD_PROFILE
         || revision.build_id != revision.commit
-        || revision.commit != compiled_sha
     {
         return Err(eyre!(
-            "revision must use target `{BUILD_TARGET}`, evidence profile `{BUILD_PROFILE}`, and commit/build_id equal the compiled CLI SHA"
+            "revision must use target `{BUILD_TARGET}`, evidence profile `{BUILD_PROFILE}`, and identical commit/build_id"
+        ));
+    }
+    if admission == ControllerAdmission::CurrentExecutable && revision.commit != compiled_sha {
+        return Err(eyre!(
+            "revision commit/build_id must equal the compiled CLI SHA"
         ));
     }
     Ok(())
@@ -3554,6 +3653,8 @@ mod executor_model {
         }
     }
 
+    include!("taira_public_reset_abandon.rs");
+
     impl JournalStore for DurableJournal {
         fn state(&self) -> &JournalV1 {
             &self.state
@@ -5114,6 +5215,8 @@ mod executor_model {
     pub(super) mod tests {
         use super::*;
         use iroha_crypto::{KeyPair, Signature};
+
+        include!("taira_public_reset_abandon_tests.rs");
 
         #[test]
         fn recovery_args_accept_identical_forward_inputs_without_admitting_unused_paths() {

@@ -4842,6 +4842,7 @@ dependencies = [
  "blake2",
  "error-stack",
  "expect-test",
+ "fastpq_isi",
  "hex",
  "iroha_config_base",
  "iroha_crypto",

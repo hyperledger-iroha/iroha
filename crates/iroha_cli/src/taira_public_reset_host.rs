@@ -13996,7 +13996,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         phase: &str,
         kind: &str,
         idempotency_key: &str,
-        _timeout_secs: u64,
+        timeout_secs: u64,
         include_submission_secret: bool,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
         let (mut args, config_file) = inherited_client_config_args(
@@ -14010,6 +14010,8 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             OsString::from("write-canary"),
             OsString::from("--public-root"),
             OsString::from(mutation_probe_root(&self.admitted.inventory, phase)?),
+            OsString::from("--timeout-secs"),
+            OsString::from(timeout_secs.to_string()),
             OsString::from("--operation"),
             OsString::from(match kind {
                 "onboarding" => "onboarding",
