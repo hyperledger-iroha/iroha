@@ -17,6 +17,7 @@ mod panic_recovery;
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
 /// Root-custodied immutable no-replace artifact publication.
+#[cfg(all(test, unix))]
 #[path = "main/root_owned_artifact_publication.rs"]
 mod root_owned_artifact_publication;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
@@ -8780,7 +8781,6 @@ impl Iroha {
         #[cfg(feature = "dag-recovery-verify")]
         if !emergency_fast {
             use iroha_core::pipeline::access::{IvmStrategy, derive_for_transaction};
-            use nonzero_ext::nonzero;
             use sha2::{Digest, Sha256};
             // Choose strategy based on configured pipeline prepass
             let view = state.query_view();
@@ -19305,7 +19305,6 @@ mod tests {
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
         use iroha_primitives::addr::socket_addr;
-        use path_absolutize::Absolutize as _;
 
         fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
             Args {

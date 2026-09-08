@@ -3,7 +3,7 @@
 use iroha_crypto::{
     CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
 };
-use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, SerializePayload, json};
+use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
 
 #[derive(NoritoSchema)]
 #[norito_schema(name = "iroha_crypto_group_01::merkle_schema_identity::OriginalMarker")]
