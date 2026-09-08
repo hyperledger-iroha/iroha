@@ -11,6 +11,8 @@ from one fixed Git-object source capture with six jobs and captures read-only
 copies. Rerun the same prepare command to
 reuse completed checks/captures or retry an incomplete local build in the same
 warm Cargo lane. Failed attempt directories and logs remain intact.
+The persistent compiler cache starts through a descriptor-isolated version probe
+before Cargo inherits the build locks; existing cache contents are preserved.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Existing source, outputs and Cargo caches are never overwritten or cleaned.
@@ -344,6 +346,27 @@ def captured_gate(source: Path, before: list[dict[str, object]]):
     return module
 
 
+
+def initialize_compiler_cache(env: dict[str, str]) -> None:
+    """Start/reuse the persistent cache before a compiler can inherit build locks."""
+    if "RUSTC_WRAPPER" not in env:
+        return
+    # A compiler version request uses sccache's connect-or-start path. Unlike
+    # --start-server it also succeeds for an existing server; --show-stats can
+    # report empty statistics without starting one. Do not reset or stop caches.
+    env["SCCACHE_IDLE_TIMEOUT"] = "0"
+    try:
+        result = subprocess.run(
+            [env["RUSTC_WRAPPER"], env["RUSTC"], "--version"],
+            cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE, close_fds=True, check=False, timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise PrepareError("compiler cache initialization failed before Cargo; cache retained") from error
+    require(result.returncode == 0,
+            "compiler cache initialization failed before Cargo; cache retained")
+
+
 def isolated_cargo_environment(root: Path, source: Path, env: dict[str, str]) -> tuple[dict[str, str], list[dict[str, object]]]:
     """Select the captured toolchain, sharing cache bytes but no ambient config."""
     channel = tomllib.loads((source / "rust-toolchain.toml").read_text())["toolchain"]["channel"]
@@ -391,6 +414,7 @@ def isolated_cargo_environment(root: Path, source: Path, env: dict[str, str]) ->
     sccache = shutil.which("sccache", path=env.get("PATH", ""))
     if sccache:
         result["RUSTC_WRAPPER"] = str(Path(sccache).resolve(strict=True))
+        initialize_compiler_cache(result)
     return result, tools
 
 

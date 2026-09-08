@@ -6,6 +6,7 @@ import contextlib
 import hashlib
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import stat
@@ -643,6 +644,63 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88, 99))
 
+
+    def test_cache_initialization_closes_inheritable_lane_and_session_descriptors(self):
+        observations = self.root / "cache-observation.json"
+        cache = self.root / "sccache-fixture"
+        cache.write_text(
+            "#!" + sys.executable + "\n"
+            "import json,os,sys\n"
+            "seen=[]\n"
+            "for fd in range(3,256):\n"
+            " try:\n"
+            "  info=os.fstat(fd);seen.append([info.st_dev,info.st_ino])\n"
+            " except OSError:pass\n"
+            "with open(" + repr(str(observations)) + ", 'w') as output:\n"
+            " json.dump({'args':sys.argv[1:],'idle':os.environ.get('SCCACHE_IDLE_TIMEOUT'),'seen':seen},output)\n"
+        )
+        cache.chmod(0o755)
+        env = release.child_environment(dict(os.environ), self.target)
+        env.update(RUSTC_WRAPPER=str(cache), RUSTC=str(self.zig), SCCACHE_IDLE_TIMEOUT="600")
+        with contextlib.ExitStack() as stack:
+            held = []
+            for name in ("mode", "source", "session"):
+                directory = self.root / name
+                directory.mkdir(mode=0o700)
+                fd = stack.enter_context(release.preparation_lock(directory))
+                os.set_inheritable(fd, True)
+                held.append((fd, os.fstat(fd)))
+            for _ in range(2):
+                release.initialize_compiler_cache(env)
+                observed = json.loads(observations.read_text())
+                self.assertEqual(observed["args"], [str(self.zig), "--version"])
+                self.assertEqual(observed["idle"], "0")
+                for fd, info in held:
+                    self.assertNotIn([info.st_dev, info.st_ino], observed["seen"])
+                    self.assertEqual(os.fstat(fd).st_ino, info.st_ino)
+                # The cache probe must not unlock the parent's live build custody.
+                with self.assertRaisesRegex(release.PrepareError, "still running"):
+                    with release.preparation_lock(self.root / "mode"):
+                        self.fail("cache startup released the Cargo lane")
+
+    def test_cache_initialization_failure_cannot_silently_continue_without_custody(self):
+        env = {"RUSTC_WRAPPER": "/fixture/sccache", "RUSTC": "/fixture/rustc"}
+        for failure in (subprocess.CompletedProcess([], 1),
+                        subprocess.TimeoutExpired(["sccache"], 30), OSError("fixture failure")):
+            with self.subTest(failure=type(failure).__name__), \
+                 patch.object(release.subprocess, "run", side_effect=failure if isinstance(failure, Exception) else None,
+                              return_value=failure) as run, \
+                 self.assertRaisesRegex(release.PrepareError, "before Cargo"):
+                release.initialize_compiler_cache(dict(env))
+            self.assertEqual(run.call_args.args[0], ["/fixture/sccache", "/fixture/rustc", "--version"])
+            self.assertTrue(run.call_args.kwargs["close_fds"])
+            self.assertNotIn("pass_fds", run.call_args.kwargs)
+            self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    def test_no_cache_wrapper_does_not_launch_a_cache_server(self):
+        with patch.object(release.subprocess, "run") as run:
+            release.initialize_compiler_cache({"RUSTC": "/fixture/rustc"})
+        run.assert_not_called()
 
     def development_paths(self):
         repo = self.root / "repo"
