@@ -8,7 +8,7 @@
 //! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 use super::super::poseidon2::LastFieldStream as GoldilocksDigest384LastFieldStreamV1;
 use super::transparent_stark::{
     ExactProofReaderV1, GOLDILOCKS_GENERATOR_V1, GoldilocksDigest384V1, GoldilocksFieldV1 as F,
@@ -21,11 +21,7 @@ use super::transparent_stark::{
 };
 #[cfg(test)]
 use super::transparent_stark::{
-    ReplayableTraceMaskV1, goldilocks_batch_invert_v1, masked_trace_lde_column_with_mask_v1,
-};
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-use super::transparent_stark::{
-    goldilocks_digest384_last_field_stream_v1, goldilocks_ifft_v1, map_digest_stream_error_v1,
+    goldilocks_digest384_last_field_stream_v1, map_digest_stream_error_v1,
     masked_trace_coefficients_on_coset_v1, masked_trace_coefficients_with_mask_v1,
     sample_trace_mask_v1,
 };
@@ -55,11 +51,6 @@ const AGGREGATE_STARK_RESERVED_DOMAINS_V1: [&[u8]; 5] = [
 /// role that is not present in [`AggregateStarkDomainsV1`].
 pub(crate) fn aggregate_stark_domain_is_reserved_v1(domain: &[u8]) -> bool {
     AGGREGATE_STARK_RESERVED_DOMAINS_V1.contains(&domain)
-}
-/// Return every fixed aggregate-core role for cross-layer uniqueness tests.
-#[cfg(test)]
-pub(crate) const fn aggregate_stark_reserved_domains_v1() -> [&'static [u8]; 5] {
-    AGGREGATE_STARK_RESERVED_DOMAINS_V1
 }
 /// Rows processed per bounded DEEP/FRI denominator-inversion batch.
 pub(crate) const DEEP_FRI_BASE_BATCH_ROWS_V1: usize = 1 << 12;
@@ -1400,7 +1391,7 @@ pub(crate) fn row_tree_v1(
         .map_err(map_transparent_error_v1)
 }
 /// Root and canonical minimal frontier produced without retaining a Merkle tree.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StreamingMerkleCommitmentV1 {
     /// Root of the complete power-of-two leaf stream.
@@ -1414,7 +1405,7 @@ pub(crate) struct StreamingMerkleCommitmentV1 {
 /// one pending subtree per level and only those sibling hashes required by the
 /// requested canonical multiproof. Its memory is therefore
 /// `O(log(leaf_count) + frontier_len)` rather than `O(leaf_count)`.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) struct StreamingMerkleAccumulatorV1 {
     context: TransparentStarkDigestContextV1,
     node_role: &'static [u8],
@@ -1424,7 +1415,7 @@ pub(crate) struct StreamingMerkleAccumulatorV1 {
     frontier_positions: BTreeMap<(usize, usize), usize>,
     frontier: Vec<Option<GoldilocksDigest384V1>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl StreamingMerkleAccumulatorV1 {
     /// Create an accumulator for an exact leaf count and sorted unique opening set.
     ///
@@ -1588,7 +1579,7 @@ impl StreamingMerkleAccumulatorV1 {
     }
 }
 /// Commit an exact leaf iterator with logarithmic tree memory.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn streaming_merkle_commitment_v1<I>(
     context: TransparentStarkDigestContextV1,
     node_role: &'static [u8],
@@ -1607,7 +1598,7 @@ where
     accumulator.finish()
 }
 /// Result of one column-streamed vector-row commitment pass.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct StreamingRowCommitmentResultV1 {
     /// Root and canonical frontier of the committed vector rows.
@@ -1623,7 +1614,7 @@ pub(crate) struct StreamingRowCommitmentResultV1 {
 /// [`StreamingMerkleAccumulatorV1`], so neither leaves nor tree levels are
 /// retained. A second deterministic pass after Fiat–Shamir query derivation
 /// supplies the canonical frontier and the small set of opened rows.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) struct StreamingRowCommitmentV1 {
     rows: usize,
     width: usize,
@@ -1634,7 +1625,7 @@ pub(crate) struct StreamingRowCommitmentV1 {
     opening_indices: Vec<usize>,
     opened_rows: BTreeMap<usize, Vec<F>>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl StreamingRowCommitmentV1 {
     /// Start an exact row commitment pass.
     pub(crate) fn new(
@@ -1757,35 +1748,24 @@ impl StreamingRowCommitmentV1 {
         })
     }
 }
-/// Secret replay material for one exact ordered set of streamed trace columns.
-///
-/// This type deliberately implements neither `Clone` nor `Debug`. Dropping it
-/// recursively overwrites every mask coefficient through
-/// [`ReplayableTraceMaskV1`].
-#[cfg(test)]
-pub(crate) struct StreamingTraceMaskSetV1 {
-    native_trace_log2: u8,
-    lde_log2: u8,
-    masks: Vec<ReplayableTraceMaskV1>,
-}
 /// Owner of one secret-bearing field column that overwrites every cell on
 /// every return path.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) struct ZeroizingFieldColumnV1(Vec<F>);
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl ZeroizingFieldColumnV1 {
     fn zeroize_v1(&mut self) {
         zeroize_field_column_v1(&mut self.0);
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl core::ops::Deref for ZeroizingFieldColumnV1 {
     type Target = [F];
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl Drop for ZeroizingFieldColumnV1 {
     fn drop(&mut self) {
         self.zeroize_v1();
@@ -1860,13 +1840,6 @@ fn zeroize_extension_field_column_v1(values: &mut [E]) {
         value.zeroize_v1();
     }
 }
-#[cfg(test)]
-impl StreamingTraceMaskSetV1 {
-    /// Number of committed columns.
-    pub(crate) fn width(&self) -> usize {
-        self.masks.len()
-    }
-}
 /// Secret retained masked polynomials for one exact streamed trace commitment.
 ///
 /// Each column stores ascending coefficients of
@@ -1875,13 +1848,13 @@ impl StreamingTraceMaskSetV1 {
 /// domain, a smaller quotient domain, and transcript-derived DEEP points
 /// without anonymous matrix scratch. The type implements neither `Clone` nor
 /// `Debug`; every coefficient is overwritten recursively on drop.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) struct MaskedTracePolynomialSetV1 {
     native_trace_log2: u8,
     commitment_lde_log2: u8,
     columns: Vec<ZeroizingFieldColumnV1>,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl MaskedTracePolynomialSetV1 {
     fn validate_v1(&self) -> Result<(usize, usize), AggregateStarkErrorV1> {
         let native_rows = checked_domain_size_v1(self.native_trace_log2)?;
@@ -1905,14 +1878,6 @@ impl MaskedTracePolynomialSetV1 {
     /// Number of committed columns.
     pub(crate) fn width(&self) -> usize {
         self.columns.len()
-    }
-    /// Native trace-domain logarithm shared by every retained polynomial.
-    pub(crate) const fn native_trace_log2(&self) -> u8 {
-        self.native_trace_log2
-    }
-    /// Logarithm of the domain used by the transcript-bound commitment.
-    pub(crate) const fn commitment_lde_log2(&self) -> u8 {
-        self.commitment_lde_log2
     }
     /// Exact ascending coefficients of one retained masked polynomial.
     pub(crate) fn column_coefficients_v1(
@@ -1941,29 +1906,13 @@ impl MaskedTracePolynomialSetV1 {
             .map_err(map_transparent_error_v1)?,
         ))
     }
-    /// Evaluate every retained column on one verifier-derived coset.
-    #[cfg(test)]
-    pub(crate) fn evaluate_columns_on_coset_v1(
-        &self,
-        evaluation_log2: u8,
-    ) -> Result<Vec<ZeroizingFieldColumnV1>, AggregateStarkErrorV1> {
-        self.validate_v1()?;
-        let mut columns = Vec::new();
-        columns
-            .try_reserve_exact(self.width())
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        for column in 0..self.width() {
-            columns.push(self.evaluate_column_on_coset_v1(column, evaluation_log2)?);
-        }
-        Ok(columns)
-    }
 }
 fn checked_domain_size_v1(log2: u8) -> Result<usize, AggregateStarkErrorV1> {
     1_usize
         .checked_shl(u32::from(log2))
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 fn validate_masked_trace_commitment_shape_v1(
     leaf_domain: &[u8],
     node_domain: &[u8],
@@ -1995,119 +1944,6 @@ fn validate_masked_trace_commitment_shape_v1(
     }
     Ok((native_rows, lde_rows))
 }
-/// Sample replayable masks and commit columns generated one at a time.
-#[cfg(test)]
-pub(crate) fn commit_masked_trace_columns_v1<R, S>(
-    context: TransparentStarkDigestContextV1,
-    leaf_domain: &[u8],
-    node_domain: &'static [u8],
-    group: usize,
-    native_trace_log2: u8,
-    lde_log2: u8,
-    width: usize,
-    mask_degree: usize,
-    opening_indices: &[usize],
-    rng: &mut R,
-    mut source: S,
-) -> Result<(StreamingRowCommitmentResultV1, StreamingTraceMaskSetV1), AggregateStarkErrorV1>
-where
-    R: TryRngCore,
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    let (native_rows, lde_rows) = validate_masked_trace_commitment_shape_v1(
-        leaf_domain,
-        node_domain,
-        group,
-        native_trace_log2,
-        lde_log2,
-        width,
-        mask_degree,
-        opening_indices,
-    )?;
-    let mut commitment = StreamingRowCommitmentV1::new(
-        context,
-        leaf_domain,
-        node_domain,
-        group,
-        lde_rows,
-        width,
-        opening_indices,
-    )?;
-    let mut masks = Vec::new();
-    masks
-        .try_reserve_exact(width)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for column_index in 0..width {
-        let native = ZeroizingFieldColumnV1(source(column_index)?);
-        if native.len() != native_rows {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        let mask = sample_trace_mask_v1(mask_degree, rng).map_err(map_transparent_error_v1)?;
-        let lde = ZeroizingFieldColumnV1(
-            masked_trace_lde_column_with_mask_v1(
-                &native,
-                native_trace_log2,
-                lde_log2,
-                mask.coefficients(),
-            )
-            .map_err(map_transparent_error_v1)?,
-        );
-        commitment.absorb_column(&lde)?;
-        masks.push(mask);
-    }
-    Ok((
-        commitment.finish()?,
-        StreamingTraceMaskSetV1 {
-            native_trace_log2,
-            lde_log2,
-            masks,
-        },
-    ))
-}
-/// Deterministically replay one streamed trace commitment with the original
-/// secret masks after Fiat–Shamir queries are fixed.
-#[cfg(test)]
-pub(crate) fn replay_masked_trace_columns_v1<S>(
-    context: TransparentStarkDigestContextV1,
-    leaf_domain: &[u8],
-    node_domain: &'static [u8],
-    group: usize,
-    masks: &StreamingTraceMaskSetV1,
-    opening_indices: &[usize],
-    mut source: S,
-) -> Result<StreamingRowCommitmentResultV1, AggregateStarkErrorV1>
-where
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    let native_rows = checked_domain_size_v1(masks.native_trace_log2)?;
-    let lde_rows = checked_domain_size_v1(masks.lde_log2)?;
-    let mut commitment = StreamingRowCommitmentV1::new(
-        context,
-        leaf_domain,
-        node_domain,
-        group,
-        lde_rows,
-        masks.width(),
-        opening_indices,
-    )?;
-    for (column_index, mask) in masks.masks.iter().enumerate() {
-        let native = ZeroizingFieldColumnV1(source(column_index)?);
-        if native.len() != native_rows {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        let lde = ZeroizingFieldColumnV1(
-            masked_trace_lde_column_with_mask_v1(
-                &native,
-                masks.native_trace_log2,
-                masks.lde_log2,
-                mask.coefficients(),
-            )
-            .map_err(map_transparent_error_v1)?,
-        );
-        commitment.absorb_column(&lde)?;
-    }
-    commitment.finish()
-}
 /// Sample masks, commit their LDEs, and retain only the masked coefficients.
 ///
 /// All verifier-derived shape checks and commitment allocations finish before
@@ -2115,7 +1951,7 @@ where
 /// to replay the exact commitment, evaluate smaller quotient cosets, and
 /// construct DEEP openings without materializing anonymous common-domain
 /// scratch.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn commit_masked_trace_polynomial_columns_v1<R, S>(
     context: TransparentStarkDigestContextV1,
     leaf_domain: &[u8],
@@ -2204,7 +2040,7 @@ where
 /// No native witness source or mask RNG is needed: the exact committed
 /// polynomials, including canonical trailing zero coefficients, are owned by
 /// `polynomials`.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn replay_masked_trace_polynomial_columns_v1(
     context: TransparentStarkDigestContextV1,
     leaf_domain: &[u8],
@@ -2263,34 +2099,6 @@ pub(crate) fn composition_tree_v1(
         .collect::<Result<Vec<_>, _>>()?;
     GoldilocksMerkleTreeV1::from_leaves(leaves, domains.digest_context, domains.composition_node)
         .map_err(map_transparent_error_v1)
-}
-/// Commit one aggregate composition lane without retaining a Merkle tree.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn streaming_composition_commitment_v1(
-    domains: AggregateStarkDomainsV1,
-    lane: usize,
-    chunks: &[Vec<E>],
-    opening_indices: &[usize],
-) -> Result<StreamingMerkleCommitmentV1, AggregateStarkErrorV1> {
-    domains.validate()?;
-    let rows = chunks
-        .first()
-        .map(Vec::len)
-        .filter(|rows| *rows != 0 && rows.is_power_of_two())
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    if chunks.iter().any(|chunk| chunk.len() != rows) {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    streaming_merkle_commitment_v1(
-        domains.digest_context,
-        domains.composition_node,
-        rows,
-        opening_indices,
-        (0..rows).map(|index| {
-            let values = chunks.iter().map(|chunk| chunk[index]).collect::<Vec<_>>();
-            composition_leaf_hash_unchecked_v1(domains, lane, index, &values)
-        }),
-    )
 }
 fn composition_chunks_from_coefficients_v1(
     coefficients: &[E],
@@ -2364,186 +2172,6 @@ pub(crate) fn split_composition_evaluations_v1(
     }
     composition_chunks_from_coefficients_v1(&coefficients, parameters, layout)
 }
-/// Divide extension coefficients exactly by the trace vanishing polynomial.
-///
-/// Synthetic division is performed by the monic polynomial `X^n - 1`. The
-/// complete remainder is checked to be zero before the quotient is returned;
-/// a numerator that is only pointwise divisible on some evaluation set is
-/// therefore rejected.
-#[cfg(test)]
-pub(crate) fn divide_extension_polynomial_by_trace_vanishing_v1(
-    numerator_coefficients: &[E],
-    trace_log2: u8,
-) -> Result<Vec<E>, AggregateStarkErrorV1> {
-    let trace_size = checked_domain_size_v1(trace_log2)?;
-    if numerator_coefficients.len() <= trace_size {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    if numerator_coefficients
-        .iter()
-        .any(|coefficient| !coefficient.is_canonical())
-    {
-        return Err(AggregateStarkErrorV1::NonCanonicalField);
-    }
-    let quotient_len = numerator_coefficients
-        .len()
-        .checked_sub(trace_size)
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    let mut work = ZeroizingExtensionFieldColumnV1(Vec::new());
-    work.0
-        .try_reserve_exact(numerator_coefficients.len())
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    work.0.extend_from_slice(numerator_coefficients);
-    let mut quotient = ZeroizingExtensionFieldColumnV1(Vec::new());
-    quotient
-        .0
-        .try_reserve_exact(quotient_len)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    quotient.0.resize(quotient_len, E::ZERO);
-    for degree in (trace_size..work.len()).rev() {
-        let factor = work[degree];
-        let quotient_degree = degree
-            .checked_sub(trace_size)
-            .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-        quotient.0[quotient_degree] = factor;
-        work.0[degree] = E::ZERO;
-        let remainder_coefficient = work[quotient_degree].add(factor);
-        work.0[quotient_degree] = remainder_coefficient;
-    }
-    if work.iter().any(|coefficient| *coefficient != E::ZERO) {
-        return Err(AggregateStarkErrorV1::ConstraintOpening);
-    }
-    Ok(core::mem::take(&mut quotient.0))
-}
-/// Divide a constraint-numerator codeword by `X^n - 1` on a quotient coset.
-///
-/// The generator shift is checked to be disjoint from both the native trace
-/// subgroup and the quotient evaluation subgroup. Only `Q / n` denominators
-/// are materialized and batch-inverted because the vanishing values repeat
-/// with that exact period. Every pointwise division is multiplied back as an
-/// implementation invariant.
-#[cfg(test)]
-pub(crate) fn quotient_evaluations_from_constraint_coset_v1(
-    numerator_evaluations: &[E],
-    trace_log2: u8,
-    quotient_coset_log2: u8,
-) -> Result<Vec<E>, AggregateStarkErrorV1> {
-    let trace_size = checked_domain_size_v1(trace_log2)?;
-    let quotient_size = checked_domain_size_v1(quotient_coset_log2)?;
-    if trace_size >= quotient_size || numerator_evaluations.len() != quotient_size {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    if numerator_evaluations
-        .iter()
-        .any(|evaluation| !evaluation.is_canonical())
-    {
-        return Err(AggregateStarkErrorV1::NonCanonicalField);
-    }
-    let quotient_root = goldilocks_primitive_root_v1(quotient_coset_log2)
-        .map_err(|_| AggregateStarkErrorV1::InvalidLayout)?;
-    let shift = F(GOLDILOCKS_GENERATOR_V1);
-    if shift.pow(trace_size as u128) == F::ONE || shift.pow(quotient_size as u128) == F::ONE {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let denominator_period = quotient_size
-        .checked_div(trace_size)
-        .filter(|period| *period != 0)
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    let step = quotient_root.pow(trace_size as u128);
-    let mut denominators = Vec::new();
-    denominators
-        .try_reserve_exact(denominator_period)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    let mut point_to_trace_size = shift.pow(trace_size as u128);
-    for _ in 0..denominator_period {
-        denominators.push(point_to_trace_size.sub(F::ONE));
-        point_to_trace_size = point_to_trace_size.mul(step);
-    }
-    let mut original_denominators = Vec::new();
-    original_denominators
-        .try_reserve_exact(denominator_period)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    original_denominators.extend_from_slice(&denominators);
-    goldilocks_batch_invert_v1(&mut denominators).map_err(map_transparent_error_v1)?;
-    let mut quotient = Vec::new();
-    quotient
-        .try_reserve_exact(quotient_size)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for (index, numerator) in numerator_evaluations.iter().copied().enumerate() {
-        let period_index = index % denominator_period;
-        let value = numerator.mul_base(denominators[period_index]);
-        if value.mul_base(original_denominators[period_index]) != numerator {
-            return Err(AggregateStarkErrorV1::InternalInvariant);
-        }
-        quotient.push(value);
-    }
-    Ok(quotient)
-}
-/// Convert a minimal quotient-coset codeword into common-domain FRI chunks.
-///
-/// `maximum_quotient_degree` is the relation's exact inclusive `q_max`, not
-/// the looser aggregate layout capacity. After interpolation, every
-/// coefficient above that bound must be exactly zero. The canonical
-/// coefficient chunks are then evaluated on the common commitment coset, so
-/// the resulting proof wire remains independent of the prover's smaller
-/// quotient domain.
-#[cfg(test)]
-pub(crate) fn composition_chunks_from_quotient_coset_v1(
-    quotient_evaluations: &[E],
-    quotient_coset_log2: u8,
-    maximum_quotient_degree: usize,
-    parameters: AggregateStarkParametersV1,
-    layout: &AggregateProofLayoutV1,
-) -> Result<Vec<Vec<E>>, AggregateStarkErrorV1> {
-    layout.validate(parameters)?;
-    let quotient_size = checked_domain_size_v1(quotient_coset_log2)?;
-    if quotient_evaluations.len() != quotient_size
-        || maximum_quotient_degree >= quotient_size
-        || maximum_quotient_degree > layout.maximum_composition_degree(parameters)?
-    {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    if quotient_evaluations
-        .iter()
-        .any(|evaluation| !evaluation.is_canonical())
-    {
-        return Err(AggregateStarkErrorV1::NonCanonicalField);
-    }
-    let coefficients = fp4_coset_coefficients_v1(quotient_evaluations, quotient_coset_log2)?;
-    let first_forbidden = maximum_quotient_degree
-        .checked_add(1)
-        .ok_or(AggregateStarkErrorV1::InvalidLayout)?;
-    if coefficients
-        .get(first_forbidden..)
-        .is_some_and(|tail| tail.iter().any(|coefficient| *coefficient != E::ZERO))
-    {
-        return Err(AggregateStarkErrorV1::FriDegree);
-    }
-    composition_chunks_from_coefficients_v1(&coefficients, parameters, layout)
-}
-/// Divide one constraint coset and canonically chunk the exact quotient.
-#[cfg(test)]
-pub(crate) fn composition_chunks_from_constraint_coset_v1(
-    numerator_evaluations: &[E],
-    trace_log2: u8,
-    quotient_coset_log2: u8,
-    maximum_quotient_degree: usize,
-    parameters: AggregateStarkParametersV1,
-    layout: &AggregateProofLayoutV1,
-) -> Result<Vec<Vec<E>>, AggregateStarkErrorV1> {
-    let quotient = ZeroizingExtensionFieldColumnV1(quotient_evaluations_from_constraint_coset_v1(
-        numerator_evaluations,
-        trace_log2,
-        quotient_coset_log2,
-    )?);
-    composition_chunks_from_quotient_coset_v1(
-        &quotient,
-        quotient_coset_log2,
-        maximum_quotient_degree,
-        parameters,
-        layout,
-    )
-}
 /// Reconstruct one unsplit quotient value from its authenticated chunks.
 pub(crate) fn recompose_composition_value_v1(
     chunks: &[E],
@@ -2563,16 +2191,6 @@ pub(crate) fn recompose_composition_value_v1(
     }
     Ok(value)
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn evaluate_base_coefficients_at_fp4_v1(coefficients: &[F], point: E) -> E {
-    coefficients
-        .iter()
-        .rev()
-        .copied()
-        .fold(E::ZERO, |value, coefficient| {
-            value.mul(point).add(E::from_base(coefficient))
-        })
-}
 fn evaluate_fp4_coefficients_at_fp4_v1(coefficients: &[E], point: E) -> E {
     coefficients
         .iter()
@@ -2581,27 +2199,6 @@ fn evaluate_fp4_coefficients_at_fp4_v1(coefficients: &[E], point: E) -> E {
         .fold(E::ZERO, |value, coefficient| {
             value.mul(point).add(coefficient)
         })
-}
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-fn base_coset_coefficients_v1(
-    evaluations: &[F],
-    lde_log2: u8,
-) -> Result<ZeroizingFieldColumnV1, AggregateStarkErrorV1> {
-    if evaluations.len() != checked_domain_size_v1(lde_log2)? {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let root = goldilocks_primitive_root_v1(lde_log2).map_err(map_transparent_error_v1)?;
-    let inverse_shift = F(GOLDILOCKS_GENERATOR_V1)
-        .inv()
-        .ok_or(AggregateStarkErrorV1::InternalInvariant)?;
-    let mut coefficients = ZeroizingFieldColumnV1(evaluations.to_vec());
-    goldilocks_ifft_v1(&mut coefficients.0, root).map_err(map_transparent_error_v1)?;
-    let mut inverse_shift_power = F::ONE;
-    for coefficient in &mut coefficients.0 {
-        *coefficient = coefficient.mul(inverse_shift_power);
-        inverse_shift_power = inverse_shift_power.mul(inverse_shift);
-    }
-    Ok(coefficients)
 }
 fn fp4_coset_coefficients_v1(
     evaluations: &[E],
@@ -2623,23 +2220,6 @@ fn fp4_coset_coefficients_v1(
     }
     Ok(coefficients)
 }
-/// Evaluate one committed base-field coset codeword at arbitrary Fp4 points.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn evaluate_base_coset_polynomial_at_fp4_points_v1(
-    evaluations: &[F],
-    lde_log2: u8,
-    points: &[E],
-) -> Result<Vec<E>, AggregateStarkErrorV1> {
-    if points.is_empty() {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let coefficients = base_coset_coefficients_v1(evaluations, lde_log2)?;
-    Ok(points
-        .iter()
-        .copied()
-        .map(|point| evaluate_base_coefficients_at_fp4_v1(&coefficients, point))
-        .collect())
-}
 /// Evaluate one committed Fp4 coset codeword at an arbitrary Fp4 point.
 pub(crate) fn evaluate_fp4_coset_polynomial_at_point_v1(
     evaluations: &[E],
@@ -2648,97 +2228,6 @@ pub(crate) fn evaluate_fp4_coset_polynomial_at_point_v1(
 ) -> Result<E, AggregateStarkErrorV1> {
     let coefficients = fp4_coset_coefficients_v1(evaluations, lde_log2)?;
     Ok(evaluate_fp4_coefficients_at_fp4_v1(&coefficients, point))
-}
-#[cfg(test)]
-fn evaluate_masked_native_column_at_points_v1(
-    native: &[F],
-    native_trace_log2: u8,
-    mask: &ReplayableTraceMaskV1,
-    points: &[E],
-) -> Result<Vec<E>, AggregateStarkErrorV1> {
-    if native.len() != checked_domain_size_v1(native_trace_log2)? || points.is_empty() {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let root = goldilocks_primitive_root_v1(native_trace_log2).map_err(map_transparent_error_v1)?;
-    let mut coefficients = ZeroizingFieldColumnV1(native.to_vec());
-    goldilocks_ifft_v1(&mut coefficients.0, root).map_err(map_transparent_error_v1)?;
-    let trace_size = native.len();
-    Ok(points
-        .iter()
-        .copied()
-        .map(|point| {
-            let trace = evaluate_base_coefficients_at_fp4_v1(&coefficients, point);
-            let randomizer = evaluate_base_coefficients_at_fp4_v1(mask.coefficients(), point);
-            trace.add(point.pow(trace_size as u128).sub(E::ONE).mul(randomizer))
-        })
-        .collect())
-}
-/// Evaluate all replayable masked-native columns at `z` and
-/// `z * omega_H` without retaining their common-domain LDEs.
-#[cfg(test)]
-pub(crate) fn evaluate_masked_native_columns_at_deep_v1<S>(
-    masks: &StreamingTraceMaskSetV1,
-    point: E,
-    mut source: S,
-) -> Result<(Vec<E>, Vec<E>), AggregateStarkErrorV1>
-where
-    S: FnMut(usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-{
-    if masks.width() == 0 {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let next_root =
-        goldilocks_primitive_root_v1(masks.native_trace_log2).map_err(map_transparent_error_v1)?;
-    let next_point = point.mul_base(next_root);
-    let mut current = Vec::new();
-    let mut next = Vec::new();
-    current
-        .try_reserve_exact(masks.width())
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    next.try_reserve_exact(masks.width())
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for (column, mask) in masks.masks.iter().enumerate() {
-        let native = ZeroizingFieldColumnV1(source(column)?);
-        let values = evaluate_masked_native_column_at_points_v1(
-            &native,
-            masks.native_trace_log2,
-            mask,
-            &[point, next_point],
-        )?;
-        current.push(values[0]);
-        next.push(values[1]);
-    }
-    Ok((current, next))
-}
-/// Evaluate every retained masked polynomial at `z` and `z * omega_H`.
-///
-/// The DEEP point must be canonical and outside the native trace subgroup.
-/// Evaluation is direct from the retained coefficients, so neither the native
-/// witness columns nor a commitment-domain codeword are reconstructed.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn evaluate_masked_trace_polynomial_columns_at_deep_v1(
-    polynomials: &MaskedTracePolynomialSetV1,
-    point: E,
-) -> Result<(Vec<E>, Vec<E>), AggregateStarkErrorV1> {
-    let (native_rows, _) = polynomials.validate_v1()?;
-    if !point.is_canonical() || fp4_is_in_trace_subgroup_v1(point, native_rows) {
-        return Err(AggregateStarkErrorV1::DeepOpening);
-    }
-    let next_root = goldilocks_primitive_root_v1(polynomials.native_trace_log2)
-        .map_err(map_transparent_error_v1)?;
-    let next_point = point.mul_base(next_root);
-    let mut current = Vec::new();
-    let mut next = Vec::new();
-    current
-        .try_reserve_exact(polynomials.width())
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    next.try_reserve_exact(polynomials.width())
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for column in &polynomials.columns {
-        current.push(evaluate_base_coefficients_at_fp4_v1(column, point));
-        next.push(evaluate_base_coefficients_at_fp4_v1(column, next_point));
-    }
-    Ok((current, next))
 }
 /// Evaluate all composition chunks at the transcript-derived DEEP point.
 pub(crate) fn evaluate_composition_chunks_at_deep_v1(
@@ -2768,77 +2257,6 @@ pub(crate) fn evaluate_composition_chunks_at_deep_v1(
                 .collect()
         })
         .collect()
-}
-/// Build a DEEP payload from retained materialized common-domain codewords.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn build_materialized_deep_proof_v1(
-    trace_groups: &[AggregateTraceGroupMaterialV1],
-    compositions: &[Vec<Vec<E>>],
-    parameters: AggregateStarkParametersV1,
-    layout: &AggregateProofLayoutV1,
-    point: E,
-) -> Result<AggregateDeepProofV1, AggregateStarkErrorV1> {
-    layout.validate(parameters)?;
-    if trace_groups.len() != layout.trace_groups.len() {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let mut deep_groups = Vec::new();
-    deep_groups
-        .try_reserve_exact(trace_groups.len())
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for (material, descriptor) in trace_groups.iter().zip(&layout.trace_groups) {
-        if material.base_lde.len() != descriptor.base_width
-            || material.aux_lde.len() != descriptor.aux_width
-        {
-            return Err(AggregateStarkErrorV1::InvalidLayout);
-        }
-        let root = goldilocks_primitive_root_v1(descriptor.native_trace_log2)
-            .map_err(map_transparent_error_v1)?;
-        let next_point = point.mul_base(root);
-        let mut base_current = Vec::with_capacity(descriptor.base_width);
-        let mut base_next = Vec::with_capacity(descriptor.base_width);
-        let mut aux_current = Vec::with_capacity(descriptor.aux_width);
-        let mut aux_next = Vec::with_capacity(descriptor.aux_width);
-        for column in &material.base_lde {
-            let values = evaluate_base_coset_polynomial_at_fp4_points_v1(
-                column,
-                layout.common_lde_log2,
-                &[point, next_point],
-            )?;
-            base_current.push(values[0].coefficients().map(F::value));
-            base_next.push(values[1].coefficients().map(F::value));
-        }
-        for column in &material.aux_lde {
-            let values = evaluate_base_coset_polynomial_at_fp4_points_v1(
-                column,
-                layout.common_lde_log2,
-                &[point, next_point],
-            )?;
-            aux_current.push(values[0].coefficients().map(F::value));
-            aux_next.push(values[1].coefficients().map(F::value));
-        }
-        deep_groups.push(AggregateDeepTraceGroupOpeningV1 {
-            base_current,
-            base_next,
-            aux_current,
-            aux_next,
-        });
-    }
-    let composition_values =
-        evaluate_composition_chunks_at_deep_v1(compositions, parameters, layout, point)?
-            .into_iter()
-            .map(|lane| {
-                lane.into_iter()
-                    .map(|value| value.coefficients().map(F::value))
-                    .collect()
-            })
-            .collect();
-    let deep = AggregateDeepProofV1 {
-        trace_groups: deep_groups,
-        composition_values,
-    };
-    validate_deep_proof_shape_v1(&deep, parameters, layout)?;
-    Ok(deep)
 }
 /// Batch-invert canonical nonzero Fp4 values using one extension-field
 /// inversion.
@@ -3027,28 +2445,6 @@ pub(crate) fn fri_tree_v1(
         .collect::<Result<Vec<_>, _>>()?;
     GoldilocksMerkleTreeV1::from_leaves(leaves, domains.digest_context, domains.fri_node)
         .map_err(map_transparent_error_v1)
-}
-/// Commit one FRI layer without retaining a Merkle tree.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn streaming_fri_commitment_v1(
-    domains: AggregateStarkDomainsV1,
-    lane: usize,
-    round: usize,
-    values: &[E],
-    opening_indices: &[usize],
-) -> Result<StreamingMerkleCommitmentV1, AggregateStarkErrorV1> {
-    domains.validate()?;
-    streaming_merkle_commitment_v1(
-        domains.digest_context,
-        domains.fri_node,
-        values.len(),
-        opening_indices,
-        values
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(index, value)| fri_leaf_hash_unchecked_v1(domains, lane, round, index, value)),
-    )
 }
 /// Absorb the complete relation domain and ordered group layout before roots.
 pub(crate) fn absorb_layout_v1(
@@ -4472,194 +3868,6 @@ pub(crate) fn build_fri_lane_v1(
         terminal_values,
     })
 }
-/// Bounded-memory transcript material for one FRI lane.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AggregateStreamingFriLaneMaterialV1 {
-    /// Layer roots, including the terminal layer.
-    pub(crate) roots: Vec<GoldilocksDigest384V1>,
-    /// Fiat–Shamir folding challenge for each non-terminal layer.
-    pub(crate) betas: Vec<E>,
-    /// Exact terminal evaluations.
-    pub(crate) terminal_values: Vec<E>,
-}
-/// Post-query openings and frontiers for one streamed FRI lane.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct AggregateStreamingFriLaneOpeningsV1 {
-    /// Openings in the caller's canonical transcript-query order.
-    pub(crate) queries: Vec<AggregateFriLaneQueryV1>,
-    /// Canonical minimal frontier for each non-terminal layer.
-    pub(crate) round_frontiers: Vec<Vec<GoldilocksDigest384V1>>,
-}
-/// Commit and transcript-bind a complete FRI lane while retaining only one
-/// current layer and one half-sized successor layer.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn build_streaming_fri_lane_v1(
-    parameters: AggregateStarkParametersV1,
-    domains: AggregateStarkDomainsV1,
-    layout: &AggregateProofLayoutV1,
-    lane: usize,
-    base_values: Vec<E>,
-    transcript: &mut TransparentTranscriptV1,
-) -> Result<AggregateStreamingFriLaneMaterialV1, AggregateStarkErrorV1> {
-    let base_values = ZeroizingExtensionFieldColumnV1(base_values);
-    layout.validate(parameters)?;
-    domains.validate()?;
-    if lane >= parameters.security_lanes || base_values.len() != layout.common_lde_size() {
-        return Err(AggregateStarkErrorV1::InvalidLayout);
-    }
-    let fri_rounds = layout.fri_rounds(parameters)?;
-    let mut roots = Vec::new();
-    roots
-        .try_reserve_exact(
-            fri_rounds
-                .checked_add(1)
-                .ok_or(AggregateStarkErrorV1::InvalidLayout)?,
-        )
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    let mut betas = Vec::new();
-    betas
-        .try_reserve_exact(fri_rounds)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    let mut current = base_values;
-    let mut domain_shift = F(GOLDILOCKS_GENERATOR_V1);
-    let mut domain_root =
-        goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
-    for round in 0..fri_rounds {
-        let commitment = streaming_fri_commitment_v1(domains, lane, round, &current, &[])?;
-        absorb_fri_root_v1(transcript, domains, lane, round, &commitment.root)?;
-        let beta = transcript
-            .challenge_fp4(domains.fri_beta_label)
-            .map_err(map_transparent_error_v1)?;
-        let next = ZeroizingExtensionFieldColumnV1(fold_fri_layer_v1(
-            &current,
-            beta,
-            domain_shift,
-            domain_root,
-        )?);
-        roots.push(commitment.root);
-        betas.push(beta);
-        current = next;
-        domain_shift = domain_shift.mul(domain_shift);
-        domain_root = domain_root.mul(domain_root);
-    }
-    if current.len() != parameters.terminal_size()? {
-        return Err(AggregateStarkErrorV1::InternalInvariant);
-    }
-    ensure_fri_terminal_degree_fp4_v1(
-        &current,
-        parameters.terminal_log2,
-        parameters.terminal_degree_bound,
-    )
-    .map_err(map_transparent_error_v1)?;
-    let terminal = streaming_fri_commitment_v1(domains, lane, fri_rounds, &current, &[])?;
-    absorb_fri_root_v1(transcript, domains, lane, fri_rounds, &terminal.root)?;
-    roots.push(terminal.root);
-    Ok(AggregateStreamingFriLaneMaterialV1 {
-        roots,
-        betas,
-        terminal_values: current.into_vec_v1(),
-    })
-}
-/// Replay a committed FRI lane after transcript queries are fixed, retaining
-/// only the exact opened pairs and canonical minimal frontiers.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn open_streaming_fri_lane_v1(
-    parameters: AggregateStarkParametersV1,
-    domains: AggregateStarkDomainsV1,
-    layout: &AggregateProofLayoutV1,
-    lane: usize,
-    base_values: Vec<E>,
-    material: &AggregateStreamingFriLaneMaterialV1,
-    query_indices: &[usize],
-) -> Result<AggregateStreamingFriLaneOpeningsV1, AggregateStarkErrorV1> {
-    let base_values = ZeroizingExtensionFieldColumnV1(base_values);
-    layout.validate(parameters)?;
-    domains.validate()?;
-    let fri_rounds = layout.fri_rounds(parameters)?;
-    if lane >= parameters.security_lanes
-        || base_values.len() != layout.common_lde_size()
-        || material.roots.len() != fri_rounds + 1
-        || material.betas.len() != fri_rounds
-        || material.terminal_values.len() != parameters.terminal_size()?
-        || query_indices.len() != parameters.query_count
-        || query_indices
-            .iter()
-            .any(|index| *index >= layout.common_lde_size())
-        || query_indices.iter().copied().collect::<BTreeSet<_>>().len() != query_indices.len()
-    {
-        return Err(AggregateStarkErrorV1::InvalidProofShape);
-    }
-    let mut queries = Vec::new();
-    queries
-        .try_reserve_exact(query_indices.len())
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    for _ in query_indices {
-        let mut rounds = Vec::new();
-        rounds
-            .try_reserve_exact(fri_rounds)
-            .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-        queries.push(AggregateFriLaneQueryV1 { rounds });
-    }
-    let mut round_frontiers = Vec::new();
-    round_frontiers
-        .try_reserve_exact(fri_rounds)
-        .map_err(|_| AggregateStarkErrorV1::AllocationFailure)?;
-    let mut layer_indices = query_indices.to_vec();
-    let mut current = base_values;
-    let mut domain_shift = F(GOLDILOCKS_GENERATOR_V1);
-    let mut domain_root =
-        goldilocks_primitive_root_v1(layout.common_lde_log2).map_err(map_transparent_error_v1)?;
-    for round in 0..fri_rounds {
-        let half = current.len() / 2;
-        let opening_indices = layer_indices
-            .iter()
-            .flat_map(|index| {
-                let low = *index % half;
-                [low, low + half]
-            })
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let commitment =
-            streaming_fri_commitment_v1(domains, lane, round, &current, &opening_indices)?;
-        if commitment.root != material.roots[round] {
-            return Err(AggregateStarkErrorV1::InternalInvariant);
-        }
-        for (query, index) in queries.iter_mut().zip(&layer_indices) {
-            let low = *index % half;
-            query.rounds.push(AggregateFriRoundOpeningV1 {
-                low: current[low].coefficients().map(F::value),
-                high: current[low + half].coefficients().map(F::value),
-            });
-        }
-        let next = ZeroizingExtensionFieldColumnV1(fold_fri_layer_v1(
-            &current,
-            material.betas[round],
-            domain_shift,
-            domain_root,
-        )?);
-        for index in &mut layer_indices {
-            *index %= half;
-        }
-        round_frontiers.push(commitment.frontier);
-        current = next;
-        domain_shift = domain_shift.mul(domain_shift);
-        domain_root = domain_root.mul(domain_root);
-    }
-    if current.0.as_slice() != material.terminal_values.as_slice() {
-        return Err(AggregateStarkErrorV1::InternalInvariant);
-    }
-    let terminal = streaming_fri_commitment_v1(domains, lane, fri_rounds, &current, &[])?;
-    if terminal.root != material.roots[fri_rounds] {
-        return Err(AggregateStarkErrorV1::InternalInvariant);
-    }
-    Ok(AggregateStreamingFriLaneOpeningsV1 {
-        queries,
-        round_frontiers,
-    })
-}
 /// Construct all exact opened values for one shared query index.
 pub(crate) fn build_query_v1(
     parameters: AggregateStarkParametersV1,
@@ -5128,82 +4336,6 @@ fn verify_fri_query_v1(
         || terminal.get(layer_index).copied() != Some(expected)
     {
         return Err(AggregateStarkErrorV1::FriOpening);
-    }
-    Ok(())
-}
-/// Invoke the relation callback for every opened row and bind its results to FRI.
-#[cfg(test)]
-pub(crate) fn verify_opened_query_relations_v1<Evaluator: AggregateOpenedRowEvaluatorV1>(
-    proof: &AggregateStarkProofV1,
-    parameters: AggregateStarkParametersV1,
-    layout: &AggregateProofLayoutV1,
-    expected_indices: &[usize],
-    fri_betas: &[Vec<E>],
-    terminals: &[Vec<E>],
-    evaluator: &mut Evaluator,
-) -> Result<(), AggregateStarkErrorV1> {
-    validate_proof_shape_v1(proof, parameters, layout)?;
-    if expected_indices.len() != parameters.query_count
-        || fri_betas.len() != parameters.security_lanes
-        || terminals.len() != parameters.security_lanes
-    {
-        return Err(AggregateStarkErrorV1::InvalidProofShape);
-    }
-    for (position, query) in proof.queries.iter().enumerate() {
-        let index =
-            usize::try_from(query.index).map_err(|_| AggregateStarkErrorV1::TranscriptMismatch)?;
-        if expected_indices.get(position).copied() != Some(index)
-            || index >= layout.common_lde_size()
-        {
-            return Err(AggregateStarkErrorV1::TranscriptMismatch);
-        }
-        let opened_groups = query
-            .trace_groups
-            .iter()
-            .zip(&layout.trace_groups)
-            .map(|(opening, descriptor)| {
-                Ok(AggregateOpenedTraceGroupV1 {
-                    base_current: canonical_fields_v1(
-                        &opening.base_current,
-                        descriptor.base_width,
-                    )?,
-                    base_next: canonical_fields_v1(&opening.base_next, descriptor.base_width)?,
-                    aux_current: canonical_fields_v1(&opening.aux_current, descriptor.aux_width)?,
-                    aux_next: canonical_fields_v1(&opening.aux_next, descriptor.aux_width)?,
-                })
-            })
-            .collect::<Result<Vec<_>, AggregateStarkErrorV1>>()?;
-        for lane in 0..parameters.security_lanes {
-            let composition_chunks = canonical_fp4_fields_v1(
-                &query.composition_values[lane],
-                parameters.composition_degree_chunks,
-            )?;
-            let lde_root = goldilocks_primitive_root_v1(layout.common_lde_log2)
-                .map_err(map_transparent_error_v1)?;
-            let x = F(GOLDILOCKS_GENERATOR_V1).mul(lde_root.pow(index as u128));
-            let composition =
-                recompose_composition_value_v1(&composition_chunks, x, parameters, layout)?;
-            let expected = evaluator.evaluate_opened_row_v1(
-                index,
-                lane,
-                &opened_groups,
-                &composition_chunks,
-            )?;
-            if composition != expected.composition {
-                return Err(AggregateStarkErrorV1::ConstraintOpening);
-            }
-            let fri_mask = E::canonical(query.fri_mask_values[lane])
-                .ok_or(AggregateStarkErrorV1::NonCanonicalField)?;
-            verify_fri_query_v1(
-                index,
-                expected.fri_base.add(fri_mask),
-                parameters,
-                layout,
-                &query.fri_lanes[lane],
-                &fri_betas[lane],
-                &terminals[lane],
-            )?;
-        }
     }
     Ok(())
 }

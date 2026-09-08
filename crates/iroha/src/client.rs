@@ -12272,7 +12272,7 @@ mod evidence_http_tests {
             .try_sign(transaction_key.private_key())
             .expect("sign with the bound transaction authority");
         assert_eq!(expected_signed.authority(), &authority);
-        let expected_wire = Client::prepare_transaction_payload(&expected_signed);
+        let expected_wire = PreparedTransactionPayload::from_transaction(&expected_signed);
         mark_data_model_compatible(&client);
 
         let (foreign_authority, foreign_key) = gen_account_in("external");

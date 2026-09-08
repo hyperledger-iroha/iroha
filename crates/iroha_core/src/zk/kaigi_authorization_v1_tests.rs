@@ -98,7 +98,7 @@ pub(super) fn valid_envelope(backend: &str) -> (ProofBox, VerifyingKeyBox) {
 fn final_kaigi_real_proof_verifies_and_binds_all_31_rows() {
     let fixture = fixture();
     for backend in [ZK_BACKEND_HALO2_IPA, KAIGI_AUTHORIZATION_BACKEND_V1] {
-        let (proof, vk) = envelope(backend, fixture.vk_bytes.clone(), &[&fixture.instance]);
+        let (proof, vk) = valid_envelope(backend);
         assert!(
             validate_builtin_halo2_ipa_verifying_key_v1(
                 backend,

@@ -219,7 +219,7 @@ fn inventory_covers_nontransfer_calls_and_every_applied_source() {
     assert_eq!(block.fastpq_source_inventory().unwrap(), Some(&inventory));
     block.capture_exec_witness().unwrap();
     let context = block.take_fastpq_witness_context().unwrap();
-    assert_eq!(context.source_inventory.as_deref(), Some(&inventory));
+    assert_eq!(context._source_inventory.as_deref(), Some(&inventory));
     assert_eq!(context.tx_set_hash, Some(inventory.tx_set_hash()));
     assert_eq!(context.entry_dataspaces.len(), 6);
 }
