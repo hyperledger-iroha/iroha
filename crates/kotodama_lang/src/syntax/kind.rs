@@ -46,6 +46,10 @@ pub enum SyntaxKind {
     JsonArrayExpr,
     /// One shorthand or explicit struct literal field.
     StructLiteralField,
+    /// Named struct destructuring pattern.
+    StructPattern,
+    /// One field in a named struct pattern.
+    StructPatternField,
     /// Function body or nested block.
     Block,
     /// Statement list.
@@ -216,6 +220,8 @@ pub enum SyntaxKind {
     ColonColon,
     /// `.`.
     Dot,
+    /// `..` explicit rest marker.
+    DotDot,
     /// `?`.
     Question,
     /// `#`.

@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  let _ok = crypto::verify_proof(Name::parse("not_envelope"));
+  let _ok = crypto::verify_proof(value: Name::parse("not_envelope"));
 }
 
 }

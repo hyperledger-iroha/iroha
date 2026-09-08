@@ -169,7 +169,16 @@ pub enum VMError {
     AssertionFailed,
     /// Contract requested an application-level abort with a stable numeric code.
     ContractAbort {
-        code: u64,
+        /// Authenticated seiyaku name where the rejection originated.
+        contract: String,
+        /// Authenticated symbolic variant name within the declared error type.
+        name: String,
+        /// Stable nominal error type identity.
+        error_type: String,
+        /// Hash of the exact signed variant schema.
+        schema_hash: [u8; 32],
+        /// Validated nonzero enum-local variant code.
+        code: u32,
     },
     ExceededMaxCycles,
     InvalidMetadata,
@@ -353,8 +362,10 @@ impl fmt::Display for VMError {
                 )
             }
             VMError::AssertionFailed => write!(f, "assertion failed (constraint violation)"),
-            VMError::ContractAbort { code } => {
-                write!(f, "contract aborted with application error code {code}")
+            VMError::ContractAbort {
+                error_type, code, ..
+            } => {
+                write!(f, "seiyaku aborted with {error_type} code {code}")
             }
             VMError::ExceededMaxCycles => write!(f, "execution exceeded max cycles"),
             VMError::InvalidMetadata => write!(f, "invalid program metadata"),

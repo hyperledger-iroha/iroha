@@ -523,7 +523,7 @@ mod tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
     }

@@ -1109,9 +1109,31 @@ impl ProductionLifecycleAdapterStartupV1 {
                     let prepared = adapter
                         .prepare_direct_certified_body_available(*tag, manifest)
                         .map_err(|_| "certified body cold BodyAvailable replay failed")?;
-                    let DirectCertifiedBodyAvailablePreparation::Applied(prepared) = prepared
-                    else {
-                        return Err("certified body cold BodyAvailable replay did not apply");
+                    let prepared = match prepared {
+                        DirectCertifiedBodyAvailablePreparation::Applied(prepared) => prepared,
+                        DirectCertifiedBodyAvailablePreparation::Blocked(_) => {
+                            return Err("certified body cold BodyAvailable replay is fenced");
+                        }
+                        DirectCertifiedBodyAvailablePreparation::Inactive(inactive) => {
+                            return Err(match inactive.disposition() {
+                                DirectCertifiedBodyAvailableInactive::Stutter(
+                                    DirectCertifiedBodyAvailableStutter::NoMatchingWork,
+                                ) => {
+                                    "certified body cold BodyAvailable replay has no matching work"
+                                }
+                                DirectCertifiedBodyAvailableInactive::Stutter(
+                                    DirectCertifiedBodyAvailableStutter::Duplicate,
+                                ) => "certified body cold BodyAvailable replay is a duplicate",
+                                DirectCertifiedBodyAvailableInactive::Superseded(
+                                    reducer::IgnoreReason::StaleGeneration,
+                                ) => {
+                                    "certified body cold BodyAvailable replay has a stale generation"
+                                }
+                                DirectCertifiedBodyAvailableInactive::Superseded(_) => {
+                                    "certified body cold BodyAvailable replay has an inactive tag"
+                                }
+                            });
+                        }
                     };
                     if prepared.store_effect() != expected_store {
                         return Err("certified body cold BodyAvailable emitted a foreign Store");
@@ -3104,6 +3126,61 @@ impl PreparedReducerFenceWait<'_> {
         self.generation
     }
 }
+/// Ordinary certified-body stage whose exact reducer incarnation has retired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sumeragi) enum SupersededCertifiedBodyStageV1 {
+    /// An authenticated Fetch completion for the retired incarnation.
+    Fetch,
+    /// An authenticated durable Store completion for the retired incarnation.
+    Store,
+}
+/// Borrow-bound proof that authenticated body work belongs to an older tag.
+///
+/// The current tag strictly advances the old tag within the same height and
+/// authenticated context. Retaining the exclusive adapter borrow freezes that
+/// comparison through durable lifecycle retirement. This token neither changes
+/// reducer or registry state nor authorizes a successor for the current tag.
+#[must_use = "superseded body work still requires exact durable lifecycle retirement"]
+pub(in crate::sumeragi) struct PreparedSupersededCertifiedBodyV1<'a> {
+    _adapter: &'a mut SumeragiV2Adapter,
+    old_tag: reducer::EventTag,
+    current_tag: reducer::EventTag,
+    context_id: wire::HeightContextId,
+    round: wire::ConsensusRound,
+    subject: wire::BlockSubject,
+    manifest_hash: HashOf<wire::PayloadManifest>,
+    stage: SupersededCertifiedBodyStageV1,
+}
+impl PreparedSupersededCertifiedBodyV1<'_> {
+    /// Return the exact retired completion tag.
+    pub(in crate::sumeragi) const fn old_tag(&self) -> reducer::EventTag {
+        self.old_tag
+    }
+    /// Return the strictly newer tag frozen by the retained adapter borrow.
+    pub(in crate::sumeragi) const fn current_tag(&self) -> reducer::EventTag {
+        self.current_tag
+    }
+    /// Return the authenticated height context shared by both incarnations.
+    pub(in crate::sumeragi) const fn context_id(&self) -> wire::HeightContextId {
+        self.context_id
+    }
+    /// Return the exact authenticated body round.
+    pub(in crate::sumeragi) const fn round(&self) -> wire::ConsensusRound {
+        self.round
+    }
+    /// Return the exact authenticated body subject.
+    pub(in crate::sumeragi) const fn subject(&self) -> wire::BlockSubject {
+        self.subject
+    }
+    /// Return the exact validated manifest identity.
+    pub(in crate::sumeragi) const fn manifest_hash(&self) -> HashOf<wire::PayloadManifest> {
+        self.manifest_hash
+    }
+    /// Return the ordinary certified-body stage being retired.
+    pub(in crate::sumeragi) const fn stage(&self) -> SupersededCertifiedBodyStageV1 {
+        self.stage
+    }
+}
 /// Exact idempotent disposition of a direct certified-body completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DirectCertifiedBodyAvailableStutter {
@@ -3184,6 +3261,8 @@ pub(in crate::sumeragi) enum CertifiedFetchStoreAdapterPreparationV1<'a> {
     Applied(PreparedCertifiedFetchStoreAdapterV1<'a>),
     /// A reducer persistence/signature fence must advance before retry.
     Blocked(PreparedReducerFenceWait<'a>),
+    /// Authenticated old-tag work may be retired without changing reducer state.
+    Superseded(PreparedSupersededCertifiedBodyV1<'a>),
     /// The lifecycle carrier and reducer no longer describe the same live edge.
     Inactive,
 }
@@ -3342,6 +3421,8 @@ pub(in crate::sumeragi) enum DurableStoreValidateAdapterPreparationV1<'a> {
     Applied(PreparedDurableStoreValidateAdapterV1<'a>),
     /// A reducer persistence/signature fence must advance before retry.
     Blocked(PreparedReducerFenceWait<'a>),
+    /// Authenticated old-tag work may be retired without changing reducer state.
+    Superseded(PreparedSupersededCertifiedBodyV1<'a>),
     /// The lifecycle carrier and reducer no longer describe the same live edge.
     Inactive,
 }
@@ -12668,9 +12749,9 @@ impl SumeragiV2Adapter {
     ///
     /// The result never exposes raw reducer state.  Applied work remains
     /// borrow-bound until the registry and LedgerV1 transaction publish it;
-    /// Busy returns the exact reducer-fence generation; every other inactive
-    /// disposition is fail-closed because cold open reconstructed this carrier
-    /// as live before scheduling it.
+    /// Busy returns the exact reducer-fence generation. Authenticated work for
+    /// a strictly older tag in the same context yields a borrow-bound retirement
+    /// proof; all other inactive dispositions remain fail-closed.
     pub(in crate::sumeragi) fn prepare_certified_fetch_store(
         &mut self,
         tag: reducer::EventTag,
@@ -12686,8 +12767,28 @@ impl SumeragiV2Adapter {
                 Ok(CertifiedFetchStoreAdapterPreparationV1::Blocked(wait))
             }
             DirectCertifiedBodyAvailablePreparation::Inactive(inactive) => {
-                drop(inactive);
-                Ok(CertifiedFetchStoreAdapterPreparationV1::Inactive)
+                let PreparedDirectCertifiedBodyAvailableInactive { _adapter, .. } = inactive;
+                let current_tag = _adapter.current_tag();
+                let context_id = _adapter.wire_context.id();
+                if current_tag.strictly_advances(tag)
+                    && manifest.round.context_id == context_id
+                    && manifest.round.height == tag.height()
+                {
+                    Ok(CertifiedFetchStoreAdapterPreparationV1::Superseded(
+                        PreparedSupersededCertifiedBodyV1 {
+                            _adapter,
+                            old_tag: tag,
+                            current_tag,
+                            context_id,
+                            round: manifest.round,
+                            subject: manifest.subject,
+                            manifest_hash: HashOf::new(manifest),
+                            stage: SupersededCertifiedBodyStageV1::Fetch,
+                        },
+                    ))
+                } else {
+                    Ok(CertifiedFetchStoreAdapterPreparationV1::Inactive)
+                }
             }
         }
     }
@@ -12709,8 +12810,28 @@ impl SumeragiV2Adapter {
                 Ok(DurableStoreValidateAdapterPreparationV1::Blocked(wait))
             }
             DirectBodyStoredPreparation::Inactive(inactive) => {
-                drop(inactive);
-                Ok(DurableStoreValidateAdapterPreparationV1::Inactive)
+                let PreparedDirectBodyStoredInactive { _adapter, .. } = inactive;
+                let current_tag = _adapter.current_tag();
+                let context_id = _adapter.wire_context.id();
+                if current_tag.strictly_advances(tag)
+                    && round.context_id == context_id
+                    && round.height == tag.height()
+                {
+                    Ok(DurableStoreValidateAdapterPreparationV1::Superseded(
+                        PreparedSupersededCertifiedBodyV1 {
+                            _adapter,
+                            old_tag: tag,
+                            current_tag,
+                            context_id,
+                            round,
+                            subject,
+                            manifest_hash: receipt.manifest_hash(),
+                            stage: SupersededCertifiedBodyStageV1::Store,
+                        },
+                    ))
+                } else {
+                    Ok(DurableStoreValidateAdapterPreparationV1::Inactive)
+                }
             }
         }
     }

@@ -10575,7 +10575,7 @@ mod cli_integration_harness {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         };
         server.manifests.insert(code_hash.clone(), manifest.clone());

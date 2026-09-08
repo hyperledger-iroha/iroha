@@ -1106,6 +1106,14 @@ final class SccpV1Tests: XCTestCase {
         }
     }
 
+    func testRegistryFinalityAnchorRejectsZeroEpochEndHeight() throws {
+        var registry = try jsonObject(registryJSON())
+        mutateFinalityAnchor(&registry) { $0["epoch_end_height"] = 0 }
+        XCTAssertThrowsError(try SccpRegistryV1.parse(jsonData(registry))) { error in
+            XCTAssertEqual(error as? SccpV1Error, .invalid("epoch_end_height is out of range"))
+        }
+    }
+
     func testRegistryValidatesFullPolicyElevenSignalKeyAndRouteCommitment() throws {
         let valid = try registryJSON()
         let registry = try SccpRegistryV1.parse(valid)

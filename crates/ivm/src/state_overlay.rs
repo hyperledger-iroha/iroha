@@ -233,6 +233,18 @@ impl DurableStateOverlay {
             .map(|(key, _)| key)
             .take_while(move |key| (*key).as_ref().starts_with(prefix))
     }
+    /// Seek directly after a cursor and yield only keys sharing the map prefix.
+    pub fn keys_after_with_text_prefix<'a>(
+        &'a self,
+        prefix: &'a str,
+        after: Option<&'a str>,
+    ) -> impl Iterator<Item = &'a StatePath> + 'a {
+        let lower = after.map_or(Bound::Included(prefix), Bound::Excluded);
+        self.data
+            .range::<str, _>((lower, Bound::Unbounded))
+            .map(|(key, _)| key)
+            .take_while(move |key| (*key).as_ref().starts_with(prefix))
+    }
     /// Delete the raw payload for the provided path.
     pub fn del(&mut self, path: &StatePath) -> Result<(), VMError> {
         self.ensure_persistence_healthy()?;

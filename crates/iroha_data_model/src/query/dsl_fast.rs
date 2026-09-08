@@ -521,8 +521,15 @@ impl<T> CompoundPredicate<T> {
         predicate_json_applies(predicate, &value)
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::query::dsl::CompoundPredicateWire")]
 enum CompoundPredicateWire {
     Pass,

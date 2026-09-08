@@ -1153,6 +1153,8 @@ mod contract_address_tests {
 }
 /// Exact recursive schemas for public Kotodama entrypoint boundaries.
 pub mod entrypoint;
+/// Canonical bounded continuation positions for live durable-map pagination.
+pub mod state_cursor;
 // Smart contract manifest types and helpers.
 #[cfg(test)]
 mod lifecycle_tests {
@@ -1297,9 +1299,9 @@ pub mod manifest {
         /// Optional durable state schema advertised by the compiler.
         #[norito(default)]
         pub states: Option<Vec<StateDescriptor>>,
-        /// Stable application error codes advertised by the compiler.
+        /// Exact nominal error type identities and variant schemas advertised by the compiler.
         #[norito(default)]
-        pub error_codes: Option<Vec<ContractErrorCodeDescriptor>>,
+        pub error_types: Option<Vec<ContractErrorTypeDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1481,10 +1483,12 @@ pub mod manifest {
         /// Zero-parameter entrypoints have no argument schema.
         #[norito(default)]
         pub argument_schema: Option<EntrypointArgumentSchemaV1>,
-        /// Declared return type for this entrypoint, when present.
+        /// Exact return type, including `()` when the source omits its return annotation.
+        /// Public entrypoint admission rejects an absent value.
         #[norito(default)]
         pub return_type: Option<String>,
-        /// Exact recursive schema for a non-unit public return value.
+        /// Exact recursive schema for every public return value, including one zero scalar Unit.
+        /// Public entrypoint admission rejects an absent schema.
         #[norito(default)]
         pub return_schema: Option<EntrypointValueTypeV1>,
         /// Permission required by the dispatcher before invoking this entrypoint.
@@ -1545,7 +1549,7 @@ pub mod manifest {
     /// Stable application error code exposed by a compiled contract.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
     #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json, deny_unknown_fields))]
     #[cfg_attr(
         all(feature = "ffi_export", not(feature = "ffi_import")),
         derive(iroha_ffi::FfiType)
@@ -1554,13 +1558,71 @@ pub mod manifest {
         all(feature = "ffi_export", not(feature = "ffi_import")),
         ffi_type(opaque)
     )]
-    pub struct ContractErrorCodeDescriptor {
-        /// Error enum namespace declared in Kotodama source.
-        pub namespace: String,
-        /// Variant name within the namespace.
+    pub struct ContractErrorVariantDescriptor {
+        /// Symbolic variant name within its nominal error type.
         pub name: String,
         /// Explicit non-zero numeric code returned on abort.
         pub code: u32,
+    }
+    /// Exact nominal identity and finite variant schema of one Kotodama error type.
+    #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
+    #[norito(decode_from_slice)]
+    #[cfg_attr(feature = "json", derive(DeriveFast, DeriveJsonSer, DeriveJsonDe))]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json, deny_unknown_fields))]
+    pub struct ContractErrorTypeDescriptor {
+        /// Stable locked-package, source-unit and enum identity; never a linker ordinal.
+        pub identity: String,
+        /// Variants in increasing numeric-code order, with unique names and nonzero codes.
+        pub variants: Vec<ContractErrorVariantDescriptor>,
+    }
+    impl ContractErrorTypeDescriptor {
+        /// Validate the bounded canonical identity and enum-local variant namespace.
+        #[must_use]
+        pub fn validate(&self) -> bool {
+            !self.identity.is_empty()
+                && self.identity.len() <= 1024
+                && self
+                    .identity
+                    .chars()
+                    .all(|character| character.is_alphanumeric() || "_:/@.-".contains(character))
+                && !self.identity.contains("__kotodama_link_")
+                && (1..=256).contains(&self.variants.len())
+                && self.variants.iter().all(|variant| {
+                    variant.code != 0
+                        && (super::entrypoint::is_canonical_kotodama_identifier(&variant.name)
+                            || (!variant.name.is_ascii()
+                                && variant
+                                    .name
+                                    .chars()
+                                    .next()
+                                    .is_some_and(|first| first.is_alphabetic() || first == '_')
+                                && variant.name.chars().all(|character| {
+                                    character.is_alphanumeric() || character == '_'
+                                })))
+                })
+                && self
+                    .variants
+                    .windows(2)
+                    .all(|pair| pair[0].code < pair[1].code)
+                && self
+                    .variants
+                    .iter()
+                    .map(|variant| &variant.name)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .len()
+                    == self.variants.len()
+        }
+        /// Hash the canonical variant schema independently of the separately bound nominal identity.
+        #[must_use]
+        pub fn schema_hash(&self) -> [u8; 32] {
+            Hash::new_from_chunks(&[b"iroha:kotodama:error-schema:v1\0", &self.variants.encode()])
+                .into()
+        }
+        /// Resolve one validated nonzero variant code without crossing nominal types.
+        #[must_use]
+        pub fn variant(&self, code: u32) -> Option<&ContractErrorVariantDescriptor> {
+            self.variants.iter().find(|variant| variant.code == code)
+        }
     }
     /// Localized message text for a specific language tag.
     #[derive(Debug, Clone, Encode, Decode, IntoSchema, PartialEq, Eq, PartialOrd, Ord)]
@@ -1704,9 +1766,9 @@ pub mod manifest {
         /// Optional durable state schema advertised by the compiler.
         #[norito(default)]
         pub states: Option<Vec<StateDescriptor>>,
-        /// Stable application error codes advertised by the compiler.
+        /// Exact nominal error type identities and variant schemas advertised by the compiler.
         #[norito(default)]
-        pub error_codes: Option<Vec<ContractErrorCodeDescriptor>>,
+        pub error_types: Option<Vec<ContractErrorTypeDescriptor>>,
         /// Optional localization tables extracted from `kotoba { ... }` blocks.
         #[norito(default)]
         pub kotoba: Option<Vec<KotobaTranslationEntry>>,
@@ -1722,7 +1784,7 @@ pub mod manifest {
                 access_set_hints: manifest.access_set_hints.clone(),
                 entrypoints: manifest.entrypoints.clone(),
                 states: manifest.states.clone(),
-                error_codes: manifest.error_codes.clone(),
+                error_types: manifest.error_types.clone(),
                 kotoba: manifest.kotoba.clone(),
             }
         }
@@ -1764,6 +1826,131 @@ pub mod manifest {
     #[cfg(all(test, feature = "json"))]
     mod tests {
         use super::*;
+        #[test]
+        fn shared_sdk_fixture_preserves_nominal_errors_and_cursor_page_schemas() {
+            let fixture: norito::json::Value = norito::json::from_str(include_str!(
+                "../../../fixtures/kotodama/nominal_errors_v1.json"
+            ))
+            .unwrap();
+            let manifest: ContractManifest =
+                norito::json::from_value(fixture.get("manifest").unwrap().clone()).unwrap();
+            let entrypoints = manifest.entrypoints.as_ref().unwrap();
+            assert_eq!(entrypoints.len(), 3);
+            for entrypoint in entrypoints {
+                assert_eq!(
+                    entrypoint
+                        .return_schema
+                        .as_ref()
+                        .unwrap()
+                        .canonical_type_name(),
+                    entrypoint.return_type
+                );
+            }
+            assert_eq!(
+                entrypoints[1].return_schema.as_ref().unwrap().word_count(),
+                Some(1)
+            );
+            assert_eq!(
+                entrypoints[2].return_schema.as_ref().unwrap().word_count(),
+                Some(2)
+            );
+            let errors = manifest.error_types.as_ref().unwrap();
+            assert_eq!(errors[0].variants[0].name, "不足");
+            assert_eq!(errors[0].variants[0].code, errors[1].variants[0].code);
+            let frame = norito::encode_canonical(&manifest).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<ContractManifest>(&frame).unwrap(),
+                manifest
+            );
+        }
+        #[test]
+        fn nominal_error_schema_identity_codes_and_wire_shape_are_exact() {
+            let descriptor = ContractErrorTypeDescriptor {
+                identity: "example/vault@1::金庫::拒否".into(),
+                variants: vec![
+                    ContractErrorVariantDescriptor {
+                        name: "不足".into(),
+                        code: 1,
+                    },
+                    ContractErrorVariantDescriptor {
+                        name: "CapacityExceeded".into(),
+                        code: 2,
+                    },
+                ],
+            };
+            assert!(descriptor.validate());
+            let frame = norito::encode_canonical(&descriptor).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<ContractErrorTypeDescriptor>(&frame).unwrap(),
+                descriptor
+            );
+            let schema_hash = descriptor.schema_hash();
+            let mut different = descriptor.clone();
+            different.identity = "example/other@1::Other::Error".into();
+            assert_eq!(
+                schema_hash,
+                different.schema_hash(),
+                "nominal identity is bound separately"
+            );
+            different.variants[0].name = "OtherFailure".into();
+            assert_ne!(schema_hash, different.schema_hash());
+            different = descriptor.clone();
+            different.variants[1].code = 3;
+            assert_ne!(schema_hash, different.schema_hash());
+            let flags =
+                norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
+            let _alternate = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(
+                descriptor.schema_hash(),
+                schema_hash,
+                "schema identity ignores ambient layout"
+            );
+            for identity in [
+                "",
+                "bad identity",
+                "bad<identity>",
+                "__kotodama_link_hidden",
+                "bad\nidentity",
+            ] {
+                different = descriptor.clone();
+                different.identity = identity.into();
+                assert!(!different.validate(), "{identity:?}");
+            }
+            for variants in [
+                vec![],
+                vec![ContractErrorVariantDescriptor {
+                    name: "Zero".into(),
+                    code: 0,
+                }],
+                vec![
+                    descriptor.variants[1].clone(),
+                    descriptor.variants[0].clone(),
+                ],
+                vec![
+                    descriptor.variants[0].clone(),
+                    descriptor.variants[0].clone(),
+                ],
+                vec![ContractErrorVariantDescriptor {
+                    name: "Bad<Name>".into(),
+                    code: 1,
+                }],
+            ] {
+                different = descriptor.clone();
+                different.variants = variants;
+                assert!(!different.validate());
+            }
+            let json = norito::json::to_json(&descriptor).unwrap();
+            assert_eq!(
+                norito::json::from_str::<ContractErrorTypeDescriptor>(&json).unwrap(),
+                descriptor
+            );
+            for forged in [
+                json.replacen("{", "{\"unexpected\":true,", 1),
+                json.replacen("\"name\":", "\"unexpected\":true,\"name\":", 1),
+            ] {
+                assert!(norito::json::from_str::<ContractErrorTypeDescriptor>(&forged).is_err());
+            }
+        }
         #[test]
         fn access_set_hints_roundtrip() {
             let hints = AccessSetHints {
@@ -1891,10 +2078,12 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: Some(vec![ContractErrorCodeDescriptor {
-                    namespace: "PaymentError".to_owned(),
-                    name: "Unauthorized".to_owned(),
-                    code: 1001,
+                error_types: Some(vec![ContractErrorTypeDescriptor {
+                    identity: "PaymentError".to_owned(),
+                    variants: vec![ContractErrorVariantDescriptor {
+                        name: "Unauthorized".to_owned(),
+                        code: 1001,
+                    }],
                 }]),
                 provenance: None,
             };
@@ -1920,12 +2109,12 @@ pub mod manifest {
             signature
                 .verify(kp.public_key(), &payload)
                 .expect("signature must verify");
-            manifest.error_codes.as_mut().expect("error codes")[0].code = 1002;
+            manifest.error_types.as_mut().expect("error types")[0].variants[0].code = 1002;
             assert!(
                 signature
                     .verify(kp.public_key(), &manifest.signature_payload_bytes())
                     .is_err(),
-                "manifest provenance must bind stable error codes"
+                "manifest provenance must bind nominal error variant codes"
             );
         }
         #[test]
@@ -1941,7 +2130,7 @@ pub mod manifest {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             };
             let signed = manifest.try_signed(&kp).expect("sign manifest");

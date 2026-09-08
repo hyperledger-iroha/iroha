@@ -11,8 +11,8 @@
                     );
                     let acct = test::actor_account("issuer");
                     let pk = test::actor_public_key("issuer");
-                    let sig = test::actor_sign("issuer", b"demo");
-                    test::expect_reject_as(
+                    let sig = test::actor_sign(actor: "issuer", payload: b"demo");
+                    test::expect_any_reject_as(
                         actor: "issuer",
                         kotoage: "run",
                         arguments: Json::parse("{\"count\":-1}"),

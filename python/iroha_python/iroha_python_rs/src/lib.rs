@@ -18,7 +18,7 @@ use core::{
 };
 use futures::executor::block_on;
 use hex::{encode as hex_encode, encode_upper as hex_encode_upper};
-use iroha_config::parameters::defaults;
+use iroha_config::parameters::actual::SorafsAliasCachePolicy;
 use iroha_core::{
     privacy_engines::vega::{VegaMdlConsensusBindingV1, derive_device_authentication_digest_v1},
     privacy_profiles::{
@@ -1934,15 +1934,16 @@ fn decode_connect_frame_bytes(bytes: &[u8]) -> PyResult<ConnectFrameV1> {
     Ok(frame)
 }
 fn sorafs_default_policy() -> AliasCachePolicy {
+    let defaults = SorafsAliasCachePolicy::default();
     AliasCachePolicy::new(
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REFRESH_WINDOW_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_HARD_EXPIRY_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_NEGATIVE_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_REVOCATION_TTL_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_ROTATION_MAX_AGE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_SUCCESSOR_GRACE_SECS),
-        Duration::from_secs(defaults::torii::SORAFS_ALIAS_GOVERNANCE_GRACE_SECS),
+        defaults.positive_ttl,
+        defaults.refresh_window,
+        defaults.hard_expiry,
+        defaults.negative_ttl,
+        defaults.revocation_ttl,
+        defaults.rotation_max_age,
+        defaults.successor_grace,
+        defaults.governance_grace,
     )
 }
 fn policy_override_u64<'py>(
@@ -2163,7 +2164,7 @@ fn sorafs_alias_proof_fixture_py(
     } else {
         now.saturating_sub(60)
     };
-    let expires_default = generated + defaults::torii::SORAFS_ALIAS_POSITIVE_TTL_SECS;
+    let expires_default = generated + sorafs_default_policy().positive_ttl().as_secs();
     let expires = if let Some(opts) = mapping {
         if let Some(value) = opts.get_item("expires_at_unix")? {
             let secs: u64 = value.extract().map_err(|_| {
@@ -5623,6 +5624,33 @@ mod tests {
         Python::attach(|py| err.value(py).to_string())
     }
     #[test]
+    fn sorafs_alias_defaults_match_the_canonical_config_policy() {
+        let expected = SorafsAliasCachePolicy::default();
+        let actual = sorafs_default_policy();
+        assert_eq!(
+            [
+                actual.positive_ttl(),
+                actual.refresh_window(),
+                actual.hard_expiry(),
+                actual.negative_ttl(),
+                actual.revocation_ttl(),
+                actual.rotation_max_age(),
+                actual.successor_grace(),
+                actual.governance_grace(),
+            ],
+            [
+                expected.positive_ttl,
+                expected.refresh_window,
+                expected.hard_expiry,
+                expected.negative_ttl,
+                expected.revocation_ttl,
+                expected.rotation_max_age,
+                expected.successor_grace,
+                expected.governance_grace,
+            ]
+        );
+    }
+    #[test]
     fn sorafs_alias_policy_parser_accepts_zero_grace_and_rejects_retired_shapes() {
         ensure_python();
         Python::attach(|py| {
@@ -7218,10 +7246,12 @@ mod tests {
             )),
             "NotPermitted"
         );
+        let schema_hash = [7_u8; 32];
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
             iroha_data_model::executor::ContractRejection {
                 contract: "BoiFiLiquidity".into(),
-                namespace: "FiLiquidityError".into(),
+                error_type: "example/boifi@1::BoiFiLiquidity::FiLiquidityError".into(),
+                schema_hash,
                 name: "BelowMinimum".into(),
                 code: 18,
             },
@@ -7231,7 +7261,8 @@ mod tests {
             transaction_contract_rejection_json(&contract),
             Some(norito::json!({
                 "contract": "BoiFiLiquidity",
-                "namespace": "FiLiquidityError",
+                "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
+                "schema_hash": schema_hash,
                 "name": "BelowMinimum",
                 "code": 18,
             }))
@@ -12088,8 +12119,18 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
         json::Value::String(rejection.contract.clone()),
     );
     value.insert(
-        "namespace".into(),
-        json::Value::String(rejection.namespace.clone()),
+        "error_type".into(),
+        json::Value::String(rejection.error_type.clone()),
+    );
+    value.insert(
+        "schema_hash".into(),
+        json::Value::Array(
+            rejection
+                .schema_hash
+                .into_iter()
+                .map(json::Value::from)
+                .collect(),
+        ),
     );
     value.insert("name".into(), json::Value::String(rejection.name.clone()));
     value.insert("code".into(), json::Value::from(rejection.code));

@@ -258,6 +258,30 @@ impl WitnessArgs {
     fn operation_json(operation: &OperationKind) -> Result<norito::json::Value> {
         match operation {
             OperationKind::Transfer => json_object(vec![("kind", json_value("Transfer")?)]),
+            OperationKind::Mint => json_object(vec![("kind", json_value("Mint")?)]),
+            OperationKind::Burn => json_object(vec![("kind", json_value("Burn")?)]),
+            OperationKind::RoleGrant {
+                role_id,
+                permission_id,
+                epoch,
+            }
+            | OperationKind::RoleRevoke {
+                role_id,
+                permission_id,
+                epoch,
+            } => {
+                let kind = if matches!(operation, OperationKind::RoleGrant { .. }) {
+                    "RoleGrant"
+                } else {
+                    "RoleRevoke"
+                };
+                json_object(vec![
+                    ("kind", json_value(kind)?),
+                    ("role_id_hex", json_value(&Self::hex(role_id))?),
+                    ("permission_id_hex", json_value(&Self::hex(permission_id))?),
+                    ("epoch", json_value(epoch)?),
+                ])
+            }
             OperationKind::MetaSet => json_object(vec![("kind", json_value("MetaSet")?)]),
         }
     }
@@ -475,7 +499,12 @@ fn row_usage_json(usage: RowUsage) -> Result<norito::json::Value> {
         ("total_rows", json_value(&usage.total_rows)?),
         ("transfer_rows", json_value(&usage.transfer_rows)?),
         ("non_transfer_rows", json_value(&usage.non_transfer_rows())?),
+        ("mint_rows", json_value(&usage.mint_rows)?),
+        ("burn_rows", json_value(&usage.burn_rows)?),
+        ("role_grant_rows", json_value(&usage.role_grant_rows)?),
+        ("role_revoke_rows", json_value(&usage.role_revoke_rows)?),
         ("meta_set_rows", json_value(&usage.meta_set_rows)?),
+        ("permission_rows", json_value(&usage.permission_rows)?),
         ("transfer_ratio", json_value(&ratio)?),
     ])
 }
@@ -490,6 +519,7 @@ mod tests {
             total_rows: 3,
             transfer_rows: 1,
             meta_set_rows: 2,
+            ..RowUsage::default()
         })
         .expect("serialize row usage");
         assert_eq!(
@@ -497,6 +527,80 @@ mod tests {
             Some(1.0 / 3.0),
             "release evidence must not round away the count-derived ratio"
         );
+    }
+    #[test]
+    fn row_usage_json_preserves_every_operation_and_permission_count() {
+        let value = row_usage_json(RowUsage {
+            total_rows: 21,
+            transfer_rows: 1,
+            mint_rows: 2,
+            burn_rows: 3,
+            role_grant_rows: 4,
+            role_revoke_rows: 5,
+            meta_set_rows: 6,
+            permission_rows: 9,
+        })
+        .expect("serialize all row counts");
+        for (field, expected) in [
+            ("total_rows", 21),
+            ("transfer_rows", 1),
+            ("non_transfer_rows", 20),
+            ("mint_rows", 2),
+            ("burn_rows", 3),
+            ("role_grant_rows", 4),
+            ("role_revoke_rows", 5),
+            ("meta_set_rows", 6),
+            ("permission_rows", 9),
+        ] {
+            assert_eq!(value[field].as_u64(), Some(expected), "{field}");
+        }
+    }
+    #[test]
+    fn operation_json_preserves_all_kinds_and_exact_role_binding_fields() {
+        let role_id = [0x11; 32];
+        let permission_id = [0x22; 32];
+        let epoch = u64::MAX - 7;
+        for (operation, kind) in [
+            (OperationKind::Transfer, "Transfer"),
+            (OperationKind::Mint, "Mint"),
+            (OperationKind::Burn, "Burn"),
+            (OperationKind::MetaSet, "MetaSet"),
+            (
+                OperationKind::RoleGrant {
+                    role_id,
+                    permission_id,
+                    epoch,
+                },
+                "RoleGrant",
+            ),
+            (
+                OperationKind::RoleRevoke {
+                    role_id,
+                    permission_id,
+                    epoch,
+                },
+                "RoleRevoke",
+            ),
+        ] {
+            let value = WitnessArgs::operation_json(&operation).expect("operation JSON");
+            assert_eq!(value["kind"].as_str(), Some(kind));
+            if matches!(
+                operation,
+                OperationKind::RoleGrant { .. } | OperationKind::RoleRevoke { .. }
+            ) {
+                assert_eq!(
+                    value["role_id_hex"].as_str(),
+                    Some(format!("0x{}", "11".repeat(32)).as_str())
+                );
+                assert_eq!(
+                    value["permission_id_hex"].as_str(),
+                    Some(format!("0x{}", "22".repeat(32)).as_str())
+                );
+                assert_eq!(value["epoch"].as_u64(), Some(epoch));
+            } else {
+                assert_eq!(value.as_object().expect("operation object").len(), 1);
+            }
+        }
     }
     #[derive(Parser, Debug)]
     #[command(no_binary_name = true)]

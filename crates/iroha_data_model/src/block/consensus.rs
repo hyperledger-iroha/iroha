@@ -29,8 +29,7 @@ pub type ValidatorIndex = u32;
 ///
 /// These parameters are encoded with Norito (binary) in a fixed order to
 /// guarantee determinism across peers and platforms.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::ConsensusGenesisParams")]
 pub struct ConsensusGenesisParams {
     /// Signed, immutable interval between block-production opportunities.
@@ -45,8 +44,7 @@ pub struct ConsensusGenesisParams {
     pub v2_context: super::consensus_v2::SumeragiV2GenesisContextParameters,
 }
 /// Type-safe first-release consensus mode carrier.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::ConsensusGenesisModeParams")]
 pub enum ConsensusGenesisModeParams {
     /// Permissioned consensus has no election parameters.
@@ -77,8 +75,7 @@ impl ConsensusGenesisParams {
     }
 }
 /// `NPoS`-specific consensus parameters hashed into the genesis fingerprint.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::NposGenesisParams")]
 pub struct NposGenesisParams {
     /// Non-zero epoch length in blocks.
@@ -539,8 +536,7 @@ pub struct SumeragiLanePayloadOwnership {
     /// Stable digest naming the lane-local RBC instance for this payload.
     pub rbc_instance_hash: Hash,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockProposalPreimage")]
 struct LaneBlockProposalPreimage {
     purpose: String,
@@ -946,8 +942,7 @@ pub struct LaneBlockCertificateV1 {
     /// Commit quorum certificate for [`Self::proposal`].
     pub commit_qc: LaneBlockQcV1,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadOwnershipSubjectPreimage")]
 struct LanePayloadOwnershipSubjectPreimage {
     version: u8,
@@ -960,8 +955,7 @@ struct LanePayloadOwnershipSubjectPreimage {
     candidate_hashes: Vec<Hash>,
     qc_mode_tag: String,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadOwnershipPreimage")]
 struct LanePayloadOwnershipPreimage {
     purpose: String,
@@ -976,8 +970,7 @@ struct LanePayloadOwnershipPreimage {
     candidate_hashes: Vec<Hash>,
     qc_mode_tag: String,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::LanePayloadOwnershipRbcPreimage")]
 struct LanePayloadOwnershipRbcPreimage {
     purpose: String,
@@ -990,8 +983,7 @@ struct LanePayloadOwnershipRbcPreimage {
     subject_hash: Hash,
     payload_ownership_hash: Hash,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage")]
 struct LaneBlockDescriptorPreimage {
     purpose: String,
@@ -1926,9 +1918,7 @@ pub struct LaneSwapMetadata {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement"
-)]
+#[norito_schema(name = "iroha_data_model::block::consensus::NativeAmxParticipantSettlement")]
 pub struct NativeAmxParticipantSettlement {
     /// Participant lane-local block height associated with the settlement.
     pub block_height: u64,
@@ -1966,8 +1956,7 @@ pub fn compute_native_amx_participant_settlement_hash(
     settlement: &NativeAmxParticipantSettlement,
 ) -> Result<HashOf<NativeAmxParticipantSettlement>, norito::Error> {
     let bytes = norito::encode_canonical(settlement)?;
-    let domain_len =
-        (NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1.len() as u64).to_le_bytes();
+    let domain_len = (NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1.len() as u64).to_le_bytes();
     Ok(HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[
         &domain_len,
         NATIVE_AMX_PARTICIPANT_SETTLEMENT_HASH_DOMAIN_V1,
@@ -2667,7 +2656,9 @@ pub struct SumeragiConsensusMessageHandlingEntry {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, Default)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiConsensusMessageHandlingStatus")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus::SumeragiConsensusMessageHandlingStatus"
+)]
 pub struct SumeragiConsensusMessageHandlingStatus {
     /// Per-kind drop/deferral counters (best-effort).
     #[norito(default)]
@@ -3446,7 +3437,9 @@ impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiAutonomousLaneExecutionStuckReason")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus::SumeragiAutonomousLaneExecutionStuckReason"
+)]
 pub enum SumeragiAutonomousLaneExecutionStuckReason {
     /// Queue ownership is durable, but the producer-authenticated executable payload is not.
     AwaitingExecutablePayload,
@@ -3795,7 +3788,9 @@ impl SumeragiAutonomousLaneExecution {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(rename_all = "snake_case")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiNativeAmxParticipantApplicationState")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus::SumeragiNativeAmxParticipantApplicationState"
+)]
 pub enum SumeragiNativeAmxParticipantApplicationState {
     /// Participant QCs are certified, but no canonical global carrier is committed yet.
     CertifiedPendingCarrier,
@@ -3855,7 +3850,9 @@ impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationSt
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus::SumeragiNativeAmxParticipantApplication")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus::SumeragiNativeAmxParticipantApplication"
+)]
 pub struct SumeragiNativeAmxParticipantApplication {
     /// Participant lane.
     pub lane_id: LaneId,
@@ -4114,8 +4111,7 @@ pub struct ExecWitness {
     pub fastpq_batches: Vec<FastpqTransitionBatch>,
 }
 /// Execution witness message bound to a specific block and round. Used on-wire.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::consensus::ExecWitnessMsg")]
 pub struct ExecWitnessMsg {
     /// Hash of the block the witness applies to.

@@ -1282,7 +1282,7 @@ pub(super) fn prepare_genesis_for_signing(
         genesis = genesis.clear_topology();
     }
     super::ensure_kagemusha_mint_finality_schedule_matches_consensus(&genesis)?;
-    let final_topology = topology_override
+    let mut final_topology = topology_override
         .map(<[PeerId]>::to_vec)
         .unwrap_or_else(|| collect_topology_peers(&genesis));
     ensure_valid_genesis_committee(&final_topology)?;

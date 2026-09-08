@@ -176,6 +176,7 @@ public final class HttpClientTransportTests {
     callContractRequestParsesResponse();
     contractCallUnsignedDraftRejectsRehashedSubstitution();
     contractCallBoundaryConsumesSharedRustArgumentRecordFixture();
+    contractCallPreservesUnitAndNestedOptionTags();
     callContractRejectsInvalidEntrypointOrGas();
     callContractResponseRequiresOperationReceipt();
     contractAndMultisigTransactionHashesRequireIrohaHashOfMarker();
@@ -4605,6 +4606,45 @@ public final class HttpClientTransportTests {
         : "Java must leave canonical argument-record encoding to Rust";
     assert !request.containsKey("argument_record_norito_hex")
         : "Java must not expose a parallel argument-record encoder";
+  }
+
+  static void contractCallPreservesUnitAndNestedOptionTags() throws Exception {
+    final Map<String, Object> fixture =
+        loadSharedFixture("fixtures/kotodama/entrypoint_argument_record_v1.json");
+    final Map<String, Object> boundary = object(fixture, "torii_boundary");
+    final ContractInvocation invocation = new ContractInvocation(
+        "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+        hexToBytes("11".repeat(32)),
+        string(boundary, "entrypoint"),
+        hexToBytes(string(object(fixture, "entrypoint_argument_record_v1"), "norito_hex")));
+    for (final String value : new String[] {
+        "{\"some\":null}",
+        "{\"none\":true}",
+        "{\"some\":{\"none\":true}}",
+        "{\"some\":{\"some\":null}}"
+    }) {
+      final Map<String, Object> payload = Map.of("value", JsonParser.parse(value));
+      final StubResponseExecutor executor = new StubResponseExecutor(
+          503, "boundary reached".getBytes(StandardCharsets.UTF_8), "unavailable");
+      final HttpClientTransport transport = HttpClientTransport.withExecutor(
+          executor, signedClientConfig("https://fixture.invalid"));
+      boolean failed = false;
+      try {
+        transport.prepareContractCall(
+            string(boundary, "authority"),
+            FeePaymentJson.parse(boundary.get("fee_payment"), "fee_payment"),
+            null,
+            string(boundary, "contract_alias"),
+            string(boundary, "entrypoint"),
+            payload,
+            new ContractCallDraftIntent(invocation, Map.of())).join();
+      } catch (final CompletionException expected) {
+        failed = true;
+      }
+      assert failed : "Tagged Option request must reach the deterministic failing boundary";
+      final Map<?, ?> sent = (Map<?, ?>) JsonParser.parse(readBody(executor.lastRequest()));
+      assert payload.equals(sent.get("payload")) : "Option presence was lost: " + value;
+    }
   }
 
   private static void proposeMultisigRequestParsesResponse() throws Exception {

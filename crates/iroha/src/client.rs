@@ -11876,7 +11876,7 @@ mod evidence_http_tests {
             StatusCode::OK,
             &norito::json::to_json(&response_value).expect("encode contract call response"),
         );
-        let (result, _) = capture_request(response, || {
+        let (result, snapshot) = capture_request(response, || {
             client.post_contract_call_json(
                 &client.account,
                 None,
@@ -11892,6 +11892,7 @@ mod evidence_http_tests {
             )
         });
         result.expect("exact contract call draft intent");
+        super::tests::assert_canonical_account_signed_json_request(&client, &snapshot);
 
         let mut caller_metadata = Metadata::default();
         caller_metadata.insert(
@@ -11934,6 +11935,7 @@ mod evidence_http_tests {
             )
         });
         result.expect("caller metadata and explicit TTL remain exact");
+        super::tests::assert_canonical_account_signed_json_request(&client, &snapshot);
         let request: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode contract call request");
         let encoded_metadata =
@@ -11978,6 +11980,189 @@ mod evidence_http_tests {
             "unexpected error: {error:#}"
         );
     }
+    #[test]
+    fn post_contract_call_authenticates_client_independently_of_transaction_signer() {
+        let client = client_with_base_url(base_url());
+        let (authority, transaction_key) = gen_account_in("external");
+        assert_ne!(authority, client.account);
+        let (address, intent, fee_payment, _) = contract_call_fixture(&client);
+        let mut builder =
+            TransactionBuilder::new(client.network_id, authority.clone(), fee_payment.clone());
+        builder.set_creation_time(Duration::from_millis(123));
+        let builder = builder.with_executable(
+            iroha_data_model::transaction::Executable::ContractCall(intent.invocation.clone()),
+        );
+        let prepared_response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&prepared_contract_call_response(&intent, &builder))
+                .expect("encode external-authority prepared response"),
+        );
+        let expected_signed = builder
+            .try_sign(transaction_key.private_key())
+            .expect("sign with the external transaction authority");
+        assert_eq!(expected_signed.authority(), &authority);
+        let expected_wire = Client::prepare_transaction_payload(&expected_signed);
+        mark_data_model_compatible(&client);
+
+        for private_key in [None, Some(transaction_key.private_key())] {
+            let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+            let store = Arc::clone(&snapshots);
+            let prepared_response = prepared_response.clone();
+            let response = with_mock_http(
+                move |snapshot| {
+                    let response = match snapshot.url.path() {
+                        "/v1/contracts/call" => prepared_response.clone(),
+                        torii_uri::TRANSACTION => empty_response(StatusCode::OK),
+                        unexpected => panic!("unexpected contract workflow request: {unexpected}"),
+                    };
+                    store.lock().expect("snapshot store").push(snapshot);
+                    Ok(response)
+                },
+                || {
+                    client.post_contract_call_json(
+                        &authority,
+                        private_key,
+                        Some(&address),
+                        None,
+                        "ping",
+                        None,
+                        None,
+                        Some(123),
+                        None,
+                        &fee_payment,
+                        &intent,
+                    )
+                },
+            )
+            .expect("external-authority draft or exact signed submission");
+            let snapshots = snapshots.lock().expect("snapshot store");
+            assert_eq!(snapshots.len(), if private_key.is_some() { 2 } else { 1 });
+            let prepare = &snapshots[0];
+            assert_eq!(prepare.method, HttpMethod::POST);
+            assert_eq!(prepare.url.path(), "/v1/contracts/call");
+            super::tests::assert_canonical_account_signed_json_request(&client, prepare);
+            let body: Value = norito::json::from_slice(&prepare.body).expect("prepare JSON body");
+            assert_eq!(
+                body.get("authority"),
+                Some(&Value::from(authority.to_string()))
+            );
+            assert!(body.get("private_key").is_none());
+            assert_eq!(
+                response.get("submitted").and_then(Value::as_bool),
+                Some(private_key.is_some())
+            );
+            if private_key.is_some() {
+                assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
+                assert_eq!(snapshots[1].body.as_slice(), expected_wire.as_bytes());
+                assert_eq!(
+                    response.get("tx_hash_hex"),
+                    Some(&Value::from(hex::encode(expected_signed.hash().as_ref())))
+                );
+            }
+        }
+    }
+
+    fn assert_contract_read_only_request_authentication(simulate: bool) {
+        let mut client = client_with_base_url(base_url());
+        for header in [
+            HEADER_ACCOUNT,
+            HEADER_SIGNATURE,
+            HEADER_TIMESTAMP_MS,
+            HEADER_NONCE,
+            HEADER_WITNESS,
+        ] {
+            client.headers.insert(
+                header.to_ascii_uppercase(),
+                "untrusted-static-value".to_owned(),
+            );
+        }
+        let (authority, _) = gen_account_in("external");
+        assert_ne!(authority, client.account);
+        let (address, _, _, _) = contract_call_fixture(&client);
+        let payload = norito::json!({ "memo": "言霊", "amount": 7, "cursor": null });
+        let expected_body = norito::json!({
+            "authority": (authority.to_string()),
+            "contract_address": (address.clone()),
+            "entrypoint": "hajimari",
+            "payload": (payload.clone()),
+            "gas_limit": 5_000,
+        });
+        let expected_path = if simulate {
+            "/v1/contracts/call/simulate"
+        } else {
+            "/v1/contracts/view"
+        };
+        let mut nonces = Vec::new();
+        for status in [StatusCode::OK, StatusCode::OK, StatusCode::FORBIDDEN] {
+            let response_body = if status == StatusCode::OK {
+                r#"{"ok":true,"result":null}"#
+            } else {
+                r#"{"error":"contract_authority_denied"}"#
+            };
+            let (result, snapshot) = capture_request(json_response(status, response_body), || {
+                if simulate {
+                    client.post_contract_call_simulate_json(
+                        &authority,
+                        Some(&address),
+                        None,
+                        "hajimari",
+                        Some(&payload),
+                        5_000,
+                    )
+                } else {
+                    client.post_contract_view_json(
+                        &authority,
+                        Some(&address),
+                        None,
+                        "hajimari",
+                        Some(&payload),
+                        5_000,
+                    )
+                }
+            });
+            assert_eq!(snapshot.method, HttpMethod::POST);
+            assert_eq!(snapshot.url.path(), expected_path);
+            super::tests::assert_canonical_account_signed_json_request(&client, &snapshot);
+            let body: Value = norito::json::from_slice(&snapshot.body).expect("contract JSON body");
+            assert_eq!(body, expected_body);
+            let headers: HashMap<_, _> = snapshot.headers.iter().cloned().collect();
+            assert!(
+                snapshot
+                    .headers
+                    .iter()
+                    .all(|(_, value)| value != "untrusted-static-value")
+            );
+            let nonce = headers
+                .get(HEADER_NONCE)
+                .expect("fresh canonical nonce")
+                .clone();
+            assert!(!nonces.contains(&nonce), "each request needs a fresh nonce");
+            nonces.push(nonce);
+            if status == StatusCode::OK {
+                assert_eq!(
+                    result.expect("authorized contract response"),
+                    norito::json::from_str::<Value>(response_body).expect("response JSON")
+                );
+            } else {
+                let error = result.expect_err("Torii contract-authority rejection must surface");
+                assert!(
+                    format!("{error:#}").contains("contract_authority_denied"),
+                    "{error:#}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn post_contract_view_authenticates_exact_body_with_fresh_client_headers() {
+        assert_contract_read_only_request_authentication(false);
+    }
+
+    #[test]
+    fn post_contract_call_simulate_authenticates_exact_body_with_fresh_client_headers() {
+        assert_contract_read_only_request_authentication(true);
+    }
+
     #[test]
     fn post_contract_call_rejects_substituted_operation_receipt() {
         let client = client_with_base_url(base_url());
@@ -21585,6 +21770,8 @@ impl Client {
     /// `private_key` is present, signs that payload without rebuilding it before
     /// submitting it through the transaction pipeline. When `private_key` is
     /// absent, the verified unsigned draft is returned for external signing.
+    /// The prepare request is authenticated with the configured client account
+    /// and key pair; `authority` and `private_key` identify only the transaction.
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
@@ -21674,10 +21861,9 @@ impl Client {
         body.insert("fee_payment".into(), norito::json::to_value(fee_payment)?);
         let request_body = norito::json::to_vec(&norito::json::Value::Object(body))?;
         let response = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, request_body)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(request_body),
+                .header("Accept", APPLICATION_JSON),
         )?;
         let mut response_value =
             Self::parse_json_ok_response(&response, "contract call prepare request")?;
@@ -21896,6 +22082,9 @@ impl Client {
     }
     /// POST `/v1/contracts/view` with a JSON body.
     ///
+    /// Authenticates the exact request body with the configured client account
+    /// and key pair. Torii authorizes the requested contract `authority`.
+    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     pub fn post_contract_view_json(
@@ -21929,10 +22118,9 @@ impl Client {
         body.insert("gas_limit".into(), gas_limit.into());
         let payload = norito::json::to_vec(&norito::json::Value::Object(body))?;
         let response = self.send_builder(
-            self.default_request(HttpMethod::POST, url)
+            self.account_signed_request(HttpMethod::POST, url, payload)?
                 .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
-                .body(payload),
+                .header("Accept", APPLICATION_JSON),
         )?;
         Self::parse_json_ok_response(&response, "contract view request")
     }
@@ -22206,6 +22394,9 @@ impl Client {
     }
     /// POST `/v1/contracts/call/simulate` with a JSON body.
     ///
+    /// Authenticates the exact request body with the configured client account
+    /// and key pair. Torii authorizes the requested contract `authority`.
+    ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
     #[allow(clippy::too_many_arguments)]
@@ -22239,13 +22430,11 @@ impl Client {
         }
         body.insert("gas_limit".into(), gas_limit.into());
         let body = norito::json::to_vec(&norito::json::Value::from(body))?;
-        let resp = self
-            .default_request(HttpMethod::POST, url)
-            .header("Content-Type", APPLICATION_JSON)
-            .header("Accept", APPLICATION_JSON)
-            .body(body)
-            .build()?
-            .send()?;
+        let resp = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
         Self::decode_json_ok(resp, "Failed to simulate contract call")
     }
     /// GET `/v1/runtime/abi/hash`

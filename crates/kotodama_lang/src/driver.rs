@@ -16,7 +16,7 @@ use crate::{
     },
     metadata::contract_code_hash,
     session::{CompileOutput, CompileRequest, CompilerSession},
-    source::SourceFile,
+    source::{SourceFile, TextRange},
     spanned_ast::{AstNodeKind, SpannedProgram},
 };
 use iroha_crypto::Hash;
@@ -241,8 +241,52 @@ struct SourceProjectImportV1 {
 struct SourceProjectPackageV1 {
     identity: String,
     modules: Vec<String>,
-    exports: Vec<String>,
+    exports: Vec<SourceProjectExportV1>,
     imports: Vec<SourceProjectImportV1>,
+}
+struct SourceProjectExportV1 {
+    name: String,
+    range: TextRange,
+}
+impl json::JsonDeserialize for SourceProjectExportV1 {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        parser.skip_ws();
+        let start = parser.position();
+        let name = parser.parse_string()?;
+        let end = parser.position();
+        Ok(Self {
+            name,
+            range: TextRange::new(
+                u32::try_from(start)
+                    .map_err(|_| json::Error::Message("export offset overflow".into()))?,
+                u32::try_from(end)
+                    .map_err(|_| json::Error::Message("export offset overflow".into()))?,
+            ),
+        })
+    }
+}
+/// Immutable local manifest authority captured while loading its contained source graph.
+#[derive(Clone, Debug)]
+pub struct ProjectManifestSource {
+    path: PathBuf,
+    text: String,
+    exports: BTreeMap<(String, String), TextRange>,
+}
+impl ProjectManifestSource {
+    /// Canonical local manifest path; every graph source is contained below its parent directory.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    /// Exact manifest bytes used to resolve the graph and its JSON token ranges.
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+    /// Exact quoted JSON token for one identified package export, including escape spelling.
+    pub fn export_range(&self, package: &str, name: &str) -> Option<TextRange> {
+        self.exports
+            .get(&(package.to_owned(), name.to_owned()))
+            .copied()
+    }
 }
 /// Unambiguous owner of one source in a locked Kotodama project graph.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -259,6 +303,8 @@ pub struct LoadedSourceProject {
     pub graph: SourceLinkRequest,
     /// Canonical physical path for every graph-owned logical source.
     pub source_paths: BTreeMap<ProjectSourceKey, PathBuf>,
+    /// Local manifest edit authority. Graphs supplied without a local manifest cannot edit exports.
+    pub manifest: Option<ProjectManifestSource>,
 }
 fn project_source_unit_span(
     source: &SourceModuleUnit,
@@ -571,7 +617,20 @@ impl BuildDriver {
             .flat_map(|(index, program)| {
                 let package_identity = scoped_sources[index].0.clone();
                 let source_name = sources[index].source_name.clone();
-                crate::lint::lint_program(&program.program)
+                let source = match package_identity.as_deref() {
+                    Some(package) => crate::source::SourceFile::new_in_package(
+                        program.facts.source_map.source(),
+                        package,
+                        source_name.as_str(),
+                        &sources[index].source,
+                    ),
+                    None => crate::source::SourceFile::new(
+                        program.facts.source_map.source(),
+                        source_name.as_str(),
+                        &sources[index].source,
+                    ),
+                };
+                crate::lint::lint_with_sources(&program.program, &program.facts, &source)
                     .into_iter()
                     .map(move |warning| ProjectLintWarning {
                         package_identity: package_identity.clone(),
@@ -1162,6 +1221,21 @@ pub fn discover_source_link_request(
 /// path is resolved relative to the manifest directory, must remain below it
 /// after canonicalization, and is returned with an unambiguous package owner.
 pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, BuildError> {
+    let body = read_source_file(path)?;
+    load_source_project_manifest_with_text(path, &body)
+}
+/// Reload the explicit local graph using a bounded unsaved manifest buffer.
+/// Source paths retain the same canonical containment and unique-owner validation as disk loads.
+pub fn load_source_project_manifest_with_text(
+    path: &Path,
+    body: &str,
+) -> Result<LoadedSourceProject, BuildError> {
+    if body.len() > crate::source::MAX_SOURCE_BYTES {
+        return Err(BuildError::InvalidProjectManifest {
+            path: path.to_path_buf(),
+            message: "project manifest exceeds the source byte limit".into(),
+        });
+    }
     let canonical_manifest = path.canonicalize().map_err(|error| BuildError::Io {
         operation: "canonicalize Kotodama project manifest",
         path: path.to_path_buf(),
@@ -1174,8 +1248,7 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
                 path: path.to_path_buf(),
                 message: "project manifest has no parent directory".to_owned(),
             })?;
-    let body = read_source_file(&canonical_manifest)?;
-    let manifest = json::from_str::<SourceProjectManifestV1>(&body).map_err(|error| {
+    let manifest = json::from_str::<SourceProjectManifestV1>(body).map_err(|error| {
         BuildError::InvalidProjectManifest {
             path: path.to_path_buf(),
             message: error.to_string(),
@@ -1208,15 +1281,20 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
         })
         .collect();
     let mut packages = Vec::with_capacity(manifest.packages.len());
+    let mut export_ranges = BTreeMap::new();
     for package in manifest.packages {
         let mut exports = BTreeSet::new();
         for export in package.exports {
-            if !exports.insert(export.clone()) {
+            export_ranges.insert(
+                (package.identity.clone(), export.name.clone()),
+                export.range,
+            );
+            if !exports.insert(export.name.clone()) {
                 return Err(BuildError::InvalidProjectManifest {
                     path: path.to_path_buf(),
                     message: format!(
-                        "package `{}` exports `{export}` more than once",
-                        package.identity
+                        "package `{}` exports `{}` more than once",
+                        package.identity, export.name
                     ),
                 });
             }
@@ -1291,6 +1369,11 @@ pub fn load_source_project_manifest(path: &Path) -> Result<LoadedSourceProject, 
     Ok(LoadedSourceProject {
         graph,
         source_paths,
+        manifest: Some(ProjectManifestSource {
+            path: canonical_manifest,
+            text: body.to_owned(),
+            exports: export_ranges,
+        }),
     })
 }
 fn project_source_key_description(key: &ProjectSourceKey) -> String {
@@ -2060,6 +2143,27 @@ mod tests {
             package_identity: Some("example/math@1.0.0".to_owned()),
             source_name: "modules/math.ko".to_owned(),
         }));
+        let overlay = valid.replace("\"value\"", "\"v\\u0061lue\"");
+        let loaded = load_source_project_manifest_with_text(&manifest, &overlay)
+            .expect("unsaved metadata uses the same exact graph parser");
+        let captured = loaded.manifest.as_ref().expect("local manifest authority");
+        assert_eq!(captured.path(), manifest.canonicalize().unwrap());
+        assert_eq!(captured.text(), overlay);
+        let range = captured
+            .export_range("example/math@1.0.0", "value")
+            .unwrap();
+        assert_eq!(
+            &captured.text()[range.start as usize..range.end as usize],
+            "\"v\\u0061lue\""
+        );
+        assert!(captured.export_range("other/math@1.0.0", "value").is_none());
+        assert!(
+            load_source_project_manifest_with_text(
+                &manifest,
+                &" ".repeat(crate::source::MAX_SOURCE_BYTES + 1)
+            )
+            .is_err()
+        );
         fs::write(
             &manifest,
             valid.replacen("\"version\": 1,", "\"version\": 1, \"wildcard\": true,", 1),
@@ -2236,8 +2340,9 @@ mod tests {
         let graph = SourceLinkRequest {
             root: SourceModuleUnit {
                 source_name: "contracts/app.ko".to_owned(),
-                source: "seiyaku App { view fn run() -> int { return helpers::value(1); } }"
-                    .to_owned(),
+                source:
+                    "seiyaku App { view fn run() -> int { return helpers::value(unused: 1); } }"
+                        .to_owned(),
             },
             imports: vec![ImportBinding {
                 alias: "helpers".to_owned(),

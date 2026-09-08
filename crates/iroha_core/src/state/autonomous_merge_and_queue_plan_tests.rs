@@ -3975,3 +3975,196 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog() {
         "failed source construction remains fail-closed"
     );
 }
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one immutable certificate is checked against both carriers and every current source failure"
+)]
+fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let old_carrier = parent.header().height().get();
+    let next_carrier = old_carrier.checked_add(1).unwrap();
+    let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let routing_plan = crate::queue::RoutingPlan::single(route);
+    let (binding, fixture_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        old_carrier,
+        0x75,
+    );
+    let decoded = norito::decode_from_bytes::<crate::torii_proxy::QueuePlanAdmissionCertificateV1>(
+        &fixture_certificate,
+    )
+    .expect("decode the existing authenticated fixture");
+    let certificate = norito::encode_canonical(&decoded).unwrap();
+    let validated = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+        state.network_id_ref(),
+        &certificate,
+    )
+    .expect("the original canonical certificate must pass exact quorum authentication");
+    assert_eq!(validated.certificate.binding, binding);
+    assert_eq!(
+        norito::encode_canonical(&validated.certificate).unwrap(),
+        certificate
+    );
+    let classify = |bytes: &[u8], carrier| {
+        state
+            .classify_pending_queue_plan_admission(bytes, carrier)
+            .map(|(_, disposition)| disposition)
+    };
+    assert_eq!(
+        classify(&certificate, old_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::Future
+    );
+    assert_eq!(
+        classify(&certificate, next_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    assert_eq!(
+        classify(&certificate, next_carrier + 1).unwrap(),
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent,
+        "a caller already ahead of State keeps its existing validation behavior"
+    );
+    assert!(
+        state
+            .validate_queue_plan_admissions_for_carrier(&[certificate.clone()], old_carrier)
+            .is_err(),
+        "waiting never authorizes actual inclusion before the signed proposal height"
+    );
+    state
+        .validate_queue_plan_admissions_for_carrier(&[certificate.clone()], next_carrier)
+        .expect("the same exact certificate is valid for the current next carrier");
+
+    let mut wrong_context = binding.admission_context.clone();
+    wrong_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+        b"wrong-current-queue-plan-predecessor",
+    )));
+    let wrong_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        state.network_id_ref(),
+        &queue_plan_entrypoint_for_state_test(&state, 0x75),
+        &routing_plan,
+        wrong_context,
+        binding.enqueue_timestamp_ms,
+    )
+    .expect("recompute every exact digest for the authenticated wrong predecessor");
+    let wrong_predecessor =
+        queue_plan_admission_certificate_bytes_for_state_test(&wrong_binding, &validator_keypairs);
+    let wrong_predecessor = norito::decode_from_bytes::<
+        crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+    >(&wrong_predecessor)
+    .unwrap();
+    let wrong_predecessor = norito::encode_canonical(&wrong_predecessor).unwrap();
+    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+        state.network_id_ref(),
+        &wrong_predecessor,
+    )
+    .expect("the wrong predecessor is authenticated, so its rejection must be State-dependent");
+    for carrier in [old_carrier, next_carrier] {
+        assert_eq!(
+            classify(&wrong_predecessor, carrier).unwrap(),
+            PendingQueuePlanAdmissionDisposition::Stale,
+            "caller lag must not hide a bad predecessor"
+        );
+    }
+
+    let mut bad_schema = decoded.clone();
+    bad_schema.version = u16::MAX;
+    let bad_schema = norito::encode_canonical(&bad_schema).unwrap();
+    let wrong_wire_schema = norito::encode_canonical(&decoded.binding).unwrap();
+    let mut bad_signature = decoded.clone();
+    let wrong_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::BlsNormal).unwrap();
+    let attestation = &mut bad_signature.attestations[0];
+    let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
+        binding.canonical_hash(),
+        attestation.validator_index,
+    )
+    .unwrap();
+    let signing_validator = &binding.admission_context.route_incarnations[0].validator_set
+        [usize::from(attestation.validator_index)];
+    decoded.attestations[0]
+        .signature
+        .verify(signing_validator.public_key(), &preimage)
+        .expect("the unchanged signature authenticates this exact binding/index preimage");
+    attestation.signature = Signature::try_new(wrong_key.private_key(), &preimage).unwrap();
+    let bad_signature = norito::encode_canonical(&bad_signature).unwrap();
+    for carrier in [old_carrier, next_carrier] {
+        let version_error = classify(&bad_schema, carrier).unwrap_err();
+        assert!(
+            matches!(version_error, MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+            if reason == "pending queue-plan admission certificate is invalid: QueuePlan admission-certificate version is unsupported")
+        );
+        let signature_error = classify(&bad_signature, carrier).unwrap_err();
+        assert!(
+            matches!(signature_error, MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+            if reason.starts_with("pending queue-plan admission certificate is invalid: QueuePlan admission attestation is invalid:"))
+        );
+        for malformed in [wrong_wire_schema.as_slice(), &[0xFF]] {
+            let decode_error = classify(malformed, carrier).unwrap_err();
+            assert!(
+                matches!(decode_error, MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+                if reason.starts_with("pending queue-plan admission certificate is invalid: QueuePlan admission certificate cannot be decoded:"))
+            );
+        }
+    }
+
+    let signer_accounts = decoded
+        .attestations
+        .iter()
+        .map(|attestation| {
+            AccountId::new(
+                decoded.binding.admission_context.route_incarnations[0].validator_set
+                    [usize::from(attestation.validator_index)]
+                .public_key()
+                .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(signer_accounts.len(), 2);
+    let (replacement_accounts, replacement_keys) = bls_accounts_in("current-queue-plan-drift", 2);
+    seed_consensus_keys_with_pops(&state, &replacement_keys);
+    let mut changed_roster = signer_accounts;
+    changed_roster.extend(replacement_accounts);
+    assert_eq!(changed_roster.len(), 4);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, changed_roster)],
+    );
+    for carrier in [old_carrier, next_carrier] {
+        assert_eq!(
+            classify(&certificate, carrier).unwrap(),
+            PendingQueuePlanAdmissionDisposition::Stale,
+            "current non-signer roster drift must invalidate even a lagging caller"
+        );
+    }
+    let original_accounts = validator_keypairs
+        .iter()
+        .map(|key| AccountId::new(key.public_key().clone()))
+        .collect();
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, original_accounts)],
+    );
+    let original_incarnation = state.lane_incarnation(LaneId::SINGLE).unwrap();
+    let _ = state.set_lane_incarnation_for_test(
+        LaneId::SINGLE,
+        Hash::new(b"current-queue-plan-incarnation-drift"),
+    );
+    for carrier in [old_carrier, next_carrier] {
+        assert_eq!(
+            classify(&certificate, carrier).unwrap(),
+            PendingQueuePlanAdmissionDisposition::Stale,
+            "current incarnation drift must invalidate even a lagging caller"
+        );
+    }
+    let _ = state.set_lane_incarnation_for_test(LaneId::SINGLE, original_incarnation);
+    assert_eq!(
+        classify(&certificate, old_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::Future
+    );
+    assert_eq!(
+        classify(&certificate, next_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+}

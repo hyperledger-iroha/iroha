@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "IrohaSwap",
-  "code_hash": "hash:5A489E14A779A0CCCECED07A1749C9F295D7F3F6FCF70B56EB62B0F1CB3F6E11#491C",
-  "abi_hash": "hash:0CE37CAD372E184A4FC1810D6B7CE3224E9793B829079505F4C6AAC8F512C6FB#0FF4",
+  "code_hash": "hash:3CA3735ECBF11C7F332D8066777041AC4C067680F85ED810371C969092730B03#EF5B",
+  "abi_hash": "hash:DB4259AA28486967F2D8799B4E66E1B919F4D18690DB2D94CD96EFA05EE840A3#4407",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -122,8 +122,15 @@
           }
         ]
       },
-      "return_type": null,
-      "return_schema": null,
+      "return_type": "()",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Unit",
+            "value": null
+          }
+        ]
+      },
       "permission": "Admin",
       "read_keys": [
         "state:*"
@@ -221,8 +228,15 @@
           }
         ]
       },
-      "return_type": null,
-      "return_schema": null,
+      "return_type": "()",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Unit",
+            "value": null
+          }
+        ]
+      },
       "permission": "Admin",
       "read_keys": [
         "state:*",
@@ -307,8 +321,15 @@
           }
         ]
       },
-      "return_type": null,
-      "return_schema": null,
+      "return_type": "()",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Unit",
+            "value": null
+          }
+        ]
+      },
       "permission": "Admin",
       "read_keys": [
         "state:*",
@@ -490,76 +511,121 @@
       "type_name": "StateMap<Name, quantity>"
     }
   ],
-  "error_codes": [
+  "error_types": [
     {
-      "namespace": "PoolError",
-      "name": "UnknownPool",
-      "code": 1
+      "identity": "kotodama::ListError",
+      "variants": [
+        {
+          "name": "IndexOutOfBounds",
+          "code": 1
+        },
+        {
+          "name": "CapacityExceeded",
+          "code": 2
+        }
+      ]
     },
     {
-      "namespace": "PoolError",
-      "name": "IdenticalAssets",
-      "code": 2
+      "identity": "kotodama::NumericError",
+      "variants": [
+        {
+          "name": "MantissaOverflow",
+          "code": 1
+        },
+        {
+          "name": "ScaleOverflow",
+          "code": 2
+        },
+        {
+          "name": "DivisionByZero",
+          "code": 3
+        },
+        {
+          "name": "RepeatingDecimal",
+          "code": 4
+        },
+        {
+          "name": "ExactDivisionScaleOverflow",
+          "code": 5
+        },
+        {
+          "name": "InvalidScale",
+          "code": 6
+        },
+        {
+          "name": "InexactConversion",
+          "code": 7
+        },
+        {
+          "name": "NegativeQuantity",
+          "code": 8
+        },
+        {
+          "name": "QuantityUnderflow",
+          "code": 9
+        }
+      ]
     },
     {
-      "namespace": "PoolError",
-      "name": "PoolAlreadyExists",
-      "code": 3
-    },
-    {
-      "namespace": "PoolError",
-      "name": "InvalidAssetAAmount",
-      "code": 4
-    },
-    {
-      "namespace": "PoolError",
-      "name": "InvalidAssetBAmount",
-      "code": 5
-    },
-    {
-      "namespace": "PoolError",
-      "name": "ZeroLiquidityMinted",
-      "code": 6
-    },
-    {
-      "namespace": "PoolError",
-      "name": "InvalidLiquidityAmount",
-      "code": 7
-    },
-    {
-      "namespace": "PoolError",
-      "name": "EmptyPool",
-      "code": 8
-    },
-    {
-      "namespace": "PoolError",
-      "name": "ZeroAssetAOutput",
-      "code": 9
-    },
-    {
-      "namespace": "PoolError",
-      "name": "ZeroAssetBOutput",
-      "code": 10
-    },
-    {
-      "namespace": "PoolError",
-      "name": "InvalidSwapAmount",
-      "code": 11
-    },
-    {
-      "namespace": "PoolError",
-      "name": "AssetNotInPool",
-      "code": 12
-    },
-    {
-      "namespace": "PoolError",
-      "name": "SlippageExceeded",
-      "code": 13
-    },
-    {
-      "namespace": "PoolError",
-      "name": "InsufficientOutput",
-      "code": 14
+      "identity": "IrohaSwap::PoolError",
+      "variants": [
+        {
+          "name": "UnknownPool",
+          "code": 1
+        },
+        {
+          "name": "IdenticalAssets",
+          "code": 2
+        },
+        {
+          "name": "PoolAlreadyExists",
+          "code": 3
+        },
+        {
+          "name": "InvalidAssetAAmount",
+          "code": 4
+        },
+        {
+          "name": "InvalidAssetBAmount",
+          "code": 5
+        },
+        {
+          "name": "ZeroLiquidityMinted",
+          "code": 6
+        },
+        {
+          "name": "InvalidLiquidityAmount",
+          "code": 7
+        },
+        {
+          "name": "EmptyPool",
+          "code": 8
+        },
+        {
+          "name": "ZeroAssetAOutput",
+          "code": 9
+        },
+        {
+          "name": "ZeroAssetBOutput",
+          "code": 10
+        },
+        {
+          "name": "InvalidSwapAmount",
+          "code": 11
+        },
+        {
+          "name": "AssetNotInPool",
+          "code": 12
+        },
+        {
+          "name": "SlippageExceeded",
+          "code": 13
+        },
+        {
+          "name": "InsufficientOutput",
+          "code": 14
+        }
+      ]
     }
   ],
   "kotoba": null,

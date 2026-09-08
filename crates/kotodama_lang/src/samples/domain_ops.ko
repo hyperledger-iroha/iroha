@@ -4,7 +4,7 @@ seiyaku DomainOps {
     kotoage fn run() authorize("Admin") {
         // Register a new domain by id
         let domain_id = DomainId::parse("wonder.universal");
-        ledger::domain::register(domain_id);
+        ledger::domain::register(domain: domain_id);
         // Transfer domain ownership from the current context::authority(demo no-op self transfer).
         ledger::domain::transfer(
             source: context::authority(),
@@ -12,6 +12,6 @@ seiyaku DomainOps {
             destination: context::authority(),
         );
         // Optionally unregister the domain (for demo purposes)
-        ledger::domain::unregister(domain_id);
+        ledger::domain::unregister(domain: domain_id);
     }
 }

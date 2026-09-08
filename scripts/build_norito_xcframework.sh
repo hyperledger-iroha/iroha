@@ -612,6 +612,7 @@ SOURCE_SEAL_SCRIPT="$ROOT_DIR/scripts/norito_bridge_source_seal.py"
 PIN_COMMIT_CHECKER="$ROOT_DIR/scripts/check_mobile_sdk_artifact_pin_commit.py"
 HERMETIC_RUNNER="$ROOT_DIR/scripts/run_mobile_hermetic_command.py"
 APPLE_SLICE_HANDOFF="$ROOT_DIR/scripts/norito_bridge_apple_slice_handoff.py"
+PQCRYPTO_ARCHIVE_NORMALIZER="$ROOT_DIR/scripts/normalize_pqcrypto_archive.py"
 USER_HOME_DIR="$(run_python312_clean -c \
   'import os,pwd; print(pwd.getpwuid(os.getuid()).pw_dir)')"
 USER_HOME_DIR="$(run_python312_clean -c \
@@ -645,6 +646,7 @@ for required_input in \
   "$PIN_COMMIT_CHECKER" \
   "$HERMETIC_RUNNER" \
   "$APPLE_SLICE_HANDOFF" \
+  "$PQCRYPTO_ARCHIVE_NORMALIZER" \
   "$ROOT_DIR/rust-toolchain.toml"; do
   [[ -f "$required_input" && ! -L "$required_input" ]] || {
     echo "[-] Required NoritoBridge build input is unavailable: $required_input" >&2
@@ -1033,6 +1035,7 @@ IPHONESIMULATOR_SDK_VERSION="$(xcrun_value --sdk iphonesimulator --show-sdk-vers
 MACOSX_SDK_VERSION="$(xcrun_value --sdk macosx --show-sdk-version)"
 LIPO_BINARY="$(xcrun_value --find lipo)"
 CLANG_BINARY="$(xcrun_value --find clang)"
+RANLIB_BINARY="$(xcrun_value --find ranlib)"
 for sdk_variable in IPHONEOS_SDKROOT IPHONESIMULATOR_SDKROOT MACOSX_SDKROOT; do
   sdkroot="${!sdk_variable}"
   printf -v "$sdk_variable" '%s' "$(run_python312_clean -c \
@@ -1057,6 +1060,13 @@ CLANG_BINARY="$(run_python312_clean -c \
   "$CLANG_BINARY")"
 [[ -x "$CLANG_BINARY" ]] || {
   echo "[-] Xcode clang executable is unavailable" >&2
+  exit 1
+}
+RANLIB_BINARY="$(run_python312_clean -c \
+  'import pathlib,sys; print(pathlib.Path(sys.argv[1]).resolve(strict=True))' \
+  "$RANLIB_BINARY")"
+[[ -x "$RANLIB_BINARY" ]] || {
+  echo "[-] Xcode ranlib executable is unavailable" >&2
   exit 1
 }
 XCODE_VERSION_OUTPUT="$(
@@ -1260,6 +1270,18 @@ CONSUMER_EOF
   fi
 }
 
+rebuild_apple_archive_index() {
+  local staged_library="$1"
+  # Xcode's ranlib is a libtool alias. Keep the authenticated canonical binary
+  # while preserving the invocation name that selects its archive-index mode.
+  env -i HOME="$USER_HOME_DIR" PATH="${RANLIB_BINARY%/*}:/usr/bin:/bin" \
+    TMPDIR="$MOBILE_TMPDIR" LANG=C.UTF-8 LC_ALL=C.UTF-8 \
+    DEVELOPER_DIR="$XCODE_DEVELOPER_DIR" \
+    "$PYTHON_BINARY" -I -S -B -c \
+    'import subprocess,sys; subprocess.run(["ranlib", "-D", sys.argv[2]], executable=sys.argv[1], check=True)' \
+    "$RANLIB_BINARY" "$staged_library"
+}
+
 stage_cargo_library() {
   local target_triple="$1"
   local label="$2"
@@ -1271,6 +1293,12 @@ stage_cargo_library() {
   fi
   mkdir -p "$(dirname "$staged_library")"
   cp "$source_library" "$staged_library"
+  run_isolated_python "$PQCRYPTO_ARCHIVE_NORMALIZER" \
+    --library "$staged_library" \
+    --cargo-build-dir "$CARGO_TARGET_DIR/$target_triple/release/build" \
+    --target "$target_triple" --cargo-lock "$CARGO_LOCKFILE" \
+    --report "$staged_library.pqcrypto-normalization.json" || return $?
+  rebuild_apple_archive_index "$staged_library" || return $?
   check_apple_consumer_link "$target_triple" "$staged_library" || return $?
   printf '%s\n' "$staged_library"
 }
@@ -1363,6 +1391,18 @@ should_build_apple_slice() {
   [[ -z "$CI_APPLE_SLICE" || "$CI_APPLE_SLICE" == "$target_triple" ]]
 }
 
+# Run the native Apple Silicon consumer and cryptographic checks early. Every
+# required slice still passes the same checks before XCFramework publication.
+if should_build_apple_slice "$MACOS_ARM_TRIPLE"; then
+  run_hermetic_apple_cargo \
+    apple-macos "$MACOSX_SDKROOT" \
+    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
+    --target "$MACOS_ARM_TRIPLE" \
+    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
+  assert_bridge_source_seal "the arm64 macOS build"
+  LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
+fi
+
 # Rust uses IPHONEOS_DEPLOYMENT_TARGET for both iOS device and simulator targets,
 # while cc-based dependencies also honor IPHONESIMULATOR_DEPLOYMENT_TARGET.
 if should_build_apple_slice "$DEVICE_TRIPLE"; then
@@ -1391,15 +1431,6 @@ if should_build_apple_slice "$SIM_X64_TRIPLE"; then
     "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
   assert_bridge_source_seal "the x86_64 simulator build"
   LIB_SIM_X64=$(stage_cargo_library "$SIM_X64_TRIPLE" "x86_64 simulator")
-fi
-if should_build_apple_slice "$MACOS_ARM_TRIPLE"; then
-  run_hermetic_apple_cargo \
-    apple-macos "$MACOSX_SDKROOT" \
-    build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release \
-    --target "$MACOS_ARM_TRIPLE" \
-    "${CARGO_FEATURE_ARGS[@]+"${CARGO_FEATURE_ARGS[@]}"}"
-  assert_bridge_source_seal "the arm64 macOS build"
-  LIB_MAC_ARM=$(stage_cargo_library "$MACOS_ARM_TRIPLE" "arm64 macOS")
 fi
 if should_build_apple_slice "$MACOS_X64_TRIPLE"; then
   run_hermetic_apple_cargo \

@@ -96,6 +96,11 @@ const test = makeNativeTest(baseTest, { require: noritoRequiredMethods });
 const descriptorTest = baseTest;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const UNIT_RETURN_DESCRIPTOR = Object.freeze({
+  returnType: "()",
+  returnSchema: { nodes: [{ kind: "Unit", value: null }] },
+});
 const repoRoot = path.resolve(__dirname, "..", "..", "..");
 const SORA_I105_DISCRIMINANT = 0x2f1;
 const CANCEL_ASSET_LOCK_ESCROW_ID =
@@ -2283,7 +2288,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
           {
             base_key: "state:Votes",
             key_type: "Name",
-            bound_kind: "range",
+            bound_kind: "page",
             max_keys: 2,
           },
         ],
@@ -2292,6 +2297,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         {
           name: "upgrade_ledger",
           kind: "Kaizen",
+          ...UNIT_RETURN_DESCRIPTOR,
           permission: "can_upgrade",
         },
       ],
@@ -2300,8 +2306,8 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
         { name: "Votes", typeName: "StateMap<Name, bool>" },
         { name: "amount", typeName: "Transfer{amount: quantity}" },
       ],
-      errorCodes: [
-        { namespace: "LedgerError", name: "amount", code: 7 },
+      errorTypes: [
+        { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
       ],
       kotoba: [
         {
@@ -2338,7 +2344,7 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
             {
               base_key: "state:Votes",
               key_type: "Name",
-              bound_kind: "range",
+              bound_kind: "page",
               max_keys: 2,
             },
           ],
@@ -2349,8 +2355,8 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
             kind: { kind: "Kaizen", value: null },
             params: [],
             argument_schema: null,
-            return_type: null,
-            return_schema: null,
+            return_type: "()",
+            return_schema: { nodes: [{ kind: "Unit", value: null }] },
             permission: "can_upgrade",
             read_keys: [],
             write_keys: [],
@@ -2364,8 +2370,8 @@ baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields",
           { name: "Votes", type_name: "StateMap<Name, bool>" },
           { name: "amount", type_name: "Transfer{amount: quantity}" },
         ],
-        error_codes: [
-          { namespace: "LedgerError", name: "amount", code: 7 },
+        error_types: [
+          { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
         ],
         kotoba: [
           {
@@ -2463,9 +2469,9 @@ baseTest("smart-contract dynamic access hints enforce the exact V1 contract", ()
   }
   for (const [boundKind, expected] of [
     ["", /dynamicReads\[0\]\.boundKind must be a non-empty string/u],
-    ["Take", /dynamicReads\[0\]\.boundKind must be exactly take or range/u],
-    ["prefix", /dynamicReads\[0\]\.boundKind must be exactly take or range/u],
-    ["range ", /dynamicReads\[0\]\.boundKind must be exactly take or range/u],
+    ["Take", /dynamicReads\[0\]\.boundKind must be exactly take or page/u],
+    ["prefix", /dynamicReads\[0\]\.boundKind must be exactly take or page/u],
+    ["range ", /dynamicReads\[0\]\.boundKind must be exactly take or page/u],
   ]) {
     assert.throws(
       () => buildWithHint({ boundKind }),
@@ -2530,7 +2536,7 @@ baseTest("smart-contract dynamic access hints resolve declared StateMaps per lis
       build({
         [field]: [
           hint,
-          { ...hint, boundKind: "range", maxKeys: 2 },
+          { ...hint, boundKind: "page", maxKeys: 2 },
         ],
       }));
     assert.throws(
@@ -2599,6 +2605,7 @@ baseTest("smart-contract parameter and state type aliases must agree", () => {
         entrypoints: [{
           name: "read",
           kind: "View",
+          ...UNIT_RETURN_DESCRIPTOR,
           params: [{ name: "amount", ...param }],
           argumentSchema: {
             fields: [{ name: "amount", ty: quantity }],
@@ -2663,15 +2670,15 @@ baseTest("smart-contract manifest type declarations reject retired numeric names
       /states\[0\]\.type_name must be a canonical Kotodama V1 state type/u,
     );
   }
-  for (const namespace of ["Amount", "amount"]) {
+  for (const namespace of ["Invalid Error", "Error<Injected>"]) {
     assert.throws(
       () =>
         buildRegisterSmartContractCodeInstruction({
           manifest: {
-            errorCodes: [{ namespace, name: "Denied", code: 7 }],
+            errorTypes: [{ identity: namespace, variants: [{ name: "Denied", code: 7 }] }],
           },
         }),
-      /errorCodes\[0\]\.namespace must be a canonical Kotodama V1 type declaration identifier/u,
+      /errorTypes\[0\]\.identity must be a stable package\/unit\/enum identity/u,
     );
   }
   for (const keyType of [
@@ -2796,7 +2803,7 @@ baseTest("smart-contract entrypoint kinds use only the V1 interface names", () =
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction({
       manifest: {
-        entrypoints: [{ name: "run", kind: canonical }],
+        entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
       },
     });
     assert.equal(
@@ -2822,7 +2829,7 @@ baseTest("smart-contract branded entrypoint kinds preserve their Norito tag orde
   for (const canonical of ["Kotoage", "View", "Hajimari", "Kaizen"]) {
     const instruction = buildRegisterSmartContractCodeInstruction({
       manifest: {
-        entrypoints: [{ name: "run", kind: canonical }],
+        entrypoints: [{ name: "run", kind: canonical, ...UNIT_RETURN_DESCRIPTOR }],
       },
     });
     assert.equal(

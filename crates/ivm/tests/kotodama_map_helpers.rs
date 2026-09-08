@@ -85,7 +85,7 @@ fn semantic_ensure_pointer_requires_explicit_default() {
     let src = r#"
         seiyaku EnsurePointer {
           state StateMap<int, Name> m;
-          fn f() { let _ = m.ensure(1); }
+          fn f() { let _ = m.ensure(key: 1); }
         }
     "#;
     let prog = parse(src).expect("parse pointer map without default");
@@ -100,7 +100,7 @@ fn semantic_ensure_non_int_requires_explicit_default() {
     let src = r#"
         seiyaku EnsureBool {
           state StateMap<int, bool> m;
-          fn f() { let _ = m.ensure(1); }
+          fn f() { let _ = m.ensure(key: 1); }
         }
     "#;
     let prog = parse(src).expect("parse bool map without default");

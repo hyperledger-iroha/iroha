@@ -1777,6 +1777,26 @@ impl KotoTestHost {
         expect_reject: bool,
     ) -> Result<u64, crate::VMError> {
         self.clear_test_error();
+        let expectation = if expect_reject {
+            if vm.register(14) != 0 || vm.register(15) != 0 {
+                return self
+                    .fail_test("rejection expectation has nonzero reserved operands".to_owned());
+            }
+            let bytes = Self::decode_bytes_arg(vm, 13)?;
+            if bytes.len() > 64 * 1024 {
+                return self.fail_test(
+                    "rejection expectation exceeds the test metadata budget".to_owned(),
+                );
+            }
+            let expectation: crate::kotodama::testing::RejectionExpectation =
+                norito::decode_canonical(&bytes).map_err(|_| crate::VMError::NoritoInvalid)?;
+            if !expectation.validate() {
+                return self.fail_test("invalid nominal rejection expectation".to_owned());
+            }
+            Some(expectation)
+        } else {
+            None
+        };
         let actor_alias =
             Self::decode_alias_arg(vm, 10, "actor").map_err(|_| crate::VMError::NoritoInvalid)?;
         let entrypoint =
@@ -1812,18 +1832,34 @@ impl KotoTestHost {
                 ));
             }
         };
-        if runtime_entrypoint.permission.as_deref() == Some("CanInvokeContractEntrypoint") {
-            let permission = PermissionToken::ContractEntrypoint {
-                contract: self.contract_address.clone(),
-                entrypoint: entrypoint.clone(),
+        if let Some(permission_name) = runtime_entrypoint.permission.as_deref() {
+            let permission = if permission_name == "CanInvokeContractEntrypoint" {
+                PermissionToken::ContractEntrypoint {
+                    contract: self.contract_address.clone(),
+                    entrypoint: entrypoint.clone(),
+                }
+            } else {
+                // Core represents every other declaration as the exact name with an empty
+                // payload. Fixture shorthand may construct scoped effect tokens, which must
+                // never substitute for this distinct authorization token.
+                PermissionToken::Custom(permission_name.to_owned())
             };
             if !self.inner.wsv.has_permission(&actor.account, &permission) {
                 if expect_reject {
+                    if !matches!(
+                        expectation.as_ref(),
+                        Some(
+                            crate::kotodama::testing::RejectionExpectation::Any
+                                | crate::kotodama::testing::RejectionExpectation::PermissionDenied
+                        )
+                    ) {
+                        return self.fail_test(format!("expected {}, observed invocation PermissionDenied before kotoage `{entrypoint}`", expectation.as_ref().expect("rejection expectation").description()));
+                    }
                     vm.set_register(10, 0);
                     return Ok(0);
                 }
                 return self.fail_test(format!(
-                    "actor `{actor_alias}` lacks exact CanInvokeContractEntrypoint permission for kotoage `{entrypoint}`"
+                    "actor `{actor_alias}` lacks declared `{permission_name}` permission for kotoage `{entrypoint}`"
                 ));
             }
         }
@@ -1833,24 +1869,34 @@ impl KotoTestHost {
             ));
         };
         let mut nested_inputs = self.base_public_inputs.clone();
-        if let Some(schema) = runtime_entrypoint.argument_schema.as_ref() {
+        let encoded_payload = match runtime_entrypoint.argument_schema.as_ref() {
+            Some(schema) => crate::encode_argument_record_from_json(schema, &payload).map(Some),
+            None if payload.get() == "{}" => Ok(None),
+            None => Err(crate::VMError::DecodeError),
+        };
+        let encoded_payload = match encoded_payload {
+            Ok(encoded) => encoded,
+            Err(crate::VMError::DecodeError | crate::VMError::NoritoInvalid) if expect_reject => {
+                if !matches!(
+                    expectation.as_ref(),
+                    Some(
+                        crate::kotodama::testing::RejectionExpectation::Any
+                            | crate::kotodama::testing::RejectionExpectation::InvalidArguments
+                    )
+                ) {
+                    return self.fail_test(format!("expected {}, observed argument-schema InvalidArguments before kotoage `{entrypoint}`", expectation.as_ref().expect("rejection expectation").description()));
+                }
+                vm.set_register(10, 0);
+                return Ok(0);
+            }
+            Err(err) => {
+                return self.fail_test(format!("actor `{actor_alias}` calling kotoage `{entrypoint}` supplied arguments that do not match the kotoage schema (zero-parameter targets require an empty object): {err:?}"));
+            }
+        };
+        if let Some(encoded_payload) = encoded_payload {
             let trigger_name: Name = "trigger_event_json"
                 .parse()
                 .map_err(|_| crate::VMError::DecodeError)?;
-            let encoded_payload = match crate::encode_argument_record_from_json(schema, &payload) {
-                Ok(encoded_payload) => encoded_payload,
-                Err(crate::VMError::DecodeError | crate::VMError::NoritoInvalid)
-                    if expect_reject =>
-                {
-                    vm.set_register(10, 0);
-                    return Ok(0);
-                }
-                Err(err) => {
-                    return self.fail_test(format!(
-                        "actor `{actor_alias}` calling kotoage `{entrypoint}` supplied arguments that do not match the kotoage schema: {err:?}"
-                    ));
-                }
-            };
             nested_inputs.insert(
                 trigger_name,
                 make_tlv(PointerType::NoritoBytes, &encoded_payload),
@@ -1908,8 +1954,17 @@ impl KotoTestHost {
                 }
                 Ok(0)
             }
-            Err(_err) if expect_reject => {
+            Err(err) if expect_reject => {
                 self.inner.restore(rollback.as_ref())?;
+                let expected = expectation.as_ref().expect("rejection expectation");
+                if !expected.matches_runtime(
+                    &err,
+                    nested_vm
+                        .last_diagnostic()
+                        .map(|diagnostic| diagnostic.trap_kind),
+                ) {
+                    return self.fail_test(format!("expected {}, observed {} while actor `{actor_alias}` called kotoage `{entrypoint}`", expected.description(), render_failure(&nested_vm, None, &err)));
+                }
                 vm.set_register(10, 0);
                 Ok(0)
             }

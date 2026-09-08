@@ -8,7 +8,7 @@
 
             kotoage fn main() -> int authorize("WriteState") {
                 Foo[Name::parse("alice")] = 1;
-                return read_value(Name::parse("alice"));
+                return read_value(key: Name::parse("alice"));
             }
         }
     

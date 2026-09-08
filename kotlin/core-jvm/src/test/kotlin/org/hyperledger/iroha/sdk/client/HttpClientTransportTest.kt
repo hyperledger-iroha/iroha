@@ -1415,6 +1415,40 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun contractCallPreservesUnitAndNestedOptionTags() {
+        val fixture = loadSharedFixture("fixtures/kotodama/entrypoint_argument_record_v1.json")
+        val boundary = obj(fixture, "torii_boundary")
+        val invocation = ContractInvocation(
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            ByteArray(32) { 0x11 },
+            string(boundary, "entrypoint"),
+            hexToBytes(string(obj(fixture, "entrypoint_argument_record_v1"), "norito_hex")),
+        )
+        for (value in listOf(
+            """{"some":null}""",
+            """{"none":true}""",
+            """{"some":{"none":true}}""",
+            """{"some":{"some":null}}""",
+        )) {
+            val payload = mapOf("value" to JsonParser.parse(value))
+            val executor = StubResponseExecutor(503, "boundary reached".toByteArray(StandardCharsets.UTF_8))
+            val transport = HttpClientTransport(executor, signedClientConfig("https://fixture.invalid"))
+            assertFailsWith<CompletionException> {
+                transport.prepareContractCall(
+                    authority = string(boundary, "authority"),
+                    feePayment = FeePaymentJson.parse(boundary["fee_payment"], "fee_payment"),
+                    contractAlias = string(boundary, "contract_alias"),
+                    entrypoint = string(boundary, "entrypoint"),
+                    payload = payload,
+                    draftIntent = ContractCallDraftIntent(invocation, emptyMap()),
+                ).join()
+            }
+            val sent = JsonParser.parse(readBody(executor.lastRequest)) as Map<*, *>
+            assertEquals(payload, sent["payload"], value)
+        }
+    }
+
+    @Test
     fun proposeMultisigPostsNativeNoritoInstructionPayloadsAndParsesResponse() {
         val instructionBytes = NoritoJavaCodecAdapter.encodeInstructionBox(
             InstructionBox.fromWirePayload(

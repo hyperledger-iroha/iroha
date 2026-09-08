@@ -125,6 +125,8 @@ pub enum TypeExpr {
     Tuple(Vec<TypeExpr>),
     /// A non-negative compile-time integer argument, used by `List<T, N>`.
     Const(u64),
+    /// An integer constant expression in a generic capacity position.
+    ConstExpression(Box<Expr>),
 }
 impl std::fmt::Debug for TypeExpr {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -152,6 +154,10 @@ impl std::fmt::Debug for TypeExpr {
                 .field(&format_args!("{} item(s)", items.len()))
                 .finish(),
             Self::Const(value) => formatter.debug_tuple("Const").field(value).finish(),
+            Self::ConstExpression(value) => formatter
+                .debug_tuple("ConstExpression")
+                .field(value)
+                .finish(),
         }
     }
 }
@@ -225,6 +231,11 @@ impl PartialEq for TypeExpr {
                         return false;
                     }
                 }
+                (Self::ConstExpression(left), Self::ConstExpression(right)) => {
+                    if left != right {
+                        return false;
+                    }
+                }
                 _ => return false,
             }
         }
@@ -264,6 +275,9 @@ impl Clone for TypeExpr {
                         pending.extend(items.iter().rev().map(Pending::Type));
                     }
                     Self::Const(value) => values.push(Self::Const(*value)),
+                    Self::ConstExpression(value) => {
+                        values.push(Self::ConstExpression(value.clone()))
+                    }
                 },
                 Pending::Source(node, source) => {
                     let ty = values.pop().expect("visited source type child");
@@ -296,10 +310,21 @@ impl Clone for TypeExpr {
         values.pop().expect("type traversal produces one root")
     }
 }
+/// Explicit source-call spelling of a parameter.
+#[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+pub enum ParameterCallMode {
+    /// `Type name`: callers supply the parameter name.
+    #[default]
+    Named,
+    /// `Type _ name`: callers supply an unlabeled positional argument.
+    Positional,
+}
 #[derive(Debug, PartialEq, Clone)]
 pub struct Param {
     pub ty: Option<TypeExpr>,
     pub name: String,
+    /// Declaration-owned source argument mode.
+    pub call_mode: ParameterCallMode,
     /// Internal state-handle marker; canonical V1 source parameters always set this to `false`.
     pub is_state: bool,
 }
@@ -487,14 +512,38 @@ pub struct MessageTranslation {
 pub enum Pattern {
     Name(String),
     Tuple(Vec<String>),
+    /// A named, order-independent destructure of one declared struct.
+    Struct {
+        /// Nominal struct type selected by the pattern.
+        name: String,
+        /// Named fields and their local binding names.
+        fields: Vec<StructPatternField>,
+        /// Whether a trailing `..` explicitly discards unspecified fields.
+        rest: bool,
+    },
+}
+/// One field in a named struct binding pattern.
+#[derive(Debug, PartialEq, Clone)]
+pub struct StructPatternField {
+    /// Field selected from the declared struct.
+    pub name: String,
+    /// Local binding name, or `_` for an explicit discard.
+    pub binding: String,
+    /// Exact source range of the selected field name.
+    pub source: Option<SourceRange>,
 }
 /// Canonical namespaced variant admitted in `match` and `if let` patterns.
-#[derive(Debug, PartialEq, Eq, Clone, Copy, Hash)]
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
 pub enum SumVariant {
     OptionSome,
     OptionNone,
     ResultOk,
     ResultErr,
+    /// A payloadless variant in a nominal error type.
+    Error {
+        namespace: String,
+        variant: String,
+    },
 }
 /// Payload handling for an active sum variant pattern.
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -504,7 +553,7 @@ pub enum PatternBinding {
     /// Explicitly ignore the active payload.
     Wildcard,
 }
-/// One exhaustive namespaced `Option` or `Result` pattern.
+/// One namespaced `Option`, `Result`, or nominal error pattern.
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub struct SumPattern {
     pub variant: SumVariant,
@@ -608,10 +657,9 @@ pub enum Statement {
         step: Option<Box<Statement>>,
         body: Block,
     },
-    /// Canonically bounded map iteration: `for (k, v) in map.take(64) { ... }`.
+    /// Iteration over a bounded list, with the same flat binding patterns as `let`.
     ForEachMap {
-        key: String,
-        value: Option<String>,
+        pat: Pattern,
         map: Expr,
         body: Block,
     },
@@ -710,11 +758,12 @@ pub enum Expr {
     Call {
         name: String,
         args: Vec<Expr>,
-        /// Source argument names in source order. `None` denotes an all-positional call.
+        /// Source labels in source order. The outer `None` denotes an all-positional call;
+        /// inner `None` slots are the positional prefix of a mixed call.
         ///
         /// Method receivers are stored as `args[0]` and are deliberately excluded from this list
         /// because they are compiler-inserted rather than source arguments.
-        argument_names: Option<Vec<String>>,
+        argument_names: Option<Vec<Option<String>>>,
         /// Whether `args[0]` is the implicit receiver from source method syntax.
         implicit_receiver: bool,
     },
@@ -872,7 +921,7 @@ enum CloneExpr<'a> {
     Wrapped(WrappedExpr),
     Call {
         name: &'a str,
-        argument_names: &'a Option<Vec<String>>,
+        argument_names: &'a Option<Vec<Option<String>>>,
         implicit_receiver: bool,
         argument_count: usize,
     },
@@ -917,8 +966,7 @@ enum CloneStatement<'a> {
         has_step: bool,
     },
     ForEachMap {
-        key: &'a str,
-        value: &'a Option<String>,
+        pat: &'a Pattern,
     },
 }
 
@@ -1273,15 +1321,9 @@ fn clone_ast_node(root: CloneNode<'_>) -> CloneValue {
                         tasks.push(CloneTask::Visit(CloneNode::Statement(init)));
                     }
                 }
-                Statement::ForEachMap {
-                    key,
-                    value,
-                    map,
-                    body,
-                } => {
+                Statement::ForEachMap { pat, map, body } => {
                     tasks.push(CloneTask::BuildStatement(CloneStatement::ForEachMap {
-                        key,
-                        value,
+                        pat,
                     }));
                     tasks.push(CloneTask::Visit(CloneNode::Block(body)));
                     tasks.push(CloneTask::Visit(CloneNode::Expr(map)));
@@ -1523,9 +1565,8 @@ fn clone_ast_node(root: CloneNode<'_>) -> CloneValue {
                         step: has_step.then(|| Box::new(children.next().unwrap().into_statement())),
                         body: children.next().unwrap().into_block(),
                     },
-                    CloneStatement::ForEachMap { key, value } => Statement::ForEachMap {
-                        key: key.to_owned(),
-                        value: value.clone(),
+                    CloneStatement::ForEachMap { pat } => Statement::ForEachMap {
+                        pat: pat.clone(),
                         map: children.next().unwrap().into_expr(),
                         body: children.next().unwrap().into_block(),
                     },
@@ -1784,19 +1825,17 @@ fn ast_nodes_equal(root: CompareNode<'_>) -> bool {
                 }
                 (
                     Statement::ForEachMap {
-                        key: left_key,
-                        value: left_value,
+                        pat: left_pat,
                         map: left_map,
                         body: left_body,
                     },
                     Statement::ForEachMap {
-                        key: right_key,
-                        value: right_value,
+                        pat: right_pat,
                         map: right_map,
                         body: right_body,
                     },
                 ) => {
-                    if left_key != right_key || left_value != right_value {
+                    if left_pat != right_pat {
                         return false;
                     }
                     pending.push(CompareNode::Block(left_body, right_body));
@@ -2502,13 +2541,26 @@ fn transform_program_provenance(program: &mut Program, action: ProvenanceAction)
                     pending.extend(args.iter_mut().map(Pending::Type));
                 }
                 TypeExpr::Path(_) | TypeExpr::Const(_) => {}
+                TypeExpr::ConstExpression(value) => pending.push(Pending::Expr(value)),
                 TypeExpr::Source { .. } | TypeExpr::Resolved { .. } => {
                     unreachable!("provenance normalization returns the semantic node")
                 }
             },
             Pending::Statement(statement) => {
                 match normalize_statement_provenance(statement, action) {
-                    Statement::Let { ty, value, .. } => {
+                    Statement::Let { ty, value, pat, .. } => {
+                        if let Pattern::Struct { fields, .. } = pat {
+                            for field in fields {
+                                match action {
+                                    ProvenanceAction::Rebase(source) => {
+                                        if let Some(range) = &mut field.source {
+                                            range.source = source;
+                                        }
+                                    }
+                                    ProvenanceAction::Strip => field.source = None,
+                                }
+                            }
+                        }
                         if let Some(ty) = ty {
                             pending.push(Pending::Type(ty));
                         }
@@ -2565,7 +2617,19 @@ fn transform_program_provenance(program: &mut Program, action: ProvenanceAction)
                         }
                         push_block(body, &mut pending);
                     }
-                    Statement::ForEachMap { map, body, .. } => {
+                    Statement::ForEachMap { pat, map, body } => {
+                        if let Pattern::Struct { fields, .. } = pat {
+                            for field in fields {
+                                match action {
+                                    ProvenanceAction::Rebase(source) => {
+                                        if let Some(range) = &mut field.source {
+                                            range.source = source;
+                                        }
+                                    }
+                                    ProvenanceAction::Strip => field.source = None,
+                                }
+                            }
+                        }
                         pending.push(Pending::Expr(map));
                         push_block(body, &mut pending);
                     }
@@ -3096,6 +3160,7 @@ pub(crate) fn drop_program_iterative(program: Program) {
                 pending.extend(args.into_iter().map(Pending::Type));
             }
             Pending::Type(TypeExpr::Path(_) | TypeExpr::Const(_)) => {}
+            Pending::Type(TypeExpr::ConstExpression(value)) => pending.push(Pending::Expr(*value)),
             Pending::Statement(statement) => match statement {
                 Statement::Source { statement, .. } | Statement::Resolved { statement, .. } => {
                     pending.push(Pending::Statement(*statement));
@@ -3291,6 +3356,7 @@ pub(crate) fn drop_type_iterative(ty: TypeExpr) {
                 pending.extend(args);
             }
             TypeExpr::Path(_) | TypeExpr::Const(_) => {}
+            TypeExpr::ConstExpression(value) => drop_expression_iterative(*value),
         }
     }
 }

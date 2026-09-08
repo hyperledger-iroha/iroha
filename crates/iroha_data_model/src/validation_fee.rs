@@ -971,31 +971,33 @@ fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
 // hash domain, so a future discriminant mistake cannot create a cross-kind
 // fingerprint collision. Parity tests below verify the complete encoded bytes
 // and fingerprints against the always-compiled Parliament type layer.
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyProposalFingerprintEnvelopeV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::validation_fee::ValidationFeePolicyProposalFingerprintEnvelopeV1"
+)]
 enum ValidationFeePolicyProposalFingerprintEnvelopeV1 {
     #[codec(index = 3)]
     ValidationFeePolicy(ValidationFeePolicyFingerprintPayloadV1),
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1"
+)]
 enum ValidationFeePayoutLifecycleProposalFingerprintEnvelopeV1 {
     #[codec(index = 4)]
     ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleFingerprintPayloadV1),
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyFingerprintPayloadV1")]
 struct ValidationFeePolicyFingerprintPayloadV1 {
     proposal_operator: AccountId,
     policy: ValidationFeePolicyV1,
     payout_lifecycle_proposal_id: Option<[u8; 32]>,
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleFingerprintPayloadV1")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleFingerprintPayloadV1"
+)]
 struct ValidationFeePayoutLifecycleFingerprintPayloadV1 {
     proposal_operator: AccountId,
     payout_binding: ValidationFeeTreasuryPayoutBindingV1,

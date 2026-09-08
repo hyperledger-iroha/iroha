@@ -1170,9 +1170,12 @@ region|view_ready_cleanup|effects|at|for key in &stale_body_cleanup.stale_ready 
 region|view_pipeline_owner_retention|effects|at|let retained_apply_owners = self|before|        // Unprotected Proposal families retire with the superseded view.
 region|adapter_recovered_validation_high|adapter|at|pub(crate) fn recovered_validation_authority(|before|/// Reauthenticate one complete recovered WAL frame and seal its exact identity.
 region|adapter_high_accessor|adapter|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the strongest complete body certificate retained by durable reducer state.
-region|leader_wire_replay_lock_authority|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
+region|leader_wire_replay_lock_delegation|adapter|at|pub(crate) fn leader_wire_recovery_authority(|before|/// Mint the sole fixed leader-wire sibling owner from this exact open WAL.
+region|leader_wire_replay_lock_authority|leader_wire_consumer|at|pub(super) fn from_adapter(adapter: &SumeragiV2Adapter) -> Result<Self, AdapterError> {|before|pub(crate) fn matches_geometry(
 region|runtime_high_accessor|runtime|at|pub(crate) fn replayed_highest_prepare_certificate_ref(|before|/// Return the exact Decision key reconstructed by safety-WAL replay.
 region|leader_wire_live_lock_authority|worker|at|fn entered_view(\n        &mut self,\n        tag: EventTag,\n        certificate: wire::TimeoutCertificate,\n        protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>,|before|    fn report_equivocation(
+region|leader_wire_live_cut_publication|worker|at|fn finish_runtime_step_reconciliation(\n        &mut self,\n        _decided_subject: Option<wire::BlockSubject>,|before|    fn complete_leader_wire_runtime_terminal(
+region|leader_wire_live_runtime_cut|effects|at|fn finish_runtime_step_reconciliation<S: V2EffectServices>(|before|/// Reconcile volatile ownership immediately after the reducer installs a
 region|callers|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|callers|selector|begin|-|end|-
 region|callers|concrete_admission|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1263,15 +1266,29 @@ required|adapter_high_accessor|.durable_state()|adapter highest-Prepare accessor
 required|adapter_high_accessor|.highest_prepare()|adapter highest-Prepare accessor stopped reading the exact WAL-replayed high-water mark
 required|adapter_high_accessor|wire::QuorumCertificateRef {|adapter highest-Prepare accessor stopped returning a cleanup-only reference
 forbidden|adapter_high_accessor|qc_to_wire|adapter highest-Prepare accessor must not widen the cleanup reference into a full certificate
-required|leader_wire_replay_lock_authority|self.registry.round_to_wire(certificate.proposal_round())|cold leader-wire authority lost the replayed lock round
-required|leader_wire_replay_lock_authority|self.registry.subject(certificate.subject())?|cold leader-wire authority lost the replayed lock subject
-required|leader_wire_replay_lock_authority|.with_protected_lock(protected_lock)|cold leader-wire authority omitted its authenticated durable lock
-order|leader_wire_replay_lock_authority|7|.durable_state()|.locked()|.round_to_wire(certificate.proposal_round())|.transpose()?|LeaderWireRecoveryAuthority::from_replayed_adapter(|.with_protected_lock(protected_lock)|.map_err(AdapterError::ServicedCandidateStore)|cold replay must authenticate, convert, attach, and surface the durable lock in order
+count|leader_wire_replay_lock_delegation|LeaderWireRecoveryAuthority::from_adapter(self)|1|cold leader-wire authority must delegate exactly once to the actual adapter factory
+forbidden|leader_wire_replay_lock_delegation|from_replayed_adapter|production cold leader-wire authority must not call the test-only geometry constructor
+required|leader_wire_replay_lock_authority|adapter.registry.round_to_wire(certificate.proposal_round())|cold leader-wire authority lost the replayed lock round
+required|leader_wire_replay_lock_authority|adapter.registry.subject(certificate.subject())?|cold leader-wire authority lost the replayed lock subject and fallible registry authentication
+required|leader_wire_replay_lock_authority|protected_lock,|cold leader-wire authority omitted its authenticated durable lock
+order|leader_wire_replay_lock_authority|8|adapter.ensure_ingress()?|adapter.reducer.durable_state()|adapter.reducer.current_tag()|.locked()|.round_to_wire(certificate.proposal_round())|.transpose()?|Ok(Self {|protected_lock,|cold replay must authenticate, convert fallibly, and attach the exact durable lock before returning authority
+required|leader_wire_replay_lock_authority|context_id: adapter.wire_context.id()|cold leader-wire authority must retain the actual adapter context
+required|leader_wire_replay_lock_authority|height: adapter.wire_context.height|cold leader-wire authority must retain the actual adapter height
+required|leader_wire_replay_lock_authority|owner: adapter.fingerprints.node.into()|cold leader-wire authority must retain the actual adapter owner
+required|leader_wire_replay_lock_authority|consumer_tag: tag|cold leader-wire authority must retain the actual reducer generation
+required|leader_wire_replay_lock_authority|wal_id: durable.last_id()|cold leader-wire authority must retain the replayed WAL cut
+required|leader_wire_replay_lock_authority|decision_durable: durable.decision().is_some()|cold leader-wire authority must retain the exact durable Decision bit
+required|leader_wire_replay_lock_authority|highest_prepare_view: durable.highest_prepare().map(|cold leader-wire authority must retain the durable highest Prepare frontier
+required|leader_wire_replay_lock_authority|installed_timeout_view: durable.last_timeout().map(|cold leader-wire authority must retain the installed timeout frontier
 required|runtime_high_accessor|self.driver.replayed_highest_prepare_certificate_ref()|serialized runtime stopped forwarding the exact durable-high accessor
 count|runtime_high_accessor|replayed_highest_prepare_certificate_ref|2|runtime highest-Prepare wrapper must contain exactly its declaration and one driver delegation
 order|view_cleanup|6|protected.validate(&self.context)|let protected_body = protected_lock_body(protected_lock.as_ref());|self.reconcile_protected_lock(tag, protected_body, highest_prepare_body, services)?;|.reconcile_active_view_producer(tag, retain_local_producer)|.entered_view(tag, certificate, protected_body)|self.reconciled_tag = Some(tag);|validated lock reconciliation and live recovery-cut publication must precede installed-view exposure
 required|leader_wire_live_lock_authority|protected_lock: Option<(wire::ConsensusRound, wire::BlockSubject)>|production EnterView lost its exact protected-lock input
-order|leader_wire_live_lock_authority|3|.advance_view(tag.view(), protected_lock)?|.advance_leader_wire_recovery_cut(next_recovery_authority)?|self.leader_wire_recovery_authority = next_recovery_authority;|EnterView must validate and persist the cut before exposing its authority
+order|leader_wire_live_cut_publication|5|let next = authority.ok_or_else(|.acquire()|if !next.monotonically_extends(self.leader_wire_recovery_authority)|.advance_leader_wire_recovery_cut(next)?|self.leader_wire_recovery_authority = next;|live reconciliation must require actual authority, validate it under the output guard, and persist the cut before exposing it
+order|leader_wire_live_runtime_cut|5|let authority = self|.leader_wire_recovery_authority()|.map_err(EffectExecutorError::Runtime)?|.finish_runtime_step_reconciliation(decided_subject, authority)|.map_err(service_error)|live reconciliation must obtain actual adapter WAL authority and propagate runtime or durable-publication failures
+order|leader_wire_live_lock_authority|3|!tag.strictly_advances(self.active_tag)|tag != self.leader_wire_recovery_authority.consumer_tag()|self.active_tag = tag;|EnterView must validate monotonicity and require the exact already-published WAL consumer before exposing its active tag
+forbidden|leader_wire_live_lock_authority|.advance_view(|EnterView must not synthesize a recovery authority from view geometry
+forbidden|leader_wire_live_lock_authority|self.leader_wire_recovery_authority =|EnterView must consume the already-published actual WAL authority rather than replacing it
 forbidden|token|Decode|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|fn from_parts(|remote Proposal replay token exposed forbidden surface {forbidden}
 forbidden|token|fn into_parts(|remote Proposal replay token exposed forbidden surface {forbidden}
@@ -1326,6 +1343,120 @@ required|callers|.release_lifecycle_ordinal(lifecycle_ordinal)|Validate authorit
 required|callers|self.decision_body_drained \p\p selected != key|resolved losing or drained Validate authority stopped retiring after deferred cleanup
 required|callers|fn bind_validate_retry_lifecycle_ordinal(|committed generic Validate admission stopped binding its exact logical row
 required|callers|commit_published_lifecycle_validate_retry_marker(|direct Store-to-Validate publication stopped binding its exact logical child row
+end
+case|superseded_certified_body_retirement_is_exact_and_durably_sealed
+region|adapter_seal|adapter|at|/// Borrow-bound proof that authenticated body work belongs to an older tag.|before|/// Exact idempotent disposition of a direct certified-body completion.
+region|adapter_fetch|adapter|at|pub(in crate::sumeragi) fn prepare_certified_fetch_store(|before|/// Preview one ordinary durable Store-to-Validate lifecycle transition.
+region|adapter_store|adapter|at|pub(in crate::sumeragi) fn prepare_durable_store_validate(|before|/// Preview a certified Fetch completion directly against the sole reducer.
+region|fetch_material|adapter|at|fn prepare_direct_certified_body_available(|before|/// Preview one durable Store completion directly against the sole reducer.
+region|store_material|adapter|at|fn prepare_direct_body_stored(|before|fn stage_direct_validation_registry(
+region|registry_seal|registry_body_retirement|at|/// Registry, reducer and executor-marker cuts retained until cancellation is durable.|before|/// The exact carrier has crossed durable cancellation and can retire its marker.
+region|cancelled_seal|registry_body_retirement|at|/// The exact carrier has crossed durable cancellation and can retire its marker.|before|impl<'registry> PreparedCertifiedFetchExecution<'registry> {
+region|identity|registry_body_retirement|at|fn matches_adapter(|before|/// A retirement join did not retain the exact ordinary carrier or reducer owner.
+region|fetch_join|registry_body_retirement|at|impl<'registry> PreparedCertifiedFetchExecution<'registry> {|before|impl<'registry> PreparedDurableStoreExecution<'registry> {
+region|store_join|registry_body_retirement|at|impl<'registry> PreparedDurableStoreExecution<'registry> {|before|impl PreparedCertifiedBodyRetirementV1<'_, '_> {
+region|registry_rejoin|registry_body_retirement|at|pub(super) fn project_for_cancellation(|before|/// Remove only the sealed carrier after its exact cancelled ledger row is durable.
+region|registry_commit|registry_body_retirement|at|pub(super) fn commit_after_publication(|before|\n}
+region|transition_seal|body_retirement|at|/// Exact cancellation staged while the registry and reducer remain exclusively borrowed.|before|impl LifecycleCoordinator {
+region|transition_prepare|body_retirement|at|pub(super) fn prepare_body_retirement_transition|before|fn stage_body_retirement(
+region|stage|body_retirement|at|fn stage_body_retirement(|before|impl PreparedBodyRetirementTransitionV1<'_, '_, '_> {
+region|transition_publish|body_retirement|at|impl PreparedBodyRetirementTransitionV1<'_, '_, '_> {|before|\n}
+region|marker_prepare|effects_body_retirement|at|pub(in crate::sumeragi) fn prepare_lifecycle_body_marker_retirement(|before|/// Commit the preflighted marker removal after the exact ledger row is cancelled.
+region|marker_commit|effects_body_retirement|at|pub(in crate::sumeragi) fn commit_lifecycle_body_marker_retirement(|before|\n}
+region|fetch_dispatch|scheduler_inputs|at|fn publish_certified_fetch_store(|before|fn publish_durable_store_validate(
+region|store_dispatch|scheduler_inputs|at|fn publish_durable_store_validate(|before|/// Authenticate, rank, and dispatch one complete lifecycle Ready census.
+region|fetch_cancel|scheduler_inputs|at|Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Superseded(|before|Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Inactive)
+region|store_cancel|scheduler_inputs|at|Ok(crate::sumeragi::v2::DurableStoreValidateAdapterPreparationV1::Superseded(|before|Ok(crate::sumeragi::v2::DurableStoreValidateAdapterPreparationV1::Inactive)
+required|adapter_seal|_adapter: &'a mut SumeragiV2Adapter|supersession must freeze the exact reducer comparison through publication
+forbidden|adapter_seal|#[derive(|the superseded adapter proof must remain move-only
+forbidden|adapter_seal|fn commit|supersession proof must not mutate or commit reducer state
+forbidden|adapter_seal|fn new|supersession proof must not have an independent constructor
+order|adapter_fetch|4|self.prepare_direct_certified_body_available(tag, manifest)?|current_tag.strictly_advances(tag)|manifest.round.height == tag.height()|CertifiedFetchStoreAdapterPreparationV1::Superseded(|Fetch retirement must validate material before proving strict same-height supersession
+order|adapter_store|4|self.prepare_direct_body_stored(tag, round, subject, receipt)?|current_tag.strictly_advances(tag)|round.height == tag.height()|DurableStoreValidateAdapterPreparationV1::Superseded(|Store retirement must validate the exact receipt before proving strict same-height supersession
+required|adapter_fetch|manifest.round.context_id == context_id|Fetch supersession lost its exact height context
+required|adapter_store|round.context_id == context_id|Store supersession lost its exact height context
+required|adapter_fetch|CertifiedFetchStoreAdapterPreparationV1::Inactive|current or future inactive Fetch work must remain fail-closed
+required|adapter_store|DurableStoreValidateAdapterPreparationV1::Inactive|current or future inactive Store work must remain fail-closed
+order|fetch_material|4|self.ensure_ingress()?|manifest.validate(&self.wire_context)?|manifest_to_core(manifest, &self.wire_context)?|next_reducer.step(event.clone())?|Fetch supersession must retain replay, wire and registry validation before reducer classification
+order|store_material|6|self.ensure_ingress()?|receipt.context_id() != self.wire_context.id()|receipt.round() != round|receipt.subject() != subject|receipt.manifest_hash() != HashOf::new(manifest)|next_reducer.step(event.clone())?|Store supersession must retain replay and every durable receipt identity check before classification
+required|store_material|.ok_or(AdapterError::MissingManifest)?|unregistered Store receipts must not become cancellation authority
+required|registry_seal|registry: &'registry mut ConcreteLifecycleWorkRegistry|retirement must retain the exact installed registry borrow
+required|registry_seal|PreparedSupersededCertifiedBodyV1<'adapter>|retirement must retain the adapter's strict supersession proof
+required|registry_seal|PreparedLifecycleBodyMarkerRetirementV1|retirement must retain its exact executor preflight
+forbidden|registry_seal|#[derive(|the joined retirement seal must remain move-only
+forbidden|cancelled_seal|#[derive(|the published cancellation witness must remain move-only
+forbidden|cancelled_seal|fn new|a published cancellation witness must not be independently constructible
+required|cancelled_seal|pub(in crate::sumeragi) struct CancelledCertifiedBodyWorkV1 {|executor retirement lost its sealed post-publication witness
+required|cancelled_seal|fn into_marker(|the cancelled-work witness must be consumed before marker removal
+required|identity|adapter.stage() == stage|body retirement lost the exact Fetch or Store stage
+required|identity|adapter.old_tag() == self.tag|body retirement lost the installed carrier's old tag
+required|identity|adapter.current_tag().strictly_advances(self.tag)|body retirement must reject current and future tags
+required|identity|adapter.context_id() == self.durable_receipt.context_id()|body retirement lost its exact context
+required|identity|adapter.round() == self.durable_receipt.round()|body retirement lost its exact body round
+required|identity|adapter.subject() == self.durable_receipt.subject()|body retirement lost its exact body subject
+required|identity|adapter.manifest_hash() == self.durable_receipt.manifest_hash()|body retirement lost its exact manifest identity
+required|fetch_join|store_publication: None|retiring a Fetch must not select any published Store marker
+required|fetch_join|!material.matches_adapter(&adapter) \p\p !marker.matches_material(&material)|Fetch retirement lost its exact three-owner material join
+required|store_join|DurableStoreExecutionOriginV1::Certified|ordinary Store cancellation must exclude the recovered Decision origin
+required|store_join|ConcreteLifecycleWorkKind::DurableStoreBody(store)|ordinary Store cancellation lost its installed carrier family
+order|store_join|4|DurableStoreExecutionOriginV1::Certified|from_exact_published_store(|&store.pending|&store.durable_receipt|Store retirement must bind the immutable published effect, pending authority and receipt
+required|store_join|!material.matches_adapter(&adapter) \p\p !marker.matches_material(&material)|Store retirement lost its exact three-owner material join
+forbidden|fetch_join|.remove(|Fetch retirement preparation must not remove the live registry carrier
+forbidden|store_join|.remove(|Store retirement preparation must not remove the live registry carrier
+required|registry_rejoin|sealed_successor_parent(self.registry, self.address, lease)|cancellation must rejoin the exact claimed registry address
+required|registry_rejoin|work.digest != self.digest|cancellation must reject a changed installed registry digest
+required|registry_rejoin|lease.work_class() != self.material.stage|cancellation must reject a changed claimed work class
+required|registry_rejoin|verified.context().id() != self.adapter.context_id()|cancellation must rejoin the authenticated runtime context
+required|registry_rejoin|!self.marker.matches_material(&self.material)|cancellation must revalidate the retained immutable marker cut
+order|registry_commit|5|.remove(&address)|assert_eq!(work.digest, digest)|assert!(work.validates_at(address))|drop(adapter)|CancelledCertifiedBodyWorkV1 { marker }|only exact post-publication registry retirement may mint the cancelled-work witness
+count|registry_commit|.remove(|1|cancellation must remove exactly one registry carrier
+required|transition_seal|coordinator: &'coordinator mut LifecycleCoordinator|cancellation staging must retain the coordinator borrow
+required|transition_seal|PreparedCertifiedBodyRetirementV1<'registry, 'adapter>|cancellation staging must retain the joined registry and reducer seal
+forbidden|transition_seal|#[derive(|the staged cancellation must remain move-only
+order|transition_prepare|2|.project_for_cancellation(lease, verified)|stage_body_retirement(self, lease, payload)?|cancellation must rejoin its exact carrier before staging a ledger change
+required|stage|LifecycleWorkClass::Fetch|cancellation must retain the closed Fetch family
+required|stage|LifecycleWorkClass::Store|cancellation must retain the closed Store family
+required|stage|lease.stage().predecessor_scope() != PredecessorScope::Independent|cancellation must reject a different predecessor shape
+required|stage|lease.physical_slots().len() != 1|cancellation must retain exactly one Effect capacity position
+required|stage|lease.output_reservation().is_some()|cancellation must not consume a reserved output
+required|stage|coordinator.active_lease.as_ref() != Some(lease)|cancellation must use the exact active lease
+required|stage|coordinator.ledger_store.is_none()|cancellation must fail closed without durable storage
+required|stage|parent.state != LifecycleState::Claimed(lease.id())|cancellation must retain the exact claimed parent
+required|stage|metadata.payload != payload|cancellation must retain the authenticated durable body frame
+required|stage|metadata.continuation != DurableContinuation::None|cancellation must not replace an existing continuation
+order|stage|4|.terminalized(TerminalOutcome::Cancelled)|coordinator.stage_durable_transaction()|staged.reduce_settle_turn(|TurnOutcome::Terminal(TerminalOutcome::Cancelled)|cancellation must stage the exact terminal ledger row without publishing live state
+required|stage|staged.records.len() != coordinator.records.len()|cancellation must not admit or delete another logical row
+required|stage|staged.durable_records.len() != coordinator.durable_records.len()|cancellation must preserve durable row cardinality
+required|stage|staged.key_index != coordinator.key_index|cancellation must retain terminal key ownership for ordinary same-key progress
+required|stage|staged.owner_index != coordinator.owner_index|cancellation must preserve unrelated owner identities
+required|stage|staged.ready_index != coordinator.ready_index|cancellation must preserve unrelated Ready work
+required|stage|staged.capacity_used[&CapacityClass::Effect] != expected_used|cancellation must release exactly its one Effect position
+required|stage|staged.capacity_generation[&CapacityClass::Effect] != expected_generation|cancellation must advance the exact released-capacity generation
+forbidden|stage|reduce_admit|obsolete-body cancellation must not create a successor outside ordinary authority
+forbidden|stage|persist_exact_staged_successor|preparation must not publish the staged cancellation
+order|transition_publish|4|fn persist_exact_cancellation(|.persist_exact_staged_successor(&self.staged)|fn commit_after_publication(self) -> CancelledCertifiedBodyWorkV1|*coordinator = staged|cancellation must expose exact persistence before its infallible publication tail
+required|marker_prepare|&self,|marker retirement preflight must be immutable
+required|marker_prepare|self.durable_bodies.get(&key) != Some(receipt)|marker retirement must retain the exact fsynced body receipt
+required|marker_prepare|HashOf::new(manifest) == receipt.manifest_hash()|marker retirement must retain the exact recoverable manifest
+required|marker_prepare|PublishedLifecycleStoreTerminalRetrySealV1::publication_census_entry|Store marker retirement must compare the immutable publication census
+required|marker_prepare|observed.as_ref() != Some(expected)|Store marker retirement must reject a changed publication
+forbidden|marker_prepare|.remove(|marker retirement preflight must not mutate executor ownership
+required|marker_commit|cancelled: crate::sumeragi::v2_lifecycle_coordinator::CancelledCertifiedBodyWorkV1|executor marker retirement must require the sealed published-cancellation witness
+order|marker_commit|6|cancelled.into_marker()|prepared.material.store_publication()|.get(&key)|Some(expected),|.remove(&key)|assert_eq!(removed.publication_census_entry().as_ref(), Some(expected))|marker retirement must consume the published witness and compare the exact immutable marker before removing it
+count|marker_commit|.remove(|1|cancellation may remove only its exact Store retry marker
+forbidden|marker_commit|durable_bodies|cancellation must preserve the fsynced body catalog for ordinary protected-lock reseeding
+forbidden|marker_commit|recovered_bodies|cancellation must preserve the recoverable body manifest and receipt
+forbidden|marker_commit|body_pipeline_owners|cancellation must preserve unrelated or current pipeline owners
+forbidden|marker_commit|published_lifecycle_validate_retry_markers|Store cancellation must preserve every published Validate owner
+forbidden|marker_commit|self.runtime|cancellation must not bypass ordinary reducer or retransmission authority
+order|fetch_dispatch|5|.prepare_published_lifecycle_store_retry_marker(|prepare_lifecycle_body_marker_retirement(|prepare_certified_fetch_store_adapter(|CertifiedFetchStoreAdapterPreparationV1::Superseded(|let retry_marker = match retry_marker|Fetch must compute both inert cuts and consume fresh-successor preflight only after adapter classification
+order|store_dispatch|5|.prepare_published_lifecycle_validate_retry_marker(|prepare_lifecycle_body_marker_retirement(|prepare_durable_store_validate_adapter(|DurableStoreValidateAdapterPreparationV1::Superseded(|let retry_marker = match retry_marker|Store must compute both inert cuts and consume fresh-successor preflight only after adapter classification
+order|fetch_cancel|10|let marker = match retirement_marker|seal_superseded_retirement(adapter, marker)|prepare_body_retirement_transition(|begin_fail_stop_operation()|transition.persist_exact_cancellation().is_err()|CoordinatorFault::DurabilityFailure|transition.commit_after_publication()|executor.commit_lifecycle_body_marker_retirement(marker)|operation.complete()|BodyStageCancelled|Fetch cancellation must publish under fail-stop output before exact registry and marker retirement
+order|store_cancel|10|let marker = match retirement_marker|seal_superseded_retirement(adapter, marker)|prepare_body_retirement_transition(|begin_fail_stop_operation()|transition.persist_exact_cancellation().is_err()|CoordinatorFault::DurabilityFailure|transition.commit_after_publication()|executor.commit_lifecycle_body_marker_retirement(marker)|operation.complete()|BodyStageCancelled|Store cancellation must publish under fail-stop output before exact registry and marker retirement
+forbidden|fetch_cancel|match retry_marker|obsolete Fetch retirement must not depend on fresh successor-marker admission
+forbidden|store_cancel|match retry_marker|obsolete Store retirement must not depend on fresh successor-marker admission
+forbidden|fetch_cancel|seal_store_successor|cancelled Fetch work must not publish a successor for its old tag
+forbidden|store_cancel|seal_validate_successor|cancelled Store work must not publish a successor for its old tag
 end
 case|stored_replay_store_coalescing_and_cleanup_are_owner_closed
 region|store_terminal_seal|registry|at|pub(in crate::sumeragi) struct DurableStoreTerminalRetrySealV1 {|before|/// Rebind one immutable Store task to a same-body carrier
@@ -1858,7 +1989,8 @@ order|registry_output_census|3|RecoveredWalRegistrySlotV1::DecisionStore(address
 required|launch_output_census|self.exact_lifecycle_output_ordinals_for_registry_census()|launch stopped authenticating the owner-held cold-output census
 required|launch_output_census|exactly_covers_recovered_ready_work_with_owner_held_outputs(|launch stopped joining ordinary startup work beside owner-held outputs
 required|launch_output_census|exactly_covers_recovered_ready_work_and_wal_authority_with_owner_held_outputs(|launch stopped joining recovered-WAL startup work beside owner-held outputs
-count|coordinator|work_registry::|7|only the seven reviewed opaque registry authority import groups may cross the module boundary
+count|coordinator|work_registry::|8|only the eight reviewed opaque registry authority import groups may cross the module boundary
+count|coordinator|pub(in crate::sumeragi) use work_registry::{\n    CancelledCertifiedBodyWorkV1, CertifiedBodyRetirementMaterialV1,\n};|1|the additional registry import group must contain only the reviewed cancellation witness and exact retirement material
 required|coordinator|LiveValidateSignRegistryReservation|coordinator registry imports lost the opaque live Validate reservation
 required|coordinator|LiveValidateSignWorkProjectionPermit|coordinator registry imports lost the sealed live Validate projection permit
 required|coordinator|PreparedLiveValidateSignRegistryWork|coordinator registry imports lost the prepared live Validate work carrier

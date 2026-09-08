@@ -1280,6 +1280,31 @@ def test_progress_witness_source_fidelity_seals_historical_lock_restart_authorit
 
     reducer_mutations = (
         (
+            "durable.apply(&context, local_validator, &entry)?;",
+            "let _ = (&context, local_validator, &entry);",
+            "WAL recovery must validate each exact ordered frame once",
+        ),
+        (
+            "generation = next_generation.ok_or(ReducerError::GenerationOverflow)?;",
+            "let _ = next_generation;",
+            "WAL recovery must validate each exact ordered frame once",
+        ),
+        (
+            "Self::ensure_missing_body_work(&mut body_work, locked.round(), locked.subject());",
+            "let _ = locked;",
+            "recovery must seed only the exact undecided durable lock body",
+        ),
+        (
+            "body_work.entry((round, subject)).or_insert(BodyWork {",
+            "body_work.insert((round, subject), BodyWork {",
+            "shared body seeding must preserve an existing exact body stage and manifest",
+        ),
+        (
+            "Self::ensure_missing_body_work(&mut self.body_work, round, subject);",
+            "let _ = (round, subject);",
+            "live certified fetch must share recovery's non-overwriting exact body seed",
+        ),
+        (
             "if let Some(certificate) = durable.locked() {",
             "if let Some(certificate) = durable.highest_prepare() {",
             "recovery must retain the exact pre-existing durable locked QC",

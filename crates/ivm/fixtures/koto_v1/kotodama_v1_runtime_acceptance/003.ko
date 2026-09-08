@@ -13,9 +13,9 @@ seiyaku ResultIfLetRuntime {
   }
 
   view fn run() -> int {
-    via_ok(Result::ok(4)) * 1000
-      + via_ok(Result::err(true)) * 100
-      + via_err(Result::err(true)) * 10
-      + via_err(Result::ok(5))
+    via_ok(value: Result::ok(4)) * 1000
+      + via_ok(value: Result::err(true)) * 100
+      + via_err(value: Result::err(true)) * 10
+      + via_err(value: Result::ok(5))
   }
 }

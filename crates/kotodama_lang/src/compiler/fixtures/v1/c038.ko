@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::account::register(Name::parse("bad"));
+  ledger::account::register(account: Name::parse("bad"));
 }
 
 }

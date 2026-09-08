@@ -3269,8 +3269,18 @@ def test_fee_sponsor_program_lookup_rejects_noncanonical_response_name(
         )
 
 
-def test_call_contract_posts_selector_payload_and_parses_response() -> None:
-    call_payload = {"value": 1, "labels": ["alpha"]}
+@pytest.mark.parametrize(
+    "call_payload",
+    [
+        {"value": 1, "labels": ["alpha"]},
+        {"value": {"some": None}},
+        {"value": {"none": True}},
+        {"value": {"some": {"none": True}}},
+        {"value": {"some": {"some": None}}},
+    ],
+    ids=["ordinary", "some-unit", "none", "some-none", "some-some-unit"],
+)
+def test_call_contract_posts_selector_payload_and_parses_response(call_payload: Any) -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -3318,7 +3328,7 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         "authority": CANONICAL_OWNER,
         "contract_alias": "router::universal",
         "entrypoint": "ping",
-        "payload": {"value": 1, "labels": ["alpha"]},
+        "payload": call_payload,
         "metadata": {"caller_note": "trusted"},
         "creation_time_ms": 42,
         "transaction_ttl_ms": 5_000,

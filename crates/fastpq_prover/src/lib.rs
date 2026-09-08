@@ -102,9 +102,9 @@ pub use packing::{LIMB_BYTES, PackedBytes, pack_bytes};
 #[cfg(feature = "fastpq-gpu")]
 pub use poseidon::preflight_gpu_backend as preflight_poseidon_gpu_backend;
 pub use poseidon::{FIELD_MODULUS, PoseidonSponge, hash_field_elements};
+pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 #[cfg(any(test, feature = "dev-tools"))]
 pub use proof::{verify_raw_statement, verify_raw_statement_with_limits};
-pub use proof::{Proof, Prover, VerifyLimits, verify, verify_with_limits};
 pub use semantics::{ProofSemantics, validate_batch_semantics};
 #[cfg(feature = "dev-tools")]
 #[doc(hidden)]

@@ -57,7 +57,8 @@ fn complete_test_genesis_builder(
 }
 
 #[cfg(test)]
-fn complete_test_genesis_builder_for_peers(
+/// Bind complete consensus parameters to the fixture's exact validator roster.
+pub(crate) fn complete_test_genesis_builder_for_peers(
     builder: iroha_genesis::GenesisBuilder,
     mut validators: Vec<iroha_data_model::peer::PeerId>,
 ) -> iroha_genesis::GenesisBuilder {
@@ -95,8 +96,11 @@ fn complete_test_genesis_builder_for_peers(
 }
 
 #[cfg(test)]
-trait CompleteTestGenesisBuilder {
+/// Complete genesis fixtures shared by Kagami's sibling test modules.
+pub(crate) trait CompleteTestGenesisBuilder {
+    /// Attach deterministic four-validator consensus parameters.
     fn complete_for_test(self) -> Self;
+    /// Attach consensus parameters for precisely the supplied topology.
     fn set_topology_for_test(self, topology: Vec<iroha_genesis::GenesisTopologyEntry>) -> Self;
 }
 

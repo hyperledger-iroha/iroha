@@ -175,7 +175,9 @@ impl PrivacyFeatureMaskV1 {
     norito(tag = "readiness", content = "detail", deny_unknown_fields)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityReadinessV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityReadinessV1"
+)]
 pub enum PrivacyCapabilityReadinessV1 {
     /// All compiled, security, audit, release, and deployment evidence matches
     /// the active committed record.
@@ -193,7 +195,9 @@ pub enum PrivacyCapabilityReadinessV1 {
     norito(tag = "reason", content = "detail", deny_unknown_fields)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityUnavailableReasonV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityUnavailableReasonV1"
+)]
 pub enum PrivacyCapabilityUnavailableReasonV1 {
     /// The current binary has no complete executable profile.
     #[cfg_attr(feature = "json", norito(rename = "compiled-profile"))]
@@ -297,7 +301,9 @@ impl PrivacyProtocolIdV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityRowV1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityRowV1"
+)]
 pub struct PrivacyExact12CapabilityRowV1 {
     /// Closed protocol identity.
     pub protocol_id: PrivacyProtocolIdV1,
@@ -514,7 +520,10 @@ pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityManifestV1", frame = "iroha.privacy.exact12-capability-manifest.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityManifestV1",
+    frame = "iroha.privacy.exact12-capability-manifest.v1"
+)]
 pub struct PrivacyExact12CapabilityManifestV1 {
     /// Exact manifest schema version.
     pub version: u32,

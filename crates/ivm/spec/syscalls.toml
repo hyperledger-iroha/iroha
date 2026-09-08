@@ -18,9 +18,9 @@ gas = "G_debug"
 
 [[syscall]]
 number = "0x04"
-args = "r10=code:u64"
+args = "r10=&NoritoBytes(ContractErrorTypeDescriptor), r11=code:u32, r12=0, r13=0, r14=0, r15=0"
 ret = "u64=0"
-gas = "G_abort"
+gas = "G_abort + descriptor bytes"
 
 [[syscall]]
 number = "0x10"
@@ -279,12 +279,6 @@ number = "0x52"
 args = "r10=&NoritoBytes(StatePath)"
 ret = "u64=0"
 gas = "G_state_del + canonical path frame bytes"
-
-[[syscall]]
-number = "0x010030"
-args = "r10=&NoritoBytes(StatePath prefix), r11=offset:u64, r12=limit:u64 (0..=64)"
-ret = "r10=ptr (&NoritoBytes(Vec<StatePath>)), r11=total:u64, r12=count:u64"
-gas = "G_state_keys + canonical prefix frame bytes + 1 per examined candidate + examined candidate UTF-8 bytes + canonical response frame bytes"
 
 [[syscall]]
 number = "0x010031"
@@ -972,6 +966,12 @@ args = "r10=&Blob(alias)"
 ret = "u64=0"
 gas = "G_sci + bytes"
 
+[[syscall]]
+number = "0x010038"
+args = "r10=&NoritoBytes(StatePath map), r11=&NoritoBytes(StateCursorV1) or 0, r12=limit(1..64), r13=0, r14=0, r15=0"
+ret = "r10=&NoritoBytes(Vec<StatePath>), r11=&NoritoBytes(StateCursorV1) or 0, r12=selected, r13=examined"
+gas = "G_state_query + canonical map and cursor input frame bytes + canonical map schema bytes + instance UTF-8 bytes + 1 per examined candidate + examined physical key UTF-8 bytes + canonical response frame bytes; at most 64 candidate positions, no count or lookahead"
+
 # Kotodama V1 exact integer syscalls. Checked arithmetic reserves r11..r13 so
 # the public argument window remains contiguous through r14=failure_mode.
 [[syscall]]
@@ -1193,6 +1193,12 @@ gas = "G_numeric_staged"
 
 # Nominal non-negative quantity syscalls.
 [[syscall]]
+number = "0x010130"
+args = "r10=&Decimal, r11=&Decimal multiplier, r12=&Decimal divisor, r13=&Int scale, r14=rounding:u64, r15=0"
+ret = "r10=&Decimal"
+gas = "G_numeric_staged"
+
+[[syscall]]
 number = "0x010140"
 args = "r10=&Int"
 ret = "r10=&Quantity-or-zero, r11=NumericFaultV1-or-zero"
@@ -1289,6 +1295,12 @@ ret = "r10=0/1"
 gas = "G_numeric_staged"
 
 # Exact numeric JSON getters accept canonical base-10 strings only.
+[[syscall]]
+number = "0x010150"
+args = "r10=&Quantity, r11=&Decimal multiplier, r12=&Decimal divisor, r13=&Int scale, r14=rounding:u64, r15=0"
+ret = "r10=&Quantity"
+gas = "G_numeric_staged"
+
 [[syscall]]
 number = "0x010160"
 args = "r10=&Json(object), r11=&Name(key)"

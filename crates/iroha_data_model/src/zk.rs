@@ -92,8 +92,19 @@ pub const OPEN_VERIFY_DEFAULT_MAX_AUX_BYTES: usize = 64 * 1024;
 /// Privacy protocols and verifier profiles are deliberately not represented by
 /// this enum. They have protocol-specific data-model types and must not be
 /// inferred from aliases or free-form catalog labels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::zk::BackendTag")]
 pub enum BackendTag {
     /// Halo2 IPA over Pasta curves.
@@ -545,7 +556,10 @@ pub struct StarkFriOpenProofV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1", frame = "iroha.privacy.zk-ace.public-inputs.v1")]
+#[norito_schema(
+    name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1",
+    frame = "iroha.privacy.zk-ace.public-inputs.v1"
+)]
 pub struct ZkAcePrivacyPublicInputsV1 {
     /// Public-input schema version.
     pub version: u16,

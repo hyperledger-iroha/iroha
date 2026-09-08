@@ -209,8 +209,10 @@ fn minimal_contract_artifact_with_identity(
             kind: iroha::data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -219,7 +221,7 @@ fn minimal_contract_artifact_with_identity(
             triggers: Vec::new(),
             entry_pc: 0,
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let mut artifact = metadata.encode();

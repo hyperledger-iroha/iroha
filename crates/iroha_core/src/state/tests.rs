@@ -40040,7 +40040,7 @@ state_test! { sync authenticated_generic_ivm_trigger_executes_without_contract_i
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         },
     );

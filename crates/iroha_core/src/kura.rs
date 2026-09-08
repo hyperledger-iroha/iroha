@@ -113,10 +113,9 @@ use iroha_data_model::{
     block::{
         BlockHeader, CertifiedMergeLedgerReference, SignedBlock,
         consensus::{
-            CertPhase, ExecWitness, LaneBlockDescriptorV1,
-            LaneBlockProposalV1, LaneBlockQcV1, LanePayloadAvailabilityBodyV1,
-            NativeAmxParticipantSettlement, NativeAmxReceipt, SumeragiLanePayloadOwnership,
-            compute_native_amx_participant_settlement_hash,
+            CertPhase, ExecWitness, LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1,
+            LanePayloadAvailabilityBodyV1, NativeAmxParticipantSettlement, NativeAmxReceipt,
+            SumeragiLanePayloadOwnership, compute_native_amx_participant_settlement_hash,
         },
         consensus_v2::{
             BlockSubject, ConsensusMode, DataAvailabilityLayout, DualQuorum, ExecutionCommitment,
@@ -312,6 +311,20 @@ const AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE: &str = "autonomous_route_latest
 const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
 #[cfg(test)]
 const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
+/// A canonical frame decoded during this exact locked attempt read.
+///
+/// This owns no durability or payload-authentication authority. The inner reader
+/// may reuse it only after a second stable read proves identical bytes and file
+/// identity; all pointer, context, view-state and artifact checks still follow.
+struct DecodedAutonomousLaneAttemptRead {
+    read: StableSidecarRead,
+    artifact: AutonomousLaneBlockArtifact,
+}
+#[cfg(test)]
+std::thread_local! {
+    static AUTONOMOUS_ATTEMPT_FRAME_DECODES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static AUTONOMOUS_ARTIFACT_VALIDATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
 const AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES: usize = 8 * 1024;
 const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES: usize = 8 * 1024;
@@ -29708,6 +29721,26 @@ impl Kura {
         }
         Ok(Some(pointer))
     }
+    fn decode_autonomous_lane_attempt_frame(
+        bytes: &[u8],
+        path: &Path,
+        non_canonical_reason: &'static str,
+    ) -> Result<AutonomousLaneBlockArtifact> {
+        #[cfg(test)]
+        AUTONOMOUS_ATTEMPT_FRAME_DECODES.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
+        norito::decode_canonical::<AutonomousLaneBlockArtifact>(bytes).map_err(
+            |error| match error {
+                norito::Error::NonCanonicalEncoding => {
+                    Self::invalid_lane_artifact_error(path.to_path_buf(), non_canonical_reason)
+                }
+                other => Error::NoritoFrame(other),
+            },
+        )
+    }
     fn read_autonomous_lane_block_attempt_artifact_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -29738,6 +29771,45 @@ impl Kura {
         expected_epoch: u64,
         view_state_mode: AutonomousLaneBlockViewStateReadMode,
     ) -> Result<AutonomousLaneBlockDurableRecord> {
+        self.read_autonomous_lane_block_attempt_artifact_with_decoded_read_locked(
+            entry,
+            pointer,
+            expected_network_id,
+            expected_epoch,
+            view_state_mode,
+            None,
+        )
+    }
+    fn read_autonomous_lane_block_attempt_artifact_with_decoded_read_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        view_state_mode: AutonomousLaneBlockViewStateReadMode,
+        decoded: Option<DecodedAutonomousLaneAttemptRead>,
+    ) -> Result<AutonomousLaneBlockDurableRecord> {
+        self.read_autonomous_lane_block_attempt_artifact_with_current_locked(
+            entry,
+            pointer,
+            expected_network_id,
+            expected_epoch,
+            view_state_mode,
+            decoded,
+        )
+        .map(|(record, _current)| record)
+    }
+    /// Keep the validated cursor local to this exact read; record-only callers
+    /// discard it before retaining records in startup or attempt inventories.
+    fn read_autonomous_lane_block_attempt_artifact_with_current_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        view_state_mode: AutonomousLaneBlockViewStateReadMode,
+        decoded: Option<DecodedAutonomousLaneAttemptRead>,
+    ) -> Result<(AutonomousLaneBlockDurableRecord, LaneBlockProposalV1)> {
         if pointer.network_id != expected_network_id || pointer.epoch != expected_epoch {
             return Err(Self::invalid_lane_artifact_error(
                 Self::autonomous_lane_block_latest_attempt_path_for_entry(
@@ -29760,8 +29832,8 @@ impl Kura {
                 "autonomous lane attempt path has no parent directory",
             )
         })?;
-        let bytes = self
-            .read_regular_sidecar_bytes(
+        let read = self
+            .read_regular_sidecar_snapshot(
                 &artifact_path,
                 parent,
                 MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
@@ -29772,14 +29844,22 @@ impl Kura {
                     "autonomous lane latest-attempt pointer references a missing payload",
                 )
             })?;
-        let mut artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
-            .map_err(|error| match error {
-                norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
-                    artifact_path.clone(),
-                    "autonomous lane attempt payload conflicts with its latest pointer",
-                ),
-                other => Error::NoritoFrame(other),
-            })?;
+        let mut artifact = match decoded {
+            Some(decoded)
+                if decoded.read.bytes == read.bytes
+                    && Self::stable_sidecar_metadata_unchanged(
+                        &decoded.read.metadata,
+                        &read.metadata,
+                    ) =>
+            {
+                decoded.artifact
+            }
+            _ => Self::decode_autonomous_lane_attempt_frame(
+                &read.bytes,
+                &artifact_path,
+                "autonomous lane attempt payload conflicts with its latest pointer",
+            )?,
+        };
         if !pointer.matches_payload(&artifact.executable_payload) {
             return Err(Self::invalid_lane_artifact_error(
                 artifact_path,
@@ -29794,30 +29874,41 @@ impl Kura {
             pointer.lane_block_height,
             pointer.proposal_height,
         );
-        let retirement = match self.read_autonomous_lane_block_view_state_locked(
-            &artifact.executable_payload,
-            &view_state_path,
-            view_state_mode,
-        )? {
-            Some(state) => {
+        let (retirement, current_proposal) = match self
+            .read_autonomous_lane_block_view_state_with_current_locked(
+                &artifact.executable_payload,
+                &view_state_path,
+                view_state_mode,
+            )? {
+            Some((state, current)) => {
+                // The selected state was validated with this exact payload and all
+                // three replacement fields. Pointer matching above already binds
+                // its network and epoch to the caller's expected context.
                 artifact.availability_certificate = state.availability_certificate;
                 artifact.view_checkpoint = state.checkpoint;
                 artifact.new_view_certificates = state.certificates;
-                state.retirement
+                (state.retirement, current)
             }
-            None => None,
+            None => {
+                let current = Self::validate_autonomous_lane_block_artifact(
+                    &artifact,
+                    expected_network_id,
+                    expected_epoch,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(parent.to_path_buf(), message)
+                })?;
+                (None, current)
+            }
         };
-        Self::validate_autonomous_lane_block_artifact(
-            &artifact,
-            expected_network_id,
-            expected_epoch,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(parent.to_path_buf(), message))?;
-        Ok(AutonomousLaneBlockDurableRecord {
-            artifact,
-            retirement,
-            view_state_path,
-        })
+        Ok((
+            AutonomousLaneBlockDurableRecord {
+                artifact,
+                retirement,
+                view_state_path,
+            },
+            current_proposal,
+        ))
     }
     fn autonomous_lane_block_view_state_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
@@ -29852,6 +29943,17 @@ impl Kura {
         path: &Path,
         mode: AutonomousLaneBlockViewStateReadMode,
     ) -> Result<Option<AutonomousLaneBlockViewState>> {
+        self.read_autonomous_lane_block_view_state_with_current_locked(payload, path, mode)
+            .map(|selected| selected.map(|(state, _current)| state))
+    }
+    /// Return the selected state together with the cursor from its complete
+    /// artifact validation. Both values belong to this exact borrowed payload.
+    fn read_autonomous_lane_block_view_state_with_current_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        path: &Path,
+        mode: AutonomousLaneBlockViewStateReadMode,
+    ) -> Result<Option<(AutonomousLaneBlockViewState, LaneBlockProposalV1)>> {
         enum Candidate {
             Absent,
             Invalid(Error),
@@ -29931,7 +30033,7 @@ impl Kura {
         let main = load_candidate(path)?;
         if mode == AutonomousLaneBlockViewStateReadMode::MainOnly {
             return match main {
-                Candidate::Valid { state, .. } => Ok(Some(state)),
+                Candidate::Valid { state, current } => Ok(Some((state, current))),
                 Candidate::Invalid(error) => Err(error),
                 Candidate::Absent => Ok(None),
             };
@@ -29940,7 +30042,7 @@ impl Kura {
             && self.durable_mutation_authorized().is_err()
         {
             return match main {
-                Candidate::Valid { state, .. } => Ok(Some(state)),
+                Candidate::Valid { state, current } => Ok(Some((state, current))),
                 Candidate::Invalid(error) => Err(error),
                 Candidate::Absent => Ok(None),
             };
@@ -29969,15 +30071,19 @@ impl Kura {
                     if recovery_rank(&temp_state, &temp_current)
                         > recovery_rank(&main_state, &main_current)
                     {
-                        temp_state
+                        (temp_state, temp_current)
                     } else {
-                        main_state
+                        (main_state, main_current)
                     },
                 )),
-                (Candidate::Invalid(_) | Candidate::Absent, Candidate::Valid { state, .. })
-                | (Candidate::Valid { state, .. }, Candidate::Invalid(_) | Candidate::Absent) => {
-                    Ok(Some(state))
-                }
+                (
+                    Candidate::Invalid(_) | Candidate::Absent,
+                    Candidate::Valid { state, current },
+                )
+                | (
+                    Candidate::Valid { state, current },
+                    Candidate::Invalid(_) | Candidate::Absent,
+                ) => Ok(Some((state, current))),
                 (Candidate::Invalid(error), Candidate::Invalid(_))
                 | (Candidate::Invalid(error), Candidate::Absent)
                 | (Candidate::Absent, Candidate::Invalid(error)) => Err(error),
@@ -30066,19 +30172,19 @@ impl Kura {
                 if recovery_rank(&temp_state, &temp_current)
                     > recovery_rank(&main_state, &main_current)
                 {
-                    promote_temp(&temp_state).map(|()| Some(temp_state))
+                    promote_temp(&temp_state).map(|()| Some((temp_state, temp_current)))
                 } else {
-                    remove_temp().map(|()| Some(main_state))
+                    remove_temp().map(|()| Some((main_state, main_current)))
                 }
             }
-            (Candidate::Invalid(_), Candidate::Valid { state, .. })
-            | (Candidate::Absent, Candidate::Valid { state, .. }) => {
-                promote_temp(&state).map(|()| Some(state))
+            (Candidate::Invalid(_), Candidate::Valid { state, current })
+            | (Candidate::Absent, Candidate::Valid { state, current }) => {
+                promote_temp(&state).map(|()| Some((state, current)))
             }
-            (Candidate::Valid { state, .. }, Candidate::Invalid(_)) => {
-                remove_temp().map(|()| Some(state))
+            (Candidate::Valid { state, current }, Candidate::Invalid(_)) => {
+                remove_temp().map(|()| Some((state, current)))
             }
-            (Candidate::Valid { state, .. }, Candidate::Absent) => Ok(Some(state)),
+            (Candidate::Valid { state, current }, Candidate::Absent) => Ok(Some((state, current))),
             (Candidate::Invalid(error), Candidate::Invalid(_))
             | (Candidate::Invalid(error), Candidate::Absent)
             | (Candidate::Absent, Candidate::Invalid(error)) => Err(error),
@@ -34871,6 +34977,30 @@ impl Kura {
         expected_epoch: u64,
         pending_canonical_bytes: Option<u64>,
     ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        self.read_autonomous_lane_block_attempt_record_with_current_locked(
+            entry,
+            lane_id,
+            lane_block_height,
+            proposal_height,
+            expected_network_id,
+            expected_epoch,
+            pending_canonical_bytes,
+        )
+        .map(|record| record.map(|(record, _current)| record))
+    }
+    /// Return a cursor only for the exact retired-attempt consumer; ordinary
+    /// collection callers use the record-only projection above.
+    #[allow(clippy::too_many_arguments)]
+    fn read_autonomous_lane_block_attempt_record_with_current_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        proposal_height: u64,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        pending_canonical_bytes: Option<u64>,
+    ) -> Result<Option<(AutonomousLaneBlockDurableRecord, LaneBlockProposalV1)>> {
         let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
             entry,
             &self.store_root,
@@ -34887,8 +35017,8 @@ impl Kura {
             .regular_sidecar_metadata(&attempt_path, parent)?
             .is_some()
         {
-            let bytes = self
-                .read_regular_sidecar_bytes(
+            let read = self
+                .read_regular_sidecar_snapshot(
                     &attempt_path,
                     parent,
                     MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
@@ -34899,14 +35029,11 @@ impl Kura {
                         "autonomous lane attempt disappeared during exact lookup",
                     )
                 })?;
-            let artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
-                .map_err(|error| match error {
-                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
-                        attempt_path.clone(),
-                        "autonomous lane attempt payload is not canonical Norito",
-                    ),
-                    other => Error::NoritoFrame(other),
-                })?;
+            let artifact = Self::decode_autonomous_lane_attempt_frame(
+                &read.bytes,
+                &attempt_path,
+                "autonomous lane attempt payload is not canonical Norito",
+            )?;
             let pointer =
                 AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
             if pointer.lane_id != lane_id
@@ -34919,12 +35046,18 @@ impl Kura {
                 ));
             }
             return self
-                .read_autonomous_lane_block_attempt_artifact_locked(
+                .read_autonomous_lane_block_attempt_artifact_with_current_locked(
                     entry,
                     &pointer,
                     expected_network_id,
                     expected_epoch,
-                    pending_canonical_bytes,
+                    pending_canonical_bytes.map_or(
+                        AutonomousLaneBlockViewStateReadMode::MainOnly,
+                        |pending_canonical_bytes| AutonomousLaneBlockViewStateReadMode::Recover {
+                            pending_canonical_bytes,
+                        },
+                    ),
+                    Some(DecodedAutonomousLaneAttemptRead { read, artifact }),
                 )
                 .map(Some);
         }

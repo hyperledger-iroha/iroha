@@ -2745,7 +2745,7 @@ mod measured_bytes_impls {
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
         smart_contract::ContractAddress,
         smart_contract::manifest::{
-            AccessSetHints, ContractErrorCodeDescriptor, ContractManifest, DynamicAccessHint,
+            AccessSetHints, ContractErrorTypeDescriptor, ContractManifest, DynamicAccessHint,
             EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
             KotobaTranslationEntry, ManifestProvenance, StateDescriptor, TriggerCallback,
             TriggerDescriptor,
@@ -3654,12 +3654,17 @@ mod measured_bytes_impls {
             total
         }
     }
-    impl MeasuredBytes for ContractErrorCodeDescriptor {
+    impl MeasuredBytes for ContractErrorTypeDescriptor {
         fn measured_bytes(&self) -> usize {
-            let mut total = size_of::<ContractErrorCodeDescriptor>();
-            total = total.saturating_add(self.namespace.measured_bytes_extra());
-            total = total.saturating_add(self.name.measured_bytes_extra());
+            let mut total = size_of::<ContractErrorTypeDescriptor>();
+            total = total.saturating_add(self.identity.measured_bytes_extra());
+            total = total.saturating_add(self.variants.measured_bytes_extra());
             total
+        }
+    }
+    impl MeasuredBytes for iroha_data_model::smart_contract::manifest::ContractErrorVariantDescriptor {
+        fn measured_bytes(&self) -> usize {
+            size_of::<Self>().saturating_add(self.name.measured_bytes_extra())
         }
     }
     impl MeasuredBytes for KotobaTranslation {
@@ -3697,7 +3702,7 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.access_set_hints.measured_bytes_extra());
             total = total.saturating_add(self.entrypoints.measured_bytes_extra());
             total = total.saturating_add(self.states.measured_bytes_extra());
-            total = total.saturating_add(self.error_codes.measured_bytes_extra());
+            total = total.saturating_add(self.error_types.measured_bytes_extra());
             total = total.saturating_add(self.kotoba.measured_bytes_extra());
             total = total.saturating_add(self.provenance.measured_bytes_extra());
             total

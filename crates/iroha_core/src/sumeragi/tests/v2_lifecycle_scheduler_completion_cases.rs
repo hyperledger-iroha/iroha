@@ -19,6 +19,507 @@ struct RecoveredBroadcastSchedulerStateForTest {
     paired_ordinal: Option<u128>,
 }
 
+/// Opaque pre-retirement census used by the authenticated body-fence regressions.
+pub(in crate::sumeragi) struct BodyOwnerSnapshotForTest {
+    ordinal: u128,
+    coordinator: LifecycleCoordinator,
+    registry_census: Vec<(u128, &'static str)>,
+}
+
+/// Exact durable identities retained across the cancellation crash boundary.
+pub(in crate::sumeragi) struct BodyRecoverySnapshotForTest {
+    coordinator: LifecycleCoordinator,
+    cancelled: u128,
+    validate: u128,
+}
+
+impl ProductionLifecycleOwnerV1 {
+    /// Snapshot the published Cancelled row and the independently admitted current Validate.
+    pub(in crate::sumeragi) fn body_recovery_snapshot_for_test(
+        &self,
+        cancelled: u128,
+        validate: u128,
+    ) -> BodyRecoverySnapshotForTest {
+        assert_eq!(
+            self.coordinator.records[&cancelled].state,
+            LifecycleState::Terminal(super::TerminalOutcome::Cancelled)
+        );
+        assert_eq!(
+            self.coordinator.records[&validate].work_class,
+            LifecycleWorkClass::Validate
+        );
+        assert_eq!(
+            self.coordinator.records[&validate].state,
+            LifecycleState::Ready
+        );
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        assert!(self.coordinator.fault.is_none());
+        assert!(self.coordinator.active_lease.is_none());
+        BodyRecoverySnapshotForTest {
+            coordinator: self.coordinator.clone(),
+            cancelled,
+            validate,
+        }
+    }
+
+    /// Prove cold reconstruction kept the cancelled tombstone and exact current carrier.
+    pub(in crate::sumeragi) fn assert_body_recovery_snapshot_for_test(
+        &self,
+        expected: &BodyRecoverySnapshotForTest,
+    ) {
+        assert_eq!(
+            super::ledger::LifecycleLedgerV1::from_coordinator(&self.coordinator)
+                .expect("the cold coordinator has a canonical ledger"),
+            super::ledger::LifecycleLedgerV1::from_coordinator(&expected.coordinator)
+                .expect("the live cancellation cut has a canonical ledger")
+        );
+        let cancelled = &self.coordinator.records[&expected.cancelled];
+        assert_eq!(
+            cancelled.state,
+            LifecycleState::Terminal(super::TerminalOutcome::Cancelled)
+        );
+        assert!(
+            cancelled.physical_slots.is_empty(),
+            "cold tombstones have no executable geometry"
+        );
+        let current = &self.coordinator.records[&expected.validate];
+        let previous = &expected.coordinator.records[&expected.validate];
+        assert_eq!(
+            (
+                current.ordinal,
+                current.owner,
+                current.key,
+                current.stage,
+                current.work_class
+            ),
+            (
+                previous.ordinal,
+                previous.owner,
+                previous.key,
+                previous.stage,
+                previous.work_class
+            )
+        );
+        assert_eq!(current.state, LifecycleState::Ready);
+        assert_eq!(
+            self.coordinator.ready_index,
+            BTreeSet::from([expected.validate])
+        );
+        assert_eq!(self.coordinator.key_index, expected.coordinator.key_index);
+        assert_eq!(
+            self.coordinator.owner_index,
+            expected.coordinator.owner_index
+        );
+        assert_eq!(
+            self.coordinator.capacity_used,
+            expected.coordinator.capacity_used
+        );
+        assert_eq!(
+            self.registry
+                .registry_for_test()
+                .finalization_entry_kind_census(),
+            (1, vec![(expected.validate, "DurableValidateBody")])
+        );
+        assert!(
+            self.registry
+                .registry_for_test()
+                .recovered_published_store_retry_markers()
+                .next()
+                .is_none()
+        );
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        assert!(self.coordinator.fault.is_none());
+        assert!(self.coordinator.active_lease.is_none());
+    }
+
+    /// Reuse normal leader-wire, ordinal, runtime, and executor recovery for the cold body fixture.
+    pub(in crate::sumeragi) fn bind_recovered_cancelled_body_executor_for_test(
+        &mut self,
+        wal_path: &std::path::Path,
+        services: &mut ProductionV2Services,
+        output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
+        local_validator: iroha_data_model::block::consensus_v2::ValidatorIndex,
+    ) -> (
+        V2EffectExecutor<SerializedV2Runtime>,
+        crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture,
+        std::sync::Arc<crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
+        crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource,
+    ) {
+        let launch = self
+            .adapter_startup
+            .as_mut()
+            .expect("the recovered owner retains its real adapter")
+            .prepare_leader_wire_launch(wal_path)
+            .expect("derive actual leader-wire startup authority");
+        let (runtime_authority, coordinator_authority) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(
+                self.coordinator.high_water(),
+            );
+        let ordinals = crate::sumeragi::v2_runtime::RuntimeLifecycleOrdinalSource::from_authority(
+            runtime_authority,
+        );
+        if let Some(high_water) = launch.restored_producer_ordinal_high_watermark() {
+            ordinals
+                .advance_past(high_water)
+                .expect("retain the recovered producer ordinal floor");
+        }
+        let (gate, restore, _) = launch
+            .open_gate(
+                self.verified.context(),
+                self.body_store
+                    .as_ref()
+                    .expect("the recovered body store is still owner-held"),
+            )
+            .expect("open the genuine WAL-adjacent leader-wire gate");
+        ordinals
+            .advance_past(restore.scheduler_ordinal_high_watermark())
+            .expect("retain the reopened leader-wire scheduler ordinal floor");
+        self.coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator_authority)
+            .expect("bind the fresh coordinator and runtime to one recovered ordinal source");
+        let startup = self
+            .adapter_startup
+            .take()
+            .expect("consume the sole recovered adapter startup");
+        let (runtime, pending_apply, local_proposal) = startup
+            .into_serialized_runtime(
+                std::time::Instant::now(),
+                std::time::Duration::from_secs(10),
+                crate::sumeragi::v2_runtime::RuntimeQueueConfig::new(8, 2, 2),
+                ordinals.clone(),
+            )
+            .expect("the exact recovered adapter enters the normal serialized runtime");
+        assert!(pending_apply.is_none());
+        assert!(local_proposal.is_none());
+        let (executor, planner_io) = self.bind_body_store_to_lifecycle_completion_io_for_test(
+            services,
+            runtime,
+            std::sync::Arc::clone(&output_guard),
+            local_validator,
+            1,
+        );
+        planner_io.install_output_guard_for_test(services, output_guard);
+        (executor, planner_io, gate, ordinals)
+    }
+
+    /// Retain the exact logical and physical owners immediately before retirement.
+    pub(in crate::sumeragi) fn body_owner_snapshot_for_test(
+        &self,
+        ordinal: u128,
+    ) -> BodyOwnerSnapshotForTest {
+        assert!(self.coordinator.active_lease.is_none());
+        assert!(self.coordinator.fault.is_none());
+        let record = &self.coordinator.records[&ordinal];
+        assert!(matches!(
+            record.work_class,
+            LifecycleWorkClass::Fetch | LifecycleWorkClass::Store
+        ));
+        assert!(!matches!(record.state, LifecycleState::Terminal(_)));
+        let (count, registry_census) = self
+            .registry
+            .registry_for_test()
+            .finalization_entry_kind_census();
+        assert_eq!(
+            count,
+            registry_census.len(),
+            "the fixture census must be complete"
+        );
+        assert_eq!(
+            registry_census
+                .iter()
+                .filter(|(owner, _)| *owner == ordinal)
+                .count(),
+            1
+        );
+        BodyOwnerSnapshotForTest {
+            ordinal,
+            coordinator: self.coordinator.clone(),
+            registry_census,
+        }
+    }
+
+    /// Inject the existing ledger publication failure without exposing its store.
+    pub(in crate::sumeragi) fn fail_body_retirement_publication_for_test(
+        &mut self,
+        root: &std::path::Path,
+    ) {
+        self.coordinator
+            .redirect_test_ledger_to_missing_parent(root);
+    }
+
+    /// Check that a failed publication preserves every executable and durable owner.
+    pub(in crate::sumeragi) fn assert_body_owner_retained_after_failure_for_test(
+        &self,
+        before: &BodyOwnerSnapshotForTest,
+        root: &std::path::Path,
+        publication_failed: bool,
+    ) {
+        let record = &self.coordinator.records[&before.ordinal];
+        let previous = &before.coordinator.records[&before.ordinal];
+        assert_eq!(
+            (
+                record.key,
+                record.owner,
+                record.ordinal,
+                record.work_class,
+                record.stage
+            ),
+            (
+                previous.key,
+                previous.owner,
+                previous.ordinal,
+                previous.work_class,
+                previous.stage
+            )
+        );
+        assert_eq!(record.physical_slots, previous.physical_slots);
+        assert_eq!(
+            self.coordinator.records.len(),
+            before.coordinator.records.len()
+        );
+        for (ordinal, previous) in &before.coordinator.records {
+            if *ordinal != before.ordinal {
+                assert_eq!(self.coordinator.records.get(ordinal), Some(previous));
+            }
+        }
+        assert_eq!(
+            self.coordinator.durable_records,
+            before.coordinator.durable_records
+        );
+        assert_eq!(self.coordinator.key_index, before.coordinator.key_index);
+        assert_eq!(self.coordinator.owner_index, before.coordinator.owner_index);
+        assert_eq!(self.coordinator.high_water, before.coordinator.high_water);
+        assert_eq!(
+            self.coordinator.capacity_used,
+            before.coordinator.capacity_used
+        );
+        assert_eq!(
+            self.coordinator.capacity_generation,
+            before.coordinator.capacity_generation
+        );
+        assert_eq!(
+            self.registry
+                .registry_for_test()
+                .finalization_entry_kind_census(),
+            (before.registry_census.len(), before.registry_census.clone())
+        );
+        if publication_failed {
+            assert_eq!(
+                self.coordinator.fault,
+                Some(super::CoordinatorFault::DurabilityFailure)
+            );
+            let lease = self
+                .coordinator
+                .active_lease
+                .as_ref()
+                .expect("an uncertain publication retains its exact claimed lease");
+            assert_eq!(lease.ordinal(), before.ordinal);
+            assert_eq!(record.state, LifecycleState::Claimed(lease.id()));
+        } else {
+            assert!(self.coordinator.fault.is_none());
+            assert!(self.coordinator.active_lease.is_none());
+            assert!(!matches!(
+                record.state,
+                LifecycleState::Terminal(_) | LifecycleState::Claimed(_)
+            ));
+        }
+        let (_, published) = super::LifecycleLedgerStoreV1::open(
+            &root.join("ledger"),
+            self.coordinator.active_context,
+        )
+        .expect("reopen the unmodified physical ledger after the injected pre-write failure");
+        assert_eq!(
+            published,
+            super::ledger::LifecycleLedgerV1::from_coordinator(&before.coordinator)
+                .expect("the original nonterminal owner has an exact durable projection")
+        );
+    }
+
+    /// Prove exact one-row cancellation, one release, and the published ledger frame.
+    pub(in crate::sumeragi) fn assert_body_owner_cancelled_for_test(
+        &self,
+        before: &BodyOwnerSnapshotForTest,
+        root: &std::path::Path,
+    ) {
+        use super::schema::DurableContinuation;
+
+        let ordinal = before.ordinal;
+        let previous = &before.coordinator.records[&ordinal];
+        let record = &self.coordinator.records[&ordinal];
+        assert_eq!(
+            record.state,
+            LifecycleState::Terminal(super::TerminalOutcome::Cancelled)
+        );
+        // Terminal rows retain their inert slot digest history; the concrete
+        // registry census below proves the executable carrier was removed.
+        assert_eq!(record.physical_slots, previous.physical_slots);
+        assert_eq!(
+            (
+                record.key,
+                record.owner,
+                record.ordinal,
+                record.work_class,
+                record.stage
+            ),
+            (
+                previous.key,
+                previous.owner,
+                previous.ordinal,
+                previous.work_class,
+                previous.stage
+            )
+        );
+        assert_eq!(record.episode.universe, previous.episode.universe);
+        assert_eq!(record.episode.slot_universe, previous.episode.slot_universe);
+        assert_eq!(
+            record.episode.frozen_predecessors,
+            previous.episode.frozen_predecessors
+        );
+        assert_eq!(record.episode.consumed_slots, record.episode.slot_universe);
+        assert_eq!(
+            self.coordinator.records.len(),
+            before.coordinator.records.len()
+        );
+        for (other, previous) in &before.coordinator.records {
+            if *other != ordinal {
+                assert_eq!(
+                    self.coordinator.records.get(other),
+                    Some(previous),
+                    "unrelated row changed"
+                );
+            }
+        }
+        let mut expected_metadata = before.coordinator.durable_records.clone();
+        let metadata = expected_metadata
+            .get_mut(&ordinal)
+            .expect("the old carrier has durable metadata");
+        let payload = metadata
+            .payload
+            .terminalized(super::TerminalOutcome::Cancelled)
+            .expect("the canonical body terminal payload exists");
+        metadata.replay_authority = metadata
+            .terminalized_replay_authority(
+                self.coordinator.active_context,
+                record.key,
+                record.work_class,
+                record.stage,
+                payload,
+            )
+            .expect("canonical cancellation retains exact replay identity");
+        metadata.payload = payload;
+        metadata.continuation = DurableContinuation::None;
+        assert_eq!(self.coordinator.durable_records, expected_metadata);
+        assert_eq!(self.coordinator.key_index, before.coordinator.key_index);
+        assert_eq!(self.coordinator.owner_index, before.coordinator.owner_index);
+        assert_eq!(
+            self.coordinator.high_water, before.coordinator.high_water,
+            "cancellation creates no child"
+        );
+        assert_eq!(
+            self.coordinator.producer_debts,
+            before.coordinator.producer_debts
+        );
+        let mut ready = before.coordinator.ready_index.clone();
+        ready.remove(&ordinal);
+        assert_eq!(self.coordinator.ready_index, ready);
+        for class in super::CapacityClass::ALL {
+            let released = usize::from(class == super::CapacityClass::Effect);
+            assert_eq!(
+                self.coordinator.capacity_used[&class],
+                before.coordinator.capacity_used[&class] - released
+            );
+            assert_eq!(
+                self.coordinator.capacity_generation[&class],
+                before.coordinator.capacity_generation[&class] + released as u64
+            );
+        }
+        let expected_census = before
+            .registry_census
+            .iter()
+            .copied()
+            .filter(|(owner, _)| *owner != ordinal)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            self.registry
+                .registry_for_test()
+                .finalization_entry_kind_census(),
+            (expected_census.len(), expected_census)
+        );
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        assert!(self.coordinator.active_lease.is_none());
+        assert!(self.coordinator.fault.is_none());
+        let (_, published) = super::LifecycleLedgerStoreV1::open(
+            &root.join("ledger"),
+            self.coordinator.active_context,
+        )
+        .expect("reopen the physically published cancellation frame");
+        assert_eq!(
+            published,
+            super::ledger::LifecycleLedgerV1::from_coordinator(&self.coordinator)
+                .expect("the canonical terminal coordinator is serializable")
+        );
+    }
+
+    /// Verify ordinary current-work admission reached the exact Ready Validate carrier.
+    pub(in crate::sumeragi) fn assert_ready_body_validate_for_test(
+        &self,
+        round: iroha_data_model::block::consensus_v2::ConsensusRound,
+        subject: iroha_data_model::block::consensus_v2::BlockSubject,
+        receipt: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+    ) -> u128 {
+        let matching = self
+            .coordinator
+            .records
+            .values()
+            .filter(|record| {
+                record.work_class == LifecycleWorkClass::Validate
+                    && record.key.subject() == Some(super::projection::block_subject(subject))
+                    && record.state == LifecycleState::Ready
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matching.len(),
+            1,
+            "one ordinary current body must be Ready for Validate"
+        );
+        let record = matching[0];
+        assert_eq!(
+            record.key.proposal_round(),
+            Some(super::LifecycleRound::new(round.height, round.view))
+        );
+        let metadata = &self.coordinator.durable_records[&record.ordinal];
+        assert_eq!(
+            metadata.payload,
+            super::schema::DurablePayloadReference::BodyFrame(
+                super::projection::durable_body_frame_reference(
+                    self.coordinator.active_context,
+                    receipt
+                )
+                .expect("the fsynced receipt belongs to this exact body")
+            )
+        );
+        assert!(metadata.replay_authority.structurally_matches_record(
+            self.coordinator.active_context,
+            record.key,
+            record.work_class,
+            record.stage,
+            metadata.payload
+        ));
+        assert!(
+            self.registry
+                .registry_for_test()
+                .finalization_entry_kind_census()
+                .1
+                .contains(&(record.ordinal, "DurableValidateBody"))
+        );
+        assert!(self.coordinator.ready_index.contains(&record.ordinal));
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        assert!(self.coordinator.active_lease.is_none());
+        assert!(self.coordinator.fault.is_none());
+        record.ordinal
+    }
+}
+
 #[cfg(test)]
 mod recovered_sign_capacity_tests {
     use super::super::schema::SchedulerEpisode;
@@ -2185,6 +2686,34 @@ impl ProductionLifecycleOwnerV1 {
         self.dispatch_completion_with_runner_debt(services, executor, runner_debt)
     }
 
+    /// Publish and acknowledge one real worker result while retaining its exact Ready carrier.
+    pub(in crate::sumeragi) fn publish_validated_body_completion_for_test(
+        &mut self,
+        completion: crate::sumeragi::v2_worker::PreparedLifecycleValidateCompletionV1,
+        expected_ordinal: u128,
+    ) {
+        let (executed, ack) = completion.into_publication_parts();
+        let publication = self
+            .coordinator
+            .complete_durable_validate_dispatch(&mut self.registry, executed)
+            .expect("publish the exact recovered body's validated replacement");
+        let super::DurableValidateCompletionPublication::PublishedValidated(published) =
+            publication
+        else {
+            panic!("the recovered body must publish its validated replacement")
+        };
+        assert_eq!(published.lifecycle_ordinal(), expected_ordinal);
+        drop(published);
+        ack.acknowledge_after_publication();
+        assert_eq!(
+            self.coordinator.records[&expected_ordinal].state,
+            LifecycleState::Ready
+        );
+        assert!(self.all_live_registry_census_is_exact_for_test());
+        assert!(self.coordinator.fault.is_none());
+        assert!(self.coordinator.active_lease.is_none());
+    }
+
     /// Exercise the production synchronous Ready-Validate-successor corridor.
     pub(in crate::sumeragi) fn dispatch_ready_validate_successor_for_test(
         &mut self,
@@ -2259,6 +2788,22 @@ impl ProductionLifecycleOwnerV1 {
             ),
             timeout_supersession_successor: None,
         }
+    }
+
+    /// Pair a still-empty ingress owner's ledger with the runtime's live ordinal source.
+    pub(in crate::sumeragi) fn bind_empty_ingress_ordinal_authority_for_test(
+        &mut self,
+    ) -> super::RuntimeLifecycleOrdinalAuthority {
+        assert_eq!(self.coordinator.high_water(), 0);
+        assert!(self.coordinator.records.is_empty());
+        assert!(self.coordinator.active_lease.is_none());
+        assert!(self.coordinator.lifecycle_ordinal_authority.is_none());
+        let (runtime, coordinator) =
+            super::authority::lifecycle_ordinal_authorities_after_high_watermark(0);
+        self.coordinator
+            .bind_live_lifecycle_ordinal_authority(coordinator)
+            .expect("bind the empty ingress owner's paired live ordinal authority");
+        runtime
     }
 
     /// Build one storage-owning production owner around the exact selected

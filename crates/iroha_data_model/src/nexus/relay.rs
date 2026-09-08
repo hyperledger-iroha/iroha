@@ -314,15 +314,13 @@ pub struct LaneFastpqProofMaterial {
     /// Block height where the proof was verified.
     pub verified_at_height: u64,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayFastpqClaim")]
 struct LaneRelayFastpqClaim {
     version: u8,
     lane_finality_statement_hash: Hash,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::relay::LaneRelayMergeHint")]
 struct LaneRelayMergeHint {
     version: u8,
@@ -388,8 +386,7 @@ pub struct FeeSponsorVaultAllocationClaim {
     /// Globally unique proof-bound spend lease identifier.
     pub lease_id: Hash,
 }
-#[derive(Clone, Debug, Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::relay::FeeSponsorVaultSourceStateCommitment")]
 struct FeeSponsorVaultSourceStateCommitment {
     version: u8,

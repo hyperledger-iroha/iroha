@@ -677,6 +677,13 @@ pub(in crate::sumeragi) enum ProductionCompletionDispatchV1 {
         /// Newly Ready child class.
         child: LifecycleWorkClass,
     },
+    /// One exact obsolete Fetch or Store carrier was durably cancelled without a child.
+    BodyStageCancelled {
+        /// Exact terminalized obsolete ordinal.
+        ordinal: u128,
+        /// Work class of the retired carrier.
+        stage: LifecycleWorkClass,
+    },
     /// One ordinary body parent is parked on the adapter reducer fence.
     ReducerFenceWait {
         /// Exact waiting parent ordinal.
@@ -1995,21 +2002,12 @@ impl ProductionLifecycleOwnerV1 {
             }
         };
         let (tag, manifest) = execution.adapter_preview_inputs();
-        let retry_marker = match executor
-            .prepare_published_lifecycle_store_retry_marker(execution.durable_body_receipt())
-        {
-            Ok(marker) => marker,
-            Err(error) => {
-                iroha_logger::error!(
-                    ?error,
-                    ordinal,
-                    "certified Fetch-to-Store retry marker preflight failed"
-                );
-                drop(execution);
-                assert!(self.coordinator.rollback_unpublished_turn(&lease));
-                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
-            }
-        };
+        // Compute both inert cuts before retaining the exclusive adapter borrow.
+        // Only the selected Applied or Superseded branch consumes its own preflight.
+        let retry_marker = executor
+            .prepare_published_lifecycle_store_retry_marker(execution.durable_body_receipt());
+        let retirement_marker =
+            executor.prepare_lifecycle_body_marker_retirement(&execution.retirement_material());
         let adapter = match executor.prepare_certified_fetch_store_adapter(tag, manifest) {
             Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Applied(adapter)) => {
                 adapter
@@ -2041,6 +2039,58 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait });
             }
+            Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Superseded(
+                adapter,
+            )) => {
+                let marker = match retirement_marker {
+                    Ok(marker) => marker,
+                    Err(_) => {
+                        drop(adapter);
+                        drop(execution);
+                        assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let retirement = match execution.seal_superseded_retirement(adapter, marker) {
+                    Ok(retirement) => retirement,
+                    Err(_) => {
+                        assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let transition = match self.coordinator.prepare_body_retirement_transition(
+                    &lease,
+                    &self.verified,
+                    retirement,
+                ) {
+                    Ok(transition) => transition,
+                    Err(_) => {
+                        assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let output_guard = services.lifecycle_output_guard();
+                let Some(operation) = output_guard.begin_fail_stop_operation() else {
+                    drop(transition);
+                    assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                    return Err(ProductionCompletionDispatchErrorV1::Service(
+                        "obsolete body cancellation output is closed".to_owned(),
+                    ));
+                };
+                if transition.persist_exact_cancellation().is_err() {
+                    drop(transition);
+                    self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                    drop(operation);
+                    return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                }
+                let marker = transition.commit_after_publication();
+                executor.commit_lifecycle_body_marker_retirement(marker);
+                operation.complete();
+                return Ok(ProductionCompletionDispatchV1::BodyStageCancelled {
+                    ordinal,
+                    stage: LifecycleWorkClass::Fetch,
+                });
+            }
             Ok(crate::sumeragi::v2::CertifiedFetchStoreAdapterPreparationV1::Inactive) => {
                 iroha_logger::error!(ordinal, "certified Fetch adapter projection was inactive");
                 drop(execution);
@@ -2053,6 +2103,15 @@ impl ProductionLifecycleOwnerV1 {
                     ordinal,
                     "certified Fetch serialized adapter projection failed"
                 );
+                drop(execution);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
+        let retry_marker = match retry_marker {
+            Ok(marker) => marker,
+            Err(_) => {
+                drop(adapter);
                 drop(execution);
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
@@ -2152,21 +2211,16 @@ impl ProductionLifecycleOwnerV1 {
             }
         };
         let (tag, round, subject) = execution.adapter_preview_inputs();
-        let retry_marker = match executor
-            .prepare_published_lifecycle_validate_retry_marker(execution.durable_body_receipt())
-        {
-            Ok(marker) => marker,
-            Err(error) => {
-                iroha_logger::error!(
-                    ?error,
-                    ordinal,
-                    "lifecycle Store-to-Validate retry marker preflight failed"
-                );
-                drop(execution);
-                assert!(self.coordinator.rollback_unpublished_turn(&lease));
-                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
-            }
-        };
+        let retry_marker = executor
+            .prepare_published_lifecycle_validate_retry_marker(execution.durable_body_receipt());
+        let retirement_marker = execution
+            .retirement_material()
+            .map_err(|_| ProductionCompletionDispatchErrorV1::InvalidCarrier)
+            .and_then(|material| {
+                executor
+                    .prepare_lifecycle_body_marker_retirement(&material)
+                    .map_err(|_| ProductionCompletionDispatchErrorV1::DispatchProjection)
+            });
         let adapter = match executor.prepare_durable_store_validate_adapter(
             tag,
             round,
@@ -2203,6 +2257,58 @@ impl ProductionLifecycleOwnerV1 {
                 }
                 return Ok(ProductionCompletionDispatchV1::ReducerFenceWait { ordinal, wait });
             }
+            Ok(crate::sumeragi::v2::DurableStoreValidateAdapterPreparationV1::Superseded(
+                adapter,
+            )) => {
+                let marker = match retirement_marker {
+                    Ok(marker) => marker,
+                    Err(_) => {
+                        drop(adapter);
+                        drop(execution);
+                        assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let retirement = match execution.seal_superseded_retirement(adapter, marker) {
+                    Ok(retirement) => retirement,
+                    Err(_) => {
+                        assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let transition = match self.coordinator.prepare_body_retirement_transition(
+                    &lease,
+                    &self.verified,
+                    retirement,
+                ) {
+                    Ok(transition) => transition,
+                    Err(_) => {
+                        assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                        return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                    }
+                };
+                let output_guard = services.lifecycle_output_guard();
+                let Some(operation) = output_guard.begin_fail_stop_operation() else {
+                    drop(transition);
+                    assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                    return Err(ProductionCompletionDispatchErrorV1::Service(
+                        "obsolete body cancellation output is closed".to_owned(),
+                    ));
+                };
+                if transition.persist_exact_cancellation().is_err() {
+                    drop(transition);
+                    self.coordinator.fault = Some(super::CoordinatorFault::DurabilityFailure);
+                    drop(operation);
+                    return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+                }
+                let marker = transition.commit_after_publication();
+                executor.commit_lifecycle_body_marker_retirement(marker);
+                operation.complete();
+                return Ok(ProductionCompletionDispatchV1::BodyStageCancelled {
+                    ordinal,
+                    stage: LifecycleWorkClass::Store,
+                });
+            }
             Ok(crate::sumeragi::v2::DurableStoreValidateAdapterPreparationV1::Inactive) => {
                 iroha_logger::error!(
                     ordinal,
@@ -2214,6 +2320,15 @@ impl ProductionLifecycleOwnerV1 {
             }
             Err(error) => {
                 iroha_logger::error!(?error, ordinal, "lifecycle Store adapter preview failed");
+                drop(execution);
+                assert!(self.coordinator.rollback_unpublished_turn(&lease));
+                return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);
+            }
+        };
+        let retry_marker = match retry_marker {
+            Ok(marker) => marker,
+            Err(_) => {
+                drop(adapter);
                 drop(execution);
                 assert!(self.coordinator.rollback_unpublished_turn(&lease));
                 return Err(ProductionCompletionDispatchErrorV1::DispatchProjection);

@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::asset::unregister(Name::parse("bad"));
+  ledger::asset::unregister(asset_definition: Name::parse("bad"));
 }
 
 }

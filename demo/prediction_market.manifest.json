@@ -1,7 +1,7 @@
 {
   "seiyaku_name": "PredictionMarket",
-  "code_hash": "hash:256D869893A0FD55217C8525F2432CC5203E731FCBC1402276B896D4ED1DCBBF#9F8B",
-  "abi_hash": "hash:0CE37CAD372E184A4FC1810D6B7CE3224E9793B829079505F4C6AAC8F512C6FB#0FF4",
+  "code_hash": "hash:BC9732616051EA4227AABEA4C4EFBA514B271FBE78B217C1FAA5A52D5D71C977#D955",
+  "abi_hash": "hash:DB4259AA28486967F2D8799B4E66E1B919F4D18690DB2D94CD96EFA05EE840A3#4407",
   "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
   "features_bitmap": 0,
   "access_set_hints": {
@@ -43,8 +43,15 @@
       },
       "params": [],
       "argument_schema": null,
-      "return_type": null,
-      "return_schema": null,
+      "return_type": "()",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Unit",
+            "value": null
+          }
+        ]
+      },
       "permission": null,
       "read_keys": [],
       "write_keys": [
@@ -64,8 +71,15 @@
       },
       "params": [],
       "argument_schema": null,
-      "return_type": null,
-      "return_schema": null,
+      "return_type": "()",
+      "return_schema": {
+        "nodes": [
+          {
+            "kind": "Unit",
+            "value": null
+          }
+        ]
+      },
       "permission": "MarketUser",
       "read_keys": [
         "state:resolved",
@@ -112,7 +126,62 @@
       "type_name": "bool"
     }
   ],
-  "error_codes": null,
+  "error_types": [
+    {
+      "identity": "kotodama::ListError",
+      "variants": [
+        {
+          "name": "IndexOutOfBounds",
+          "code": 1
+        },
+        {
+          "name": "CapacityExceeded",
+          "code": 2
+        }
+      ]
+    },
+    {
+      "identity": "kotodama::NumericError",
+      "variants": [
+        {
+          "name": "MantissaOverflow",
+          "code": 1
+        },
+        {
+          "name": "ScaleOverflow",
+          "code": 2
+        },
+        {
+          "name": "DivisionByZero",
+          "code": 3
+        },
+        {
+          "name": "RepeatingDecimal",
+          "code": 4
+        },
+        {
+          "name": "ExactDivisionScaleOverflow",
+          "code": 5
+        },
+        {
+          "name": "InvalidScale",
+          "code": 6
+        },
+        {
+          "name": "InexactConversion",
+          "code": 7
+        },
+        {
+          "name": "NegativeQuantity",
+          "code": 8
+        },
+        {
+          "name": "QuantityUnderflow",
+          "code": 9
+        }
+      ]
+    }
+  ],
   "kotoba": null,
   "provenance": null
 }

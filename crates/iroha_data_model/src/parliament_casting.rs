@@ -69,7 +69,9 @@ pub enum ParliamentTimedOvnCastingPhaseV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_casting::ParliamentTimedOvnRegistrationCorpusCommitmentV1"
+)]
 pub struct ParliamentTimedOvnRegistrationCorpusCommitmentV1 {
     /// Commitment format version.
     pub version: u16,
@@ -158,7 +160,9 @@ pub struct ParliamentTimedOvnReleaseBindingV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextBindingV1"
+)]
 pub struct ParliamentTimedOvnCastingContextBindingV1 {
     /// Binding format version.
     pub version: u16,
@@ -294,7 +298,9 @@ impl ParliamentTimedOvnCastingContextBindingV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingSnapshotCommitmentV1"
+)]
 pub struct ParliamentTimedOvnCastingSnapshotCommitmentV1 {
     /// Snapshot format version.
     pub version: u16,
@@ -377,7 +383,9 @@ impl ParliamentTimedOvnCastingSnapshotCommitmentV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextMembershipProofV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingContextMembershipProofV1"
+)]
 pub struct ParliamentTimedOvnCastingContextMembershipProofV1 {
     proof: MerkleProof<ParliamentTimedOvnCastingContextBindingV1>,
 }
@@ -431,7 +439,9 @@ impl ParliamentTimedOvnCastingContextMembershipProofV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingWitnessProofV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_casting::ParliamentTimedOvnCastingWitnessProofV1"
+)]
 pub struct ParliamentTimedOvnCastingWitnessProofV1 {
     /// Fixed raw execution-witness key.
     pub key: Vec<u8>,
@@ -449,7 +459,9 @@ pub struct ParliamentTimedOvnCastingWitnessProofV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::parliament_casting::ParliamentTimedOvnFinalizedCastingProofV1")]
+#[norito_schema(
+    name = "iroha_data_model::parliament_casting::ParliamentTimedOvnFinalizedCastingProofV1"
+)]
 pub struct ParliamentTimedOvnFinalizedCastingProofV1 {
     /// Fixed-write proof tying the snapshot to the block's ordinary-write root.
     pub snapshot_witness: ParliamentTimedOvnCastingWitnessProofV1,

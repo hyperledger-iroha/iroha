@@ -41,6 +41,9 @@ enum class EntrypointValueTypeNodeKindV1 {
     RESULT,
     LIST,
     LEAF,
+    UNIT,
+    ERROR,
+    STATE_CURSOR,
 }
 
 /** Named product metadata for one exact boundary-schema node. */
@@ -63,6 +66,7 @@ class EntrypointValueTypeNodeV1(
     @JvmField val tupleArity: Int? = null,
     @JvmField val listValue: EntrypointListTypeNodeV1? = null,
     @JvmField val leafKind: EntrypointValueKindV1? = null,
+    @JvmField val errorType: ContractErrorTypeDescriptor? = null,
 )
 
 /** Exact flat preorder value schema used at a Kotodama V1 public boundary. */
@@ -180,12 +184,20 @@ class ContractStateDescriptor(
     @JvmField val typeName: String,
 )
 
-/** One stable application error code declared by a Kotodama seiyaku. */
-class ContractErrorCodeDescriptor(
-    @JvmField val namespace: String,
+/** One nonzero enum-local variant in a finite nominal error type. */
+class ContractErrorVariantDescriptor(
     @JvmField val name: String,
     @JvmField val code: Long,
 )
+
+/** Stable package/unit/enum identity and exact ordered variant schema. */
+class ContractErrorTypeDescriptor(
+    @JvmField val identity: String,
+    variants: List<ContractErrorVariantDescriptor>,
+) {
+    @JvmField val variants: List<ContractErrorVariantDescriptor> =
+        Collections.unmodifiableList(ArrayList(variants))
+}
 
 /** One localized text in a `kotoba` manifest table. */
 class ContractKotobaTranslation(
@@ -218,7 +230,7 @@ class ContractManifest(
     @JvmField val accessSetHints: ContractAccessSetHints?,
     entrypoints: List<ContractEntrypointDescriptor>?,
     states: List<ContractStateDescriptor>?,
-    errorCodes: List<ContractErrorCodeDescriptor>?,
+    errorTypes: List<ContractErrorTypeDescriptor>?,
     kotoba: List<ContractKotobaTranslationEntry>?,
     @JvmField val provenance: ContractManifestProvenance?,
 ) {
@@ -228,7 +240,7 @@ class ContractManifest(
     @JvmField val states: List<ContractStateDescriptor>? = states?.let {
         Collections.unmodifiableList(ArrayList(it))
     }
-    @JvmField val errorCodes: List<ContractErrorCodeDescriptor>? = errorCodes?.let {
+    @JvmField val errorTypes: List<ContractErrorTypeDescriptor>? = errorTypes?.let {
         Collections.unmodifiableList(ArrayList(it))
     }
     @JvmField val kotoba: List<ContractKotobaTranslationEntry>? = kotoba?.let {
@@ -298,7 +310,11 @@ object ContractManifestJsonParser {
         "Option",
         "Result",
         "List",
+        "ListError",
+        "NumericError",
         "StateMap",
+        "StateCursor",
+        "StatePage",
         "Secret",
         "AccountView",
         "AssetView",
@@ -312,8 +328,12 @@ object ContractManifestJsonParser {
         "SoracloudRequest",
         "SoracloudResponse",
         "state_map_get",
+        "__kotodama_state_page",
+        "__kotodama_state_take",
         "__kotodama_list_len",
         "__kotodama_list_get",
+        "__kotodama_list_set",
+        "__kotodama_list_push",
         "__kotodama_list_try_set",
         "__kotodama_list_try_push",
         "__kotodama_list_pop",
@@ -321,6 +341,8 @@ object ContractManifestJsonParser {
         "__kotodama_list_take",
         "__kotodama_list_enumerate",
         "__kotodama_decimal_div_round",
+        "__kotodama_decimal_mul_div_round",
+        "__kotodama_quantity_mul_div_round",
         "__kotodama_quantity_div_round",
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",
@@ -376,7 +398,7 @@ object ContractManifestJsonParser {
         "Name",
     )
     private val dynamicAccessBoundKinds = setOf(
-        "range",
+        "page",
         "take",
     )
     private val maxDynamicAccessKeys = BigInteger.valueOf(64)
@@ -430,7 +452,7 @@ object ContractManifestJsonParser {
             root,
             setOf(
                 "seiyaku_name", "code_hash", "abi_hash", "compiler_fingerprint",
-                "features_bitmap", "access_set_hints", "entrypoints", "states", "error_codes",
+                "features_bitmap", "access_set_hints", "entrypoints", "states", "error_types",
                 "kotoba", "provenance",
             ),
             "manifest",
@@ -460,7 +482,7 @@ object ContractManifestJsonParser {
             ?.let(::parseAccessSetHints)
         val entrypoints = optionalObjectList(root, "entrypoints", "manifest.entrypoints", ::parseEntrypoint)
         val states = optionalObjectList(root, "states", "manifest.states", ::parseState)
-        val errorCodes = optionalObjectList(root, "error_codes", "manifest.error_codes", ::parseErrorCode)
+        val errorTypes = optionalObjectList(root, "error_types", "manifest.error_types", ::parseErrorType)
         val kotoba = optionalObjectList(root, "kotoba", "manifest.kotoba", ::parseKotobaEntry)
         val provenance = optionalObject(root, "provenance", "manifest.provenance")?.let(::parseProvenance)
 
@@ -487,9 +509,25 @@ object ContractManifestJsonParser {
         }
         states?.let { requireUnique(it.map { descriptor -> descriptor.name }, "manifest.states") }
         validateDynamicAccessHintStateMaps(accessSetHints, states.orEmpty())
-        errorCodes?.let {
-            requireUnique(it.map { descriptor -> "${descriptor.namespace}::${descriptor.name}" }, "manifest.error_codes")
-            requireUnique(it.map { descriptor -> descriptor.code.toString() }, "manifest.error_codes.code")
+        errorTypes?.let {
+            check(it.size <= 256) { "manifest.error_types exceeds 256 types" }
+            requireUnique(it.map { descriptor -> descriptor.identity }, "manifest.error_types")
+        }
+        val errorCatalog = errorTypes.orEmpty().associateBy { it.identity }
+        states.orEmpty().forEach { state ->
+            check(StateTypeNameParser(state.typeName, errorCatalog.keys).parse()) {
+                "manifest state nominal error identity is not declared in its error_types catalog"
+            }
+        }
+        entrypoints.orEmpty().forEach { entrypoint ->
+            val schemas = entrypoint.argumentSchema?.fields.orEmpty().map { it.valueType } + listOfNotNull(entrypoint.returnSchema)
+            schemas.flatMap { it.nodes }.filter { it.kind == EntrypointValueTypeNodeKindV1.ERROR }.forEach { node ->
+                val error = checkNotNull(node.errorType)
+                val declared = errorCatalog[error.identity]
+                check(declared != null && declared.variants.map { it.name to it.code } == error.variants.map { it.name to it.code }) {
+                    "manifest boundary error schema does not match its error_types catalog"
+                }
+            }
         }
         kotoba?.let { requireUnique(it.map { entry -> entry.messageId }, "manifest.kotoba") }
 
@@ -502,7 +540,7 @@ object ContractManifestJsonParser {
             accessSetHints,
             entrypoints,
             states,
-            errorCodes,
+            errorTypes,
             kotoba,
             provenance,
         )
@@ -634,10 +672,10 @@ object ContractManifestJsonParser {
             ?.let { currentTypeName(it, "entrypoint descriptor.return_type") }
         val returnSchema = optionalObject(root, "return_schema", "entrypoint descriptor.return_schema")
             ?.let(::parseValueType)
-        check((returnType == null) == (returnSchema == null)) {
-            "entrypoint descriptor return_type and return_schema must be present together"
+        check(returnType != null && returnSchema != null) {
+            "entrypoint descriptor must declare return_type and return_schema, including Unit"
         }
-        check(returnSchema == null || (returnSchema.wordCount <= 13 && returnSchema.canonicalTypeName == returnType)) {
+        check(returnSchema.wordCount <= 13 && returnSchema.canonicalTypeName == returnType) {
             "entrypoint descriptor return schema does not exactly match return_type"
         }
         val permission = optionalExactString(root, "permission", "entrypoint descriptor.permission")
@@ -763,6 +801,19 @@ object ContractManifestJsonParser {
                 EntrypointValueTypeNodeKindV1.LIST,
                 listValue = parseListNode(objectValue(root["value"], "entrypoint list node")),
             )
+            "Unit" -> {
+                check(root["value"] == null) { "entrypoint Unit node.value must be null" }
+                EntrypointValueTypeNodeV1(EntrypointValueTypeNodeKindV1.UNIT)
+            }
+            "Error" -> EntrypointValueTypeNodeV1(
+                EntrypointValueTypeNodeKindV1.ERROR,
+                errorType = parseErrorType(objectValue(root["value"], "entrypoint error type")),
+            )
+            "StateCursor" -> {
+                val key = parseLeafKind(objectValue(root["value"], "state cursor key kind"))
+                check(key != EntrypointValueKindV1.JSON) { "Json is not a state cursor key kind" }
+                EntrypointValueTypeNodeV1(EntrypointValueTypeNodeKindV1.STATE_CURSOR, leafKind = key)
+            }
             "Leaf" -> EntrypointValueTypeNodeV1(
                 EntrypointValueTypeNodeKindV1.LEAF,
                 leafKind = parseLeafKind(objectValue(root["value"], "entrypoint value kind")),
@@ -777,8 +828,8 @@ object ContractManifestJsonParser {
         val fields = stringList(required(root, "fields", "entrypoint struct node"), "entrypoint struct node.fields")
         check(
             (
-                canonicalTypeDeclarationIdentifier(name) ||
-                    name == "QueryPage" ||
+                canonicalUserStructIdentifier(name) ||
+                    name == "QueryPage" || name == "StatePage" ||
                     isCoreQueryViewName(name)
             ) &&
                 fields.isNotEmpty() &&
@@ -854,7 +905,7 @@ object ContractManifestJsonParser {
             val handle = node.kind == EntrypointValueTypeNodeKindV1.OPTION ||
                 node.kind == EntrypointValueTypeNodeKindV1.RESULT ||
                 node.kind == EntrypointValueTypeNodeKindV1.LIST
-            if (!suppressWords && (handle || node.kind == EntrypointValueTypeNodeKindV1.LEAF)) {
+            if (!suppressWords && (handle || node.kind in setOf(EntrypointValueTypeNodeKindV1.LEAF, EntrypointValueTypeNodeKindV1.UNIT, EntrypointValueTypeNodeKindV1.ERROR, EntrypointValueTypeNodeKindV1.STATE_CURSOR))) {
                 words += 1
             }
             val children = nodeChildCount(node)
@@ -879,6 +930,12 @@ object ContractManifestJsonParser {
                 EntrypointValueTypeNodeKindV1.STRUCT -> {
                     val struct = checkNotNull(node.structValue) { "missing struct node metadata" }
                     when {
+                        struct.name == "StatePage" -> {
+                            val body = children[0].typeName.removePrefix("List<(").removeSuffix(">")
+                            val split = body.lastIndexOf("), ")
+                            check(split >= 0) { "invalid StatePage items" }
+                            RenderedType("StatePage<${body.substring(0, split)}, ${body.substring(split + 3)}>")
+                        }
                         struct.name == "QueryPage" -> children.firstOrNull()?.listElementCoreViewName
                             ?.let { RenderedType("QueryPage<$it>") }
                             ?: RenderedType("struct QueryPage")
@@ -901,6 +958,9 @@ object ContractManifestJsonParser {
                         listElementCoreViewName = child.coreViewName,
                     )
                 }
+                EntrypointValueTypeNodeKindV1.STATE_CURSOR -> RenderedType("StateCursor<${canonicalLeafName(checkNotNull(node.leafKind))}>")
+                EntrypointValueTypeNodeKindV1.UNIT -> RenderedType("()")
+                EntrypointValueTypeNodeKindV1.ERROR -> RenderedType(checkNotNull(node.errorType).identity)
                 EntrypointValueTypeNodeKindV1.LEAF ->
                     RenderedType(canonicalLeafName(checkNotNull(node.leafKind) { "missing leaf kind" }))
             }
@@ -923,7 +983,7 @@ object ContractManifestJsonParser {
         EntrypointValueTypeNodeKindV1.TUPLE -> checkNotNull(node.tupleArity)
         EntrypointValueTypeNodeKindV1.OPTION, EntrypointValueTypeNodeKindV1.LIST -> 1
         EntrypointValueTypeNodeKindV1.RESULT -> 2
-        EntrypointValueTypeNodeKindV1.LEAF -> 0
+        EntrypointValueTypeNodeKindV1.LEAF, EntrypointValueTypeNodeKindV1.UNIT, EntrypointValueTypeNodeKindV1.ERROR, EntrypointValueTypeNodeKindV1.STATE_CURSOR -> 0
     }
 
     private fun subtreeEnd(nodes: List<EntrypointValueTypeNodeV1>, start: Int): Int? {
@@ -1014,6 +1074,18 @@ object ContractManifestJsonParser {
             val struct = node.structValue ?: return false
             if (isCoreQueryViewName(struct.name)) {
                 if (coreQueryViewRange(nodes, start) == null) return false
+                return@forEachIndexed
+            }
+            if (struct.name == "StatePage") {
+                if (struct.fields != listOf("items", "next")) return false
+                val list = nodes.getOrNull(start + 1) ?: return false
+                if (list.kind != EntrypointValueTypeNodeKindV1.LIST || list.listValue?.capacity !in 1..64) return false
+                if (nodes.getOrNull(start + 2)?.kind != EntrypointValueTypeNodeKindV1.TUPLE || nodes[start + 2].tupleArity != 2) return false
+                val key = nodes.getOrNull(start + 3) ?: return false
+                if (key.kind != EntrypointValueTypeNodeKindV1.LEAF || key.leafKind == EntrypointValueKindV1.JSON) return false
+                val end = subtreeEnd(nodes, start + 4) ?: return false
+                val cursor = nodes.getOrNull(end + 1) ?: return false
+                if (nodes.getOrNull(end)?.kind != EntrypointValueTypeNodeKindV1.OPTION || cursor.kind != EntrypointValueTypeNodeKindV1.STATE_CURSOR || cursor.leafKind != key.leafKind || subtreeEnd(nodes, start) != end + 2) return false
                 return@forEachIndexed
             }
             if (struct.name != "QueryPage") return@forEachIndexed
@@ -1116,20 +1188,27 @@ object ContractManifestJsonParser {
         return ContractStateDescriptor(name, typeName)
     }
 
-    private fun parseErrorCode(root: Map<String, Any?>): ContractErrorCodeDescriptor {
-        exactKeys(root, setOf("namespace", "name", "code"), "error code descriptor")
-        val namespace = exactString(required(root, "namespace", "error code descriptor"), "error code descriptor.namespace")
-        val name = exactString(required(root, "name", "error code descriptor"), "error code descriptor.name")
-        check(canonicalTypeDeclarationIdentifier(namespace) && canonicalSourceIdentifier(name)) {
-            "error code namespace and name must be canonical Kotodama identifiers"
+    private fun parseErrorType(root: Map<String, Any?>): ContractErrorTypeDescriptor {
+        exactKeys(root, setOf("identity", "variants"), "error type descriptor")
+        val identity = exactString(required(root, "identity", "error type descriptor"), "error type descriptor.identity")
+        check(identity.toByteArray(StandardCharsets.UTF_8).size <= 1024 &&
+            identity.matches(Regex("[\\p{L}\\p{N}_:/@.-]+")) && !identity.contains("__kotodama_link_")) {
+            "error type identity must be a stable package/unit/enum identity"
         }
-        val code = unsignedInteger(
-            required(root, "code", "error code descriptor"),
-            BigInteger.valueOf(0xffff_ffffL),
-            "error code descriptor.code",
-        ).longValueExact()
-        check(code > 0) { "error code descriptor.code must be a non-zero u32" }
-        return ContractErrorCodeDescriptor(namespace, name, code)
+        val variants = objectList(required(root, "variants", "error type descriptor"), "error type descriptor.variants") { variant ->
+            exactKeys(variant, setOf("name", "code"), "error variant")
+            val name = exactString(required(variant, "name", "error variant"), "error variant.name")
+            check(canonicalSourceIdentifier(name) || (name.any { it.code > 127 } && name.matches(Regex("[\\p{L}_][\\p{L}\\p{N}_]*")))) {
+                "error variant name must be a canonical identifier"
+            }
+            val code = unsignedInteger(required(variant, "code", "error variant"), BigInteger.valueOf(0xffff_ffffL), "error variant.code").longValueExact()
+            check(code > 0) { "error variant.code must be a non-zero u32" }
+            ContractErrorVariantDescriptor(name, code)
+        }
+        check(variants.size in 1..256) { "error type must contain 1..256 variants" }
+        requireUnique(variants.map { it.name }, "error variant names")
+        check(variants.zipWithNext().all { (left, right) -> left.code < right.code }) { "error variant codes must be strictly increasing" }
+        return ContractErrorTypeDescriptor(identity, variants)
     }
 
     private fun parseKotobaEntry(root: Map<String, Any?>): ContractKotobaTranslationEntry {
@@ -1316,7 +1395,22 @@ object ContractManifestJsonParser {
     private fun canonicalTypeDeclarationIdentifier(value: String): Boolean =
         canonicalDeclarationIdentifier(value) && value !in retiredNumericTypeNames
 
-    private class StateTypeNameParser(private val value: String) {
+    private fun canonicalQualifiedStructIdentifier(value: String): Boolean {
+        if (value.length > 1024 || value.any { it.code > 127 } || value.contains("__kotodama_link_")) return false
+        val parts = value.split("::")
+        if (parts.size != 3 || !canonicalTypeDeclarationIdentifier(parts[1]) || !canonicalTypeDeclarationIdentifier(parts[2])) return false
+        fun component(part: String): Boolean = part.isNotEmpty() &&
+            (part[0] in 'A'..'Z' || part[0] in 'a'..'z' || part[0] in '0'..'9' || part[0] == '_') &&
+            part.all { it in 'A'..'Z' || it in 'a'..'z' || it in '0'..'9' || it == '_' || it == '.' || it == '-' }
+        val lockedPackage = parts[0].split('@')
+        return lockedPackage.size in 1..2 && lockedPackage[0].split('/').all(::component) &&
+            (lockedPackage.size == 1 || component(lockedPackage[1]))
+    }
+
+    private fun canonicalUserStructIdentifier(value: String): Boolean =
+        value.length <= 1024 && (canonicalTypeDeclarationIdentifier(value) || canonicalQualifiedStructIdentifier(value))
+
+    private class StateTypeNameParser(private val value: String, private val errorIdentities: Set<String>? = null) {
         private var cursor = 0
         private var nodes = 0
 
@@ -1329,6 +1423,19 @@ object ContractManifestJsonParser {
             nodes += 1
             if (depth > maxStateTypeDepth || nodes > maxStateTypeNodes) return null
 
+            if (consume("()")) return "unit"
+            val errorIdentity = Regex("[\\p{L}\\p{N}_:/@.-]+").find(value, cursor)?.takeIf { it.range.first == cursor }?.value
+            val qualifiedStructName = errorIdentity?.takeIf {
+                value.getOrNull(cursor + it.length) == '{' && canonicalQualifiedStructIdentifier(it)
+            }
+            if (qualifiedStructName != null) {
+                cursor += qualifiedStructName.length
+            } else if (errorIdentity != null && errorIdentity.contains("::") &&
+                errorIdentity.toByteArray(StandardCharsets.UTF_8).size <= 1024 && !errorIdentity.contains("__kotodama_link_")) {
+                if (errorIdentities != null && errorIdentity !in errorIdentities) return null
+                cursor += errorIdentity.length
+                return "error"
+            }
             if (consume("(")) {
                 if (parseType(allowStateMap = false, depth = depth + 1) == null || !consume(", ")) return null
                 if (parseType(allowStateMap = false, depth = depth + 1) == null) return null
@@ -1338,7 +1445,7 @@ object ContractManifestJsonParser {
                 return if (consume(")")) aggregateType else null
             }
 
-            val name = identifier() ?: return null
+            val name = qualifiedStructName ?: identifier() ?: return null
             if (name in stateScalarTypeNames) return name
             when (name) {
                 "Option" -> {
@@ -1365,6 +1472,11 @@ object ContractManifestJsonParser {
                     ) return null
                     return aggregateType
                 }
+                "StateCursor" -> {
+                    if (!consume("<")) return null
+                    val key = identifier() ?: return null
+                    return if (key in stateMapKeyTypeNames && consume(">")) aggregateType else null
+                }
                 "StateMap" -> {
                     if (!allowStateMap || !consume("<")) return null
                     // The map wrapper and scalar key are outside the stored
@@ -1382,7 +1494,15 @@ object ContractManifestJsonParser {
                 }
             }
 
-            if (!canonicalTypeDeclarationIdentifier(name) || !consume("{")) return null
+            if (name == "StatePage") {
+                nodes += 5 // List, Tuple, scalar key, Option, StateCursor.
+                if (nodes > maxStateTypeNodes || depth + 3 > maxStateTypeDepth || !consume("{items: List<(")) return null
+                val key = identifier() ?: return null
+                if (key !in stateMapKeyTypeNames || !consume(", ") || parseType(false, depth + 3) == null ||
+                    !consume("), ") || !listCapacity() || !consume(">, next: Option<StateCursor<")) return null
+                return if (consume(key) && consume(">>}")) aggregateType else null
+            }
+            if (!canonicalUserStructIdentifier(name) || !consume("{")) return null
             val fields = HashSet<String>()
             while (true) {
                 val field = identifier()
@@ -1456,6 +1576,13 @@ object ContractManifestJsonParser {
                     index += 1
                 }
                 isAsciiIdentifierStart(value[index]) -> {
+                    var qualifiedEnd = index
+                    while (qualifiedEnd < value.length &&
+                        (isAsciiIdentifierPart(value[qualifiedEnd]) || value[qualifiedEnd] in ":/@.-")) qualifiedEnd += 1
+                    if (canonicalQualifiedStructIdentifier(value.substring(index, qualifiedEnd))) {
+                        index = qualifiedEnd
+                        continue
+                    }
                     val start = index
                     index += 1
                     while (index < value.length && isAsciiIdentifierPart(value[index])) {
@@ -1486,9 +1613,6 @@ object ContractManifestJsonParser {
                     }
                 }
                 else -> {
-                    check(value[index].code <= 0x7f) {
-                        "$path must use ASCII Kotodama type identifiers"
-                    }
                     index += 1
                 }
             }

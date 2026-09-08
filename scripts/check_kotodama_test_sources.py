@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Verify the sealed Kotodama compiler test-source fixture inventories."""
+"""Check the current sealed Kotodama compiler test-source inventory.
+
+Requires Python 3.10+ and a repository checkout; no Rust build or environment
+variables are needed. The default is read-only. Use --write only after an
+intentional fixture or test change to regenerate the reviewable V1 manifest.
+"""
 
 from __future__ import annotations
 
@@ -11,28 +16,11 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 import sys
-from typing import Any, Iterable, Optional
-
+from typing import Any, Iterable
 
 FORMAT = "iroha.kotodama.test-sources"
 SCHEMA_VERSION = 1
 DEFAULT_MANIFEST = Path("crates/kotodama_lang/kotodama_fixtures_v1.manifest.json")
-LEGACY_FORMAT = "iroha.kotodama.legacy-test-sources"
-LEGACY_SCHEMA_VERSION = 1
-LEGACY_ORIGIN_MERGE = "58a8040dc1726359edfdc72759b73ea3649ae38c"
-DEFAULT_LEGACY_MANIFEST = Path(
-    "crates/kotodama_lang/kotodama_legacy_test_sources_v1.manifest.json"
-)
-EXPECTED_LEGACY_FIXTURE_COUNT = 52
-EXPECTED_LEGACY_SOURCES = (
-    "crates/kotodama_lang/src/semantic.rs",
-    "crates/kotodama_lang/src/ir.rs",
-    "crates/kotodama_lang/src/ir_tail_tests.rs",
-)
-EXPECTED_LEGACY_DIRECTORIES = (
-    "crates/kotodama_lang/src/semantic/test_sources",
-    "crates/kotodama_lang/src/ir/test_sources",
-)
 EXPECTED_SOURCES = (
     "crates/kotodama_lang/src/compiler.rs",
     "crates/kotodama_lang/src/semantic.rs",
@@ -47,6 +35,7 @@ EXPECTED_TEST_INCLUDES = {
         "semantic/tests/numeric_rounding_modes.rs",
         "semantic/tests/trigger_semantics_tests.rs",
         "semantic_sum_tests.rs",
+        "semantic/tests/call_labels_and_patterns.rs",
     ),
     "crates/kotodama_lang/src/ir.rs": (
         "ir/tests/public_argument_record_abi.rs",
@@ -68,7 +57,26 @@ TEST_BATCH_MACROS = {
 TEST_SINGLE_CASE_MACROS = {
     "crates/kotodama_lang/src/ir.rs": ("alias_lowering_case",),
 }
-EXPECTED_FIXTURE_COUNT = 248
+EXPECTED_FIXTURE_DIRECTORIES = {
+    "crates/kotodama_lang/src/compiler.rs": (
+        "crates/kotodama_lang/src/compiler/fixtures/v1",
+    ),
+    "crates/kotodama_lang/src/semantic.rs": (
+        "crates/kotodama_lang/src/semantic/fixtures/v1",
+        "crates/kotodama_lang/src/semantic/test_sources",
+    ),
+    "crates/kotodama_lang/src/ir.rs": (
+        "crates/kotodama_lang/src/ir/fixtures/v1",
+        "crates/kotodama_lang/src/ir/test_sources",
+    ),
+}
+EXPECTED_EXTERNAL_FIXTURES = {
+    "crates/kotodama_lang/src/compiler.rs": (
+        "crates/kotodama_lang/src/samples/mint_rose_trigger.ko",
+        "crates/kotodama_lang/src/samples/zk_vote_ballot.ko",
+        "crates/kotodama_lang/fixtures/koto_v1/staged_mint_access_hints/001.ko",
+    ),
+}
 ROOT_KEYS = frozenset(
     {
         "format",
@@ -80,36 +88,30 @@ ROOT_KEYS = frozenset(
     }
 )
 SOURCE_KEYS = frozenset(
-    {"path", "fixture_directory", "test_names", "test_names_sha256"}
+    {
+        "path",
+        "fixture_directories",
+        "external_fixtures",
+        "test_includes",
+        "test_names",
+        "test_names_sha256",
+    }
 )
-COMMON_LITERAL_KEYS = frozenset(
+FIXTURE_KEYS = frozenset(
     {
         "ordinal",
         "owner_source",
         "owner_function",
         "owner_is_test",
-        "source_line_before_migration",
-        "raw_hashes",
+        "asset",
+        "include_path",
         "byte_len",
         "newline_count",
         "starts_with_lf",
         "ends_with_lf",
         "content_sha256",
-        "raw_literal_sha256",
     }
 )
-FIXTURE_KEYS = COMMON_LITERAL_KEYS | frozenset({"asset", "include_path"})
-LEGACY_ROOT_KEYS = frozenset(
-    {
-        "format",
-        "schema_version",
-        "origin_merge",
-        "inventory_sha256",
-        "source_files",
-        "fixtures",
-    }
-)
-LEGACY_FIXTURE_KEYS = frozenset({"path", "byte_len", "content_sha256"})
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RAW_STRING_RE = re.compile(r'(?<![A-Za-z0-9_])r(?P<hashes>#{0,255})"')
 INCLUDE_STR_RE = re.compile(r'include_str!\(\s*"(?P<path>[^"]+)"\s*\)')
@@ -124,9 +126,7 @@ TEST_FUNCTION_RE = re.compile(
     r"[ \t]*(?:pub(?:\([^\n)]*\))?[ \t]+)?fn[ \t]+"
     r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
 )
-TEST_INCLUDE_RE = re.compile(
-    r'(?m)^[ \t]*include!\(\s*"(?P<path>[^"\n]+)"\s*\);'
-)
+TEST_INCLUDE_RE = re.compile(r'(?m)^[ \t]*include!\(\s*"(?P<path>[^"\n]+)"\s*\);')
 
 
 class ValidationError(ValueError):
@@ -148,7 +148,6 @@ class ValidationStats:
     """Summary returned after a successful validation."""
 
     fixtures: int
-    legacy_fixtures: int
     tests: int
 
 
@@ -346,25 +345,6 @@ def _owner(spans: Iterable[FunctionSpan], position: int) -> FunctionSpan:
     return min(owners, key=lambda span: span.end - span.start)
 
 
-def _validate_common_literal(entry: dict[str, Any], label: str) -> None:
-    _integer(entry["ordinal"], f"{label}.ordinal", minimum=1)
-    _relative_path(entry["owner_source"], f"{label}.owner_source")
-    _string(entry["owner_function"], f"{label}.owner_function")
-    _boolean(entry["owner_is_test"], f"{label}.owner_is_test")
-    _integer(
-        entry["source_line_before_migration"],
-        f"{label}.source_line_before_migration",
-        minimum=1,
-    )
-    _integer(entry["raw_hashes"], f"{label}.raw_hashes", minimum=1)
-    _integer(entry["byte_len"], f"{label}.byte_len", minimum=1)
-    _integer(entry["newline_count"], f"{label}.newline_count", minimum=1)
-    _boolean(entry["starts_with_lf"], f"{label}.starts_with_lf")
-    _boolean(entry["ends_with_lf"], f"{label}.ends_with_lf")
-    _sha256(entry["content_sha256"], f"{label}.content_sha256")
-    _sha256(entry["raw_literal_sha256"], f"{label}.raw_literal_sha256")
-
-
 def _regular_bytes(path: Path, label: str) -> bytes:
     metadata = path.lstat()
     if not stat.S_ISREG(metadata.st_mode):
@@ -384,9 +364,7 @@ def _closing_brace(masked: str, opening: int, label: str) -> int:
     _fail(f"unterminated Rust macro invocation: {label}")
 
 
-def _macro_test_events(
-    source_path: str, masked: str
-) -> list[tuple[int, list[str]]]:
+def _macro_test_events(source_path: str, masked: str) -> list[tuple[int, list[str]]]:
     events: list[tuple[int, list[str]]] = []
     for macro_name in TEST_BATCH_MACROS.get(source_path, ()):
         pattern = re.compile(rf"\b{re.escape(macro_name)}!\s*\{{")
@@ -478,277 +456,247 @@ def _expanded_test_names(root: Path, source_path: str, source: str) -> list[str]
     return names
 
 
-def _validate_legacy_manifest(root: Path, manifest_path: Path) -> int:
-    """Validate the recovered legacy test-source assets and their Rust includes."""
+def _macro_case_spans(source_path: str, source: str) -> list[FunctionSpan]:
+    """Locate fixture ownership inside the explicitly registered Rust test macros."""
 
-    try:
-        payload: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as error:
-        raise ValidationError(f"failed to read legacy manifest: {error}") from error
-    payload = _exact_keys(payload, LEGACY_ROOT_KEYS, "legacy_manifest")
-    if payload["format"] != LEGACY_FORMAT:
-        _fail(f"legacy manifest format must be {LEGACY_FORMAT!r}")
-    if payload["schema_version"] != LEGACY_SCHEMA_VERSION:
-        _fail(f"legacy manifest schema_version must be {LEGACY_SCHEMA_VERSION}")
-    if payload["origin_merge"] != LEGACY_ORIGIN_MERGE:
-        _fail(f"legacy manifest origin_merge must be {LEGACY_ORIGIN_MERGE}")
-
-    source_files = payload["source_files"]
-    fixtures = payload["fixtures"]
-    if source_files != list(EXPECTED_LEGACY_SOURCES):
-        _fail(
-            "legacy manifest source_files must be exactly "
-            f"{list(EXPECTED_LEGACY_SOURCES)} in order"
-        )
-    if not isinstance(fixtures, list) or len(fixtures) != EXPECTED_LEGACY_FIXTURE_COUNT:
-        _fail(
-            "legacy manifest fixtures must contain exactly "
-            f"{EXPECTED_LEGACY_FIXTURE_COUNT} entries"
-        )
-    inventory = {"fixtures": fixtures, "source_files": source_files}
-    if (
-        _sha256(payload["inventory_sha256"], "legacy_manifest.inventory_sha256")
-        != _digest_json(inventory)
-    ):
-        _fail("legacy manifest inventory_sha256 does not authenticate the inventory")
-
-    expected_paths: list[str] = []
-    allowed_directories = frozenset(EXPECTED_LEGACY_DIRECTORIES)
-    for index, raw_entry in enumerate(fixtures):
-        label = f"legacy_manifest.fixtures[{index}]"
-        entry = _exact_keys(raw_entry, LEGACY_FIXTURE_KEYS, label)
-        path = _relative_path(entry["path"], f"{label}.path")
-        if PurePosixPath(path).parent.as_posix() not in allowed_directories:
-            _fail(f"{label}.path is outside the legacy fixture directories")
-        if not path.endswith(".ko"):
-            _fail(f"{label}.path must name a .ko source fixture")
-        expected_paths.append(path)
-        asset = root / path
-        try:
-            data = _regular_bytes(asset, path)
-        except FileNotFoundError:
-            _fail(f"legacy fixture is missing: {path}")
-        if len(data) != _integer(entry["byte_len"], f"{label}.byte_len", minimum=1):
-            _fail(f"{path} byte length changed")
-        if hashlib.sha256(data).hexdigest() != _sha256(
-            entry["content_sha256"], f"{label}.content_sha256"
-        ):
-            _fail(f"{path} content hash changed")
-
-    if expected_paths != sorted(expected_paths) or len(expected_paths) != len(
-        set(expected_paths)
-    ):
-        _fail("legacy fixture paths must be unique and sorted")
-
-    observed_includes: list[str] = []
-    for source_path in source_files:
-        try:
-            source = _regular_bytes(root / source_path, source_path).decode("utf-8")
-        except FileNotFoundError:
-            _fail(f"legacy fixture owner source is missing: {source_path}")
-        source_parent = PurePosixPath(source_path).parent
-        include_sources = [(source_path, source)]
-        for child_relative in EXPECTED_TEST_INCLUDES.get(source_path, ()):
-            child_path = (source_parent / PurePosixPath(child_relative)).as_posix()
-            if child_path in source_files:
-                continue
-            try:
-                include_sources.append((
-                    child_path,
-                    _regular_bytes(root / child_path, child_path).decode("utf-8"),
-                ))
-            except FileNotFoundError:
-                _fail(f"Rust test include is missing: {child_path}")
-        for include_source_path, include_source in include_sources:
-            for match in INCLUDE_STR_RE.finditer(include_source):
-                include_path = match.group("path")
-                if "/test_sources/" not in include_path:
-                    continue
-                observed_includes.append(
-                    _resolved_include_path(
-                        include_source_path,
-                        include_path,
-                        "legacy include path",
+    masked = _mask_rust(source)
+    spans: list[FunctionSpan] = []
+    for macro_name in TEST_BATCH_MACROS.get(source_path, ()):
+        pattern = re.compile(rf"\b{re.escape(macro_name)}!\s*\{{")
+        for invocation in pattern.finditer(masked):
+            opening = masked.find("{", invocation.start(), invocation.end())
+            closing = _closing_brace(masked, opening, macro_name)
+            cases = list(
+                re.finditer(
+                    r"(?:\A|;)\s*([A-Za-z_][A-Za-z0-9_]*)\s*:",
+                    masked[opening + 1 : closing],
+                )
+            )
+            for index, case in enumerate(cases):
+                end = (
+                    opening + 1 + cases[index + 1].start()
+                    if index + 1 < len(cases)
+                    else closing
+                )
+                spans.append(
+                    FunctionSpan(
+                        case.group(1),
+                        opening + 1 + case.start(),
+                        end,
+                        True,
                     )
                 )
-    if len(observed_includes) != len(set(observed_includes)):
-        _fail("legacy fixture include inventory contains duplicates")
-    if set(observed_includes) != set(expected_paths):
-        _fail("legacy fixture include inventory differs from the sealed manifest")
-
-    for directory in EXPECTED_LEGACY_DIRECTORIES:
-        observed_assets = {
-            path.relative_to(root).as_posix()
-            for path in (root / directory).glob("*.ko")
-            if path.is_file()
-        }
-        expected_assets = {
-            path
-            for path in expected_paths
-            if PurePosixPath(path).parent.as_posix() == directory
-        }
-        if observed_assets != expected_assets:
-            _fail(f"legacy fixture directory membership changed under {directory}")
-
-    return len(fixtures)
+    for macro_name in TEST_SINGLE_CASE_MACROS.get(source_path, ()):
+        pattern = re.compile(
+            rf"\b{re.escape(macro_name)}!\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,"
+        )
+        for invocation in pattern.finditer(masked):
+            opening = masked.find("(", invocation.start(), invocation.end())
+            depth = 0
+            for closing in range(opening, len(masked)):
+                depth += (masked[closing] == "(") - (masked[closing] == ")")
+                if depth == 0:
+                    spans.append(
+                        FunctionSpan(invocation.group(1), opening, closing + 1, True)
+                    )
+                    break
+            else:
+                _fail(f"unterminated Rust test macro invocation: {macro_name}")
+    return spans
 
 
-def validate_manifest(
-    root: Path,
-    manifest_path: Path,
-    legacy_manifest_path: Optional[Path] = None,
-) -> ValidationStats:
-    """Validate every source reference, payload byte, and reconstruction hash."""
+def _capture_manifest(root: Path) -> dict[str, Any]:
+    """Capture current consumers; reject unowned, duplicate, or missing assets."""
+
+    sources: list[dict[str, Any]] = []
+    fixtures: list[dict[str, Any]] = []
+    seen_assets: set[str] = set()
+    for source_path in EXPECTED_SOURCES:
+        source = _regular_bytes(root / source_path, source_path).decode("utf-8")
+        names = _expanded_test_names(root, source_path, source)
+        directories = EXPECTED_FIXTURE_DIRECTORIES[source_path]
+        external = EXPECTED_EXTERNAL_FIXTURES.get(source_path, ())
+        sources.append(
+            {
+                "path": source_path,
+                "fixture_directories": list(directories),
+                "external_fixtures": list(external),
+                "test_includes": list(EXPECTED_TEST_INCLUDES[source_path]),
+                "test_names": names,
+                "test_names_sha256": hashlib.sha256(
+                    ("\n".join(names) + "\n").encode("utf-8")
+                ).hexdigest(),
+            }
+        )
+        consumers = [(source_path, source)]
+        for include_path in EXPECTED_TEST_INCLUDES[source_path]:
+            child_path = _resolved_include_path(
+                source_path, include_path, "Rust test include"
+            )
+            consumers.append(
+                (
+                    child_path,
+                    _regular_bytes(root / child_path, child_path).decode("utf-8"),
+                )
+            )
+        root_assets: set[str] = set()
+        for owner_source, text in consumers:
+            masked = _mask_rust(text)
+            spans = _function_spans(text) + _macro_case_spans(source_path, text)
+            ordinal = 0
+            for match in INCLUDE_STR_RE.finditer(text):
+                if not masked[match.start() :].startswith("include_str!"):
+                    continue
+                include_path = match.group("path")
+                if not include_path.endswith(".ko"):
+                    continue
+                asset = _resolved_include_path(
+                    owner_source, include_path, "fixture include"
+                )
+                if (
+                    PurePosixPath(asset).parent.as_posix() not in directories
+                    and asset not in external
+                ):
+                    _fail(
+                        f"fixture include is outside the owned fixture inventory: {asset}"
+                    )
+                if asset in seen_assets:
+                    _fail(f"duplicate fixture include: {asset}")
+                seen_assets.add(asset)
+                root_assets.add(asset)
+                owner = _owner(spans, match.start())
+                try:
+                    data = _regular_bytes(root / asset, asset)
+                except FileNotFoundError:
+                    _fail(f"fixture is missing: {asset}")
+                if not data:
+                    _fail(f"fixture is empty: {asset}")
+                data.decode("utf-8")
+                ordinal += 1
+                fixtures.append(
+                    {
+                        "ordinal": ordinal,
+                        "owner_source": owner_source,
+                        "owner_function": owner.name,
+                        "owner_is_test": owner.is_test,
+                        "asset": asset,
+                        "include_path": include_path,
+                        "byte_len": len(data),
+                        "newline_count": data.count(b"\n"),
+                        "starts_with_lf": data.startswith(b"\n"),
+                        "ends_with_lf": data.endswith(b"\n"),
+                        "content_sha256": hashlib.sha256(data).hexdigest(),
+                    }
+                )
+        for directory in directories:
+            observed = {
+                path.relative_to(root).as_posix()
+                for path in (root / directory).glob("*.ko")
+            }
+            referenced = {
+                asset
+                for asset in root_assets
+                if PurePosixPath(asset).parent.as_posix() == directory
+            }
+            if observed != referenced:
+                _fail(
+                    f"fixture directory membership changed under {directory}: unreferenced={sorted(observed - referenced)}, missing={sorted(referenced - observed)}"
+                )
+        if set(external) - root_assets:
+            _fail(f"external fixture include inventory changed in {source_path}")
+    return {
+        "format": FORMAT,
+        "schema_version": SCHEMA_VERSION,
+        "fixtures_sha256": _digest_json(fixtures),
+        "test_inventory_sha256": _digest_json(sources),
+        "source_files": sources,
+        "fixtures": fixtures,
+    }
+
+
+def validate_manifest(root: Path, manifest_path: Path) -> ValidationStats:
+    """Validate exact current tests, source ownership, include paths, and bytes."""
 
     root = root.resolve()
-    manifest_path = manifest_path.resolve()
     try:
         payload: Any = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise ValidationError(f"failed to read manifest: {error}") from error
     payload = _exact_keys(payload, ROOT_KEYS, "manifest")
-    if payload["format"] != FORMAT:
-        _fail(f"manifest format must be {FORMAT!r}")
-    if payload["schema_version"] != SCHEMA_VERSION:
-        _fail(f"manifest schema_version must be {SCHEMA_VERSION}")
-
-    source_entries = payload["source_files"]
+    if (
+        payload["format"] != FORMAT
+        or _integer(payload["schema_version"], "schema_version", minimum=1)
+        != SCHEMA_VERSION
+    ):
+        _fail(f"manifest must use {FORMAT!r} schema_version {SCHEMA_VERSION}")
+    sources = payload["source_files"]
     fixtures = payload["fixtures"]
-    if not isinstance(source_entries, list):
-        _fail("manifest.source_files must be an array")
-    if not isinstance(fixtures, list) or len(fixtures) != EXPECTED_FIXTURE_COUNT:
-        _fail(f"manifest.fixtures must contain exactly {EXPECTED_FIXTURE_COUNT} entries")
+    if not isinstance(sources, list) or not isinstance(fixtures, list) or not fixtures:
+        _fail("manifest source_files and fixtures must be non-empty arrays")
+    for index, source in enumerate(sources):
+        _exact_keys(source, SOURCE_KEYS, f"source_files[{index}]")
+    for index, fixture in enumerate(fixtures):
+        _exact_keys(fixture, FIXTURE_KEYS, f"fixtures[{index}]")
+        _integer(fixture["ordinal"], "fixture.ordinal", minimum=1)
+        _relative_path(fixture["asset"], "fixture.asset")
+        _relative_path(fixture["owner_source"], "fixture.owner_source")
+        _string(fixture["owner_function"], "fixture.owner_function")
+        _boolean(fixture["owner_is_test"], "fixture.owner_is_test")
+        _integer(fixture["byte_len"], "fixture.byte_len", minimum=1)
+        _integer(fixture["newline_count"], "fixture.newline_count")
+        _boolean(fixture["starts_with_lf"], "fixture.starts_with_lf")
+        _boolean(fixture["ends_with_lf"], "fixture.ends_with_lf")
+        _sha256(fixture["content_sha256"], "fixture.content_sha256")
     if _sha256(payload["fixtures_sha256"], "fixtures_sha256") != _digest_json(fixtures):
         _fail("fixtures_sha256 does not authenticate the ordered fixture inventory")
-    if (
-        _sha256(payload["test_inventory_sha256"], "test_inventory_sha256")
-        != _digest_json(source_entries)
-    ):
+    if _sha256(
+        payload["test_inventory_sha256"], "test_inventory_sha256"
+    ) != _digest_json(sources):
         _fail("test_inventory_sha256 does not authenticate the test inventory")
-
-    sources: dict[str, tuple[str, str, list[str]]] = {}
-    total_tests = 0
-    for index, raw_entry in enumerate(source_entries):
-        label = f"source_files[{index}]"
-        entry = _exact_keys(raw_entry, SOURCE_KEYS, label)
-        path = _relative_path(entry["path"], f"{label}.path")
-        directory = _relative_path(
-            entry["fixture_directory"], f"{label}.fixture_directory"
-        )
-        names = entry["test_names"]
-        if not isinstance(names, list) or not all(
-            isinstance(name, str) and name for name in names
+    observed = _capture_manifest(root)
+    if len(sources) != len(observed["source_files"]):
+        _fail("source inventory differs from the owned sources")
+    for expected, actual in zip(sources, observed["source_files"]):
+        if expected["test_names"] != actual["test_names"]:
+            _fail(f"Rust test name/order inventory changed in {actual['path']}")
+        if expected != actual:
+            _fail(
+                f"Rust source/include policy or test inventory hash changed in {actual['path']}"
+            )
+    if len(fixtures) != len(observed["fixtures"]):
+        _fail("fixture include inventory differs from the sealed manifest")
+    for expected, actual in zip(fixtures, observed["fixtures"]):
+        asset = actual["asset"]
+        for field, description in (
+            ("asset", "fixture include order"),
+            ("owner_source", "fixture source ownership"),
+            ("owner_function", "fixture function ownership"),
+            ("owner_is_test", "fixture test ownership"),
+            ("ordinal", "fixture include ordinal"),
+            ("include_path", "fixture include path"),
+            ("byte_len", "byte length"),
+            ("newline_count", "newline count"),
+            ("starts_with_lf", "leading-LF policy"),
+            ("ends_with_lf", "final-LF policy"),
+            ("content_sha256", "content hash"),
         ):
-            _fail(f"{label}.test_names must be an array of non-empty strings")
-        if len(names) != len(set(names)):
-            _fail(f"{label}.test_names contains duplicates")
-        names_digest = hashlib.sha256(
-            ("\n".join(names) + "\n").encode("utf-8")
-        ).hexdigest()
-        if _sha256(entry["test_names_sha256"], f"{label}.test_names_sha256") != names_digest:
-            _fail(f"{label}.test_names_sha256 mismatch")
-        if path in sources:
-            _fail(f"duplicate source inventory for {path}")
-        sources[path] = (directory, entry["test_names_sha256"], names)
-        total_tests += len(names)
-    if tuple(sources) != EXPECTED_SOURCES:
-        _fail(f"source inventory must be exactly {list(EXPECTED_SOURCES)} in order")
-
-    include_inventory: dict[str, list[tuple[str, FunctionSpan]]] = {}
-    for source_path, (directory, _, expected_names) in sources.items():
-        path = root / source_path
-        text = _regular_bytes(path, source_path).decode("utf-8")
-        spans = _function_spans(text)
-        observed_names = _expanded_test_names(root, source_path, text)
-        if observed_names != expected_names:
-            _fail(f"Rust test name/order inventory changed in {source_path}")
-        expected_include_prefix = PurePosixPath(directory).relative_to(
-            PurePosixPath(source_path).parent
-        ).as_posix() + "/"
-        includes: list[tuple[str, FunctionSpan]] = []
-        for match in INCLUDE_STR_RE.finditer(text):
-            include_path = match.group("path")
-            if include_path.startswith(expected_include_prefix):
-                includes.append((include_path, _owner(spans, match.start())))
-        include_inventory[source_path] = includes
-
-    seen_assets: set[str] = set()
-    expected_by_source: dict[str, list[tuple[str, str, bool]]] = {
-        source: [] for source in sources
-    }
-    ordinal_by_source = {source: 0 for source in sources}
-    for index, raw_entry in enumerate(fixtures):
-        label = f"fixtures[{index}]"
-        entry = _exact_keys(raw_entry, FIXTURE_KEYS, label)
-        _validate_common_literal(entry, label)
-        source = entry["owner_source"]
-        if source not in sources:
-            _fail(f"{label}.owner_source is not declared")
-        ordinal_by_source[source] += 1
-        if entry["ordinal"] != ordinal_by_source[source]:
-            _fail(f"{label}.ordinal is not contiguous within {source}")
-        asset = _relative_path(entry["asset"], f"{label}.asset")
-        include_path = _relative_path(entry["include_path"], f"{label}.include_path")
-        if asset in seen_assets:
-            _fail(f"duplicate fixture asset {asset}")
-        seen_assets.add(asset)
-        directory = sources[source][0]
-        if PurePosixPath(asset).parent.as_posix() != directory:
-            _fail(f"{label}.asset must be directly under {directory}")
-        expected_include = PurePosixPath(asset).relative_to(
-            PurePosixPath(source).parent
-        ).as_posix()
-        if include_path != expected_include:
-            _fail(f"{label}.include_path does not resolve to its asset")
-        data = _regular_bytes(root / asset, asset)
-        if len(data) != entry["byte_len"]:
-            _fail(f"{asset} byte length changed")
-        if data.count(b"\n") != entry["newline_count"]:
-            _fail(f"{asset} newline count changed")
-        if data.startswith(b"\n") != entry["starts_with_lf"]:
-            _fail(f"{asset} leading-LF policy changed")
-        if data.endswith(b"\n") != entry["ends_with_lf"]:
-            _fail(f"{asset} final-LF policy changed")
-        if hashlib.sha256(data).hexdigest() != entry["content_sha256"]:
-            _fail(f"{asset} content hash changed")
-        hashes = b"#" * entry["raw_hashes"]
-        reconstructed = b"r" + hashes + b'"' + data + b'"' + hashes
-        if hashlib.sha256(reconstructed).hexdigest() != entry["raw_literal_sha256"]:
-            _fail(f"{asset} no longer reconstructs its original raw literal")
-        expected_by_source[source].append(
-            (include_path, entry["owner_function"], entry["owner_is_test"])
-        )
-
-    for source, expected in expected_by_source.items():
-        observed = [
-            (path, owner.name, owner.is_test)
-            for path, owner in include_inventory[source]
-        ]
-        if observed != expected:
-            _fail(f"fixture include order/ownership changed in {source}")
-        directory = root / sources[source][0]
-        observed_assets = {
-            path.relative_to(root).as_posix()
-            for path in directory.glob("*.ko")
-            if path.is_file()
-        }
-        expected_assets = {
-            entry["asset"] for entry in fixtures if entry["owner_source"] == source
-        }
-        if observed_assets != expected_assets:
-            _fail(f"fixture directory membership changed under {directory.relative_to(root)}")
-
-    if legacy_manifest_path is None:
-        legacy_manifest_path = root / DEFAULT_LEGACY_MANIFEST
-    elif not legacy_manifest_path.is_absolute():
-        legacy_manifest_path = root / legacy_manifest_path
-    legacy_fixtures = _validate_legacy_manifest(root, legacy_manifest_path.resolve())
-
+            if expected[field] != actual[field]:
+                _fail(f"{asset} {description} changed")
     return ValidationStats(
         fixtures=len(fixtures),
-        legacy_fixtures=legacy_fixtures,
-        tests=total_tests,
+        tests=sum(len(source["test_names"]) for source in sources),
     )
+
+
+def write_manifest(root: Path, manifest_path: Path) -> ValidationStats:
+    """Regenerate the current seal only after all ownership checks succeed."""
+
+    payload = _capture_manifest(root.resolve())
+    manifest_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return validate_manifest(root, manifest_path)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -766,10 +714,9 @@ def _parse_args() -> argparse.Namespace:
         help="manifest path, relative to --root by default",
     )
     parser.add_argument(
-        "--legacy-manifest",
-        type=Path,
-        default=DEFAULT_LEGACY_MANIFEST,
-        help="legacy fixture manifest path, relative to --root by default",
+        "--write",
+        action="store_true",
+        help="explicitly regenerate the current inventory after intentional fixture/test edits",
     )
     return parser.parse_args()
 
@@ -777,23 +724,19 @@ def _parse_args() -> argparse.Namespace:
 def main() -> int:
     args = _parse_args()
     root = args.root.resolve()
-    manifest = args.manifest
-    if not manifest.is_absolute():
-        manifest = root / manifest
-    legacy_manifest = args.legacy_manifest
-    if not legacy_manifest.is_absolute():
-        legacy_manifest = root / legacy_manifest
+    manifest = args.manifest if args.manifest.is_absolute() else root / args.manifest
     try:
-        stats = validate_manifest(root, manifest, legacy_manifest)
+        stats = (
+            write_manifest(root, manifest)
+            if args.write
+            else validate_manifest(root, manifest)
+        )
     except (OSError, UnicodeError, ValidationError) as error:
-        print(f"ERROR: Kotodama test-source validation failed: {error}", file=sys.stderr)
+        print(
+            f"ERROR: Kotodama test-source validation failed: {error}", file=sys.stderr
+        )
         return 1
-    print(
-        "kotodama_test_sources: "
-        f"fixtures={stats.fixtures} "
-        f"legacy_fixtures={stats.legacy_fixtures} "
-        f"tests={stats.tests}"
-    )
+    print(f"kotodama_test_sources: fixtures={stats.fixtures} tests={stats.tests}")
     return 0
 
 

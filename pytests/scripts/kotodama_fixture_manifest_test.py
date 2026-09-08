@@ -1,4 +1,4 @@
-"""Tests for the sealed Kotodama compiler test-source inventories."""
+"""Tests for the sealed current Kotodama compiler test-source inventory."""
 
 from __future__ import annotations
 
@@ -10,16 +10,9 @@ import sys
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_kotodama_test_sources.py"
 MANIFEST = ROOT / "crates" / "kotodama_lang" / "kotodama_fixtures_v1.manifest.json"
-LEGACY_MANIFEST = (
-    ROOT
-    / "crates"
-    / "kotodama_lang"
-    / "kotodama_legacy_test_sources_v1.manifest.json"
-)
 
 
 def _load_checker():
@@ -36,13 +29,10 @@ checker = _load_checker()
 
 def _copy_fixture_tree(destination: Path) -> Path:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    legacy_payload = json.loads(LEGACY_MANIFEST.read_text(encoding="utf-8"))
     relative_manifest = MANIFEST.relative_to(ROOT)
     copied_manifest = destination / relative_manifest
     copied_manifest.parent.mkdir(parents=True)
     shutil.copy2(MANIFEST, copied_manifest)
-    copied_legacy_manifest = destination / LEGACY_MANIFEST.relative_to(ROOT)
-    shutil.copy2(LEGACY_MANIFEST, copied_legacy_manifest)
     for source in payload["source_files"]:
         source_path = ROOT / source["path"]
         copied_source = destination / source["path"]
@@ -60,24 +50,13 @@ def _copy_fixture_tree(destination: Path) -> Path:
         copied_asset = destination / fixture["asset"]
         copied_asset.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(asset, copied_asset)
-    for source in legacy_payload["source_files"]:
-        source_path = ROOT / source
-        copied_source = destination / source
-        copied_source.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source_path, copied_source)
-    for fixture in legacy_payload["fixtures"]:
-        asset = ROOT / fixture["path"]
-        copied_asset = destination / fixture["path"]
-        copied_asset.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(asset, copied_asset)
     return copied_manifest
 
 
-def test_checked_in_inventory_is_complete_and_reconstructable() -> None:
+def test_checked_in_inventory_seals_current_consumers() -> None:
     stats = checker.validate_manifest(ROOT, MANIFEST)
-    assert stats.fixtures == 248
-    assert stats.legacy_fixtures == 52
-    assert stats.tests == 573
+    assert stats.fixtures == 302
+    assert stats.tests == 587
 
 
 def test_payload_corruption_fails_closed(tmp_path: Path) -> None:
@@ -116,15 +95,16 @@ def test_included_test_inventory_drift_fails_closed(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    with pytest.raises(checker.ValidationError, match="test name/order inventory changed"):
+    with pytest.raises(
+        checker.ValidationError, match="test name/order inventory changed"
+    ):
         checker.validate_manifest(tmp_path, copied_manifest)
 
 
 def test_trigger_semantics_include_inventory_drift_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
     included_source = (
-        tmp_path
-        / "crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"
+        tmp_path / "crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"
     )
     source = included_source.read_text(encoding="utf-8")
     included_source.write_text(
@@ -136,15 +116,16 @@ def test_trigger_semantics_include_inventory_drift_fails_closed(tmp_path: Path) 
         encoding="utf-8",
     )
 
-    with pytest.raises(checker.ValidationError, match="test name/order inventory changed"):
+    with pytest.raises(
+        checker.ValidationError, match="test name/order inventory changed"
+    ):
         checker.validate_manifest(tmp_path, copied_manifest)
 
 
 def test_trigger_semantics_fixture_inventory_drift_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
     included_source = (
-        tmp_path
-        / "crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"
+        tmp_path / "crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"
     )
     source = included_source.read_text(encoding="utf-8")
     included_source.write_text(
@@ -158,7 +139,7 @@ def test_trigger_semantics_fixture_inventory_drift_fails_closed(tmp_path: Path) 
 
     with pytest.raises(
         checker.ValidationError,
-        match="legacy fixture include inventory differs",
+        match="fixture is missing",
     ):
         checker.validate_manifest(tmp_path, copied_manifest)
 
@@ -168,6 +149,7 @@ def test_trigger_semantics_fixture_inventory_drift_fails_closed(tmp_path: Path) 
     [
         ("retained_templates", []),
         ("retained_templates_sha256", "0" * 64),
+        ("origin_merge", "0" * 40),
     ],
 )
 def test_retired_template_migration_seal_is_rejected(
@@ -182,25 +164,29 @@ def test_retired_template_migration_seal_is_rejected(
         checker.validate_manifest(tmp_path, copied_manifest)
 
 
-def test_legacy_payload_corruption_fails_closed(tmp_path: Path) -> None:
+def test_named_payload_corruption_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
-    legacy_manifest = tmp_path / LEGACY_MANIFEST.relative_to(ROOT)
-    payload = json.loads(legacy_manifest.read_text(encoding="utf-8"))
-    asset = tmp_path / payload["fixtures"][0]["path"]
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    fixture = next(
+        entry for entry in payload["fixtures"] if "/test_sources/" in entry["asset"]
+    )
+    asset = tmp_path / fixture["asset"]
     asset.write_bytes(asset.read_bytes() + b"\n")
 
     with pytest.raises(checker.ValidationError, match="byte length changed"):
         checker.validate_manifest(tmp_path, copied_manifest)
 
 
-def test_legacy_payload_omission_fails_closed(tmp_path: Path) -> None:
+def test_named_payload_omission_fails_closed(tmp_path: Path) -> None:
     copied_manifest = _copy_fixture_tree(tmp_path)
-    legacy_manifest = tmp_path / LEGACY_MANIFEST.relative_to(ROOT)
-    payload = json.loads(legacy_manifest.read_text(encoding="utf-8"))
-    asset = tmp_path / payload["fixtures"][0]["path"]
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    fixture = next(
+        entry for entry in payload["fixtures"] if "/test_sources/" in entry["asset"]
+    )
+    asset = tmp_path / fixture["asset"]
     asset.unlink()
 
-    with pytest.raises(checker.ValidationError, match="legacy fixture is missing"):
+    with pytest.raises(checker.ValidationError, match="fixture is missing"):
         checker.validate_manifest(tmp_path, copied_manifest)
 
 
@@ -216,3 +202,132 @@ def test_child_include_paths_cannot_escape_the_root() -> None:
             "../../../../../../escape.ko",
             "test include",
         )
+
+
+def test_named_macro_cases_and_external_samples_have_exact_owners() -> None:
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    fixtures = {entry["asset"]: entry for entry in payload["fixtures"]}
+    for suffix in ("1", "2"):
+        entry = fixtures[
+            "crates/kotodama_lang/src/semantic/test_sources/"
+            f"trigger_metadata_json_parse_uses_json_literal_diagnostics_{suffix}.ko"
+        ]
+        assert (
+            entry["owner_function"]
+            == "trigger_metadata_json_parse_uses_json_literal_diagnostics"
+        )
+        assert entry["owner_source"].endswith(
+            "semantic/tests/trigger_semantics_tests.rs"
+        )
+        assert entry["owner_is_test"] is True
+    assert (
+        set(checker.EXPECTED_EXTERNAL_FIXTURES[checker.EXPECTED_SOURCES[0]])
+        <= fixtures.keys()
+    )
+
+
+@pytest.mark.parametrize(
+    "field", ["raw_hashes", "raw_literal_sha256", "source_line_before_migration"]
+)
+def test_historical_raw_literal_fields_are_rejected(tmp_path: Path, field: str) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    payload["fixtures"][0][field] = 1
+    copied_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(checker.ValidationError, match=f"unknown=.*{field}"):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+@pytest.mark.parametrize(
+    "field,value", [("owner_function", "different_owner"), ("ordinal", 2)]
+)
+def test_resealed_fixture_cannot_forge_its_current_owner(
+    tmp_path: Path, field: str, value: object
+) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    payload["fixtures"][0][field] = value
+    payload["fixtures_sha256"] = checker._digest_json(payload["fixtures"])
+    copied_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(
+        checker.ValidationError,
+        match="fixture (function ownership|include ordinal) changed",
+    ):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_manifest_omission_cannot_hide_a_referenced_fixture(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    payload["fixtures"].pop()
+    payload["fixtures_sha256"] = checker._digest_json(payload["fixtures"])
+    copied_manifest.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(
+        checker.ValidationError, match="fixture include inventory differs"
+    ):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_duplicate_fixture_include_fails_closed(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    fixture = payload["fixtures"][0]
+    owner = tmp_path / fixture["owner_source"]
+    with owner.open("a", encoding="utf-8") as source:
+        source.write(
+            '\nfn duplicated_fixture() { let _ = include_str!("'
+            + fixture["include_path"]
+            + '"); }\n'
+        )
+    with pytest.raises(checker.ValidationError, match="duplicate fixture include"):
+        checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_commented_out_includes_do_not_create_consumers(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    owner = tmp_path / checker.EXPECTED_SOURCES[0]
+    with owner.open("a", encoding="utf-8") as source:
+        source.write('\n// include_str!("../../../../outside.ko");\n')
+    checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_write_reseals_intentional_changes_and_is_idempotent(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    original = copied_manifest.read_bytes()
+    checker.write_manifest(tmp_path, copied_manifest)
+    assert copied_manifest.read_bytes() == original
+    payload = json.loads(original)
+    asset = tmp_path / payload["fixtures"][0]["asset"]
+    asset.write_bytes(asset.read_bytes() + b"// intended fixture update\n")
+    with pytest.raises(checker.ValidationError, match="byte length changed"):
+        checker.validate_manifest(tmp_path, copied_manifest)
+    checker.write_manifest(tmp_path, copied_manifest)
+    assert copied_manifest.read_bytes() != original
+    checker.validate_manifest(tmp_path, copied_manifest)
+
+
+def test_write_refuses_unreferenced_assets_without_changing_manifest(
+    tmp_path: Path,
+) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    original = copied_manifest.read_bytes()
+    directory = checker.EXPECTED_FIXTURE_DIRECTORIES[checker.EXPECTED_SOURCES[0]][0]
+    (tmp_path / directory / "unreferenced.ko").write_text(
+        "fn unused() {}\n", encoding="utf-8"
+    )
+    with pytest.raises(
+        checker.ValidationError, match="fixture directory membership changed"
+    ):
+        checker.write_manifest(tmp_path, copied_manifest)
+    assert copied_manifest.read_bytes() == original
+
+
+def test_symlink_fixture_is_not_a_regular_owned_asset(tmp_path: Path) -> None:
+    copied_manifest = _copy_fixture_tree(tmp_path)
+    payload = json.loads(copied_manifest.read_text(encoding="utf-8"))
+    asset = tmp_path / payload["fixtures"][0]["asset"]
+    other = asset.with_suffix(".saved")
+    asset.rename(other)
+    asset.symlink_to(other.name)
+    with pytest.raises(checker.ValidationError, match="not a regular file"):
+        checker.validate_manifest(tmp_path, copied_manifest)

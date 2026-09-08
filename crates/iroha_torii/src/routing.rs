@@ -153,9 +153,9 @@ use iroha_sccp::{
     sccp_payload_projection,
 };
 #[cfg(feature = "telemetry")]
-use iroha_torii_shared::status::Status;
-#[cfg(feature = "telemetry")]
 use iroha_telemetry::privacy::{PrivacyBucketConfig, PrivacyEventError, PrivacyShareError};
+#[cfg(feature = "telemetry")]
+use iroha_torii_shared::status::Status;
 use iroha_torii_shared::sumeragi_evidence_api::{
     SUMERAGI_EVIDENCE_COUNT_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_DEFAULT_LIMIT,
     SUMERAGI_EVIDENCE_LIST_JSON_RESPONSE_MAX_BYTES, SUMERAGI_EVIDENCE_LIST_MAX_LIMIT,
@@ -13121,7 +13121,7 @@ mod contract_manifest_response_tests {
         EntrypointValueTypeNodeV1, EntrypointValueTypeV1,
     };
     use iroha_data_model::smart_contract::manifest::{
-        AccessSetHints, ContractErrorCodeDescriptor, ContractManifest, DynamicAccessHint,
+        AccessSetHints, ContractErrorTypeDescriptor, ContractManifest, DynamicAccessHint,
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor, KotobaTranslation,
         KotobaTranslationEntry, StateDescriptor,
     };
@@ -13175,11 +13175,7 @@ mod contract_manifest_response_tests {
                 name: "Balances".to_owned(),
                 type_name: "StateMap<AccountId, quantity>".to_owned(),
             }]),
-            error_codes: Some(vec![ContractErrorCodeDescriptor {
-                namespace: "TreasuryError".to_owned(),
-                name: "InsufficientFunds".to_owned(),
-                code: 7,
-            }]),
+            error_types: Some(vec![ContractErrorTypeDescriptor { identity: "TreasuryError".to_owned(), variants: vec![iroha_data_model::smart_contract::manifest::ContractErrorVariantDescriptor { name: "InsufficientFunds".to_owned(), code: 7 }] }]),
             kotoba: Some(vec![KotobaTranslationEntry {
                 msg_id: "insufficient_funds".to_owned(),
                 translations: vec![KotobaTranslation {
@@ -13230,7 +13226,7 @@ mod contract_manifest_response_tests {
             "access_set_hints",
             "entrypoints",
             "states",
-            "error_codes",
+            "error_types",
             "kotoba",
             "provenance",
         ] {
@@ -13678,7 +13674,10 @@ fn contract_state_value_schema(
                 pending.push(ok);
             }
             ivm::EmbeddedStateType::List { element, .. } => pending.push(element),
-            ivm::EmbeddedStateType::Int
+            ivm::EmbeddedStateType::Unit
+            | ivm::EmbeddedStateType::Error(_)
+            | ivm::EmbeddedStateType::StateCursor(_)
+            | ivm::EmbeddedStateType::Int
             | ivm::EmbeddedStateType::Decimal
             | ivm::EmbeddedStateType::Quantity
             | ivm::EmbeddedStateType::Bool
@@ -13815,7 +13814,19 @@ fn decode_contract_state_pointer_json_fragment(
                 decode_canonical_contract_state_norito(payload, "dataspace id")?;
             value.to_string()
         }
-        Type::Bool
+        Type::StateCursor(key) => {
+            ivm::state_cursor::validate_cursor_envelope(*key, envelope)
+                .map_err(|err| format!("invalid state cursor envelope: {err}"))?;
+            let payload = decode_contract_state_pointer_payload(
+                envelope,
+                PointerType::NoritoBytes,
+                "StateCursor",
+            )?;
+            format!("0x{}", hex::encode(payload))
+        }
+        Type::Unit
+        | Type::Error(_)
+        | Type::Bool
         | Type::Tuple(_)
         | Type::Struct { .. }
         | Type::StateMap { .. }
@@ -14078,6 +14089,13 @@ fn decode_contract_state_atoms_json(
                             if *present {
                                 try_push_contract_state_item(
                                     &mut pending,
+                                    Pending::FinishResult {
+                                        label: "some",
+                                        value_start: completed.len(),
+                                    },
+                                )?;
+                                try_push_contract_state_item(
+                                    &mut pending,
                                     Pending::Decode {
                                         ty: inner,
                                         stream,
@@ -14089,7 +14107,7 @@ fn decode_contract_state_atoms_json(
                             } else {
                                 let node = push_contract_state_json_node(
                                     &mut arena,
-                                    ContractStateJsonNode::Static("null"),
+                                    ContractStateJsonNode::Static("{\"none\":true}"),
                                 )?;
                                 try_push_contract_state_item(&mut completed, node)?;
                             }
@@ -14188,6 +14206,42 @@ fn decode_contract_state_atoms_json(
                                     },
                                 )?;
                             }
+                        }
+                        Type::Unit | Type::Error(_) => {
+                            let (stream_atoms, index) = {
+                                let cursor = cursors
+                                    .get(stream)
+                                    .ok_or_else(|| "invalid state atom stream".to_owned())?;
+                                (cursor.atoms, cursor.index)
+                            };
+                            let node = match (ty, stream_atoms.get(index)) {
+                                (Type::Unit, Some(Atom::Unit)) => {
+                                    ContractStateJsonNode::Static("null")
+                                }
+                                (Type::Error(error), Some(Atom::ErrorCode(code))) => {
+                                    let variant = error.variant(*code).ok_or_else(|| {
+                                        "error state value has an undeclared variant code".to_owned()
+                                    })?;
+                                    let mut fragment = String::new();
+                                    norito::json::write_json_string(&variant.name, &mut fragment);
+                                    ContractStateJsonNode::Fragment(fragment)
+                                }
+                                (Type::Unit, _) => {
+                                    return Err(
+                                        "Unit state value is not a canonical Unit atom".into(),
+                                    );
+                                }
+                                _ => {
+                                    return Err(
+                                        "error state value is not a canonical error code atom".into(),
+                                    );
+                                }
+                            };
+                            cursors[stream].index = index
+                                .checked_add(1)
+                                .ok_or_else(|| "state atom index overflow".to_owned())?;
+                            let node = push_contract_state_json_node(&mut arena, node)?;
+                            try_push_contract_state_item(&mut completed, node)?;
                         }
                         Type::Bool => {
                             let (stream_atoms, index) = {
@@ -14340,6 +14394,8 @@ fn decode_contract_state_scalar_json(
     let record = decode_canonical_state_value_record_v1(bytes)
         .map_err(|err| format!("decode durable state record: {err}"))?;
     let schema = contract_state_value_schema(ty)?;
+    let _canonical_flags =
+        norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
     let schema_payload = norito::to_bytes(&schema)
         .map_err(|err| format!("encode embedded durable-state schema: {err}"))?;
     if record.schema_hash != state_value_schema_hash_v1(&schema_payload) {
@@ -15007,6 +15063,7 @@ mod contract_state_tests {
     use ivm::pointer_abi::PointerType;
     use std::collections::BTreeMap;
     use std::sync::Arc;
+    include!("routing/contract_state_nominal_tests.rs");
     routing_test! { sync contract_state_schema_interest_is_query_local
         let exact = ContractStateSelection::Exact(
             StatePath::from_str("orders/by-id").expect("exact state path"),
@@ -15336,7 +15393,7 @@ mod contract_state_tests {
             decode_contract_state_scalar_json(&record, &ty).expect("project aggregate state");
         assert_eq!(
             projected.get(),
-            "{\"a_list\":[true,false],\"z_tuple\":[true,null,{\"ok\":false}]}"
+            "{\"a_list\":[true,false],\"z_tuple\":[true,{\"none\":true},{\"ok\":false}]}"
         );
     }
     fn scoped_state_key(
@@ -15397,7 +15454,15 @@ mod contract_state_tests {
         )
         .await
         .expect_err("the first explicit path beyond the V1 count must fail");
-        assert!(error.to_string().contains("paths supports at most"));
+        let Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) = error else {
+            panic!("expected the explicit-path count rejection, got {error:?}");
+        };
+        assert_eq!(
+            message,
+            format!("paths supports at most {CONTRACT_STATE_MAX_EXPLICIT_PATHS_V1} entries")
+        );
     }
     routing_test! { async contract_state_prefix_paginates_before_retained_page_overflow
         let mut world = World::default();
@@ -22568,7 +22633,7 @@ mod multisig_contract_call_tests {
             entrypoints,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
     }
@@ -22693,8 +22758,10 @@ mod multisig_contract_call_tests {
             kind: manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("CanInvokeContractEntrypoint".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -22777,8 +22844,10 @@ mod multisig_contract_call_tests {
                 kind: manifest::EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: Some("CanInvokeContractEntrypoint".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -23176,7 +23245,7 @@ mod multisig_contract_call_tests {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         };
         let contract_address: iroha_data_model::smart_contract::ContractAddress =
@@ -23289,7 +23358,7 @@ mod contract_entrypoint_validation_tests {
             entrypoints,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
     }
@@ -23341,8 +23410,10 @@ mod contract_entrypoint_validation_tests {
             kind: manifest::EntryPointKind::Hajimari,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -23362,8 +23433,10 @@ mod contract_entrypoint_validation_tests {
                 kind: manifest::EntryPointKind::Hajimari,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -23376,8 +23449,10 @@ mod contract_entrypoint_validation_tests {
                 kind: manifest::EntryPointKind::Kaizen,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -23390,8 +23465,10 @@ mod contract_entrypoint_validation_tests {
                 kind: manifest::EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -23440,8 +23517,10 @@ mod contract_entrypoint_validation_tests {
             kind: manifest::EntryPointKind::Hajimari,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("SourceCannotOverrideLifecycle".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -23516,8 +23595,10 @@ mod contract_payload_normalization_tests {
                 type_name: "int".to_owned(),
             }],
             argument_schema: Some(scalar_argument_schema("amount", EntrypointValueKindV1::Int)),
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -23538,8 +23619,10 @@ mod contract_payload_normalization_tests {
                 "alias_literal",
                 EntrypointValueKindV1::Blob,
             )),
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -23560,8 +23643,10 @@ mod contract_payload_normalization_tests {
                 "controller",
                 EntrypointValueKindV1::AccountId,
             )),
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -23579,8 +23664,10 @@ mod contract_payload_normalization_tests {
                 type_name: "Json".to_owned(),
             }],
             argument_schema: Some(scalar_argument_schema("ev", EntrypointValueKindV1::Json)),
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -24315,8 +24402,10 @@ mod multisig_selector_tests {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: Some("CanEnactGovernance".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -24325,7 +24414,7 @@ mod multisig_selector_tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         out.extend_from_slice(&interface.encode_section());
@@ -48615,8 +48704,10 @@ mod validation_fee_torii_ingress_tests {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("CanInvokeContractEntrypoint".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -48658,7 +48749,7 @@ mod validation_fee_torii_ingress_tests {
                 triggers: entrypoint.triggers.clone(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = metadata.encode();
@@ -48685,8 +48776,10 @@ mod validation_fee_torii_ingress_tests {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("CanInvokeContractEntrypoint".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -48716,7 +48809,7 @@ mod validation_fee_torii_ingress_tests {
                 triggers: entrypoint.triggers.clone(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = metadata.encode();

@@ -650,7 +650,9 @@ impl AsRef<[u8]> for KagemushaDeviceSignatureV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAggregateStateCommitmentV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaAggregateStateCommitmentV1"
+)]
 pub struct KagemushaAggregateStateCommitmentV1 {
     /// Wire version.
     pub version: u16,
@@ -698,7 +700,9 @@ pub struct KagemushaAggregateStateCommitmentV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPastaStateCommitmentV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaPastaStateCommitmentV1"
+)]
 pub struct KagemushaPastaStateCommitmentV1 {
     /// Eq/Fp native state-commitment component.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -813,7 +817,9 @@ pub struct KagemushaPairedProofV1 {
 #[norito(tag = "class", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaHardwarePlatformClassV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaHardwarePlatformClassV1"
+)]
 pub enum KagemushaHardwarePlatformClassV1 {
     /// Qualified Android OEM or secure-element service.
     AndroidOemService,
@@ -1045,7 +1051,9 @@ pub struct KagemushaCreditOpeningV1 {
 #[norito(tag = "purpose", content = "value", rename_all = "snake_case")]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaEncryptedCreditPurposeV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaEncryptedCreditPurposeV1"
+)]
 pub enum KagemushaEncryptedCreditPurposeV1 {
     /// Reserve-backed online top-up credit.
     Mint,
@@ -1090,7 +1098,9 @@ pub struct KagemushaEncryptedCreditAadV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaEncryptedCreditEnvelopeV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaEncryptedCreditEnvelopeV1"
+)]
 pub struct KagemushaEncryptedCreditEnvelopeV1 {
     /// Wire version.
     pub version: u16,
@@ -1255,7 +1265,9 @@ pub struct KagemushaOutboxReservationV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaHardwareTerminalBodyV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaHardwareTerminalBodyV1"
+)]
 pub struct KagemushaHardwareTerminalBodyV1 {
     /// Wire/lifecycle contract version.
     pub version: u16,
@@ -1564,7 +1576,9 @@ pub struct KagemushaAcknowledgementV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaMintAuthorizationContextV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaMintAuthorizationContextV1"
+)]
 pub struct KagemushaMintAuthorizationContextV1 {
     /// Wire version.
     pub version: u16,
@@ -1629,7 +1643,9 @@ pub struct KagemushaMintAuthorizationContextV1 {
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaMintAuthorizationStatementV1")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::KagemushaMintAuthorizationStatementV1"
+)]
 pub struct KagemushaMintAuthorizationStatementV1 {
     /// Wire version.
     pub version: u16,
@@ -1804,7 +1820,10 @@ pub struct KagemushaRedemptionVoucherV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.liability-pool-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::LiabilityPoolPreimageV1", frame = "iroha.kagemusha.v1.liability-pool-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::LiabilityPoolPreimageV1",
+    frame = "iroha.kagemusha.v1.liability-pool-preimage"
+)]
 struct LiabilityPoolPreimageV1 {
     network_id: NetworkId,
     asset: AssetDefinitionId,
@@ -1814,7 +1833,10 @@ struct LiabilityPoolPreimageV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.hardware-profile-id-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::HardwareProfileIdPreimageV1", frame = "iroha.kagemusha.v1.hardware-profile-id-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::HardwareProfileIdPreimageV1",
+    frame = "iroha.kagemusha.v1.hardware-profile-id-preimage"
+)]
 struct HardwareProfileIdPreimageV1 {
     version: u16,
     protocol_version: u16,
@@ -1864,7 +1886,10 @@ pub struct KagemushaPeerCreditContextV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.mint-credit-opening-commitment-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::MintCreditOpeningCommitmentPreimageV1", frame = "iroha.kagemusha.v1.mint-credit-opening-commitment-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::MintCreditOpeningCommitmentPreimageV1",
+    frame = "iroha.kagemusha.v1.mint-credit-opening-commitment-preimage"
+)]
 struct MintCreditOpeningCommitmentPreimageV1 {
     version: u16,
     network_id: [u8; 32],
@@ -1881,7 +1906,10 @@ struct MintCreditOpeningCommitmentPreimageV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.recipient-credential-commitment-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::RecipientCredentialCommitmentPreimageV1", frame = "iroha.kagemusha.v1.recipient-credential-commitment-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::RecipientCredentialCommitmentPreimageV1",
+    frame = "iroha.kagemusha.v1.recipient-credential-commitment-preimage"
+)]
 struct RecipientCredentialCommitmentPreimageV1 {
     operation_id: [u8; 32],
     hardware_credential_id: [u8; 32],
@@ -1891,7 +1919,10 @@ struct RecipientCredentialCommitmentPreimageV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.hardware-credential-id-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::HardwareCredentialIdPreimageV1", frame = "iroha.kagemusha.v1.hardware-credential-id-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::HardwareCredentialIdPreimageV1",
+    frame = "iroha.kagemusha.v1.hardware-credential-id-preimage"
+)]
 struct HardwareCredentialIdPreimageV1 {
     version: u16,
     network_id: NetworkId,
@@ -2338,7 +2369,10 @@ pub fn kagemusha_hardware_credential_id_preimage_layout_v1() -> Result<
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.hardware-credential-signing-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::HardwareCredentialSigningPreimageV1", frame = "iroha.kagemusha.v1.hardware-credential-signing-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::HardwareCredentialSigningPreimageV1",
+    frame = "iroha.kagemusha.v1.hardware-credential-signing-preimage"
+)]
 struct HardwareCredentialSigningPreimageV1 {
     domain: Vec<u8>,
     credential_id: [u8; 32],
@@ -2348,7 +2382,10 @@ struct HardwareCredentialSigningPreimageV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.inbox-receipt-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::InboxReceiptPreimageV1", frame = "iroha.kagemusha.v1.inbox-receipt-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::InboxReceiptPreimageV1",
+    frame = "iroha.kagemusha.v1.inbox-receipt-preimage"
+)]
 struct InboxReceiptPreimageV1 {
     recipient_lane_id: [u8; 32],
     staging_hardware_epoch_id: [u8; 32],
@@ -2360,7 +2397,10 @@ struct InboxReceiptPreimageV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.acknowledgement-signing-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::AcknowledgementSigningPreimageV1", frame = "iroha.kagemusha.v1.acknowledgement-signing-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::AcknowledgementSigningPreimageV1",
+    frame = "iroha.kagemusha.v1.acknowledgement-signing-preimage"
+)]
 struct AcknowledgementSigningPreimageV1 {
     domain: Vec<u8>,
     version: u16,
@@ -2372,7 +2412,10 @@ struct AcknowledgementSigningPreimageV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.mint-credit-id-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::MintCreditIdPreimageV1", frame = "iroha.kagemusha.v1.mint-credit-id-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::MintCreditIdPreimageV1",
+    frame = "iroha.kagemusha.v1.mint-credit-id-preimage"
+)]
 struct MintCreditIdPreimageV1 {
     lifecycle_context_digest: [u8; 32],
     recipient_credential_commitment: [u8; 32],
@@ -2386,7 +2429,10 @@ struct MintCreditIdPreimageV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.mint-lifecycle-context-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::MintLifecycleContextPreimageV1", frame = "iroha.kagemusha.v1.mint-lifecycle-context-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::MintLifecycleContextPreimageV1",
+    frame = "iroha.kagemusha.v1.mint-lifecycle-context-preimage"
+)]
 struct MintLifecycleContextPreimageV1 {
     version: u16,
     network_id: NetworkId,
@@ -2406,7 +2452,10 @@ struct MintLifecycleContextPreimageV1 {
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 #[norito(schema_name = "iroha.kagemusha.v1.redemption-id-preimage")]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::kagemusha::kagemusha_v1::RedemptionIdPreimageV1", frame = "iroha.kagemusha.v1.redemption-id-preimage")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_v1::RedemptionIdPreimageV1",
+    frame = "iroha.kagemusha.v1.redemption-id-preimage"
+)]
 struct RedemptionIdPreimageV1 {
     lifecycle_binding_digest: [u8; 32],
     terminal_nullifier: [u8; 32],

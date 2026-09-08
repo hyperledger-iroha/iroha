@@ -1097,7 +1097,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         (path, path.read_text(encoding="utf-8")) for path in checker_source_paths()
     )
     expected_provider = [
-        ("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py", 1144)
+        ("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py", 1223)
     ]
     assert provider_assignments(checker_sources) == expected_provider
     synthetic_shadow = f"\n{provider_name} = {{}}\n"
@@ -1294,9 +1294,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "timeout_ack_classification_bypasses_kernel",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
             "generation_after_timeout_install",
-            """self
-            .durable
-            .is_strict_same_round_timeout_upgrade(certificate)""",
+            "durable.is_strict_same_round_timeout_upgrade(certificate)",
             "false",
             "InstallTimeout generation must classify the exact strict same-round upgrade and reset only advancing views",
         ),
@@ -1305,9 +1303,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
             "on_persisted",
             """let next_generation = match pending.entry.record() {
-            WalRecord::InstallTimeout(certificate) => self
-                .generation_after_timeout_install(certificate)
-                .ok_or(ReducerError::GenerationOverflow)?,
+            WalRecord::InstallTimeout(certificate) => {
+                Self::generation_after_timeout_install(&self.durable, self.generation, certificate)
+                    .ok_or(ReducerError::GenerationOverflow)?
+            }
             _ => self.generation,
         };""",
             "let next_generation = self.generation;",
@@ -1668,7 +1667,7 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
     )
     prepare_regression_provider_relative = Path(
         "crates/iroha_core/src/sumeragi/v2_core/tests/"
-        "committee_fallback_and_retransmit.rs"
+        "delayed_prepare_qc_cache_bounds.rs"
     )
     fixture_paths = {*source_relatives, prepare_regression_relative}
     pending_fixture_paths = list(fixture_paths)
@@ -1686,7 +1685,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
     mutations = (
         (
             "live-bound",
-            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "refinement/volatile_summary_well_formed.rs"
+            ),
             "volatile_summary_well_formed_body",
             "&& $summary.pending_prepare <= 1u64",
             "&& $summary.pending_prepare <= 2u64",
@@ -1695,7 +1697,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
         ),
         (
             "stale-admission",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "reducer/prepare_certificate_handling.rs"
+            ),
             "on_prepare_certificate",
             "if certificate.round().view() < existing.round().view() {",
             "if certificate.round().view() > existing.round().view() {",
@@ -1704,7 +1709,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
         ),
         (
             "historical-retention",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "reducer/prepare_certificate_handling.rs"
+            ),
             "prune_observed_prepare_caches",
             "certificate.round().view() == current_view",
             "certificate.round().view() <= current_view",
@@ -1713,7 +1721,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
         ),
         (
             "lock-omission",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "reducer/prepare_certificate_handling.rs"
+            ),
             "prune_observed_prepare_caches",
             ".chain(self.durable.locked())",
             ".chain(self.durable.highest_prepare())",

@@ -311,7 +311,9 @@ pub struct ProofOutcomeFinalizedRecordV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1"
+)]
 pub struct ProofOutcomeFinalizedEventCursorV1 {
     /// Monotonic event sequence beginning at one.
     pub sequence: u64,

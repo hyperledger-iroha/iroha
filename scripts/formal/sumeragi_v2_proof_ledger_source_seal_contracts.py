@@ -955,6 +955,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_lifecycle_work_registry_validate_recovery.rs',
         'v2_lifecycle_work_registry_validate_execution.rs',
         'v2_lifecycle_work_registry_validate_sidecar.rs',
+        'v2_lifecycle_work_registry_body_retirement.rs',
         'tests/v2_lifecycle_work_registry_00.rs',
         'tests/v2_lifecycle_work_registry_01.rs',
         'tests/v2_lifecycle_work_registry_02.rs',
@@ -1075,6 +1076,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'v2_effects_recovered_fetch_and_pipeline_types.rs',
         'v2_effects_recovered_lifecycle_output_service.rs',
         'v2_effects_lifecycle_admission_settlement.rs',
+        'v2_effects_body_retirement.rs',
         'v2_effects_runner_decision_cleanup_plan.rs',
         'v2_effects_test_consumer_wrappers.rs',
         'tests/v2_effects_main_00.rs',
@@ -1084,6 +1086,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'tests/v2_effects_main_04.rs',
         'tests/v2_effects_main_05.rs',
         'tests/v2_effects_03_locked_body_and_sidecar.rs',
+        'tests/v2_effects_certified_body_fence_supersession.rs',
     ),
     'crates/iroha_core/src/sumeragi/v2_lane_work.rs': (
         'v2_lane_work/canonical_executed_block_application_repair.rs',

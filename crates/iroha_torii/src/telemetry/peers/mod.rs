@@ -3,11 +3,11 @@ use crate::{
     explorer::ExplorerDurationDto,
     json_macros::{JsonDeserialize, JsonSerialize},
 };
-use iroha_torii_shared::configuration::Configuration;
 use iroha_crypto::{KeyPair, PublicKey};
 use iroha_data_model::NetworkId;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
+use iroha_torii_shared::configuration::Configuration;
 use monitor::Metrics as PeerMetricsSnapshot;
 pub use monitor::Update;
 use std::{

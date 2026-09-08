@@ -15,16 +15,16 @@ IVM_SOURCE = Path("crates/ivm/tests/kotodama.rs")
 IR_SOURCE = Path("crates/kotodama_lang/src/ir.rs")
 FIXTURE_MANIFEST = Path("crates/kotodama_lang/kotodama_fixtures_v1.manifest.json")
 
-IVM_REGION_SHA256 = "7ba66a05d520056adea3d1098a2298bc198fb6d9c900ce1e845a70c1a8083ff1"
-IR_REGION_SHA256 = "5687f1fc7303948c2e9d5aba10c51c509cc3cf1e21b7eef9f730ae9a8323edfe"
-IVM_CASE_IDS_SHA256 = "54426fcf612986f0b7eceee6233ee3ad9b60a08165f511191be6680eaa2eff79"
+IVM_REGION_SHA256 = "102a60c194192e6e7cd05e229c58ccc28bcf4d74e80b2078bd97cc1c13779011"
+IR_REGION_SHA256 = "d361b6a6d5bacf917729bee90898e2a17cb23c4d6c4ad0a746bb5c325e11d17f"
+IVM_CASE_IDS_SHA256 = "9c2a8f00d546b43ea86589639998900a540961bdc6b4b4b9b4a6e2b4ce1c92cc"
 
 IVM_MACROS = (
-    ("compile_cases", 8),
+    ("compile_cases", 9),
     ("compile_rejection_cases", 32),
     ("semantic_rejection_cases", 27),
     ("vm_result_cases", 8),
-    ("parse_rejection_cases", 6),
+    ("parse_rejection_cases", 5),
     ("semantic_success_cases", 7),
 )
 IVM_REGISTRY_TESTS = (

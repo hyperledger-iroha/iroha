@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
 SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
-EXPECTED_CASE_COUNT = 54
+EXPECTED_CASE_COUNT = 55
 MINIMUM_NET_REDUCTION = 2_161
 # The 54th case inspects eight sources outside the historical migration and
 # adds exactly 31 hash-pinned runner lines to resolve them. Count that broader
@@ -22,16 +22,28 @@ MINIMUM_NET_REDUCTION = 2_161
 # uncompacted tests with only the same 31-line growth.
 ORIGINAL_PREIMAGE_RUST_LINES = 5_779
 ORIGINAL_POSTIMAGE_RUST_LINES = 3_618
-CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
+# The 55th case adds three SourceId mappings (11 lines), two exact include
+# expansions (6 lines), and one static macro test (3 lines). The inventory
+# substitutions add no lines. Account for only this hash-pinned 20-line growth
+# on both sides; the original 2,161-line reduction floor remains unchanged.
+SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES = 20
+# The replayed leader-wire guard follows its existing production owner through
+# one exact SourceId enum/parse/source mapping (3 lines). This fixes a stale
+# HEAD-era inline-factory assertion; keep the original reduction floor intact.
+REPLAYED_LEADER_WIRE_SOURCE_OWNER_GROWTH_RUST_LINES = 3
+CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = (
+    31 + SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES
+    + REPLAYED_LEADER_WIRE_SOURCE_OWNER_GROWTH_RUST_LINES
+)
 BASELINE_RUST_LINES = (
     ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
 MAX_POSTIMAGE_RUST_LINES = (
     ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
 )
-EXPECTED_ASSET_LENGTH = 613_797
-EXPECTED_ASSET_SHA256 = "8ff26670f01c337a929127297f098e86372889d677878a92490b70463719fc45"
-EXPECTED_CASE_IDS_SHA256 = "77db5140892b9c541a0e4e08b0b70648210765ebce8a828514ca1cc006427284"
+EXPECTED_ASSET_LENGTH = 638_599
+EXPECTED_ASSET_SHA256 = "e31e530b815652f62358aaf2ec49a13c0d09e1fec67d288c31f56fef7be4a725"
+EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 HOST_PREIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
@@ -45,7 +57,7 @@ HOST_POSTIMAGE_SHA256 = {
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d380501e4efd09374acdfc2b7729bd095c7499a4d0dfdde355ef2296fa8de23d",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d83e903bd0d2307896a2cc53ffb8c36aaf01cce3cb9178f88221009f44fe284c",
     "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "c2f419913582f0b15a2f3209f8f0b45e90cbe84d608764a7dd6bcfd7299cef06",
+    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "41b23f0be77e4bcf5dda8374b27013a7daee201edccf043504ce7217a4fdab45",
 }
 
 MIGRATED_TESTS = {
@@ -69,19 +81,30 @@ MIGRATED_TESTS = {
     ),
 }
 
+# Reviewed refresh: remote Proposal keeps its four lock semantics at the actual
+# factory and adds ten exact delegation/frontier checks. Live publication keeps
+# its validate/persist/expose semantics at the actual runtime/service owner and
+# adds four checks; no Rust lines are added. Registry adds one exact cancellation
+# import assertion while changing its group census from seven to eight.
 NEW_CASE_CONTRACT_COUNTS = {
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": 161,
+    "registry_remains_inert_and_scheduler_free": 89,
+    "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 306,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 81,
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 84,
 }
 MIGRATED_CASE_SHA256 = {
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "4fddf294a38afcdf7e170d56c2fc62faa7265b17ca3e636d1ef7ef300dd88ef0",
+    "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
+    "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
     "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
-    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "48c0bab0ae5a14d9f6b4c46beb3207a45f30ca8c520e1150a9ed01c70ab97eae",
+    "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "cae5d89f501d9d07fb0410956c84abd120cd298322183260eb0c0b45f7d8b497",
 }
 
 
@@ -187,7 +210,14 @@ class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
         support = SUPPORT_PATH.read_text(encoding="utf-8")
         self.assertIn(f"cases.len() != {EXPECTED_CASE_COUNT}", support)
         self.assertIn(f"assert_eq!(ids.len(), {EXPECTED_CASE_COUNT}", support)
-        for source_id in ("ReplayAuthorityBase", "ReplayAuthorityCertifiedBody"):
+        for source_id in (
+            "ReplayAuthorityBase",
+            "ReplayAuthorityCertifiedBody",
+            "BodyRetirement",
+            "EffectsBodyRetirement",
+            "RegistryBodyRetirement",
+            "LeaderWireConsumer",
+        ):
             self.assertIn(source_id, support)
 
 

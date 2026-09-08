@@ -69,3 +69,35 @@ fn out_of_order_named_struct_fields_match_explicit_source_order_at_runtime() {
     assert_eq!(named, explicit, "named and explicit forms must agree");
     assert_eq!(named, (2112, 21), "fields evaluate second, then first");
 }
+
+#[test]
+fn durable_state_reads_observe_calls_in_arguments_branches_and_loop_iterations() {
+    for (body, expected) in [
+        (
+            "trace = 0; let combined = mark(1) + trace; combined * 100 + trace",
+            (201, 1),
+        ),
+        ("trace = 0; if mark(1) == 1 { mark(2); } trace", (12, 12)),
+        (
+            "trace = 0; let passed = mark(1) == 1 && mark(2) == 2; if passed { trace } else { 0 }",
+            (12, 12),
+        ),
+        (
+            "trace = 0; var total = 0; for index in range(3) { total += trace; mark(1); } total * 1000 + trace",
+            (12111, 111),
+        ),
+        (
+            "trace = 0; let before = trace; let packed = pack(second: mark(2), first: trace); before * 10000 + packed * 100 + trace",
+            (2202, 2),
+        ),
+    ] {
+        let source = format!(
+            "seiyaku DurableReads {{ state int trace; hajimari() {{ trace = 0; }} fn mark(int _ value) -> int {{ trace = trace * 10 + value; value }} fn pack(int first, int second) -> int {{ first * 10 + second }} kotoage fn main() -> int authorize(\"WriteState\") {{ {body} }} }}"
+        );
+        assert_eq!(
+            run_named_struct_order(&source),
+            expected,
+            "source body: {body}"
+        );
+    }
+}

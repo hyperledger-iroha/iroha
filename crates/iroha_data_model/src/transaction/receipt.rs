@@ -32,7 +32,9 @@ pub const TX_SUBMISSION_RECEIPT_DOMAIN: &str = "iroha.tx.submission.receipt@v1";
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::transaction::receipt::TransactionSubmissionReceiptPayload")]
+#[norito_schema(
+    name = "iroha_data_model::transaction::receipt::TransactionSubmissionReceiptPayload"
+)]
 pub struct TransactionSubmissionReceiptPayload {
     /// Canonical hash of the submitted transaction entrypoint.
     pub entrypoint_hash: HashOf<TransactionEntrypoint>,

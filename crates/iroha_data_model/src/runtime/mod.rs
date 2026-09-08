@@ -27,8 +27,8 @@ fn manifest_hash(bytes: &[u8]) -> RuntimeUpgradeId {
     Encode,
     Decode,
     iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeId")]
 pub struct RuntimeUpgradeId(pub [u8; 32]);
 impl RuntimeUpgradeId {
@@ -199,8 +199,17 @@ pub struct RuntimeUpgradeRecord {
     pub created_height: u64,
 }
 /// Status of a proposed runtime upgrade.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::runtime::RuntimeUpgradeStatus")]
 pub enum RuntimeUpgradeStatus {
     /// Proposal recorded but not yet activated.

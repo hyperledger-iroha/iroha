@@ -1417,9 +1417,11 @@ pub(in crate::sumeragi) struct RuntimeStepObservationV1 {
     selected: Option<RuntimeSelectedOwnerKind>,
     effect_count: usize,
     validate_count: usize,
+    store_count: usize,
     non_validate_class: Option<RuntimeEffectClassV1>,
     broadcast_count: usize,
     canonical_prepare_qc_digest: Option<HashOf<wire::QuorumCertificate>>,
+    batch_prepare_qc_digest: Option<HashOf<wire::QuorumCertificate>>,
 }
 
 /// Closed class of the sole non-Validate sibling in one observed reducer step.
@@ -1463,9 +1465,27 @@ impl RuntimeStepObservationV1 {
         self.validate_count
     }
 
+    /// Number of raw Store effects before executor-side stutter handling.
+    pub(in crate::sumeragi) const fn store_count(&self) -> usize {
+        self.store_count
+    }
+
     /// Sole non-Validate class, or `Multiple` when several were emitted.
     pub(in crate::sumeragi) const fn non_validate_class(&self) -> Option<RuntimeEffectClassV1> {
         self.non_validate_class
+    }
+
+    /// Number of raw Broadcast effects before executor-side dispatch.
+    pub(in crate::sumeragi) const fn broadcast_count(&self) -> usize {
+        self.broadcast_count
+    }
+
+    /// Whether the batch contains exactly one canonical PrepareQC with this identity.
+    pub(in crate::sumeragi) fn batch_has_exact_prepare_qc(
+        &self,
+        expected: &wire::QuorumCertificate,
+    ) -> bool {
+        self.batch_prepare_qc_digest == Some(HashOf::new(expected))
     }
 
     /// Whether the sole Broadcast is the canonical envelope for this exact PrepareQC.
@@ -1521,6 +1541,31 @@ fn observed_canonical_prepare_qc_digest(
             return None;
         }
         observed = Some(HashOf::new(certificate));
+    }
+    observed
+}
+
+#[cfg(test)]
+fn observed_batch_prepare_qc_digest(
+    effects: &[AdapterEffect],
+) -> Option<HashOf<wire::QuorumCertificate>> {
+    let mut observed = None;
+    for effect in effects {
+        let AdapterEffect::Broadcast(message) = effect else {
+            continue;
+        };
+        let wire::ConsensusMessageV2Payload::QuorumCertificate(certificate) = &message.payload
+        else {
+            continue;
+        };
+        if certificate.phase != wire::GlobalPhase::Prepare {
+            continue;
+        }
+        if message.protocol_version != wire::PROTOCOL_VERSION
+            || observed.replace(HashOf::new(certificate)).is_some()
+        {
+            return None;
+        }
     }
     observed
 }
@@ -3184,6 +3229,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
 
 include!("v2_effects_recovered_lifecycle_output_service.rs");
 include!("v2_effects_lifecycle_admission_settlement.rs");
+include!("v2_effects_body_retirement.rs");
 
 impl V2EffectExecutor<SerializedV2Runtime> {
     /// Take ownership of an exact-body store opened during sealed preflight.
@@ -5034,12 +5080,17 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                             .iter()
                             .filter(|effect| matches!(effect, AdapterEffect::ValidateBody { .. }))
                             .count(),
+                        store_count: effects
+                            .iter()
+                            .filter(|effect| matches!(effect, AdapterEffect::StoreBody { .. }))
+                            .count(),
                         non_validate_class: observed_non_validate_class(&effects),
                         broadcast_count: effects
                             .iter()
                             .filter(|effect| matches!(effect, AdapterEffect::Broadcast(_)))
                             .count(),
                         canonical_prepare_qc_digest: observed_canonical_prepare_qc_digest(&effects),
+                        batch_prepare_qc_digest: observed_batch_prepare_qc_digest(&effects),
                     });
                 }
                 let count = self.consume_effects_with_runner_decision_cleanup(
@@ -8929,9 +8980,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         selected,
                         effect_count: 0,
                         validate_count: 0,
+                        store_count: 0,
                         non_validate_class: None,
                         broadcast_count: 0,
                         canonical_prepare_qc_digest: None,
+                        batch_prepare_qc_digest: None,
                     });
                 }
                 if let Err(error) = self.publish_external_lifecycle_owners() {
@@ -8952,12 +9005,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             .iter()
                             .filter(|effect| matches!(effect, AdapterEffect::ValidateBody { .. }))
                             .count(),
+                        store_count: effects
+                            .iter()
+                            .filter(|effect| matches!(effect, AdapterEffect::StoreBody { .. }))
+                            .count(),
                         non_validate_class: observed_non_validate_class(&effects),
                         broadcast_count: effects
                             .iter()
                             .filter(|effect| matches!(effect, AdapterEffect::Broadcast(_)))
                             .count(),
                         canonical_prepare_qc_digest: observed_canonical_prepare_qc_digest(&effects),
+                        batch_prepare_qc_digest: observed_batch_prepare_qc_digest(&effects),
                     });
                 }
                 let count = self.consume_effects_with_runner_decision_cleanup(
@@ -9062,9 +9120,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         selected,
                         effect_count: 0,
                         validate_count: 0,
+                        store_count: 0,
                         non_validate_class: None,
                         broadcast_count: 0,
                         canonical_prepare_qc_digest: None,
+                        batch_prepare_qc_digest: None,
                     });
                 }
                 if let Err(error) = self.publish_status(services) {
@@ -9082,12 +9142,17 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                             .iter()
                             .filter(|effect| matches!(effect, AdapterEffect::ValidateBody { .. }))
                             .count(),
+                        store_count: effects
+                            .iter()
+                            .filter(|effect| matches!(effect, AdapterEffect::StoreBody { .. }))
+                            .count(),
                         non_validate_class: observed_non_validate_class(&effects),
                         broadcast_count: effects
                             .iter()
                             .filter(|effect| matches!(effect, AdapterEffect::Broadcast(_)))
                             .count(),
                         canonical_prepare_qc_digest: observed_canonical_prepare_qc_digest(&effects),
+                        batch_prepare_qc_digest: observed_batch_prepare_qc_digest(&effects),
                     });
                 }
                 let count = self.consume_effects_with_runner_decision_cleanup(
@@ -15607,4 +15672,5 @@ mod tests {
     include!("tests/v2_effects_main_04.rs");
     include!("tests/v2_effects_main_05.rs");
     include!("tests/v2_effects_03_locked_body_and_sidecar.rs");
+    include!("tests/v2_effects_certified_body_fence_supersession.rs");
 }

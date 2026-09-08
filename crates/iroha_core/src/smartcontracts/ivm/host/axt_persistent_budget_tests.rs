@@ -169,7 +169,7 @@ fn snapshot_policy_accepts_base_plus_one_across_envelopes_but_rejects_gap() {
         .expect("snapshot base+1 counter must include a prior completed envelope");
 }
 
-fn establish_authenticated_axt_ledger_time(state: &State, creation_time_ms: u64) {
+pub(super) fn establish_authenticated_axt_ledger_time(state: &State, creation_time_ms: u64) {
     let header = BlockHeader::new(
         nonzero_ext::nonzero!(1_u64),
         None,

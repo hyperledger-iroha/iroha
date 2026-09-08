@@ -13,9 +13,9 @@ seiyaku ZkVote {
     fn verify_and_submit_ballot(bytes proof_env, bytes submit) {
         // 1) Verify the ballot using ZK_VOTE_VERIFY_BALLOT.
         //    `proof_env` must be a Norito-encoded OpenVerifyEnvelope in a NoritoBytes TLV.
-        ledger::governance::verify_ballot(proof_env);
+        ledger::governance::verify_ballot(request: proof_env);
         // 2) Enqueue the prebuilt SubmitBallot InstructionBox.
-        ledger::governance::submit_ballot(submit);
+        ledger::governance::submit_ballot(value: submit);
     }
 
     // Optional demo kotoage: verifies a proof and enqueues a ballot using literal data.

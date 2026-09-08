@@ -32,7 +32,9 @@ pub const MAX_VALIDATOR_POP_BYTES: usize = 256;
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot")]
+#[norito_schema(
+    name = "iroha_data_model::block::consensus_v2::finality::FinalizedNextEpochSnapshot"
+)]
 pub struct FinalizedNextEpochSnapshot {
     /// Epoch immediately following the artifact's height context epoch.
     pub epoch: u64,

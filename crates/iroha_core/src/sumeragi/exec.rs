@@ -7,8 +7,7 @@ use iroha_data_model::{
     block::{
         SignedBlock,
         consensus::{
-            ExecWitness, LaneBlockProposalV1,
-            NativeAmxParticipantSettlement, NativeAmxReceipt,
+            ExecWitness, LaneBlockProposalV1, NativeAmxParticipantSettlement, NativeAmxReceipt,
             compute_native_amx_participant_settlement_hash,
         },
         consensus_v2 as wire,
@@ -310,10 +309,8 @@ impl NativeAmxApplicationManifestV1 {
                     || commit.tx_entrypoint_hash != source.entrypoint_hash
                     || prepare.participant_proposal_hash != leg.participant_proposal.proposal_hash
                     || commit.participant_proposal_hash != leg.participant_proposal.proposal_hash
-                    || prepare.participant_settlement_commitment
-                        != leg.participant_settlement_hash
-                    || commit.participant_settlement_commitment
-                        != leg.participant_settlement_hash
+                    || prepare.participant_settlement_commitment != leg.participant_settlement_hash
+                    || commit.participant_settlement_commitment != leg.participant_settlement_hash
                 {
                     return Err(
                         "Native AMX participant QCs do not bind the canonical source/entrypoint"

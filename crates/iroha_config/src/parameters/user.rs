@@ -38228,16 +38228,25 @@ publish_delay_seconds = 17
                 .expect("snapshot table");
             snapshot.insert("max_payload_bytes".into(), Value::Integer(128));
             let mut resources = Table::new();
-            resources.insert("max_decode_depth".into(), Value::Integer(64));
+            resources.insert(
+                "max_decode_depth".into(),
+                Value::Integer(
+                    i64::try_from(norito::json::MAX_JSON_VALUE_NESTING_DEPTH)
+                        .expect("Norito depth limit fits i64"),
+                ),
+            );
             resources.insert("max_decode_items".into(), Value::Integer(1_024));
             resources.insert("max_string_bytes".into(), Value::Integer(32));
             resources.insert("max_blob_bytes".into(), Value::Integer(64));
             resources.insert("max_transient_bytes".into(), Value::Integer(128));
             resources.insert(field.into(), Value::Integer(value));
             snapshot.insert("resources".into(), Value::Table(resources));
+            let error = actual::Root::from_toml_source(TomlSource::inline(table))
+                .expect_err("incoherent snapshot resource policy must fail configuration parsing");
+            let report = format!("{error:?}");
             assert!(
-                actual::Root::from_toml_source(TomlSource::inline(table)).is_err(),
-                "incoherent snapshot resource field {field} must fail configuration parsing"
+                report.contains(field),
+                "incoherent snapshot resource field {field} must report its own budget violation: {report}"
             );
         }
     }

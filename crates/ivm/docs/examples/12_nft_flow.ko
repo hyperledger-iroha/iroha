@@ -3,7 +3,7 @@ seiyaku NftFlow {
     kotoage fn nft_issue_and_transfer() authorize("NftAuthority") {
         let owner = AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", );
         let nft = NftId::parse("n0$wonderland.universal");
-        ledger::nft::mint(nft, owner);
+        ledger::nft::mint(nft: nft, owner: owner);
         let to = AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", );
         ledger::nft::transfer(source: owner, nft: nft, destination: to);
         ledger::nft::set_metadata(
@@ -11,6 +11,6 @@ seiyaku NftFlow {
             key: Name::parse("issued"),
             value: Json::parse("{\"issued\":\"demo\"}"),
         );
-        ledger::nft::burn(nft);
+        ledger::nft::burn(nft: nft);
     }
 }

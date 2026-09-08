@@ -48,7 +48,7 @@ fn manifest_pointer_roundtrip() {
         entrypoints: None,
         states: None,
         kotoba: None,
-        error_codes: None,
+        error_types: None,
         provenance: None,
     };
     let payload = to_bytes(&manifest).expect("encode manifest");

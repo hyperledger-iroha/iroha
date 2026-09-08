@@ -1262,7 +1262,7 @@ impl DurableStateReadSnapshot {
     /// Capture all exact values and descendants covered by the host read log.
     ///
     /// The host uses the same logical key for exact reads and prefix operations such as
-    /// `STATE_KEYS`. Fingerprinting the whole prefix is conservative for exact reads and complete
+    /// `STATE_SCAN`. Fingerprinting the whole prefix is conservative for exact reads and complete
     /// for both forms. Deployed contracts report the concrete contract-instance namespace; raw IVM
     /// execution reports the unscoped path it actually uses.
     pub(crate) fn capture<R>(
@@ -4110,8 +4110,10 @@ mod tests_overlay_manifest {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -4120,7 +4122,7 @@ mod tests_overlay_manifest {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = metadata.encode();
@@ -4233,8 +4235,10 @@ mod tests_overlay_manifest {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: permission.map(str::to_owned),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -4243,7 +4247,7 @@ mod tests_overlay_manifest {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = meta.encode();
@@ -8718,8 +8722,10 @@ seiyaku ProtectedProved {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: Some("CanInvokeOverlayFixture".to_owned()),
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -8728,7 +8734,7 @@ seiyaku ProtectedProved {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         }
     }
@@ -8884,7 +8890,7 @@ seiyaku ProtectedProved {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -9140,7 +9146,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -9397,7 +9403,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -9503,7 +9509,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -9546,7 +9552,7 @@ seiyaku AliasBoundArguments {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             }
             .signed(&kp),
@@ -9661,7 +9667,7 @@ seiyaku AliasBoundArguments {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         };
         world.contract_manifests.insert(code_hash, manifest.clone());

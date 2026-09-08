@@ -239,7 +239,8 @@ impl Checker {
                 self.visit_expr(target, origin);
                 self.visit_expr(index, origin);
             }
-            ExprKind::IntLiteral(_)
+            ExprKind::ErrorValue(_)
+            | ExprKind::IntLiteral(_)
             | ExprKind::DecimalLiteral { .. }
             | ExprKind::OptionNone
             | ExprKind::Bool(_)
@@ -316,8 +317,10 @@ fn display_type(ty: &Type) -> String {
         Type::SoracloudResponse => "SoracloudResponse".to_string(),
         Type::Json => "Json".to_string(),
         Type::Unit => "()".to_string(),
+        Type::ErrorEnum(descriptor) => descriptor.identity.clone(),
         Type::Secret(inner) => format!("Secret<{}>", display_type(&inner)),
         Type::StateMap(k, v) => format!("StateMap<{}, {}>", display_type(&k), display_type(&v)),
+        Type::StateCursor(key) => format!("StateCursor<{}>", display_type(&key)),
         Type::Option(inner) => format!("Option<{}>", display_type(&inner)),
         Type::Result(ok, err) => format!("Result<{}, {}>", display_type(&ok), display_type(&err)),
         Type::List(element, capacity) => {

@@ -677,17 +677,37 @@ impl Reducer {
         Self::from_durable(context, local_validator, generation, durable, true)
     }
     /// Reconstructs a reducer from complete WAL frames.
+    ///
+    /// `generation` seeds the height before its first timeout install. Each
+    /// recovered install applies the same checked generation transition as live
+    /// persistence: a view advance resets it, and a strict same-round upgrade
+    /// increments it. A history without timeout installs retains the caller seed.
     /// Until a matching [`Event::ResumeAfterReplay`] crosses [`Self::step`], the reducer
     /// accepts nothing else, keeping replay effects behind the production commit gate.
     /// # Errors
-    /// Returns an error if replay fails or the local validator is absent from the roster.
+    /// Returns an error if replay fails, a generation increment overflows, or
+    /// the local validator is absent from the roster.
     pub fn recover(
         context: HeightContext,
         local_validator: Option<ValidatorId>,
-        generation: Generation,
+        mut generation: Generation,
         entries: impl IntoIterator<Item = WalEntry>,
     ) -> Result<Self, ReducerError> {
-        let durable = DurableState::replay(&context, local_validator, entries)?;
+        let mut durable = DurableState::new(&context);
+        for entry in entries {
+            let next_generation = match entry.record() {
+                WalRecord::InstallTimeout(certificate) => {
+                    Self::generation_after_timeout_install(&durable, generation, certificate)
+                }
+                _ => Some(generation),
+            };
+            // Retain the canonical replay validation and error ordering. The
+            // recurrence reads the pre-entry state, but its result is consumed
+            // only after this exact frame validates. No partial state escapes
+            // either failure and the history is traversed only once.
+            durable.apply(&context, local_validator, &entry)?;
+            generation = next_generation.ok_or(ReducerError::GenerationOverflow)?;
+        }
         // Only successful WAL replay creates an unconsumed recovery event.
         Self::from_durable(context, local_validator, generation, durable, false)
     }
@@ -709,17 +729,23 @@ impl Reducer {
         let mut body_work = BTreeMap::new();
         let mut pending_prepare = BTreeMap::new();
         if let Some(certificate) = retryable_prepare {
-            // Replay restores an undecided open-current-view high PrepareQC as exact Missing-body
-            // authority without constructor work. Retransmission derives FetchBody after replay;
-            // closed/old highs, locks, and Decisions retain narrower recovery paths.
-            body_work.insert(
-                (certificate.round(), certificate.subject()),
-                BodyWork {
-                    manifest: None,
-                    state: BodyState::Missing,
-                },
+            // Restore exact Missing-body authority without emitting constructor
+            // work. Retransmission derives FetchBody after replay.
+            Self::ensure_missing_body_work(
+                &mut body_work,
+                certificate.round(),
+                certificate.subject(),
             );
             pending_prepare.insert(certificate.reference(), certificate.clone());
+        }
+        if durable.decision().is_none()
+            && let Some(locked) = durable.locked()
+        {
+            // A TC-promoted historical lock can own an already-published body
+            // completion even without a local Commit intent. Retain its exact
+            // key for startup replay without emitting a duplicate Fetch or
+            // granting the historical certificate current-view vote authority.
+            Self::ensure_missing_body_work(&mut body_work, locked.round(), locked.subject());
         }
         let mut known_prepare = BTreeMap::new();
         if let Some(certificate) = durable.highest_prepare() {
@@ -2355,7 +2381,8 @@ impl Reducer {
                 self.generation == after.generation && after.awaiting_signature.is_some()
             }
             Continuation::InstallTimeout { certificate, .. } => {
-                self.generation_after_timeout_install(certificate) == Some(after.generation)
+                Self::generation_after_timeout_install(&self.durable, self.generation, certificate)
+                    == Some(after.generation)
                     && after.durable.last_timeout() == Some(certificate)
                     && after.candidate.is_none()
                     && after.pending_prepare.is_empty()
@@ -2413,14 +2440,12 @@ impl Reducer {
     /// generation.  The check is performed before WAL application to retain
     /// the atomic fail-stop overflow boundary for malformed/unreachable state.
     fn generation_after_timeout_install(
-        &self,
+        durable: &DurableState,
+        generation: Generation,
         certificate: &TimeoutCertificate,
     ) -> Option<Generation> {
-        if self
-            .durable
-            .is_strict_same_round_timeout_upgrade(certificate)
-        {
-            self.generation.next()
+        if durable.is_strict_same_round_timeout_upgrade(certificate) {
+            generation.next()
         } else {
             Some(Generation::INITIAL)
         }
@@ -3879,6 +3904,19 @@ impl Reducer {
         self.formed_certificates.insert(reference);
         Ok(Some(QuorumCertificate::new(reference, signatures)))
     }
+    /// Retain one exact body key without resetting an already observed stage.
+    /// Recovery uses this same insertion as live certified fetches, but emits no
+    /// constructor effect or additional pending Prepare authority.
+    fn ensure_missing_body_work(
+        body_work: &mut BTreeMap<(Round, Subject), BodyWork>,
+        round: Round,
+        subject: Subject,
+    ) {
+        body_work.entry((round, subject)).or_insert(BodyWork {
+            manifest: None,
+            state: BodyState::Missing,
+        });
+    }
     fn ensure_body_fetch(&mut self, certificate: &QuorumCertificate) -> Effect {
         let round = self
             .durable
@@ -3889,10 +3927,7 @@ impl Reducer {
                 |decision| self.decision_body_round(decision),
             );
         let subject = certificate.subject();
-        self.body_work.entry((round, subject)).or_insert(BodyWork {
-            manifest: None,
-            state: BodyState::Missing,
-        });
+        Self::ensure_missing_body_work(&mut self.body_work, round, subject);
         Effect::FetchBody {
             tag: self.current_tag(),
             round,
@@ -4297,9 +4332,10 @@ impl Reducer {
         // or releasing its pending owner. Normal view advances reset to zero;
         // only a same-view lock upgrade can reach the checked overflow path.
         let next_generation = match pending.entry.record() {
-            WalRecord::InstallTimeout(certificate) => self
-                .generation_after_timeout_install(certificate)
-                .ok_or(ReducerError::GenerationOverflow)?,
+            WalRecord::InstallTimeout(certificate) => {
+                Self::generation_after_timeout_install(&self.durable, self.generation, certificate)
+                    .ok_or(ReducerError::GenerationOverflow)?
+            }
             _ => self.generation,
         };
         let mut durable = self.durable.clone();

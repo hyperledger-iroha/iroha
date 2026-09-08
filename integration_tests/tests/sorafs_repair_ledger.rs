@@ -409,7 +409,7 @@ async fn four_peer_repair_claim_revocation_terminal_and_restart_are_authoritativ
         network.sync_timeout(),
         peer.once_block(before_restart.0.finalized_cursor.height),
     )
-    .await??;
+    .await?;
     let after_restart = converged(&network, 4, 4).await?;
     ensure!(
         norito::to_bytes(&before_restart)? == norito::to_bytes(&after_restart)?,

@@ -82,6 +82,427 @@ fn advance_direct_validation_fixture_to_next_view(
     current
 }
 
+fn assert_certified_body_supersession_identity(
+    prepared: &PreparedSupersededCertifiedBodyV1<'_>,
+    old_tag: reducer::EventTag,
+    current_tag: reducer::EventTag,
+    manifest: &wire::PayloadManifest,
+    stage: SupersededCertifiedBodyStageV1,
+) {
+    assert_eq!(prepared.old_tag(), old_tag);
+    assert_eq!(prepared.current_tag(), current_tag);
+    assert!(prepared.current_tag().strictly_advances(prepared.old_tag()));
+    assert_eq!(prepared.context_id(), manifest.round.context_id);
+    assert_eq!(prepared.round(), manifest.round);
+    assert_eq!(prepared.subject(), manifest.subject);
+    assert_eq!(prepared.manifest_hash(), HashOf::new(manifest));
+    assert_eq!(prepared.stage(), stage);
+}
+
+#[test]
+fn certified_body_supersession_binds_old_view_material_without_mutation() {
+    let directory = TempDir::new().expect("temporary superseded body directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (old_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xD1);
+    let current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xD1,
+    );
+    assert!(old_tag.generation().get() > current_tag.generation().get());
+    for fenced in [false, true] {
+        if fenced {
+            let sign = adapter
+                .timeout_elapsed(current_tag)
+                .expect("persist the current-view timeout intent")
+                .into_effects();
+            assert!(matches!(sign.as_slice(), [AdapterEffect::Sign { .. }]));
+        }
+        let reducer_before = adapter.reducer.clone();
+        let registry_before = adapter.registry.clone();
+        let fence_before = adapter.reducer_fence_generation;
+        let CertifiedFetchStoreAdapterPreparationV1::Superseded(fetch) = adapter
+            .prepare_certified_fetch_store(old_tag, &manifest)
+            .expect("classify the exact older Fetch")
+        else {
+            panic!("strictly older authenticated Fetch work must be superseded")
+        };
+        assert_certified_body_supersession_identity(
+            &fetch,
+            old_tag,
+            current_tag,
+            &manifest,
+            SupersededCertifiedBodyStageV1::Fetch,
+        );
+        drop(fetch);
+        assert_eq!(adapter.reducer, reducer_before);
+        assert_registry_eq(&adapter.registry, &registry_before);
+        assert_eq!(adapter.reducer_fence_generation, fence_before);
+        let DurableStoreValidateAdapterPreparationV1::Superseded(store) = adapter
+            .prepare_durable_store_validate(old_tag, manifest.round, manifest.subject, &durable)
+            .expect("classify the exact older Store")
+        else {
+            panic!("strictly older authenticated Store work must be superseded")
+        };
+        assert_certified_body_supersession_identity(
+            &store,
+            old_tag,
+            current_tag,
+            &manifest,
+            SupersededCertifiedBodyStageV1::Store,
+        );
+        drop(store);
+        assert_eq!(adapter.reducer, reducer_before);
+        assert_registry_eq(&adapter.registry, &registry_before);
+        assert_eq!(adapter.reducer_fence_generation, fence_before);
+    }
+}
+
+#[test]
+fn certified_body_supersession_accepts_only_strict_same_view_generation_advance() {
+    let directory = TempDir::new().expect("temporary generation supersession directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (current_tag, manifest, durable, _) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xD2);
+    // The adapter proves tag ordering, while the registry separately proves
+    // that an exact published owner actually carried this older generation.
+    let old_tag = reducer::EventTag::new(
+        current_tag.height(),
+        current_tag.view(),
+        reducer::Generation::new(current_tag.generation().get().checked_sub(1).unwrap()),
+    );
+    let reducer_before = adapter.reducer.clone();
+    let registry_before = adapter.registry.clone();
+    let fence_before = adapter.reducer_fence_generation;
+    let CertifiedFetchStoreAdapterPreparationV1::Superseded(fetch) = adapter
+        .prepare_certified_fetch_store(old_tag, &manifest)
+        .expect("classify an older same-view Fetch tag")
+    else {
+        panic!("a strictly older same-view generation must be superseded")
+    };
+    assert_certified_body_supersession_identity(
+        &fetch,
+        old_tag,
+        current_tag,
+        &manifest,
+        SupersededCertifiedBodyStageV1::Fetch,
+    );
+    drop(fetch);
+    let DurableStoreValidateAdapterPreparationV1::Superseded(store) = adapter
+        .prepare_durable_store_validate(old_tag, manifest.round, manifest.subject, &durable)
+        .expect("classify an older same-view Store tag")
+    else {
+        panic!("a strictly older same-view generation must be superseded")
+    };
+    assert_certified_body_supersession_identity(
+        &store,
+        old_tag,
+        current_tag,
+        &manifest,
+        SupersededCertifiedBodyStageV1::Store,
+    );
+    drop(store);
+    assert_eq!(adapter.reducer, reducer_before);
+    assert_registry_eq(&adapter.registry, &registry_before);
+    assert_eq!(adapter.reducer_fence_generation, fence_before);
+}
+
+#[test]
+fn certified_body_supersession_keeps_current_future_and_wrong_height_inactive() {
+    let directory = TempDir::new().expect("temporary inactive body directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (tag, manifest, durable, _) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xD3);
+    let tags = [
+        tag,
+        reducer::EventTag::new(
+            tag.height(),
+            tag.view(),
+            reducer::Generation::new(tag.generation().get().checked_add(1).unwrap()),
+        ),
+        reducer::EventTag::new(
+            tag.height(),
+            tag.view().checked_add(1).unwrap(),
+            reducer::Generation::new(0),
+        ),
+        reducer::EventTag::new(
+            tag.height().checked_add(1).unwrap(),
+            tag.view(),
+            tag.generation(),
+        ),
+        reducer::EventTag::new(
+            tag.height().checked_sub(1).unwrap(),
+            tag.view(),
+            tag.generation(),
+        ),
+    ];
+    let proposer = adapter.status().expect("status").leader;
+    let wire::ConsensusMessageV2Payload::Proposal(unowned) =
+        proposal(&adapter.wire_context, proposer, subject(0xD4)).payload
+    else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    adapter
+        .registry
+        .manifest_to_core(&unowned.manifest, &adapter.wire_context)
+        .expect("register structurally valid material without reducer body work");
+    let unowned_durable = DurableBodyReceipt::for_test(
+        unowned.manifest.round.context_id,
+        unowned.manifest.round,
+        unowned.manifest.subject,
+        HashOf::new(&unowned.manifest),
+    );
+    let reducer_before = adapter.reducer.clone();
+    let registry_before = adapter.registry.clone();
+    let fence_before = adapter.reducer_fence_generation;
+    for input_tag in tags {
+        assert!(matches!(
+            adapter.prepare_certified_fetch_store(input_tag, &manifest),
+            Ok(CertifiedFetchStoreAdapterPreparationV1::Inactive)
+        ));
+        assert!(matches!(
+            adapter.prepare_durable_store_validate(
+                input_tag,
+                manifest.round,
+                manifest.subject,
+                &durable,
+            ),
+            Ok(DurableStoreValidateAdapterPreparationV1::Inactive)
+        ));
+    }
+    assert!(matches!(
+        adapter.prepare_certified_fetch_store(tag, &unowned.manifest),
+        Ok(CertifiedFetchStoreAdapterPreparationV1::Inactive)
+    ));
+    assert!(matches!(
+        adapter.prepare_durable_store_validate(
+            tag,
+            unowned.manifest.round,
+            unowned.manifest.subject,
+            &unowned_durable,
+        ),
+        Ok(DurableStoreValidateAdapterPreparationV1::Inactive)
+    ));
+    assert_eq!(adapter.reducer, reducer_before);
+    assert_registry_eq(&adapter.registry, &registry_before);
+    assert_eq!(adapter.reducer_fence_generation, fence_before);
+}
+
+#[test]
+fn certified_body_supersession_rejects_foreign_and_malformed_fetch_material() {
+    let directory = TempDir::new().expect("temporary invalid Fetch material directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (old_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xD5);
+    let _current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xD5,
+    );
+    let mut foreign_context = adapter.wire_context.clone();
+    foreign_context.leader_seed[0] ^= 0x80;
+    let mut foreign_manifest = manifest.clone();
+    foreign_manifest.round.context_id = foreign_context.id();
+    let mut wrong_height = manifest.clone();
+    wrong_height.round.height = wrong_height.round.height.checked_add(1).unwrap();
+    let mut wrong_root = manifest.clone();
+    wrong_root.chunk_root = Hash::new(b"wrong superseded body chunk root");
+    let mut empty_manifest = manifest.clone();
+    empty_manifest.chunk_hashes.clear();
+    let reducer_before = adapter.reducer.clone();
+    let registry_before = adapter.registry.clone();
+    let fence_before = adapter.reducer_fence_generation;
+    for invalid in [foreign_manifest, wrong_height, wrong_root, empty_manifest] {
+        assert!(matches!(
+            adapter.prepare_certified_fetch_store(old_tag, &invalid),
+            Err(AdapterError::WireValidation(_))
+        ));
+        assert_eq!(adapter.reducer, reducer_before);
+        assert_registry_eq(&adapter.registry, &registry_before);
+        assert_eq!(adapter.reducer_fence_generation, fence_before);
+    }
+}
+
+#[test]
+fn certified_body_supersession_rejects_foreign_and_mismatched_store_receipts() {
+    let directory = TempDir::new().expect("temporary invalid Store material directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (old_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xD6);
+    let _current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xD6,
+    );
+    let mut foreign_context = adapter.wire_context.clone();
+    foreign_context.leader_seed[0] ^= 0x80;
+    let wrong_round = wire::ConsensusRound {
+        view: manifest.round.view.checked_add(1).unwrap(),
+        ..manifest.round
+    };
+    let invalid_receipts = [
+        DurableBodyReceipt::for_test(
+            foreign_context.id(),
+            manifest.round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        ),
+        DurableBodyReceipt::for_test(
+            manifest.round.context_id,
+            wrong_round,
+            manifest.subject,
+            HashOf::new(&manifest),
+        ),
+        DurableBodyReceipt::for_test(
+            manifest.round.context_id,
+            manifest.round,
+            subject(0xD7),
+            HashOf::new(&manifest),
+        ),
+        DurableBodyReceipt::for_test(
+            manifest.round.context_id,
+            manifest.round,
+            manifest.subject,
+            HashOf::from_untyped_unchecked(Hash::new(b"wrong superseded manifest")),
+        ),
+    ];
+    let reducer_before = adapter.reducer.clone();
+    let registry_before = adapter.registry.clone();
+    let fence_before = adapter.reducer_fence_generation;
+    for receipt in invalid_receipts {
+        assert!(matches!(
+            adapter.prepare_durable_store_validate(
+                old_tag,
+                manifest.round,
+                manifest.subject,
+                &receipt,
+            ),
+            Err(AdapterError::DurableBodyMismatch)
+        ));
+        assert_eq!(adapter.reducer, reducer_before);
+        assert_registry_eq(&adapter.registry, &registry_before);
+        assert_eq!(adapter.reducer_fence_generation, fence_before);
+    }
+}
+
+#[test]
+fn certified_body_supersession_preserves_manifest_registration_and_replay_checks() {
+    let directory = TempDir::new().expect("temporary gated body retirement directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (old_tag, manifest, durable, validated) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xD9);
+    let _current_tag = advance_direct_validation_fixture_to_next_view(
+        &mut adapter,
+        &manifest,
+        &durable,
+        validated.execution_commitment(),
+        0xD9,
+    );
+    let wire::ConsensusMessageV2Payload::Proposal(unregistered) = proposal(
+        &adapter.wire_context,
+        adapter.wire_context.leader(manifest.round.view),
+        subject(0xDA),
+    )
+    .payload
+    else {
+        unreachable!("proposal helper returns a proposal")
+    };
+    let unregistered_receipt = DurableBodyReceipt::for_test(
+        unregistered.manifest.round.context_id,
+        unregistered.manifest.round,
+        unregistered.manifest.subject,
+        HashOf::new(&unregistered.manifest),
+    );
+    let reducer_before = adapter.reducer.clone();
+    let registry_before = adapter.registry.clone();
+    let fence_before = adapter.reducer_fence_generation;
+    assert!(matches!(
+        adapter.prepare_durable_store_validate(
+            old_tag,
+            unregistered.manifest.round,
+            unregistered.manifest.subject,
+            &unregistered_receipt,
+        ),
+        Err(AdapterError::MissingManifest)
+    ));
+    adapter.replay_complete = false;
+    assert!(matches!(
+        adapter.prepare_certified_fetch_store(old_tag, &manifest),
+        Err(AdapterError::ReplayNotComplete)
+    ));
+    assert!(matches!(
+        adapter.prepare_durable_store_validate(old_tag, manifest.round, manifest.subject, &durable),
+        Err(AdapterError::ReplayNotComplete)
+    ));
+    assert!(!adapter.replay_complete);
+    assert_eq!(adapter.reducer, reducer_before);
+    assert_registry_eq(&adapter.registry, &registry_before);
+    assert_eq!(adapter.reducer_fence_generation, fence_before);
+}
+
+#[test]
+fn certified_body_supersession_preserves_current_tag_fence_and_exhaustion() {
+    let directory = TempDir::new().expect("temporary current body fence directory");
+    let (mut adapter, startup) = open_test(&directory).expect("open adapter");
+    assert!(startup.is_empty());
+    let (tag, manifest, durable, _) =
+        advance_direct_validation_fixture_to_durable(&mut adapter, 0xD8);
+    let sign = adapter
+        .timeout_elapsed(tag)
+        .expect("persist timeout intent")
+        .into_effects();
+    assert!(matches!(sign.as_slice(), [AdapterEffect::Sign { .. }]));
+    let reducer_before = adapter.reducer.clone();
+    let registry_before = adapter.registry.clone();
+    let fence_before = adapter.reducer_fence_generation;
+    let CertifiedFetchStoreAdapterPreparationV1::Blocked(fetch) = adapter
+        .prepare_certified_fetch_store(tag, &manifest)
+        .expect("classify the current signature-fenced Fetch")
+    else {
+        panic!("current-tag Fetch must retain the exact reducer fence")
+    };
+    assert_eq!(fetch.context_id(), manifest.round.context_id);
+    assert_eq!(fetch.generation(), fence_before);
+    drop(fetch);
+    let DurableStoreValidateAdapterPreparationV1::Blocked(store) = adapter
+        .prepare_durable_store_validate(tag, manifest.round, manifest.subject, &durable)
+        .expect("classify the current signature-fenced Store")
+    else {
+        panic!("current-tag Store must retain the exact reducer fence")
+    };
+    assert_eq!(store.context_id(), manifest.round.context_id);
+    assert_eq!(store.generation(), fence_before);
+    drop(store);
+    assert_eq!(adapter.reducer, reducer_before);
+    assert_registry_eq(&adapter.registry, &registry_before);
+    assert_eq!(adapter.reducer_fence_generation, fence_before);
+    adapter.reducer_fence_generation = u64::MAX;
+    assert!(matches!(
+        adapter.prepare_certified_fetch_store(tag, &manifest),
+        Err(AdapterError::ReducerFenceGenerationExhausted)
+    ));
+    assert!(matches!(
+        adapter.prepare_durable_store_validate(tag, manifest.round, manifest.subject, &durable),
+        Err(AdapterError::ReducerFenceGenerationExhausted)
+    ));
+    assert_eq!(adapter.reducer, reducer_before);
+    assert_registry_eq(&adapter.registry, &registry_before);
+    assert_eq!(adapter.reducer_fence_generation, u64::MAX);
+}
+
 #[test]
 fn direct_certified_body_preview_is_inert_and_commits_one_store_successor() {
     let directory = TempDir::new().expect("temporary direct-completion directory");

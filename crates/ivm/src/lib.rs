@@ -60,6 +60,8 @@ mod metadata;
 pub mod numeric {
     pub use ivm_abi::numeric::*;
 }
+#[cfg(test)]
+mod kotodama_v1_tests;
 pub mod mock_wsv;
 pub mod numeric_gas;
 pub mod numeric_tlv;
@@ -76,6 +78,8 @@ mod sha3;
 pub mod signature;
 pub mod stack_policy;
 mod state_overlay;
+/// Shared bounded live-keyset scan implementation for ABI V1 state hosts.
+pub mod state_scan;
 #[path = "state_value.rs"]
 mod state_value_runtime;
 pub mod sum;
@@ -200,6 +204,9 @@ pub use ivm_abi::entrypoint::{
     EntrypointArgumentSchemaV1, EntrypointReturnRecordV1, EntrypointValueAtomV1,
     EntrypointValueTypeV1,
 };
+/// Canonical compiler-owned nominal error descriptors.
+pub use ivm_abi::error_types;
+pub use ivm_abi::state_cursor;
 /// Canonical schemas and records used for durable Kotodama V1 state values.
 pub use ivm_abi::state_value;
 #[cfg(test)]

@@ -8,6 +8,10 @@ seiyaku C {
                     var Option<Pair> changing_option = Option::some(Pair { count: 4, ready: true });
                     changing_option = Option::none;
                     var Result<Pair, Pair> changing_result = Result::ok(Pair { count: 5, ready: true });
+                    let _ = changing_result;
                     changing_result = Result::err(Pair { count: 6, ready: false });
+                    let _ = changing_result;
+                    let _ = ok;
+                    let _ = err;
                 }
             }

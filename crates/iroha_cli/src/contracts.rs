@@ -1,5 +1,6 @@
 //! Contracts helpers.
 mod local_debug_rendering;
+mod scaffold;
 use crate::{
     Run, RunContext, TransactionWaitArgs, apply_cli_gas_limit_override,
     wait_for_transaction_applied,
@@ -37,6 +38,7 @@ use local_debug_rendering::{
     build_local_debug_entrypoint, render_durable_state_overlay, render_queued_instructions,
 };
 use reqwest::StatusCode;
+pub use scaffold::DevNewArgs;
 use std::{
     collections::BTreeMap,
     fs,
@@ -104,7 +106,8 @@ impl Command {
         match self {
             Self::App(AppCommand::Build(_))
             | Self::Dev(
-                DevCommand::Check(_)
+                DevCommand::New(_)
+                | DevCommand::Check(_)
                 | DevCommand::Build(_)
                 | DevCommand::Test(_)
                 | DevCommand::Schema(_),
@@ -142,6 +145,8 @@ impl Run for AppCommand {
 }
 #[derive(clap::Subcommand, Debug)]
 pub enum DevCommand {
+    /// Create a complete local Kotodama project with tests and editor configuration
+    New(DevNewArgs),
     /// Lint, build interfaces, and run Kotodama tests from a contract manifest
     Check(DevCheckArgs),
     /// Build all contract artifacts and generated interface files
@@ -162,6 +167,7 @@ pub enum DevCommand {
 impl Run for DevCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            DevCommand::New(args) => args.run(context),
             DevCommand::Check(args) => args.run(context),
             DevCommand::Build(args) => args.run(context),
             DevCommand::Test(args) => args.run(context),
@@ -812,6 +818,7 @@ fn contract_source_project(
     Ok(Some(KotodamaLoadedSourceProject {
         graph,
         source_paths,
+        manifest: None,
     }))
 }
 fn contract_project_root_path(project: &KotodamaLoadedSourceProject) -> Result<PathBuf> {
@@ -1699,28 +1706,8 @@ fn dev_run_lints(manifest_path: &Path, zk_enabled: bool) -> Result<norito::json:
                     let package_identity = project_warning.package_identity;
                     let source_name = project_warning.source_name;
                     let warning = project_warning.warning;
-                    let (line, column) = warning
-                        .source
-                        .as_ref()
-                        .map_or((1, 1), |span| (span.line.max(1), span.column.max(1)));
-                    let position = ivm::kotodama::diagnostic::SourcePosition { line, column };
-                    let mut diagnostic = ivm::kotodama::diagnostic::Diagnostic::warning(
-                        warning.diagnostic_code(),
-                        ivm::kotodama::diagnostic::DiagnosticPhase::Semantic,
-                        warning.localized_message(language),
-                        Some(ivm::kotodama::diagnostic::SourceSpan {
-                            package_identity: package_identity.clone(),
-                            source: Some(source_name.clone()),
-                            start: position,
-                            end: position,
-                            byte_range: None,
-                        }),
-                    );
-                    diagnostic.notes.push(format!(
-                        "lint `{}` in category `{}`",
-                        warning.code,
-                        warning.category.as_str()
-                    ));
+                    let diagnostic =
+                        warning.to_diagnostic(&source_name, package_identity.as_deref(), language);
                     grouped
                         .entry((package_identity, source_name))
                         .or_default()
@@ -2504,7 +2491,7 @@ pub struct DebugCallArgs {
     /// Base64-encoded code (mutually exclusive with --code-file)
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
-    /// Contract entrypoint selector.
+    /// Local kotoage, hajimari, or kaizen entrypoint selector.
     #[arg(long)]
     pub entrypoint: String,
     /// Gas limit applied to the local call execution.
@@ -3101,7 +3088,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
         executable_len,
     )?;
     let selector = args.entrypoint;
-    let descriptor = resolve_local_public_entrypoint(&verified, &selector)?;
+    let descriptor = resolve_local_call_entrypoint(&verified, &selector)?;
     let entrypoint_pc = resolve_local_contract_entrypoint_pc(&code, descriptor)?;
     let payload = load_contract_payload_value(
         args.payload.payload_json.as_deref(),
@@ -3514,7 +3501,7 @@ fn decode_debug_fixture_bytes(raw: &str) -> Result<Vec<u8>> {
 fn resolve_local_entrypoint<'a>(
     artifact: &'a ivm::VerifiedContractArtifact,
     selector: &str,
-    expected_kind: iroha_data_model::smart_contract::manifest::EntryPointKind,
+    expected_kinds: &[iroha_data_model::smart_contract::manifest::EntryPointKind],
     expected_label: &str,
 ) -> Result<&'a ivm::EmbeddedEntrypointDescriptor> {
     let descriptor = artifact
@@ -3523,7 +3510,7 @@ fn resolve_local_entrypoint<'a>(
         .iter()
         .find(|candidate| candidate.name == selector)
         .ok_or_else(|| eyre!("unknown contract entrypoint `{selector}`"))?;
-    if descriptor.kind != expected_kind {
+    if !expected_kinds.contains(&descriptor.kind) {
         return Err(eyre!(
             "contract entrypoint `{selector}` is not a {expected_label} entrypoint"
         ));
@@ -3537,19 +3524,23 @@ fn resolve_local_view_entrypoint<'a>(
     resolve_local_entrypoint(
         artifact,
         selector,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::View,
+        &[iroha_data_model::smart_contract::manifest::EntryPointKind::View],
         "read-only view",
     )
 }
-fn resolve_local_public_entrypoint<'a>(
+fn resolve_local_call_entrypoint<'a>(
     artifact: &'a ivm::VerifiedContractArtifact,
     selector: &str,
 ) -> Result<&'a ivm::EmbeddedEntrypointDescriptor> {
     resolve_local_entrypoint(
         artifact,
         selector,
-        iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
-        "kotoage",
+        &[
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Hajimari,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::Kaizen,
+        ],
+        "kotoage or lifecycle",
     )
 }
 fn resolve_local_contract_entrypoint_pc(
@@ -5207,6 +5198,82 @@ mod tests {
         );
     }
     #[test]
+    fn debug_call_executes_lifecycle_and_persists_state_for_readback() {
+        let authority = fixture_account(0x34);
+        let ctx = TestContext::new(authority.clone());
+        let program = compile_contract_program(
+            "seiyaku LifecycleDebug {
+                state int counter;
+                hajimari() { counter = 7; }
+                kaizen() { counter = counter + 1; }
+                view fn value() -> int { return counter; }
+            }",
+        );
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
+        let mut state = None;
+        for (selector, expected) in [("hajimari", 7), ("kaizen", 8)] {
+            let response = execute_local_contract_debug_call(
+                &ctx,
+                DebugCallArgs {
+                    authority: None,
+                    code_file: None,
+                    code_b64: Some(code_b64.clone()),
+                    entrypoint: selector.to_owned(),
+                    gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
+                    source_file: None,
+                    source_map_file: None,
+                    accounts_json: None,
+                    accounts_file: None,
+                    durable_state_json: state,
+                    durable_state_file: None,
+                    payload: ContractPayloadArgs {
+                        payload_json: None,
+                        payload_file: None,
+                    },
+                },
+                authority.clone(),
+            )
+            .expect("local lifecycle execution");
+            assert!(response.ok, "{selector}: {:?}", response.error);
+            assert_eq!(response.result, Some(norito::json::Value::Null));
+            assert_eq!(response.durable_state_mutation_count, 1);
+            assert_eq!(response.queued_instruction_count, 0);
+            assert_eq!(
+                response.durable_state_overlay.get("counter"),
+                Some(&norito::json::Value::from(format!(
+                    "0x{}",
+                    hex::encode(encode_int_state_value(expected))
+                )))
+            );
+            state = Some(norito::json::to_json(&response.durable_state_overlay).unwrap());
+        }
+        let response = execute_local_contract_debug_view(
+            &ctx,
+            DebugViewArgs {
+                authority: None,
+                code_file: None,
+                code_b64: Some(code_b64),
+                entrypoint: "value".to_owned(),
+                gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
+                source_file: None,
+                source_map_file: None,
+                accounts_json: None,
+                accounts_file: None,
+                durable_state_json: state,
+                durable_state_file: None,
+                payload: ContractPayloadArgs {
+                    payload_json: None,
+                    payload_file: None,
+                },
+            },
+            authority,
+        )
+        .expect("read lifecycle state");
+        assert!(response.ok, "readback: {:?}", response.error);
+        assert_eq!(response.result, Some(norito::json::Value::from("8")));
+        assert_eq!(response.durable_state_mutation_count, 0);
+    }
+    #[test]
     fn debug_call_rejects_view_entrypoints() {
         let authority = fixture_account(0x32);
         let mut ctx = TestContext::new(authority);
@@ -5233,7 +5300,8 @@ mod tests {
             .run(&mut ctx)
             .expect_err("view entrypoints must be rejected");
         assert!(
-            err.to_string().contains("is not a kotoage entrypoint"),
+            err.to_string()
+                .contains("is not a kotoage or lifecycle entrypoint"),
             "unexpected error: {err}"
         );
     }
@@ -5343,7 +5411,7 @@ mod tests {
                 0,
                 0,
             );
-            let mut block = state.block(header);
+            let mut block = state.block(header.clone());
             let mut transaction = block.transaction();
             let registered_hash =
                 code::register_code_bytes(&authority, program.clone(), &mut transaction)
@@ -5369,6 +5437,7 @@ mod tests {
             block
                 .commit_world_overlay_for_testing()
                 .expect("commit contract deployment");
+            state.append_committed_block_header_for_tests(header);
         }
         let tx = TransactionBuilder::new(
             ctx.config().network_id,
@@ -5456,13 +5525,34 @@ mod tests {
         let error = parse_debug_durable_state_fixture(&fixture)
             .expect_err("oversized StatePath fixture must fail");
         assert!(error.to_string().contains("invalid durable state key"));
-        let duplicate = r#"{"root/e\u0301":"0x01","root/é":"0x02"}"#;
+        let composed = parse_debug_durable_state_fixture(r#"{"root/é":"0x0102"}"#)
+            .expect("exact NFC state key");
+        assert_eq!(composed.len(), 1);
+        let (path, bytes) = composed.iter().next().expect("one exact NFC state key");
+        assert_eq!(path.as_ref(), "root/é");
+        assert_eq!(bytes.as_slice(), &[0x01, 0x02]);
+        for fixture in [
+            r#"{"root/e\u0301":"0x01"}"#,
+            r#"{"root/e\u0301":"0x01","root/é":"0x02"}"#,
+        ] {
+            let error = parse_debug_durable_state_fixture(fixture)
+                .expect_err("alternate NFC spelling must fail before state insertion");
+            assert_eq!(
+                error.to_string(),
+                "invalid durable state key `root/e\u{301}`: StatePath must already use the exact NFC spelling",
+                "unexpected rejection stage for {fixture}"
+            );
+        }
+        let duplicate = r#"{"root/é":"0x01","root/é":"0x02"}"#;
         let error = parse_debug_durable_state_fixture(duplicate)
-            .expect_err("canonically equivalent StatePath keys must not overwrite");
+            .expect_err("duplicate JSON state keys must not overwrite");
+        assert_eq!(error.to_string(), "invalid durable state fixture JSON");
         assert!(
-            error
-                .to_string()
-                .contains("duplicate durable state key after canonicalization")
+            matches!(
+                error.downcast_ref::<norito::json::Error>(),
+                Some(norito::json::Error::DuplicateField { field }) if field == "root/é"
+            ),
+            "the JSON decoder must reject the exact duplicate key: {error:?}"
         );
     }
     #[test]

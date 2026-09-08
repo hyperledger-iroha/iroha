@@ -2967,9 +2967,10 @@ pub enum PendingQueuePlanAdmissionDisposition {
     Applied,
     /// No marker exists and the complete certificate is eligible for the next carrier.
     EligibleAbsent,
-    /// The certificate is authentic but its bound canonical frontier has not arrived locally yet.
+    /// The certificate is authentic but its authority frontier or the caller's carrier is not ready.
     ///
-    /// Callers must retain the bounded durable certificate and reclassify it after catch-up.
+    /// Callers must retain the bounded durable certificate and reclassify it after State catch-up
+    /// or carrier advancement. This disposition never authorizes inclusion in an earlier carrier.
     Future,
     /// A different well-formed immutable marker already owns this source identity.
     DefinitiveConflict,
@@ -34641,15 +34642,36 @@ impl State {
                             &state_view.lane_incarnations,
                             &state_view.lane_incarnation_activation_heights,
                         )?;
+                        // An asynchronous Apply can publish State before the process-height
+                        // adapter rolls over. Validate the source at this same immutable State
+                        // frontier before deciding whether the caller's carrier is ready for it.
+                        // The actual carrier inclusion boundary remains strict.
+                        let current_proposal_height =
+                            committed_height.checked_add(1).ok_or_else(|| {
+                                MergeLedgerCommitError::ExecutionBatchInvalid(
+                                "current QueuePlan authority height overflows its proposal height"
+                                    .to_owned(),
+                            )
+                            })?;
                         if Self::validate_queue_plan_admissions_for_carrier_in_view(
                             state_view,
                             &encoded,
                             &active_lanes,
-                            carrier_height,
+                            carrier_height.max(current_proposal_height),
                         )
                         .is_ok()
                         {
-                            PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                            if admission
+                                .certificate
+                                .binding
+                                .admission_context
+                                .proposal_height
+                                > carrier_height
+                            {
+                                PendingQueuePlanAdmissionDisposition::Future
+                            } else {
+                                PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                            }
                         } else {
                             PendingQueuePlanAdmissionDisposition::Stale
                         }

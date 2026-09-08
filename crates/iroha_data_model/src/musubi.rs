@@ -3387,8 +3387,7 @@ impl MusubiProviderBundleAttestationRefV1 {
         Ok(())
     }
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::musubi::MusubiProviderBundleAttestationSetPreimageV1")]
 struct MusubiProviderBundleAttestationSetPreimageV1 {
     archive_id: ArchiveId,

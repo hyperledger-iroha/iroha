@@ -486,8 +486,7 @@ mod tests {
     use crate::metadata::Metadata;
     use iroha_primitives::numeric::Numeric;
     use norito::codec::{Decode, Encode};
-    #[derive(Encode)]
-    #[derive(norito::NoritoSchema)]
+    #[derive(Encode, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::sns::tests::ForgedTokenValue")]
     struct ForgedTokenValue {
         asset_id: String,

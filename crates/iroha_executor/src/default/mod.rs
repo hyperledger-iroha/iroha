@@ -404,7 +404,7 @@ mod contract_deployment_bootstrap_tests {
             access_set_hints: None,
             entrypoints: None,
             states: None,
-            error_codes: None,
+            error_types: None,
             kotoba: None,
             provenance: None,
         }

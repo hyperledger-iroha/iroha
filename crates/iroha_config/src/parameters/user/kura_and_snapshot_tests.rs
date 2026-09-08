@@ -1,4 +1,44 @@
 #[test]
+fn snapshot_resource_defaults_respect_norito_structural_limit() {
+    let resources = super::SnapshotResourcePolicy::default();
+    resources
+        .validate(defaults::snapshot::MAX_PAYLOAD_BYTES)
+        .expect("snapshot defaults satisfy their production validation policy");
+    assert_eq!(
+        resources.max_decode_depth.get(),
+        norito::json::MAX_JSON_VALUE_NESTING_DEPTH,
+    );
+    let actual = load_root(base_table());
+    assert_eq!(
+        actual.snapshot.resources.max_decode_depth,
+        resources.max_decode_depth
+    );
+}
+
+#[test]
+fn snapshot_resource_depth_boundary_is_enforced_without_other_invalid_budgets() {
+    for (depth, valid) in [
+        (norito::json::MAX_JSON_VALUE_NESTING_DEPTH, true),
+        (norito::json::MAX_JSON_VALUE_NESTING_DEPTH + 1, false),
+    ] {
+        let resources = super::SnapshotResourcePolicy {
+            max_decode_depth: NonZeroUsize::new(depth).expect("positive depth"),
+            ..super::SnapshotResourcePolicy::default()
+        };
+        let result = resources.validate(defaults::snapshot::MAX_PAYLOAD_BYTES);
+        if valid {
+            result.expect("the exact structural limit remains valid");
+        } else {
+            assert!(
+                result
+                    .expect_err("excess depth must fail")
+                    .contains("structural limit")
+            );
+        }
+    }
+}
+
+#[test]
 fn kura_replica_advert_defaults_reserve_an_evictable_window_after_the_tail() {
     let actual = load_root(base_table());
     assert_eq!(

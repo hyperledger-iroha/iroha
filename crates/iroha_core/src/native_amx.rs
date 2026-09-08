@@ -3231,11 +3231,9 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                 participant_settlement: leg.participant_settlement.clone(),
             };
             if participant_request.validate_plan_binding().is_err()
-                || compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
-                    .ok()
+                || compute_native_amx_participant_settlement_hash(&leg.participant_settlement).ok()
                     != Some(leg.participant_settlement_hash)
-                || leg.participant_settlement_hash
-                    != prepare.body.participant_settlement_commitment
+                || leg.participant_settlement_hash != prepare.body.participant_settlement_commitment
                 || native_amx_participant_application_role(receipt, leg).is_err()
             {
                 return false;
@@ -3296,8 +3294,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                     && body.participant_lane_block_view
                         == leg.participant_proposal.descriptor.lane_block_view
                     && body.participant_proposal_hash == leg.participant_proposal.proposal_hash
-                    && body.participant_settlement_commitment
-                        == leg.participant_settlement_hash
+                    && body.participant_settlement_commitment == leg.participant_settlement_hash
                     && body.authority_context_height == descriptor.proposal_height
                     && body.planned_coordinator_block_height == descriptor.lane_block_height
                     && body.coordinator_lane_block_view == descriptor.lane_block_view

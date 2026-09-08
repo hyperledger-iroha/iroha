@@ -298,7 +298,9 @@ pub struct ModerationLedgerPolicyRecord {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationPoPRegistrySnapshotV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationPoPRegistrySnapshotV1"
+)]
 pub struct ModerationPoPRegistrySnapshotV1 {
     /// Issuer policy digest used to admit both active publications.
     #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
@@ -662,7 +664,9 @@ pub enum ModerationAppealIntakeError {
     norito(tag = "class", content = "value", rename_all = "snake_case")
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityClassV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityClassV1"
+)]
 pub enum ModerationJurorEligibilityClassV1 {
     /// General juror pool.
     General,
@@ -679,7 +683,9 @@ pub enum ModerationJurorEligibilityClassV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationJurorEligibilityRecordV1"
+)]
 pub struct ModerationJurorEligibilityRecordV1 {
     /// Appeal case identifier.
     pub case_id: String,
@@ -1318,7 +1324,9 @@ impl ModerationChallengeKindV1 {
     norito(tag = "decision", content = "value", rename_all = "snake_case")
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationChallengeDecisionV1"
+)]
 pub enum ModerationChallengeDecisionV1 {
     /// Challenge was rejected and normal ballot processing may resume.
     Rejected,
@@ -1565,7 +1573,9 @@ pub struct ModerationFinalizedCursorV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventCursorV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventCursorV1"
+)]
 pub struct ModerationFinalizedEventCursorV1 {
     /// Monotonic moderation-event sequence beginning at one.
     pub sequence: u64,
@@ -1611,7 +1621,9 @@ impl ModerationFinalizedEventV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventPageV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedEventPageV1"
+)]
 pub struct ModerationFinalizedEventPageV1 {
     /// Finalized state anchor shared by every event in the page.
     pub finalized_cursor: ModerationFinalizedCursorV1,
@@ -1626,7 +1638,9 @@ pub struct ModerationFinalizedEventPageV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedAppealViewV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedAppealViewV1"
+)]
 pub struct ModerationFinalizedAppealViewV1 {
     /// Authoritative appeal, sortition, and activation record.
     pub appeal: ModerationAppealRecordV1,
@@ -1637,7 +1651,9 @@ pub struct ModerationFinalizedAppealViewV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedCaseViewV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedCaseViewV1"
+)]
 pub struct ModerationFinalizedCaseViewV1 {
     /// Authoritative case header.
     pub case: ModerationCaseRecordV1,
@@ -1656,7 +1672,9 @@ pub struct ModerationFinalizedCaseViewV1 {
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedLedgerSnapshotV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedLedgerSnapshotV1"
+)]
 pub struct ModerationFinalizedLedgerSnapshotV1 {
     /// Schema version; must equal [`MODERATION_FINALIZED_SNAPSHOT_VERSION_V1`].
     pub version: u16,
@@ -1870,7 +1888,9 @@ pub enum RepairLedgerTerminalKindV1 {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTerminalOutcomeV1")]
+#[norito_schema(
+    name = "iroha_data_model::sorafs::moderation_ledger::RepairLedgerTerminalOutcomeV1"
+)]
 pub struct RepairLedgerTerminalOutcomeV1 {
     /// Terminal result.
     pub kind: RepairLedgerTerminalKindV1,

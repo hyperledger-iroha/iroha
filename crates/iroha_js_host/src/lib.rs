@@ -44,10 +44,6 @@ use halo2_proofs::{
     },
     transcript::{Blake2bWrite, Challenge255, TranscriptWriterBuffer},
 };
-use iroha_storage_client::da::{
-    DaProofConfig as IrohaDaProofConfig,
-    generate_da_proof_summary as iroha_generate_da_proof_summary,
-};
 use iroha_core::privacy_profiles::{
     compiled_privacy_profile_catalog_v1, validate_local_privacy_compiled_profile_catalog_archive_v1,
 };
@@ -163,6 +159,10 @@ use iroha_data_model::{
         action::{Action, Repeats},
     },
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
+};
+use iroha_storage_client::da::{
+    DaProofConfig as IrohaDaProofConfig,
+    generate_da_proof_summary as iroha_generate_da_proof_summary,
 };
 use std::{
     collections::HashSet,
@@ -17028,7 +17028,7 @@ seiyaku Privacy {
                     text: "Ledger Contract".to_owned(),
                 }],
             }]),
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&signing_key);

@@ -17,23 +17,23 @@ seiyaku NativeEscrowAitai {
     }
 
     kotoage fn accept(Name offer) authorize("Admin") {
-        ledger::escrow::accept(offer);
+        ledger::escrow::accept(offer: offer);
     }
 
     kotoage fn mark_payment_sent(Name offer) authorize("Admin") {
-        ledger::escrow::mark_payment_sent(offer);
+        ledger::escrow::mark_payment_sent(offer: offer);
     }
 
     kotoage fn release(Name offer) authorize("Admin") {
-        ledger::escrow::release(offer);
+        ledger::escrow::release(offer: offer);
     }
 
     kotoage fn cancel(Name offer) authorize("Admin") {
-        ledger::escrow::cancel(offer);
+        ledger::escrow::cancel(offer: offer);
     }
 
     kotoage fn dispute(Name offer) authorize("Admin") {
-        ledger::escrow::open_dispute(offer);
+        ledger::escrow::open_dispute(offer: offer);
     }
 
     kotoage fn resolve_dispute(Name offer, quantity buyer_amount, quantity seller_amount) authorize(

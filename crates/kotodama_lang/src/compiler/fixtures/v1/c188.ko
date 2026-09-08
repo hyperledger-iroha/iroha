@@ -9,7 +9,7 @@
             }
 
             view fn exposed(int value) -> int {
-                return helper(value);
+                return helper(value: value);
             }
         }
         

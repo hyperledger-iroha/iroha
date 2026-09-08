@@ -14878,7 +14878,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                     "access_set_hints": null,
                     "entrypoints": null,
                     "states": null,
-                    "error_codes": null,
+                    "error_types": null,
                     "kotoba": null,
                     "provenance": null
                   },
@@ -16781,6 +16781,27 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         Assert.True(response!.Ok);
         Assert.Equal("ok", response.Result!["status"]!.GetValue<string>());
         Assert.Equal(2, response.Result!["matched"]!.GetValue<int>());
+    }
+
+    [Theory]
+    [InlineData("{\"some\":null}")]
+    [InlineData("{\"none\":true}")]
+    [InlineData("{\"some\":{\"none\":true}}")]
+    [InlineData("{\"some\":{\"some\":null}}")]
+    public void ContractJsonRetainsUnitAndNestedOptionPresence(string json)
+    {
+        var value = JsonNode.Parse(json)!;
+        var request = ValidContractViewRequest() with { Payload = new JsonObject { ["value"] = value } };
+        var encodedRequest = JsonNode.Parse(JsonSerializer.Serialize(request))!;
+        Assert.True(JsonNode.DeepEquals(value, encodedRequest["payload"]!["value"]));
+
+        var responseJson = ContractViewSuccessResponseJsonObject();
+        responseJson["result"] = value.DeepClone();
+        var response = JsonSerializer.Deserialize<ToriiContractViewResponse>(responseJson.ToJsonString())!;
+        Assert.NotNull(response.Result);
+        Assert.True(JsonNode.DeepEquals(value, response.Result));
+        var encodedResponse = JsonNode.Parse(JsonSerializer.Serialize(response))!;
+        Assert.True(JsonNode.DeepEquals(value, encodedResponse["result"]));
     }
 
     [Fact]

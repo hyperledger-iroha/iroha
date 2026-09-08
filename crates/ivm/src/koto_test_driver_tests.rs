@@ -154,6 +154,19 @@ fn compiler_owned_test_return_sentinel_preserves_artifact_verification() {
         .program
         .entrypoint_pc(crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
         .expect("compiler-owned suite return sentinel");
+    let sentinel = compiled
+        .suite
+        .program
+        .contract_interface()
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == crate::metadata::KOTO_TEST_RETURN_ENTRYPOINT)
+        .unwrap();
+    assert_eq!(sentinel.return_type.as_deref(), Some("()"));
+    assert_eq!(
+        sentinel.return_schema.as_ref().unwrap().nodes,
+        vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit]
+    );
     let parsed = ProgramMetadata::parse(suite_program).expect("parse compiled suite");
     assert_eq!(
         return_pc,
@@ -652,6 +665,7 @@ fn execute_suite_supports_native_contract_flow_helpers() {
 
                 fixture actors {{
                     actor("issuer", AccountId::parse("{actor_account}"), "0x{seed_hex}");
+                    grant_permission("issuer", "Test");
                 }}
 
                 #[test(fixture="actors")]
@@ -664,7 +678,7 @@ fn execute_suite_supports_native_contract_flow_helpers() {
                         arguments: Json::parse("{{}}")
                     );
 
-                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"), expected: DemoError::Rejected);
                 }}
                 }}
                 "#,
@@ -787,13 +801,393 @@ fn execute_suite_supports_native_contract_flow_helpers() {
     put_blob(&mut vm, 10, "issuer");
     put_blob(&mut vm, 11, "reject_me");
     put_json(&mut vm, 12, "{}");
-    vm.set_register(13, 0);
-    vm.set_register(14, 1);
+    let expectation = crate::kotodama::testing::RejectionExpectation::Any;
+    let bytes = norito::encode_canonical(&expectation).expect("encode expectation");
+    let ptr = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Blob, &bytes))
+        .expect("expectation tlv");
+    vm.set_register(13, ptr);
+    vm.set_register(14, 0);
+    vm.set_register(15, 0);
     host.syscall(TEST_SYSCALL_EXPECT_REJECT_AS, &mut vm)
         .expect("expect reject");
     assert!(
         !host.supplemental_trace_pcs().is_empty(),
         "expected coverage trace from nested entrypoint execution"
+    );
+}
+#[test]
+fn exact_rejection_mismatches_fail_and_restore_nested_state() {
+    use crate::kotodama::testing::{RejectionExpectation, RejectionTrap};
+    use iroha_data_model::smart_contract::manifest::{
+        ContractErrorTypeDescriptor, ContractErrorVariantDescriptor,
+    };
+    let temp = TestTempDir::new();
+    let scoped_asset = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("rejections", "universal").unwrap(),
+        "unit".parse().unwrap(),
+    );
+    let mint_permission = format!("mint_asset:{}", scoped_asset.canonical_address());
+    temp.write(
+        "rejection.ko",
+        &r#"seiyaku Rejections {
+        error enum RejectionError { First = 1, Second = 2, }
+        state int counter;
+        hajimari() { counter = 7; }
+        kotoage fn reject(int value) authorize("CanInvokeContractEntrypoint") {
+            counter = value;
+            require(false, RejectionError::First);
+        }
+        kotoage fn succeed(int value) authorize("CanInvokeContractEntrypoint") {
+            counter = value;
+        }
+        kotoage fn govern() authorize("CanEnactGovernance") {
+            counter = 99;
+            require(false, RejectionError::First);
+        }
+        kotoage fn custom() authorize("CanCustomProbe") {
+            counter = 99;
+            require(false, RejectionError::First);
+        }
+        kotoage fn mapped() authorize("manage_roles") {
+            counter = 99;
+            require(false, RejectionError::First);
+        }
+        kotoage fn scoped() authorize("MINT_PERMISSION") {
+            counter = 99;
+            require(false, RejectionError::First);
+        }
+    }"#
+        .replace("MINT_PERMISSION", &mint_permission),
+    );
+    let path = temp.write(
+        "rejection.test.ko",
+        &format!(
+            r#"module RejectionTests {{
+        koto_test {{ target: "rejection.ko" }}
+        fixture allowed {{
+            actor("app", AccountId::parse("{DEFAULT_CALLER}"));
+            grant_seiyaku_kotoage_permission("app", "reject");
+            grant_seiyaku_kotoage_permission("app", "succeed");
+            grant_permission("app", "CanEnactGovernance");
+            grant_permission("app", "CanCustomProbe");
+            grant_permission("app", Json::parse("{{\"name\":\"manage_roles\",\"type\":\"custom\"}}"));
+            grant_permission("app", Json::parse("{{\"name\":\"{mint_permission}\",\"type\":\"custom\"}}"));
+        }}
+        fixture unpermitted {{
+            actor("app", AccountId::parse("{DEFAULT_CALLER}"));
+        }}
+        #[test(fixture = "allowed")]
+        fn placeholder() {{}}
+    }}"#
+        ),
+    );
+    let suite = discover_suite(&path).expect("discover rejection suite");
+    let compiled = compile_suite(&suite, false).expect("compile rejection suite");
+    let mut host = build_host_for_fixture(&compiled, Some("allowed")).expect("build host");
+    let mut vm = IVM::new(u64::MAX);
+    let put = |vm: &mut IVM, register, value: &[u8], kind| {
+        let pointer = vm
+            .alloc_input_tlv(&make_tlv(kind, value))
+            .expect("test operand");
+        vm.set_register(register, pointer);
+    };
+    let call = |host: &mut KotoTestHost,
+                vm: &mut IVM,
+                entrypoint: &str,
+                payload: &str,
+                expected: Option<&RejectionExpectation>| {
+        let payload =
+            norito::to_bytes(&Json::from_str_norito(payload).expect("json")).expect("payload");
+        put(vm, 10, b"app", PointerType::Blob);
+        put(vm, 11, entrypoint.as_bytes(), PointerType::Blob);
+        put(vm, 12, &payload, PointerType::Json);
+        if let Some(expected) = expected {
+            put(
+                vm,
+                13,
+                &norito::encode_canonical(expected).expect("expectation"),
+                PointerType::Blob,
+            );
+        } else {
+            vm.set_register(13, 0);
+        }
+        vm.set_register(14, u64::from(expected.is_none()));
+        vm.set_register(15, 0);
+        host.syscall(
+            if expected.is_some() {
+                TEST_SYSCALL_EXPECT_REJECT_AS
+            } else {
+                TEST_SYSCALL_INVOKE_ENTRYPOINT_AS
+            },
+            vm,
+        )
+    };
+    call(&mut host, &mut vm, "hajimari", "{}", None).expect("initialize");
+    let valid_payload = r#"{"value":"99"}"#;
+    let control = call(&mut host, &mut vm, "succeed", valid_payload, None);
+    assert!(
+        control.is_ok(),
+        "successful mutation control: {control:?}: {:?}; schema: {:?}",
+        host.last_test_error(),
+        host.entrypoints
+            .get("succeed")
+            .and_then(|entry| entry.argument_schema.as_ref())
+    );
+    assert_eq!(
+        decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+        99
+    );
+    call(&mut host, &mut vm, "hajimari", "{}", None).expect("reset control state");
+    let descriptor = ContractErrorTypeDescriptor {
+        identity: "Rejections::RejectionError".to_owned(),
+        variants: vec![
+            ContractErrorVariantDescriptor {
+                name: "First".to_owned(),
+                code: 1,
+            },
+            ContractErrorVariantDescriptor {
+                name: "Second".to_owned(),
+                code: 2,
+            },
+        ],
+    };
+    let nominal = RejectionExpectation::Contract {
+        descriptor: descriptor.clone(),
+        code: 1,
+    };
+    let mut other_type = descriptor.clone();
+    other_type.identity = "Other::RejectionError".to_owned();
+    let mut other_schema = descriptor.clone();
+    other_schema.variants[1].name = "Different".to_owned();
+    assert_ne!(other_schema.schema_hash(), descriptor.schema_hash());
+    for (expected, matches) in [
+        (
+            RejectionExpectation::Contract {
+                descriptor: descriptor.clone(),
+                code: 2,
+            },
+            false,
+        ),
+        (
+            RejectionExpectation::Contract {
+                descriptor: other_type,
+                code: 1,
+            },
+            false,
+        ),
+        (
+            RejectionExpectation::Contract {
+                descriptor: other_schema,
+                code: 1,
+            },
+            false,
+        ),
+        (nominal.clone(), true),
+        (RejectionExpectation::PermissionDenied, false),
+        (RejectionExpectation::InvalidArguments, false),
+        (RejectionExpectation::Trap(RejectionTrap::OutOfGas), false),
+        (RejectionExpectation::Any, true),
+    ] {
+        let caller_before = host.inner.caller_subject();
+        let outcome = call(&mut host, &mut vm, "reject", valid_payload, Some(&expected));
+        assert_eq!(
+            outcome.is_ok(),
+            matches,
+            "{expected:?}: {:?}",
+            host.last_test_error()
+        );
+        assert_eq!(
+            decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+            7
+        );
+        assert_eq!(host.inner.caller_subject(), caller_before);
+        if !matches {
+            assert!(
+                host.last_test_error()
+                    .expect("mismatch diagnostic")
+                    .contains("expected")
+            );
+        }
+    }
+    // Even the explicitly broad helper must reject unexpected success and undo its effects.
+    for expected in [&nominal, &RejectionExpectation::Any] {
+        call(&mut host, &mut vm, "succeed", valid_payload, Some(expected))
+            .expect_err("unexpected success");
+        assert!(
+            host.last_test_error()
+                .expect("success diagnostic")
+                .contains("but it succeeded")
+        );
+        assert_eq!(
+            decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+            7
+        );
+    }
+    let invalid_payload = r#"{"value":"not-an-int"}"#;
+    for (expected, matches) in [
+        (nominal.clone(), false),
+        (RejectionExpectation::PermissionDenied, false),
+        (RejectionExpectation::InvalidArguments, true),
+        (RejectionExpectation::Any, true),
+    ] {
+        let outcome = call(
+            &mut host,
+            &mut vm,
+            "reject",
+            invalid_payload,
+            Some(&expected),
+        );
+        assert_eq!(
+            outcome.is_ok(),
+            matches,
+            "{expected:?}: {:?}",
+            host.last_test_error()
+        );
+        if !matches {
+            assert!(
+                host.last_test_error()
+                    .expect("argument stage diagnostic")
+                    .contains("argument-schema InvalidArguments before")
+            );
+        }
+        assert_eq!(
+            decode_int_state_value(&host.inner.wsv.sc_get("counter").expect("state")),
+            7
+        );
+    }
+    let mut denied =
+        build_host_for_fixture(&compiled, Some("unpermitted")).expect("unpermitted host");
+    call(&mut denied, &mut vm, "hajimari", "{}", None).expect("initialize denied fixture");
+    let denied_actor = denied.actor_account("app").unwrap();
+    denied
+        .inner
+        .wsv
+        .grant_permission(&denied_actor, PermissionToken::ManageRoles);
+    denied
+        .inner
+        .wsv
+        .grant_permission(&denied_actor, PermissionToken::MintAsset(scoped_asset));
+    for (expected, matches) in [
+        (nominal.clone(), false),
+        (RejectionExpectation::InvalidArguments, false),
+        (
+            RejectionExpectation::Trap(RejectionTrap::RuntimePermissionDenied),
+            false,
+        ),
+        (RejectionExpectation::PermissionDenied, true),
+        (RejectionExpectation::Any, true),
+    ] {
+        // Authorization is checked before the deliberately invalid argument payload.
+        let outcome = call(
+            &mut denied,
+            &mut vm,
+            "reject",
+            invalid_payload,
+            Some(&expected),
+        );
+        assert_eq!(
+            outcome.is_ok(),
+            matches,
+            "{expected:?}: {:?}",
+            denied.last_test_error()
+        );
+        if !matches {
+            assert!(
+                denied
+                    .last_test_error()
+                    .expect("authorization stage diagnostic")
+                    .contains("invocation PermissionDenied before")
+            );
+        }
+        assert_eq!(
+            decode_int_state_value(&denied.inner.wsv.sc_get("counter").expect("state")),
+            7
+        );
+    }
+    for (entrypoint, permission_name) in [
+        ("govern", "CanEnactGovernance"),
+        ("custom", "CanCustomProbe"),
+        ("mapped", "manage_roles"),
+        ("scoped", mint_permission.as_str()),
+    ] {
+        // A generic exact-entrypoint grant cannot replace the distinct declared permission.
+        let actor = denied.actor_account("app").unwrap();
+        denied.inner.wsv.grant_permission(
+            &actor,
+            PermissionToken::ContractEntrypoint {
+                contract: denied.contract_address.clone(),
+                entrypoint: entrypoint.to_owned(),
+            },
+        );
+        call(&mut denied, &mut vm, entrypoint, "{}", None)
+            .expect_err("missing declared permission");
+        assert!(denied.last_test_error().unwrap().contains(permission_name));
+        for (expected, matches) in [
+            (nominal.clone(), false),
+            (RejectionExpectation::InvalidArguments, false),
+            (
+                RejectionExpectation::Trap(RejectionTrap::RuntimePermissionDenied),
+                false,
+            ),
+            (RejectionExpectation::PermissionDenied, true),
+            (RejectionExpectation::Any, true),
+        ] {
+            let caller_before = denied.inner.caller_subject();
+            assert_eq!(
+                call(
+                    &mut denied,
+                    &mut vm,
+                    entrypoint,
+                    r#"{"unexpected":true}"#,
+                    Some(&expected)
+                )
+                .is_ok(),
+                matches,
+                "{permission_name} {expected:?}: {:?}",
+                denied.last_test_error()
+            );
+            assert_eq!(
+                decode_int_state_value(&denied.inner.wsv.sc_get("counter").unwrap()),
+                7
+            );
+            assert_eq!(denied.inner.caller_subject(), caller_before);
+        }
+        call(&mut host, &mut vm, entrypoint, "{}", Some(&nominal))
+            .expect("declared fixture permission reaches typed rejection");
+        for payload in [r#"{"unexpected":true}"#, "[]", "null", r#""{}""#] {
+            for (expected, matches) in [
+                (nominal.clone(), false),
+                (RejectionExpectation::PermissionDenied, false),
+                (RejectionExpectation::InvalidArguments, true),
+                (RejectionExpectation::Any, true),
+            ] {
+                let caller_before = host.inner.caller_subject();
+                assert_eq!(
+                    call(&mut host, &mut vm, entrypoint, payload, Some(&expected)).is_ok(),
+                    matches,
+                    "{entrypoint} {payload} {expected:?}: {:?}",
+                    host.last_test_error()
+                );
+                assert_eq!(
+                    decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
+                    7
+                );
+                assert_eq!(host.inner.caller_subject(), caller_before);
+            }
+        }
+    }
+    call(&mut host, &mut vm, "succeed", valid_payload, None).expect("normal mutation control");
+    call(&mut host, &mut vm, "hajimari", "[]", None)
+        .expect_err("normal zero-parameter calls reject nonempty arguments too");
+    assert_eq!(
+        decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
+        99
+    );
+    call(&mut host, &mut vm, "hajimari", "{}", None).expect("canonical empty arguments execute");
+    assert_eq!(
+        decode_int_state_value(&host.inner.wsv.sc_get("counter").unwrap()),
+        7
     );
 }
 #[test]
@@ -824,6 +1218,7 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
 
                 fixture actors {{
                     actor("issuer", AccountId::parse("{actor_account}"), "0x{seed_hex}");
+                    grant_permission("issuer", "Test");
                 }}
 
                 #[test(fixture="actors")]
@@ -832,7 +1227,7 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
                     test::assert(acct == AccountId::parse("{actor_account}"));
 
                     let pk = test::actor_public_key("issuer");
-                    let sig = test::actor_sign("issuer", b"native-flow");
+                    let sig = test::actor_sign(actor: "issuer", payload: b"native-flow");
                     test::assert(pk != b"");
                     test::assert(sig != b"");
                 }}
@@ -853,15 +1248,15 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
 
                 #[test(fixture="actors")]
                 fn expect_reject_as_captures_seiyaku_rejection() {{
-                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "reject_me", arguments: Json::parse("{{}}"), expected: DemoError::Rejected);
                 }}
 
                 #[test(fixture="actors")]
                 fn expect_reject_as_captures_argument_schema_rejection() {{
                     test::invoke_kotoage_as(actor: "issuer", kotoage: "hajimari", arguments: Json::parse("{{}}"));
-                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"));
-                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{}}"));
-                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"unexpected\":true,\"value\":7}}"));
+                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"value\":\"not-an-int\"}}"), expected: test::Rejection::InvalidArguments);
+                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{}}"), expected: test::Rejection::InvalidArguments);
+                    test::expect_reject_as(actor: "issuer", kotoage: "set_counter", arguments: Json::parse("{{\"unexpected\":true,\"value\":7}}"), expected: test::Rejection::InvalidArguments);
                     test::assert(counter == 1);
                 }}
                 }}
@@ -1089,6 +1484,7 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
                         actor: "app",
                         kotoage: "mint",
                         arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                        expected: test::Rejection::RuntimePermissionDenied,
                     );
                 }}
 
@@ -1098,6 +1494,7 @@ fn nested_contract_effects_use_contract_subject_while_context_keeps_invoker() {
                         actor: "app",
                         kotoage: "mint",
                         arguments: Json::parse("{{\"destination\":\"{DEFAULT_CALLER}\"}}"),
+                        expected: test::Rejection::RuntimePermissionDenied,
                     );
                 }}
 

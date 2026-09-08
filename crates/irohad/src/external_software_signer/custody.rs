@@ -273,39 +273,46 @@ impl fmt::Debug for VerifiedSignerCustodyV1 {
 }
 
 /// Fixed failure classes; no record contents, handles or provider diagnostics are retained.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HardwareSignerCustodyErrorV1 {
     /// Canonical framing, shape, resource bounds or public identities are invalid.
-    #[error("invalid hardware custody record")]
     InvalidRecord,
     /// The only admitted hardware-generated, never-exported profile was not met.
-    #[error("non-exportable hardware custody is required")]
     HardwareCustodyRequired,
     /// The exact independently supplied signer binding does not match.
-    #[error("hardware custody signer binding mismatch")]
     BindingMismatch,
     /// The independent authority identity, policy, key or trust interval is invalid.
-    #[error("hardware custody authority is untrusted")]
     UntrustedAuthority,
     /// Role-key signatures and identities cannot independently attest custody.
-    #[error("hardware custody authority is not independent")]
     SelfAttestation,
     /// The independent attestation signature is malformed or invalid.
-    #[error("hardware custody attestation is invalid")]
     InvalidAttestation,
     /// The record, current anchor or trust key is stale, expired or from the future.
-    #[error("hardware custody freshness check failed")]
     Freshness,
     /// The record is not bound to the exact independently authenticated current state.
-    #[error("hardware custody finalized anchor mismatch")]
     AnchorMismatch,
     /// The qualification sequence or predecessor disagrees with authoritative state.
-    #[error("hardware custody sequence or predecessor mismatch")]
     ReplayOrRollback,
     /// Either the hardware key or its attestation authority is currently revoked.
-    #[error("hardware custody key or authority is revoked")]
     Revoked,
 }
+impl fmt::Display for HardwareSignerCustodyErrorV1 {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::InvalidRecord => "invalid hardware custody record",
+            Self::HardwareCustodyRequired => "non-exportable hardware custody is required",
+            Self::BindingMismatch => "hardware custody signer binding mismatch",
+            Self::UntrustedAuthority => "hardware custody authority is untrusted",
+            Self::SelfAttestation => "hardware custody authority is not independent",
+            Self::InvalidAttestation => "hardware custody attestation is invalid",
+            Self::Freshness => "hardware custody freshness check failed",
+            Self::AnchorMismatch => "hardware custody finalized anchor mismatch",
+            Self::ReplayOrRollback => "hardware custody sequence or predecessor mismatch",
+            Self::Revoked => "hardware custody key or authority is revoked",
+        })
+    }
+}
+impl std::error::Error for HardwareSignerCustodyErrorV1 {}
 
 /// Verify one canonical record against an independently supplied exact signer and authority.
 ///

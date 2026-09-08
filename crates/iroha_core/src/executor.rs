@@ -19858,8 +19858,10 @@ mod tests {
             kind,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: permission.map(str::to_owned),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -19876,7 +19878,7 @@ mod tests {
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![descriptor],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let interface_section = interface.encode_section();
@@ -19905,8 +19907,10 @@ mod tests {
             kind,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: (kind
                 == iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage)
                 .then(|| "ExecutePrivate".to_owned()),
@@ -19925,7 +19929,7 @@ mod tests {
             access_set_hints: None,
             kotoba: Vec::new(),
             entrypoints: vec![descriptor],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let metadata = ProgramMetadata {
@@ -21425,7 +21429,7 @@ seiyaku ReviewedValue {
                 entrypoints: None,
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             },
         );

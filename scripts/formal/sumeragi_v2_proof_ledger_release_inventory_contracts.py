@@ -19,7 +19,7 @@ _PRODUCTION_LIVENESS_HELPER_SEALS = (
     ProductionLivenessHelperSeal(
         "crates/iroha_core/src/kura.rs",
         "read_autonomous_lane_retired_attempt",
-        "cd7120b23a8a22f1704b7ead6ca258242faba7e4c491b599f88d2b297a61349d",
+        "041723bc1dcdb77493eda9c8bf035d4eeb4560cfb02a7489222991647c415cd0",
         brace_context=(("impl", "Kura"),),
     ),
     ProductionLivenessHelperSeal(

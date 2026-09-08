@@ -1,3 +1,4 @@
+import { normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "../contractErrorTypes.js";
 import { blake2b256 } from "../blake2b.js";
 import {
   KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS,
@@ -625,7 +626,7 @@ function validateEmbeddedInterfaceFrame(frame, manifest, headerMode, abiHashHex)
     [5, manifest.kotoba ?? [], "kotoba"],
     [6, manifest.entrypoints, "entrypoints"],
     [7, manifest.states, "states"],
-    [8, manifest.error_codes ?? [], "error_codes"],
+    [8, manifest.error_types ?? [], "error_types"],
   ]) {
     if (vectorCount(fields[fieldIndex], `${label}.${fieldLabel}`) !== manifestValue.length) {
       rejectType(
@@ -1247,7 +1248,7 @@ function validateCompilerEntrypoint(entry, index, names, lifecycleKinds) {
     }
     validateArgumentSchema(entry.argument_schema, entry.params, `${label}.argument_schema`);
   }
-  if ((entry.return_type === null) !== (entry.return_schema === null)) {
+  if (entry.return_type === null || entry.return_schema === null) {
     rejectType(`${label} return_type and return_schema must be present together`);
   }
   if (entry.return_schema !== null) {
@@ -1285,30 +1286,8 @@ function validateCompilerManifestStates(states) {
   });
 }
 
-function validateCompilerManifestErrorCodes(errorCodes) {
-  if (errorCodes === null) return;
-  requireDenseArray(errorCodes, "Kotodama manifest error_codes");
-  const paths = new Set();
-  const codes = new Set();
-  errorCodes.forEach((errorCode, index) => {
-    const label = `Kotodama manifest error code ${index}`;
-    requireExactKeys(errorCode, ["namespace", "name", "code"], label);
-    if (
-      !isCanonicalIdentifier(errorCode.namespace, { typeDeclaration: true }) ||
-      !isCanonicalIdentifier(errorCode.name)
-    ) {
-      rejectType(`${label} must use canonical namespace and variant identifiers`);
-    }
-    if (!Number.isSafeInteger(errorCode.code) || errorCode.code <= 0 || errorCode.code > U32_MAX) {
-      rejectType(`${label}.code must be a non-zero u32`);
-    }
-    const path = `${errorCode.namespace}::${errorCode.name}`;
-    if (paths.has(path) || codes.has(errorCode.code)) {
-      rejectType(`Kotodama manifest contains a duplicate error path or code at ${path}`);
-    }
-    paths.add(path);
-    codes.add(errorCode.code);
-  });
+function validateCompilerManifestErrorTypes(value) {
+  normalizeContractErrorTypesV1(value, "Kotodama manifest error_types");
 }
 
 function validateKotoba(value) {
@@ -1368,7 +1347,7 @@ function validateCompilerManifest(manifest) {
       "access_set_hints",
       "entrypoints",
       "states",
-      "error_codes",
+      "error_types",
       "kotoba",
       "provenance",
     ],
@@ -1397,7 +1376,8 @@ function validateCompilerManifest(manifest) {
     manifest.states,
     "Kotodama manifest access_set_hints",
   );
-  validateCompilerManifestErrorCodes(manifest.error_codes);
+  validateCompilerManifestErrorTypes(manifest.error_types);
+  validateManifestErrorTypeBindingsV1(manifest, "Kotodama manifest");
   validateKotoba(manifest.kotoba);
   validateProvenance(manifest.provenance);
 }

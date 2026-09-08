@@ -2766,7 +2766,7 @@ mod tests {
             access_set_hints,
             kotoba: Vec::new(),
             entrypoints: embedded_entrypoints,
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
             states: Vec::new(),
         };
         let mut artifact = meta.encode();
@@ -2833,8 +2833,10 @@ mod tests {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -3262,7 +3264,7 @@ mod tests {
                 entrypoints: Some(vec![entrypoint]),
                 states: None,
                 kotoba: None,
-                error_codes: None,
+                error_types: None,
                 provenance: None,
             };
             assert!(
@@ -3327,7 +3329,7 @@ mod tests {
                     entrypoints: None,
                     states: None,
                     kotoba: None,
-                    error_codes: None,
+                    error_types: None,
                     provenance: None,
                 };
                 assert!(
@@ -5172,7 +5174,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5209,7 +5211,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5256,7 +5258,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5313,8 +5315,10 @@ seiyaku DynamicAccessCounter {
                 kind: EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: Some("ExecuteContract".to_owned()),
                 read_keys: vec!["state:alpha".to_owned()],
                 write_keys: vec!["state:beta".to_owned()],
@@ -5327,8 +5331,10 @@ seiyaku DynamicAccessCounter {
                 kind: EntryPointKind::Kotoage,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: Some("ExecuteContract".to_owned()),
                 read_keys: vec!["state:run-read".to_owned()],
                 write_keys: vec!["state:run-write".to_owned()],
@@ -5352,7 +5358,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5416,8 +5422,10 @@ seiyaku DynamicAccessCounter {
             kind: EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: vec!["state:alpha".to_owned()],
             write_keys: vec!["state:beta".to_owned()],
@@ -5435,7 +5443,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);
@@ -5501,8 +5509,10 @@ seiyaku DynamicAccessCounter {
             kind: EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: Some("ExecuteContract".to_owned()),
             read_keys: vec![format!("account:{alice}")],
             write_keys: vec![format!("asset:{asset_id}")],
@@ -5520,7 +5530,7 @@ seiyaku DynamicAccessCounter {
             entrypoints: Some(entrypoints),
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         }
         .signed(&kp);

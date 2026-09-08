@@ -116,8 +116,7 @@ pub struct VpnSessionAddressPlanV1 {
     pub session_routes: Vec<String>,
 }
 /// Enumeration of supported cell classes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnCellClassV1")]
 pub enum VpnCellClassV1 {
     /// User traffic tunneled through the circuit.
@@ -142,8 +141,7 @@ impl VpnCellClassV1 {
     }
 }
 /// Bitfield describing cell handling hints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnCellFlagsV1")]
 pub struct VpnCellFlagsV1 {
     bits: u8,
@@ -225,8 +223,7 @@ impl json::JsonDeserialize for VpnCellFlagsV1 {
     }
 }
 /// Flow label assigned to a tunnel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnFlowLabelV1")]
 pub struct VpnFlowLabelV1 {
     /// Three-byte flow label encoded in network byte order.
@@ -329,8 +326,7 @@ impl json::JsonDeserialize for VpnFlowLabelV1 {
     }
 }
 /// Fixed header carried by every VPN cell.
-#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnCellHeaderV1")]
 pub struct VpnCellHeaderV1 {
     /// Protocol version (currently `1`).
@@ -377,8 +373,7 @@ impl VpnCellHeaderV1 {
     }
 }
 /// VPN cell with payload (unpadded).
-#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnCellV1")]
 pub struct VpnCellV1 {
     /// Cell header.
@@ -721,8 +716,7 @@ impl VpnPaddedCellV1 {
     }
 }
 /// Cover traffic scheduler parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnCoverScheduleV1")]
 pub struct VpnCoverScheduleV1 {
     /// Ratio of cover cells to data cells expressed in permille (0–1000).
@@ -800,8 +794,7 @@ impl DeterministicPrng {
     }
 }
 /// A scheduled cell emitted by the cover/data planner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnCoverPlanEntryV1")]
 pub struct VpnCoverPlanEntryV1 {
     /// Start time (milliseconds since plan epoch).
@@ -857,8 +850,7 @@ impl VpnExitClassV1 {
     }
 }
 /// Control-plane envelope used to push DNS/routes and guard/exit choices.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnControlPlaneV1")]
 pub struct VpnControlPlaneV1 {
     /// Entry relay selected for the tunnel.
@@ -875,8 +867,7 @@ pub struct VpnControlPlaneV1 {
     pub lease_seconds: u32,
 }
 /// Route entry pushed to a VPN client.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnRouteV1")]
 pub struct VpnRouteV1 {
     /// CIDR string describing the route.
@@ -1073,8 +1064,7 @@ fn vpn_usage_voucher_signing_bytes(body: &VpnUsageVoucherBodyV1) -> Vec<u8> {
     bytes
 }
 /// Client-signed prepaid voucher plus its client-computed maximum XOR charge.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soranet::vpn::VpnUsageVoucherEnvelopeV1")]
 pub struct VpnUsageVoucherEnvelopeV1 {
     /// Highest cumulative prepaid voucher signed by the client.

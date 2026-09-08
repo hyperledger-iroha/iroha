@@ -3,6 +3,27 @@ import XCTest
 @testable import IrohaSwift
 
 final class ToriiJSONValueTests: XCTestCase {
+    func testTaggedOptionsRetainUnitAndNestedPresence() throws {
+        let values = [
+            #"{"some":null}"#,
+            #"{"none":true}"#,
+            #"{"some":{"none":true}}"#,
+            #"{"some":{"some":null}}"#,
+        ]
+        var encodedValues = Set<Data>()
+        for json in values {
+            let data = Data(json.utf8)
+            let value = try ToriiJSONValue.decodeExact(from: data)
+            XCTAssertNotEqual(value, .null)
+            XCTAssertEqual(try value.encodedData(), data)
+            XCTAssertEqual(try CanonicalNorito.jsonString(from: value), json)
+            XCTAssertEqual(try JSONDecoder().decode(ToriiJSONValue.self, from: data), value)
+            XCTAssertEqual(try JSONEncoder().encode(value), data)
+            encodedValues.insert(try value.encodedData())
+        }
+        XCTAssertEqual(encodedValues.count, values.count)
+    }
+
     func testCanonicalNoritoMetadataUsesOneLexicalForm() throws {
         XCTAssertEqual(try CanonicalNorito.jsonString(from: .number(-0.0)), "-0.0")
         XCTAssertEqual(

@@ -254,7 +254,9 @@ impl norito::json::JsonDeserialize for ConfidentialSpentnessPathV1 {
     norito(tag = "state", content = "value", deny_unknown_fields)
 )]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessStateKindV1")]
+#[norito_schema(
+    name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessStateKindV1"
+)]
 pub enum ConfidentialSpentnessStateKindV1 {
     /// The position is empty and has never been consumed.
     Unspent,
@@ -358,7 +360,9 @@ impl ConfidentialSpentnessStateV1 {
 )]
 #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessCheckpointV1")]
+#[norito_schema(
+    name = "iroha_data_model::confidential::spentness::ConfidentialSpentnessCheckpointV1"
+)]
 pub struct ConfidentialSpentnessCheckpointV1 {
     network_id: NetworkId,
     asset_definition_id: AssetDefinitionId,

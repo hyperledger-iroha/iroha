@@ -1576,35 +1576,19 @@ fn run_lifecycle_active_height(
                 },
             )?;
             if terminal_stall_due {
-                let (pending_historical_recovery, durable_completion_matches_finality) = activated
-                    .with_runner_runtime(
-                        &mut active_runner,
-                        |_owner, executor, _services, _local_proposal| {
-                            let pending = lane_work.has_pending_historical_recovery();
-                            let durable = if pending {
-                                None
-                            } else {
-                                let (_, artifact) =
-                                    executor.durable_finality().ok_or_else(|| {
-                                        V2RunnerError::Service(
-                                            "finalized lane diagnostic lost durable finality"
-                                                .to_owned(),
-                                        )
-                                    })?;
-                                Some(
-                                    lane_work
-                                        .durable_completion_matches_finality(artifact)
-                                        .map_err(V2RunnerError::from)?,
-                                )
-                            };
-                            Ok::<_, V2RunnerError>((pending, durable))
-                        },
-                    )?;
+                // Report the actual completed preflight, not a second storage
+                // audit after ingress may have changed the durable lane state.
+                let pending_historical_recovery = activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, _executor, _services, _local_proposal| {
+                        Ok::<_, V2RunnerError>(lane_work.has_pending_historical_recovery())
+                    },
+                )?;
                 iroha_logger::warn!(
                     height = context.height,
                     canonical_lane_body_recovered,
                     pending_historical_recovery,
-                    ?durable_completion_matches_finality,
+                    rollover_preflight_ready = rollover_ready,
                     "Sumeragi v2 finalized lane rollover preflight stalled"
                 );
             }

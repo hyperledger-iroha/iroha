@@ -1179,9 +1179,8 @@ fn negative_controls(
         b"native-amx-v2-grouped-fixture-coordinator-incarnation",
     ))
     .expect("hash serializes to JSON");
-    let mut recursively_shaped_participant_settlement = json::to_value(
-        &commitment.native_amx_receipts[0].legs[0].participant_settlement,
-    )?;
+    let mut recursively_shaped_participant_settlement =
+        json::to_value(&commitment.native_amx_receipts[0].legs[0].participant_settlement)?;
     recursively_shaped_participant_settlement
         .as_object_mut()
         .expect("participant settlement serializes as an object")

@@ -5,7 +5,7 @@ use iroha_data_model::{
         EntrypointValueTypeV1,
     },
     smart_contract::manifest::{
-        AccessSetHints, ContractErrorCodeDescriptor, DynamicAccessHint, EntryPointKind,
+        AccessSetHints, ContractErrorTypeDescriptor, DynamicAccessHint, EntryPointKind,
         EntrypointParamDescriptor, TriggerCallback, TriggerDescriptor,
     },
     trigger::{TriggerId, action::Repeats},
@@ -38,8 +38,10 @@ fn entrypoint(
         kind,
         params: Vec::new(),
         argument_schema: None,
-        return_type: None,
-        return_schema: None,
+        return_type: Some("()".to_owned()),
+        return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+            nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+        }),
         permission: (kind == EntryPointKind::Kotoage).then(|| "Execute".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
@@ -99,7 +101,7 @@ fn contract_artifact_with_mode_and_code(
         access_set_hints,
         kotoba: Vec::new(),
         entrypoints,
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = meta.encode();
@@ -109,7 +111,7 @@ fn contract_artifact_with_mode_and_code(
     }
     bytes
 }
-fn contract_artifact_with_error_codes(error_codes: Vec<ContractErrorCodeDescriptor>) -> Vec<u8> {
+fn contract_artifact_with_error_types(error_types: Vec<ContractErrorTypeDescriptor>) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -126,7 +128,7 @@ fn contract_artifact_with_error_codes(error_codes: Vec<ContractErrorCodeDescript
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
-        error_codes,
+        error_types,
         states: Vec::new(),
     };
     let mut bytes = meta.encode();
@@ -157,7 +159,7 @@ fn contract_artifact_with_access_hints_and_states(
         access_set_hints,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states,
     };
     let mut bytes = meta.encode();
@@ -182,7 +184,7 @@ fn contract_artifact_with_seiyaku_name(seiyaku_name: &str) -> Vec<u8> {
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("run", EntryPointKind::Kotoage, 0)],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = meta.encode();
@@ -207,7 +209,7 @@ fn contract_artifact_with_execution_features(mode: u8, features_bitmap: u64) -> 
         access_set_hints: None,
         kotoba: Vec::new(),
         entrypoints: vec![entrypoint("inspect", EntryPointKind::View, 0)],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = metadata.encode();
@@ -441,56 +443,41 @@ fn compiler_embeds_exact_nested_return_schema_in_cntr_and_manifest() {
     ivm::verify_contract_artifact(&artifact).expect("verify exact nested return artifact");
 }
 #[test]
-fn verify_rejects_ambiguous_or_reserved_error_codes() {
-    let duplicate = contract_artifact_with_error_codes(vec![
-        ContractErrorCodeDescriptor {
-            namespace: "PaymentError".to_owned(),
-            name: "Unauthorized".to_owned(),
-            code: 1001,
-        },
-        ContractErrorCodeDescriptor {
-            namespace: "SettlementError".to_owned(),
-            name: "Expired".to_owned(),
-            code: 1001,
-        },
-    ]);
-    let error =
-        ivm::verify_contract_artifact(&duplicate).expect_err("duplicate code must be rejected");
-    assert!(
-        error
-            .to_string()
-            .contains("duplicate numeric error code 1001")
-    );
-    let reserved = contract_artifact_with_error_codes(vec![ContractErrorCodeDescriptor {
-        namespace: "PaymentError".to_owned(),
-        name: "Unspecified".to_owned(),
-        code: 0,
-    }]);
-    let error =
-        ivm::verify_contract_artifact(&reserved).expect_err("reserved code must be rejected");
-    assert!(error.to_string().contains("uses reserved code 0"));
-    for (namespace, name) in [
-        ("1PaymentError", "Unauthorized"),
-        ("PaymеntError", "Unauthorized"), // Cyrillic `е`.
-        ("Option", "Unauthorized"),
-        ("PaymentError", "not-valid"),
-        ("PaymentError", "for"),
-    ] {
-        let artifact = contract_artifact_with_error_codes(vec![ContractErrorCodeDescriptor {
-            namespace: namespace.to_owned(),
+fn verify_nominal_error_catalog_allows_local_codes_and_rejects_schema_ambiguity() {
+    use iroha_data_model::smart_contract::manifest::ContractErrorVariantDescriptor;
+    let descriptor = |identity: &str, name: &str, code: u32| ContractErrorTypeDescriptor {
+        identity: identity.to_owned(),
+        variants: vec![ContractErrorVariantDescriptor {
             name: name.to_owned(),
-            code: 1001,
-        }]);
-        let error = ivm::verify_contract_artifact(&artifact)
-            .expect_err("noncanonical or reserved error path must fail admission");
+            code,
+        }],
+    };
+    let first = descriptor("Payment::PaymentError", "Unauthorized", 1001);
+    let second = descriptor("Settlement::SettlementError", "Expired", 1001);
+    ivm::verify_contract_artifact(&contract_artifact_with_error_types(vec![
+        first.clone(),
+        second,
+    ]))
+    .expect("enum-local numeric codes may coincide across nominal types");
+    let duplicate = contract_artifact_with_error_types(vec![first.clone(), first]);
+    assert!(
+        ivm::verify_contract_artifact(&duplicate).is_err(),
+        "duplicate type identity"
+    );
+    for invalid in [
+        descriptor("Payment::PaymentError", "Unspecified", 0),
+        descriptor("Invalid Error", "Unauthorized", 1),
+        descriptor("Injected<Error>", "Unauthorized", 1),
+        descriptor("Payment::PaymentError", "not-valid", 1),
+        descriptor("Payment::PaymentError", "for", 1),
+    ] {
         assert!(
-            error
-                .to_string()
-                .contains("canonical Kotodama V1 identifiers"),
-            "unexpected error for `{namespace}::{name}`: {error}"
+            ivm::verify_contract_artifact(&contract_artifact_with_error_types(vec![invalid]))
+                .is_err()
         );
     }
 }
+
 #[test]
 fn compiler_emits_self_describing_contract_artifact() {
     let src = r#"
@@ -1880,7 +1867,7 @@ fn verify_rejects_invalid_dynamic_access_hints() {
         dynamic_writes: vec![DynamicAccessHint {
             base_key: "state:Orders".to_owned(),
             key_type: "int".to_owned(),
-            bound_kind: "range".to_owned(),
+            bound_kind: "page".to_owned(),
             max_keys: 0,
         }],
     };
@@ -1897,7 +1884,7 @@ fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
     let hint = DynamicAccessHint {
         base_key: "state:amount".to_owned(),
         key_type: "quantity".to_owned(),
-        bound_kind: "range".to_owned(),
+        bound_kind: "page".to_owned(),
         max_keys: 64,
     };
     let hints = AccessSetHints {
@@ -1913,10 +1900,25 @@ fn verify_dynamic_access_hints_resolve_the_exact_declared_state_map() {
             value: Box::new(ivm::EmbeddedStateType::Bool),
         },
     };
+    for bound_kind in ["page", "take"] {
+        let mut valid_hints = hints.clone();
+        valid_hints.dynamic_reads[0].bound_kind = bound_kind.to_owned();
+        let artifact =
+            contract_artifact_with_access_hints_and_states(Some(valid_hints), vec![state.clone()]);
+        ivm::verify_contract_artifact(&artifact)
+            .expect("each exact V1 dynamic bound must resolve to its declared StateMap");
+    }
+    let mut retired_hints = hints.clone();
+    retired_hints.dynamic_reads[0].bound_kind = "range".to_owned();
     let artifact =
-        contract_artifact_with_access_hints_and_states(Some(hints.clone()), vec![state.clone()]);
-    ivm::verify_contract_artifact(&artifact)
-        .expect("exact dynamic hint must resolve to its declared StateMap");
+        contract_artifact_with_access_hints_and_states(Some(retired_hints), vec![state.clone()]);
+    let error = ivm::verify_contract_artifact(&artifact)
+        .expect_err("retired range metadata must reject even for an exact declared StateMap");
+    assert!(
+        error
+            .to_string()
+            .contains("bound_kind must be exactly `page` or `take`")
+    );
     let mut mismatched_hints = hints.clone();
     mismatched_hints.dynamic_reads[0].key_type = "int".to_owned();
     let artifact =

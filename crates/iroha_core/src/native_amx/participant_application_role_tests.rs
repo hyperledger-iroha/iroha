@@ -1,6 +1,7 @@
 //! Direct adversarial tests for Native AMX participant application classification.
 
 use super::*;
+use iroha_data_model::block::consensus::LaneBlockCommitment;
 
 const INCONSISTENT_IDENTITY: &str =
     "Native AMX participant leg identity is internally inconsistent";
@@ -47,7 +48,7 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
     leg.participant_settlement.lane_incarnation = descriptor.lane_incarnation;
     leg.participant_settlement.block_height = descriptor.lane_block_height;
     leg.participant_settlement_hash =
-        iroha_data_model::nexus::compute_settlement_hash(&leg.participant_settlement)
+        compute_native_amx_participant_settlement_hash(&leg.participant_settlement)
             .expect("mutated fixture settlement hashes");
     leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
     let descriptor = &leg.participant_proposal.descriptor;
@@ -62,7 +63,7 @@ fn rebind_participant_identity(leg: &mut NativeAmxLegRecordV2) {
         body.participant_lane_block_height = descriptor.lane_block_height;
         body.participant_lane_block_view = descriptor.lane_block_view;
         body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
-        body.participant_settlement_commitment = Hash::from(leg.participant_settlement_hash);
+        body.participant_settlement_commitment = leg.participant_settlement_hash;
     }
 }
 
@@ -191,7 +192,8 @@ const BODY_IDENTITY_MUTATIONS: &[BodyIdentityMutation] = &[
         body.participant_proposal_hash = Hash::new(b"phase-proposal-drift")
     }),
     ("participant settlement", |body| {
-        body.participant_settlement_commitment = Hash::new(b"phase-settlement-drift")
+        body.participant_settlement_commitment =
+            HashOf::from_untyped_unchecked(Hash::new(b"phase-settlement-drift"))
     }),
     ("coordinator lane", |body| {
         body.coordinator_lane_id = LaneId::new(90)

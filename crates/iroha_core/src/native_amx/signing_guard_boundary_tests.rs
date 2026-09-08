@@ -292,8 +292,9 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
                 HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::prehashed(
                     conflicting_tail.source_id,
                 ));
-            conflicting_tail.participant_settlement_commitment =
-                Hash::new(b"unpublished tail slot settlement conflict");
+            conflicting_tail.participant_settlement_commitment = HashOf::from_untyped_unchecked(
+                Hash::new(b"unpublished tail slot settlement conflict"),
+            );
         } else {
             // A different participant route gives the tail a fresh signing
             // key and slot, leaving the source-session claim as the only
@@ -305,9 +306,7 @@ fn signing_guard_restart_rejects_source_and_slot_equivocating_unpublished_tails(
             conflicting_tail.participant_proposal_hash =
                 Hash::new(b"unpublished tail participant proposal");
             conflicting_tail.participant_settlement_commitment = conflicting_tail
-                .computed_grouped_participant_settlement_commitment(&[
-                    conflicting_tail.source_id,
-                ])
+                .computed_grouped_participant_settlement_commitment(&[conflicting_tail.source_id])
                 .expect("single-source unpublished tail settlement");
             conflicting_tail.coordinator_proposal_hash =
                 Hash::new(b"unpublished tail source-session conflict");

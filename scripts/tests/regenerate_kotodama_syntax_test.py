@@ -131,7 +131,7 @@ def test_final_policy_pins_quantity_without_an_abi_tombstone() -> None:
         "DomainId",
         "Name",
     )
-    assert dynamic_access.bound_kinds == ("range", "take")
+    assert dynamic_access.bound_kinds == ("page", "take")
     assert dynamic_access.max_keys == 64
     assert dynamic_access.base_prefix == "state:"
     assert dynamic_access.base_identifier == "state_declaration_identifier"
@@ -213,9 +213,13 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
     assert "pub use" not in semantic_policy
     data_model_policy = MODULE.render_data_model_identifier_policy(policy)
     assert "const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS" in data_model_policy
+    assert "const KOTODAMA_V1_RESERVED_TYPE_DECLARATIONS" in data_model_policy
+    for reserved_type in ("StatePage", "ListError", "Amount", "float"):
+        assert f'"{reserved_type}"' in data_model_policy
     assert "pub const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS" not in data_model_policy
     assert '&["Amount"]' in data_model_policy
-    assert '"amount",' not in data_model_policy
+    forbidden_table = data_model_policy.split("const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS", 1)[1].split(";", 1)[0]
+    assert '"amount"' not in forbidden_table
     for intrinsic in (
         "is_some",
         "is_none",
@@ -258,7 +262,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
             (root / path).read_text(encoding="utf-8"),
             MODULE.VALIDATOR_MARKER_NAME,
         )
-        assert "range" in body
+        assert "page" in body
         assert "take" in body
         assert "64" in body
         assert "DataSpaceId" in body
@@ -273,7 +277,7 @@ def test_dynamic_access_policy_is_generated_across_consumers_and_docs() -> None:
     assert "KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS: 64" in typescript
 
     docs = (root / MODULE.GRAMMAR_DOC_PATH).read_text(encoding="utf-8")
-    assert "| Dynamic-access bound kinds (ordered) | `range`, `take` |" in docs
+    assert "| Dynamic-access bound kinds (ordered) | `page`, `take` |" in docs
     assert "| Dynamic-access key bound | `1..=64` |" in docs
     assert (
         "One direct declared top-level `StateMap`, encoded as "

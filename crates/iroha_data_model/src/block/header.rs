@@ -562,8 +562,7 @@ fn checked_block_signature_from_wire(
         SignatureOf::from_signature(signature),
     ))
 }
-#[derive(Encode)]
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::block::header::BlockHeaderConsensusProjectionV1")]
 struct BlockHeaderConsensusProjectionV1 {
     version: u16,

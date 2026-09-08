@@ -3,6 +3,27 @@
 //! Keeping ABI-shape validation independent of instruction emission ensures
 //! `check` and `build` reject the same oversized or unsupported typed values.
 use crate::semantic::{ExprKind, Type, TypedExpr};
+pub(crate) fn state_cursor_key_kind(
+    ty: &Type,
+) -> Option<ivm_abi::entrypoint::EntrypointValueKindV1> {
+    use ivm_abi::entrypoint::EntrypointValueKindV1 as Kind;
+    Some(match ty {
+        Type::Int => Kind::Int,
+        Type::Decimal => Kind::Decimal,
+        Type::Quantity => Kind::Quantity,
+        Type::Bool => Kind::Bool,
+        Type::String => Kind::String,
+        Type::Bytes => Kind::Blob,
+        Type::AccountId => Kind::AccountId,
+        Type::AssetDefinitionId => Kind::AssetDefinitionId,
+        Type::AssetId => Kind::AssetId,
+        Type::DomainId => Kind::DomainId,
+        Type::NftId => Kind::NftId,
+        Type::Name => Kind::Name,
+        Type::DataSpaceId => Kind::DataSpaceId,
+        _ => return None,
+    })
+}
 pub(crate) fn state_value_kind_for_type(
     ty: &Type,
 ) -> Option<ivm_abi::state_value::StateValueKindV1> {
@@ -28,6 +49,8 @@ pub(crate) fn state_value_kind_for_type(
         Type::SoracloudRequest => Kind::SoracloudRequest,
         Type::SoracloudResponse => Kind::SoracloudResponse,
         Type::Unit
+        | Type::StateCursor(_)
+        | Type::ErrorEnum(_)
         | Type::Secret(_)
         | Type::StateMap(_, _)
         | Type::Option(_)
@@ -73,6 +96,13 @@ fn state_value_schema_nodes(ty: &Type) -> Option<Vec<ivm_abi::state_value::State
                 });
             }
             Pending::Visit { ty, target } => match ty {
+                Type::StateCursor(key) => node_streams
+                    .get_mut(target)?
+                    .push(Node::StateCursor(state_cursor_key_kind(key)?)),
+                Type::Unit => node_streams.get_mut(target)?.push(Node::Unit),
+                Type::ErrorEnum(descriptor) => node_streams
+                    .get_mut(target)?
+                    .push(Node::Error(descriptor.as_ref().clone())),
                 Type::Struct { name, fields } => {
                     node_streams.get_mut(target)?.push(Node::Struct {
                         name: name.clone(),

@@ -25,7 +25,7 @@ pub const SYSCALL_EXIT: u32 = 0x01;
 pub const SYSCALL_ABORT: u32 = 0x02;
 /// Output a debug message (development only).
 pub const SYSCALL_DEBUG_LOG: u32 = 0x03;
-/// Abort execution with a declared application error code in `r10`.
+/// Abort with `r10=&NoritoBytes(ContractErrorTypeDescriptor)`, `r11=code:u32`, and zero `r12..r15`.
 pub const SYSCALL_CONTRACT_ABORT: u32 = 0x04;
 /// Helper syscalls for inputs/outputs; part of the ABI v1 surface.
 /// Retrieve a piece of public input provided by the host.
@@ -81,13 +81,6 @@ pub const SYSCALL_NFT_BURN_ASSET: u32 = 0x28;
 pub const SYSCALL_STATE_GET: u32 = 0x50;
 pub const SYSCALL_STATE_SET: u32 = 0x51;
 pub const SYSCALL_STATE_DEL: u32 = 0x52;
-/// Enumerate durable-state keys under a prefix.
-///
-/// Args: r10 = &NoritoBytes(StatePath) prefix, r11 = offset, r12 = limit
-/// (0 returns an empty page; limits above [`STATE_KEYS_MAX_ITEMS`] are rejected)
-/// Ret:  r10 = &NoritoBytes(Vec<StatePath>), r11 = total matching keys,
-/// r12 = returned keys
-pub const SYSCALL_STATE_KEYS: u32 = 0x01_0030;
 /// Test whether a durable-state key is currently present.
 ///
 /// Args: r10 = &NoritoBytes(StatePath) Ret: r10 = 1 when present, 0 when absent
@@ -101,7 +94,7 @@ pub const SYSCALL_STATE_LEN: u32 = 0x01_0032;
 ///
 /// Args: r10 = &NoritoBytes(StatePath) Ret: r10 = total matching keys
 pub const SYSCALL_STATE_COUNT: u32 = 0x01_0033;
-/// Decode one canonical Kotodama `StateMap` key from a page returned by [`SYSCALL_STATE_KEYS`].
+/// Decode one canonical Kotodama `StateMap` key from a page returned by [`SYSCALL_STATE_SCAN`].
 ///
 /// Args: r10 = &NoritoBytes(Vec<StatePath>), r11 = &Name(base), r12 = index
 /// Ret:  r10 = &NoritoBytes(canonical key), or 0 when index is out of range
@@ -121,8 +114,17 @@ pub const SYSCALL_STATE_VALUE_DECODE: u32 = 0x01_0036;
 ///
 /// Args: r10 = &Name Ret: r10 = &NoritoBytes(canonical Norito StatePath)
 pub const SYSCALL_STATE_PATH_FROM_NAME: u32 = 0x01_0037;
+/// Seek through at most 64 current map positions, including overlay tombstones.
+///
+/// Args: r10 = &NoritoBytes(StatePath map), r11 = &NoritoBytes(StateCursorV1) or 0,
+/// r12 = limit (1..=64), r13 = r14 = r15 = 0.
+/// Ret: r10 = &NoritoBytes(Vec<StatePath>), r11 = next cursor or 0,
+/// r12 = selected keys, r13 = examined positions. No count or lookahead is performed.
+pub const SYSCALL_STATE_SCAN: u32 = 0x01_0038;
+/// Maximum distinct current positions examined by one live map page, including tombstones.
+pub const STATE_SCAN_MAX_CANDIDATES_V1: usize = 64;
 /// Maximum number of entries returned by one V1 durable-state key page.
-pub const STATE_KEYS_MAX_ITEMS: u64 = 64;
+pub const STATE_SCAN_MAX_ITEMS_V1: u64 = 64;
 /// Maximum UTF-8 byte length of a canonical V1 durable-state `StatePath`.
 ///
 /// The 16 KiB path accommodates a canonical `Name` base of at most 255 UTF-8 bytes, one separator,
@@ -612,6 +614,10 @@ pub const SYSCALL_DECIMAL_TRY_TO_INT_EXACT: u32 = 0x01_012D;
 pub const SYSCALL_DECIMAL_TO_INT_TRUNC: u32 = 0x01_012E;
 /// Convert a decimal to `int` using an explicit rounding mode.
 pub const SYSCALL_DECIMAL_TO_INT_ROUND: u32 = 0x01_012F;
+/// Fused decimal multiplication/division with one final explicit rounding.
+/// Args: r10=value, r11=multiplier, r12=divisor, r13=int scale,
+/// r14=rounding tag, r15=0. Arithmetic faults trap; r10 returns decimal.
+pub const SYSCALL_DECIMAL_MUL_DIV_ROUND: u32 = 0x01_0130;
 /// Convert a non-negative `int` to nominal `quantity`.
 pub const SYSCALL_QUANTITY_TRY_FROM_INT: u32 = 0x01_0140;
 /// Convert a non-negative canonical `decimal` to nominal `quantity`.
@@ -644,6 +650,10 @@ pub const SYSCALL_QUANTITY_LE: u32 = 0x01_014D;
 pub const SYSCALL_QUANTITY_GT: u32 = 0x01_014E;
 /// Numeric quantity greater-or-equal comparison.
 pub const SYSCALL_QUANTITY_GE: u32 = 0x01_014F;
+/// Fused quantity multiplication/division with one final explicit rounding.
+/// Args: r10=quantity, r11=decimal multiplier, r12=decimal divisor,
+/// r13=int scale, r14=rounding tag, r15=0. Arithmetic faults trap.
+pub const SYSCALL_QUANTITY_MUL_DIV_ROUND: u32 = 0x01_0150;
 /// Parse a canonical base-10 JSON string into an exact `int` pointer.
 pub const SYSCALL_JSON_GET_INT: u32 = 0x01_0160;
 /// Parse a canonical base-10 JSON string into an exact `decimal` pointer.
@@ -653,7 +663,7 @@ pub const SYSCALL_JSON_GET_QUANTITY: u32 = 0x01_0162;
 /// Return whether `number` belongs to the exact Kotodama V1 numeric surface.
 #[must_use]
 pub const fn is_numeric_v1_syscall(number: u32) -> bool {
-    matches!(number, 0x01_0100..=0x01_0113 | 0x01_0120..=0x01_012F | 0x01_0140..=0x01_014F)
+    matches!(number, 0x01_0100..=0x01_0113 | 0x01_0120..=0x01_0130 | 0x01_0140..=0x01_0150)
 }
 /// Construct one native JSON value from a compiler-emitted schema and flattened words.
 ///
@@ -732,10 +742,10 @@ pub const GENERIC_PROGRAM_DENIED_SYSCALLS_V1: &[u32] = &[
     SYSCALL_SYSVAR_ENTRYPOINT,
     SYSCALL_SYSVAR_CONTRACT_SUBJECT,
     SYSCALL_CALL_CONTRACT_QUANTITY2,
-    SYSCALL_STATE_KEYS,
     SYSCALL_STATE_HAS,
     SYSCALL_STATE_LEN,
     SYSCALL_STATE_COUNT,
+    SYSCALL_STATE_SCAN,
 ];
 /// Return whether an ABI syscall is available to a contract-less program.
 ///
@@ -793,10 +803,10 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
     if matches!(
         number,
         SYSCALL_STATE_GET
-            | SYSCALL_STATE_KEYS
             | SYSCALL_STATE_HAS
             | SYSCALL_STATE_LEN
             | SYSCALL_STATE_COUNT
+            | SYSCALL_STATE_SCAN
     ) {
         return Some(SyscallAccess::StateRead);
     }
@@ -1213,7 +1223,6 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_SYSVAR_CONTRACT_SUBJECT, "SYSVAR_CONTRACT_SUBJECT"),
     (SYSCALL_NORMALIZE_NORITO_BYTES, "NORMALIZE_NORITO_BYTES"),
     (SYSCALL_CALL_CONTRACT_QUANTITY2, "CALL_CONTRACT_QUANTITY2"),
-    (SYSCALL_STATE_KEYS, "STATE_KEYS"),
     (SYSCALL_STATE_HAS, "STATE_HAS"),
     (SYSCALL_STATE_LEN, "STATE_LEN"),
     (SYSCALL_STATE_COUNT, "STATE_COUNT"),
@@ -1221,6 +1230,7 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_STATE_VALUE_ENCODE, "STATE_VALUE_ENCODE"),
     (SYSCALL_STATE_VALUE_DECODE, "STATE_VALUE_DECODE"),
     (SYSCALL_STATE_PATH_FROM_NAME, "STATE_PATH_FROM_NAME"),
+    (SYSCALL_STATE_SCAN, "STATE_SCAN"),
     (SYSCALL_JSON_BUILD, "JSON_BUILD"),
     (SYSCALL_INT_FROM_I64, "INT_FROM_I64"),
     (SYSCALL_INT_FROM_U64, "INT_FROM_U64"),
@@ -1258,6 +1268,7 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_DECIMAL_TRY_TO_INT_EXACT, "DECIMAL_TRY_TO_INT_EXACT"),
     (SYSCALL_DECIMAL_TO_INT_TRUNC, "DECIMAL_TO_INT_TRUNC"),
     (SYSCALL_DECIMAL_TO_INT_ROUND, "DECIMAL_TO_INT_ROUND"),
+    (SYSCALL_DECIMAL_MUL_DIV_ROUND, "DECIMAL_MUL_DIV_ROUND"),
     (SYSCALL_QUANTITY_TRY_FROM_INT, "QUANTITY_TRY_FROM_INT"),
     (
         SYSCALL_QUANTITY_TRY_FROM_DECIMAL,
@@ -1283,6 +1294,7 @@ const ABI_V1_SYSCALL_METADATA: &[(u32, &str)] = &[
     (SYSCALL_QUANTITY_LE, "QUANTITY_LE"),
     (SYSCALL_QUANTITY_GT, "QUANTITY_GT"),
     (SYSCALL_QUANTITY_GE, "QUANTITY_GE"),
+    (SYSCALL_QUANTITY_MUL_DIV_ROUND, "QUANTITY_MUL_DIV_ROUND"),
     (SYSCALL_JSON_GET_INT, "JSON_GET_INT"),
     (SYSCALL_JSON_GET_DECIMAL, "JSON_GET_DECIMAL"),
     (SYSCALL_JSON_GET_QUANTITY, "JSON_GET_QUANTITY"),
@@ -1462,6 +1474,10 @@ struct AbiQueryPageSurface {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiEntrypointSurface {
     schema_version: u8,
+    unit_layout: &'static str,
+    struct_identity: &'static str,
+    error_layout: &'static str,
+    sum_json: &'static str,
     int_kind: &'static str,
     int_pointer_type_id: u16,
     decimal_kind: &'static str,
@@ -1669,7 +1685,7 @@ struct AbiDurableStateSurface {
     dynamic_access_hint_reserved_state_identifiers: Vec<&'static str>,
     dynamic_access_hint_reserved_state_prefixes: Vec<&'static str>,
     dynamic_access_hint_validation: &'static str,
-    keys_max_items: u64,
+    scan_max_items: u64,
     max_path_bytes: u64,
     max_path_frame_bytes: u64,
     max_value_bytes: u64,
@@ -1690,6 +1706,12 @@ struct AbiDurableStateSurface {
     operation_path_rules: &'static str,
     state_value_validation_version: u8,
     state_value_validation: &'static str,
+    cursor_schema_hash: [u8; 16],
+    cursor_schema_hash_domain: &'static [u8],
+    cursor_max_bytes: u64,
+    scan_max_candidates: u64,
+    cursor_layout: &'static str,
+    scan_semantics: &'static str,
     typed_value: AbiTypedStateValueSurface,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2097,6 +2119,10 @@ fn semantic_abi_surface_v1() -> Result<
         },
         AbiEntrypointSurface {
             schema_version: 1,
+            unit_layout: "Unit=one-public-zero-scalar-word;Unit-atom-has-no-payload;JSON-null;nonzero-word-rejected;also-valid-in-sums-lists-state;every-public-CNTR-entrypoint-requires-return_type-and-return_schema;omitted-source-return-annotation=type-()-and-Unit-schema;absent-return-descriptor-invalid;nested-calls-always-return-schema-hashed-EntrypointReturnRecordV1-including-Unit-null",
+            struct_identity: "local-source-type-name-or-exact-locked-package::SourceUnit::Struct;max1024-ASCII-bytes;package=slash-separated-components-with-optional-single-@revision;component=[A-Za-z0-9_][A-Za-z0-9_.-]*;unit-and-struct=canonical-unreserved-source-type-identifiers;qualified-linker-private-substring-rejected;no-alias-or-revision-normalization;public-and-durable-schema-hashes-bind-exact-name;plain-core-view-and-page-names-require-reserved-schema-shape",
+            error_layout: "Error=one-public-u32-scalar-word;ErrorCode-atom-u32-code;JSON-exact-symbolic-variant-name;nonzero-enum-local-code-must-belong-to-schema;descriptor={identity:String,variants:Vec<{name:String,code:u32}>};identity=stable-locked-package-unit-enum-not-linker-ordinal;canonical-increasing-codes-and-unique-names;max256-variants;schema-hash=Iroha-Hash(domain-iroha:kotodama:error-schema:v1\0+Norito-encoded-ordered-variants);identity-is-bound-separately;every-boundary-state-descriptor-exactly-in-signed-CNTR;max256-error-types;CONTRACT_ABORT-descriptor-frame-max65536-bytes-and-CNTR-member-before-rejection;rejection-carries-authenticated-origin-contract-variant-identity-schemahash-code-through-nesting",
+            sum_json: "typed-JSON-uses-exact-single-key-tagged-objects;Option::some(value)={some:value};Option::none()={none:true};Result::ok(value)={ok:value};Result::err(value)={err:value};Some(Unit)={some:null}-distinct-from-None;nested-tags-preserved;no-flattened-or-nullable-Option-form;consistent-public-arguments-returns-and-durable-state-projection;JSON_BUILD-preserves-the-same-Option-tags-for-admitted-native-values;JSON_BUILD-rejects-implicit-Result",
             int_kind: "Int",
             int_pointer_type_id,
             decimal_kind: "Decimal",
@@ -2149,6 +2175,10 @@ fn semantic_abi_surface_v1() -> Result<
                 AbiNumericRuleSurface {
                     name: "exact_division",
                     specification: "reduce-denominator;classify-prime-factors;non-2-or-5-factor-is-repeating-decimal;terminating-minimum-scale-above-28-is-exact-division-scale-overflow;never-round",
+                },
+                AbiNumericRuleSurface {
+                    name: "fused_mul_div_round",
+                    specification: "decimal-or-quantity-receiver;decimal-multiplier-and-divisor;mathematical-product-kept-unbounded;one-final-round-at-explicit-scale;shared-observed-primitive-meters-every-work-phase-before-work;r10=value;r11=multiplier;r12=divisor;r13=Int-scale;r14=rounding;r15=zero;all-arithmetic-failures-trap;quantity-result-must-be-nonnegative",
                 },
                 AbiNumericRuleSurface {
                     name: "rounded_division",
@@ -2689,7 +2719,7 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             "dynamic_access_hint_validation",
             surface.durable_state.dynamic_access_hint_validation,
         )?;
-        state.u64("keys_max_items", surface.durable_state.keys_max_items)?;
+        state.u64("scan_max_items", surface.durable_state.scan_max_items)?;
         state.u64("max_path_bytes", surface.durable_state.max_path_bytes)?;
         state.u64(
             "max_path_frame_bytes",
@@ -2740,6 +2770,21 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             "state_value_validation",
             surface.durable_state.state_value_validation,
         )?;
+        state.field(
+            "cursor_schema_hash",
+            &surface.durable_state.cursor_schema_hash,
+        )?;
+        state.field(
+            "cursor_schema_hash_domain",
+            surface.durable_state.cursor_schema_hash_domain,
+        )?;
+        state.u64("cursor_max_bytes", surface.durable_state.cursor_max_bytes)?;
+        state.u64(
+            "scan_max_candidates",
+            surface.durable_state.scan_max_candidates,
+        )?;
+        state.text("cursor_layout", surface.durable_state.cursor_layout)?;
+        state.text("scan_semantics", surface.durable_state.scan_semantics)?;
         state.record("typed_value", |typed| {
             let value = &surface.durable_state.typed_value;
             typed.u8("wire_format_version", value.wire_format_version)?;
@@ -2807,6 +2852,10 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
     })?;
     descriptor.record("entrypoint", |entrypoint| {
         entrypoint.u8("schema_version", surface.entrypoint.schema_version)?;
+        entrypoint.text("unit_layout", surface.entrypoint.unit_layout)?;
+        entrypoint.text("struct_identity", surface.entrypoint.struct_identity)?;
+        entrypoint.text("error_layout", surface.entrypoint.error_layout)?;
+        entrypoint.text("sum_json", surface.entrypoint.sum_json)?;
         entrypoint.text("int_kind", surface.entrypoint.int_kind)?;
         entrypoint.u16(
             "int_pointer_type_id",
@@ -3068,6 +3117,17 @@ fn embedded_state_type_surface_v1() -> Result<Vec<AbiEmbeddedStateTypeSurface>, 
             },
             "u8-tag+owned(element)+u8(capacity);capacity=1..64;no-StateMap-descendant",
         ),
+        ("Unit", Type::Unit, "u8-tag;one-canonical-zero-scalar-word"),
+        (
+            "Error",
+            Type::Error(crate::error_types::list_error_type()),
+            "u8-tag+canonical-Norito-ContractErrorTypeDescriptor;one-u32-code-scalar-word",
+        ),
+        (
+            "StateCursor",
+            Type::StateCursor(crate::entrypoint::EntrypointValueKindV1::Int),
+            "u8-tag+EntrypointValueKindV1;one-NoritoBytes-pointer-to-canonical-StateCursorV1-frame",
+        ),
     ];
     samples
         .into_iter()
@@ -3237,6 +3297,21 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             tag: StateValueNodeV1::LEAF_TAG,
             layout: "u8-tag+u8(StateValueKindV1-tag)",
         },
+        AbiTaggedLayoutSurface {
+            name: "Unit",
+            tag: StateValueNodeV1::UNIT_TAG,
+            layout: "u8-tag;no-payload;one-canonical-zero-scalar-word",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Error",
+            tag: StateValueNodeV1::ERROR_TAG,
+            layout: "u8-tag+canonical-Norito-ContractErrorTypeDescriptor;code-must-belong-to-exact-nominal-schema",
+        },
+        AbiTaggedLayoutSurface {
+            name: "StateCursor",
+            tag: StateValueNodeV1::STATE_CURSOR_TAG,
+            layout: "u8-tag+EntrypointValueKindV1;opaque-one-word-canonical-NoritoBytes-pointer;frame-key-kind-must-match",
+        },
     ];
     let atoms = vec![
         AbiTaggedLayoutSurface {
@@ -3258,6 +3333,16 @@ fn typed_state_value_surface_v1() -> Result<AbiTypedStateValueSurface, AbiSurfac
             name: "List",
             tag: StateValueAtomV1::LIST_TAG,
             layout: "KRV1-u8-tag+u8(item-count-0..64)+each-item-as-u16le(atom-count-1..256)+inline-active-only-element-atom-stream;items-in-order",
+        },
+        AbiTaggedLayoutSurface {
+            name: "Unit",
+            tag: StateValueAtomV1::UNIT_TAG,
+            layout: "KRV1-u8-tag;no-payload;materializes-zero-word",
+        },
+        AbiTaggedLayoutSurface {
+            name: "ErrorCode",
+            tag: StateValueAtomV1::ERROR_CODE_TAG,
+            layout: "KRV1-u8-tag+u32le(nonzero-variant-code);requires-nominal-schema-membership",
         },
     ];
     Ok(AbiTypedStateValueSurface {
@@ -3347,9 +3432,9 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         reserved_transaction_metadata: "reject-presence-before-decode-in-order:contract_manifest,gov_contract_address,gov_manifest_approvers,contract_address,contract_alias,contract_entrypoint,contract_payload",
     };
     let durable_state = AbiDurableStateSurface {
-        semantics_version: 5,
+        semantics_version: 6,
         contract_interface_section_magic: crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC,
-        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_codes);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
+        contract_interface_section_layout: "ASCII-CNTR+u32le(payload-bytes)+canonical-Norito-frame(EmbeddedContractInterfaceV1 fields in exact order:seiyaku_name,compiler_fingerprint,abi_hash[32],features_bitmap,access_set_hints,kotoba,entrypoints,states,error_types);abi_hash=Iroha-Hash-v1(canonical-ABI-descriptor-for-declared-abi_version;Blake2b-256-with-final-byte-LSB-set-to-1)-and-must-equal-runtime-descriptor-before-admission",
         contract_interface_schema_name: crate::metadata::CONTRACT_INTERFACE_SCHEMA_NAME_V1,
         contract_interface_schema_hash:
             <crate::metadata::EmbeddedContractInterfaceV1 as norito::NoritoSerialize>::schema_hash(),
@@ -3373,8 +3458,8 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
             crate::access_hints::DYNAMIC_ACCESS_HINT_RESERVED_STATE_IDENTIFIERS_V1.to_vec(),
         dynamic_access_hint_reserved_state_prefixes:
             crate::access_hints::DYNAMIC_ACCESS_HINT_RESERVED_STATE_PREFIXES_V1.to_vec(),
-        dynamic_access_hint_validation: "base_key=ASCII-state-colon-plus-one-generated-exact-canonical-state-declaration-identifier-with-no-aliasing-or-trimming;target=exact-declared-top-level-StateMap;key_type=exact-declared-map-key-type;bound_kind=exact-{range,take};max_keys=1..64;duplicate=full-{base_key,key_type,bound_kind,max_keys}-record-equality-rejected-independently-within-each-list;cross-read-write-repeat=allowed;metadata=advisory-and-never-scheduler-authoritative",
-        keys_max_items: STATE_KEYS_MAX_ITEMS,
+        dynamic_access_hint_validation: "base_key=ASCII-state-colon-plus-one-generated-exact-canonical-state-declaration-identifier-with-no-aliasing-or-trimming;target=exact-declared-top-level-StateMap;key_type=exact-declared-map-key-type;bound_kind=exact-{page,take};max_keys=1..64;duplicate=full-{base_key,key_type,bound_kind,max_keys}-record-equality-rejected-independently-within-each-list;cross-read-write-repeat=allowed;metadata=advisory-and-never-scheduler-authoritative",
+        scan_max_items: STATE_SCAN_MAX_ITEMS_V1,
         max_path_bytes: u64::try_from(STATE_MAX_PATH_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         max_path_frame_bytes: u64::try_from(STATE_MAX_PATH_FRAME_BYTES)
@@ -3390,7 +3475,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         map_max_page_bytes: u64::try_from(STATE_MAP_MAX_PAGE_BYTES)
             .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
         path_size_unit: "canonical StatePath UTF-8 bytes; canonical-Norito transport frame bounded separately",
-        path_transport: "STATE_GET,STATE_SET,STATE_DEL,STATE_KEYS,STATE_HAS,STATE_LEN,STATE_COUNT=&NoritoBytes(canonical-Norito-StatePath);STATE_PATH_FROM_NAME-input=&Name-and-output=&NoritoBytes(canonical-Norito-StatePath);BUILD_PATH_KEY_NORITO-input-base=&Name-and-output=&NoritoBytes(canonical-Norito-StatePath);STATE_KEYS-page=&NoritoBytes(canonical-Norito-Vec<StatePath>);STATE_MAP_KEY_AT-base=&Name",
+        path_transport: "STATE_GET,STATE_SET,STATE_DEL,STATE_SCAN,STATE_HAS,STATE_LEN,STATE_COUNT=&NoritoBytes(canonical-Norito-StatePath);STATE_PATH_FROM_NAME-input=&Name-and-output=&NoritoBytes(canonical-Norito-StatePath);BUILD_PATH_KEY_NORITO-input-base=&Name-and-output=&NoritoBytes(canonical-Norito-StatePath);STATE_SCAN-page=&NoritoBytes(canonical-Norito-Vec<StatePath>);STATE_MAP_KEY_AT-base=&Name",
         value_storage: "raw NoritoBytes payload; pointer boundary wraps exactly once",
         ordering_version: 1,
         key_ordering: "canonical StatePath order; StateMap lowercase-hex suffixes preserve canonical Norito key byte order",
@@ -3399,9 +3484,15 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         map_path_derivation: "canonical-Name-base(<=255-UTF8-bytes) + slash + lowercase_hex(canonical_norito_key_payload<=4096-bytes); result is canonical StatePath<=16384-UTF8-bytes",
         page_overflow: "reject before selected-page materialization",
         operation_path_rules_version: 1,
-        operation_path_rules: "canonical-StatePath-transport-only;CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;scan-operations(STATE_KEYS,STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;CNTR-absent=all-durable-state-syscalls-rejected-by-generic-program-profile",
+        operation_path_rules: "canonical-StatePath-transport-only;CNTR-present:value-operations(STATE_GET,STATE_SET,STATE_DEL,STATE_HAS,STATE_LEN)=declared-non-map-base-or-canonical-StateMap-child-only;bare-StateMap-base-rejected;count-operation(STATE_COUNT)=same-declared-path-validation-with-bare-StateMap-base-allowed;page-operation(STATE_SCAN)=exact-declared-bare-StateMap-base-only;CNTR-absent=all-durable-state-syscalls-rejected-by-generic-program-profile",
         state_value_validation_version: 1,
         state_value_validation: "CNTR-present:STATE_SET-before-mutation-and-present-STATE_GET-before-publication-reconstruct-exact-StateValueSchemaV1-from-declared-scalar-type-or-StateMap-value-type;schema-frame=canonical-Norito-Vec<u8>(KSV1+u16le-total-logical-node-count+flat-preorder-u8-node-and-kind-tags);record-frame=canonical-Norito-Vec<u8>(KRV1+schema-hash+root-u16le-atom-count+flat-active-only-u8-tagged-atom-stream);require-exact-schema_hash=iroha_crypto::Hash::new(KOTODAMA_STATE_VALUE_SCHEMA_V1\\0||exact-canonical-Norito-schema-frame);validate-exact-active-only-atom-stream,pointer-policy,pointer-type,pointer-envelope-hash,and-canonical-leaf-payload;CNTR-absent=unavailable",
+        cursor_schema_hash: <iroha_data_model::smart_contract::state_cursor::StateCursorV1 as norito::NoritoSerialize>::schema_hash(),
+        cursor_schema_hash_domain: iroha_data_model::smart_contract::state_cursor::STATE_CURSOR_SCHEMA_HASH_DOMAIN_V1,
+        cursor_max_bytes: iroha_data_model::smart_contract::state_cursor::MAX_STATE_CURSOR_BYTES_V1 as u64,
+        scan_max_candidates: STATE_SCAN_MAX_CANDIDATES_V1 as u64,
+        cursor_layout: "canonical-Norito-StateCursorV1{instance:String<=1024,map:bare-Name-StatePath<=255,schema_hash:[u8;32],key_type:EntrypointValueKindV1,last_key:canonical-map-child-StatePath};schema_hash=Iroha-Hash(domain||canonical-Norito-EmbeddedStateType::StateMap);word=NoritoBytes-pointer;JSON=0x-prefixed-frame-hex",
+        scan_semantics: "STATE_SCAN=seek-after-last-examined-canonical-key;instance-and-exact-map-schema-bound;position-never-authorization;current-invocation-backing-plus-overlay;sorted-distinct-candidates-including-tombstones;stop-immediately-at-N-live-values-or-64-candidates;no-total-count-or-extra-lookahead;bounded-page-has-continuation-even-if-next-page-empty;deleted-cursor-key-valid;insertions-before-cursor-not-revisited;gas=request-and-schema-bytes+examined-physical-key-bytes-and-items+response-bytes;conservative-map-prefix-scheduler-read",
         typed_value: typed_state_value_surface_v1()?,
     };
     Ok(AbiSurface {
@@ -3580,10 +3671,10 @@ mod tests {
                 SYSCALL_SYSVAR_ENTRYPOINT,
                 SYSCALL_SYSVAR_CONTRACT_SUBJECT,
                 SYSCALL_CALL_CONTRACT_QUANTITY2,
-                SYSCALL_STATE_KEYS,
                 SYSCALL_STATE_HAS,
                 SYSCALL_STATE_LEN,
                 SYSCALL_STATE_COUNT,
+                SYSCALL_STATE_SCAN,
             ]
         );
         for &syscall in GENERIC_PROGRAM_DENIED_SYSCALLS_V1 {
@@ -3681,6 +3772,12 @@ mod tests {
     #[test]
     fn abi_v1_has_one_canonical_signature_per_allowed_syscall() {
         let allowed = abi_syscall_list();
+        assert!(is_syscall_allowed(
+            crate::SyscallPolicy::AbiV1,
+            SYSCALL_STATE_SCAN
+        ));
+        assert!(!is_syscall_allowed(crate::SyscallPolicy::AbiV1, 0x01_0030));
+        assert!(syscall_name(0x01_0030).is_none());
         assert_eq!(
             syscalls_doc_gen::DOCS.len(),
             allowed.len(),
@@ -3850,7 +3947,7 @@ mod tests {
             StateValueRecordV1, StateValueSchemaV1,
         };
         let state = canonical_surface().durable_state;
-        assert_eq!(state.semantics_version, 5);
+        assert_eq!(state.semantics_version, 6);
         assert_eq!(
             state.contract_interface_section_magic,
             crate::metadata::CONTRACT_INTERFACE_SECTION_MAGIC
@@ -3908,6 +4005,9 @@ mod tests {
                 ("Option", 17),
                 ("Result", 18),
                 ("List", 19),
+                ("Unit", 20),
+                ("Error", 21),
+                ("StateCursor", 22),
             ]
         );
         for state_type in &state.embedded_state_types {
@@ -3971,7 +4071,7 @@ mod tests {
                 .dynamic_access_hint_validation
                 .contains("metadata=advisory-and-never-scheduler-authoritative")
         );
-        assert_eq!(state.keys_max_items, STATE_KEYS_MAX_ITEMS);
+        assert_eq!(state.scan_max_items, STATE_SCAN_MAX_ITEMS_V1);
         assert_eq!(state.max_path_bytes, STATE_MAX_PATH_BYTES as u64);
         assert_eq!(
             state.max_path_frame_bytes,
@@ -4079,8 +4179,8 @@ mod tests {
             <StateValueRecordV1 as norito::NoritoSerialize>::schema_hash()
         );
         assert_eq!(typed.kinds.len(), 19);
-        assert_eq!(typed.nodes.len(), 6);
-        assert_eq!(typed.atoms.len(), 4);
+        assert_eq!(typed.nodes.len(), 9);
+        assert_eq!(typed.atoms.len(), 6);
         assert_eq!(typed.max_nodes, MAX_STATE_VALUE_NODES as u64);
         assert_eq!(typed.max_depth, MAX_STATE_VALUE_NODES as u64);
         assert_eq!(typed.max_words, MAX_STATE_VALUE_WORDS as u64);
@@ -4175,7 +4275,7 @@ mod tests {
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.dynamic_access_hint_validation = "accept-unvalidated-hints";
         });
-        assert_surface_mutation_changes_hash(|changed| changed.durable_state.keys_max_items += 1);
+        assert_surface_mutation_changes_hash(|changed| changed.durable_state.scan_max_items += 1);
         assert_surface_mutation_changes_hash(|changed| changed.durable_state.max_path_bytes += 1);
         assert_surface_mutation_changes_hash(|changed| {
             changed.durable_state.max_path_frame_bytes += 1;
@@ -4579,6 +4679,54 @@ mod tests {
             pointer_abi::PointerType,
         };
         let surface = canonical_surface();
+        assert!(
+            surface
+                .entrypoint
+                .unit_layout
+                .contains("every-public-CNTR-entrypoint-requires-return_type-and-return_schema")
+        );
+        assert!(
+            surface
+                .entrypoint
+                .unit_layout
+                .contains("absent-return-descriptor-invalid")
+        );
+        assert!(surface.entrypoint.unit_layout.contains(
+            "nested-calls-always-return-schema-hashed-EntrypointReturnRecordV1-including-Unit-null"
+        ));
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.unit_layout = "Unit-without-explicit-public-return-descriptor";
+        });
+        assert!(
+            surface
+                .entrypoint
+                .struct_identity
+                .contains("max1024-ASCII-bytes")
+        );
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.struct_identity = "unqualified-display-names";
+        });
+        assert!(
+            surface
+                .entrypoint
+                .sum_json
+                .contains("Some(Unit)={some:null}-distinct-from-None")
+        );
+        assert!(
+            surface
+                .entrypoint
+                .sum_json
+                .contains("no-flattened-or-nullable-Option-form")
+        );
+        assert!(
+            surface
+                .entrypoint
+                .sum_json
+                .contains("JSON_BUILD-rejects-implicit-Result")
+        );
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.entrypoint.sum_json = "Option-null-or-flattened-payload";
+        });
         assert_eq!(surface.entrypoint.int_kind, "Int");
         assert_eq!(surface.entrypoint.decimal_kind, "Decimal");
         assert_eq!(surface.entrypoint.quantity_kind, "Quantity");
@@ -4681,7 +4829,7 @@ mod tests {
         assert_eq!(surface.numeric.mantissa_bits, 512);
         assert_eq!(surface.numeric.max_scale, 28);
         assert_eq!(surface.numeric.semantics_descriptor_version, 3);
-        assert_eq!(surface.numeric.rules.len(), 12);
+        assert_eq!(surface.numeric.rules.len(), 13);
         assert_eq!(surface.numeric.operators.len(), 102);
         assert_eq!(
             surface

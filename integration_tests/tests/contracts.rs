@@ -7,7 +7,7 @@ use iroha::data_model::prelude::*;
 use iroha::data_model::{
     block::{
         consensus::{SumeragiCommittedLaneBlock, committed_lane_block_status_counts_as_progress},
-        consensus_v2::{SumeragiV2GenesisContextParameters, recommended_data_availability_layout},
+        consensus_v2::recommended_data_availability_layout,
     },
     isi::smart_contract_code::{
         AcceptContractOwnership, ActivateContractInstance, DeactivateContractInstance,
@@ -47,8 +47,10 @@ fn minimal_contract_artifact() -> Vec<u8> {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![iroha_data_model::smart_contract::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -57,7 +59,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let mut out = meta.encode();
@@ -65,16 +67,38 @@ fn minimal_contract_artifact() -> Vec<u8> {
     out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
     out
 }
+// The 200-entry probe uses about 3.9M gas locally. Reserve headroom for
+// instance-scoped state paths and bounded scan precharges on real validators.
+const CONTRACT_STATE_PROBE_GAS_LIMIT: u64 = 5_000_000;
+
 fn contract_state_probe_artifact() -> Vec<u8> {
     let src = r#"
 seiyaku ContractStateProbe {
   error enum ProbeError {
-    NotInitialized = 1
+    NotInitialized = 1;
+    WrongValue = 2
   }
+
+  struct Receipt { int recipient; int amount; () memo; }
 
   state int Initialized;
   state int StoredValue;
   state int probe_readback;
+  state () Marker;
+  state Result<(), ProbeError> Outcome;
+  state StateMap<int, int> Entries;
+  const int PAGE_SIZE = 32 * 2;
+
+  fn paginated_sum() -> int {
+    var Option<StateCursor<int>> cursor = Option::none;
+    var sum = 0;
+    for iteration in range(4) {
+      let page = Entries.page(after: cursor, limit: PAGE_SIZE);
+      for (key, value) in page.items { sum += value; }
+      cursor = page.next;
+    }
+    return sum;
+  }
 
   kotoage fn main() -> int authorize("CanEnactGovernance") {
     return 0;
@@ -84,6 +108,8 @@ seiyaku ContractStateProbe {
     Initialized = 1;
     StoredValue = 7;
     probe_readback = 0;
+    Marker = ();
+    Outcome = Result::ok(());
   }
 
   hajimari() {
@@ -92,10 +118,37 @@ seiyaku ContractStateProbe {
 
   kotoage fn verify() authorize("CanEnactGovernance") {
     require(Initialized == 1, ProbeError::NotInitialized);
+    require(Marker == (), ProbeError::WrongValue);
+    match Outcome {
+      Result::ok(value) => { require(value == (), ProbeError::WrongValue); },
+      Result::err(_) => { require(false, ProbeError::WrongValue); },
+    };
+    var List<int, 1> values = [StoredValue];
+    match values.try_push(99) {
+      Result::ok(_) => { require(false, ProbeError::WrongValue); },
+      Result::err(failure) => {
+        require(failure == ListError::CapacityExceeded, ProbeError::WrongValue);
+      },
+    };
+    values.set(index: 0, value: StoredValue);
+    let Receipt { amount, recipient: payee, memo: _ } =
+      Receipt { amount: StoredValue, recipient: 2, memo: () };
+    require(amount == 7 && payee == 2 && values.len() == 1, ProbeError::WrongValue);
+    let rounded = decimal::from_int(amount).mul_div_round(
+      multiplier: 2.0, divisor: 3.0, scale: 2, mode: Rounding::floor);
+    require(rounded == 4.66, ProbeError::WrongValue);
+    for index in range(200) { Entries[index] = index; }
+    require(paginated_sum() == 19900, ProbeError::WrongValue);
     probe_readback = StoredValue;
   }
 
   view fn readback() -> int {
+    require(Marker == (), ProbeError::WrongValue);
+    match Outcome {
+      Result::ok(value) => { require(value == (), ProbeError::WrongValue); },
+      Result::err(_) => { require(false, ProbeError::WrongValue); },
+    };
+    require(paginated_sum() == 19900, ProbeError::WrongValue);
     return probe_readback;
   }
 }
@@ -103,6 +156,338 @@ seiyaku ContractStateProbe {
     ivm::KotodamaCompiler::new()
         .compile_source(src)
         .expect("compile contract-state probe program")
+}
+fn contract_probe_call_intent(
+    artifact: &[u8],
+    contract_address: &ContractAddress,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    entrypoint: &str,
+) -> Result<iroha::client::ContractCallDraftIntent> {
+    let verified = ivm::verify_contract_artifact(artifact)
+        .map_err(|error| eyre!("verify contract probe artifact: {error}"))?;
+    let descriptor = verified
+        .contract_interface
+        .entrypoints
+        .iter()
+        .find(|descriptor| descriptor.name == entrypoint)
+        .ok_or_else(|| eyre!("contract probe entrypoint `{entrypoint}` is missing"))?;
+    if !descriptor.params.is_empty() || descriptor.argument_schema.is_some() {
+        return Err(eyre!(
+            "contract probe `{entrypoint}` must have no arguments"
+        ));
+    }
+    let mut metadata = Metadata::default();
+    for (key, value) in [
+        ("contract_address", contract_address.to_string()),
+        ("contract_code_hash", verified.code_hash.to_string()),
+        ("contract_alias", contract_alias.to_string()),
+        ("contract_entrypoint", entrypoint.to_owned()),
+    ] {
+        metadata.insert(
+            Name::from_str(key)?,
+            iroha_primitives::json::Json::new(value),
+        );
+    }
+    Ok(iroha::client::ContractCallDraftIntent {
+        invocation: iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: verified.code_hash,
+            entrypoint: entrypoint.to_owned(),
+            arguments: None,
+        },
+        metadata,
+    })
+}
+
+fn contract_probe_call_observation(
+    entrypoint: &str,
+    transaction_hash: &str,
+    unix_time_ms: u128,
+) -> Result<String> {
+    if !matches!(entrypoint, "hajimari" | "verify")
+        || transaction_hash.len() != 64
+        || !transaction_hash
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        || unix_time_ms == 0
+    {
+        return Err(eyre!(
+            "contract probe observation requires an exact public stage/hash/timestamp"
+        ));
+    }
+    Ok(format!(
+        "KOTODAMA_CONTRACT_CALL stage={entrypoint} hash={transaction_hash} unix_time_ms={unix_time_ms}"
+    ))
+}
+
+fn contract_probe_genesis_registration(artifact: &[u8]) -> Result<Vec<InstructionBox>> {
+    use iroha_data_model::isi::smart_contract_code::{
+        RegisterSmartContractBytes, RegisterSmartContractCode,
+    };
+    let registrar_key = &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+    let registrar = AccountId::new(registrar_key.public_key().clone());
+    let verified = ivm::verify_contract_artifact(artifact)
+        .map_err(|error| eyre!("verify genesis contract probe artifact: {error}"))?;
+    let manifest = verified
+        .manifest
+        .try_signed(registrar_key)
+        .map_err(|error| eyre!("sign genesis contract probe manifest: {error}"))?;
+    let permission: Permission = CanRegisterSmartContractCode.into();
+    Ok(vec![
+        Grant::account_permission(permission, registrar).into(),
+        RegisterSmartContractBytes {
+            code_hash: verified.code_hash,
+            code: artifact.to_vec(),
+        }
+        .into(),
+        RegisterSmartContractCode { manifest }.into(),
+    ])
+}
+
+fn contract_probe_alias_management_permission() -> CanManageAccountAlias {
+    CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Alias(
+            iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+                "contract_state_probe@universal"
+                    .parse()
+                    .expect("canonical contract probe alias permission"),
+                iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+            ),
+        ),
+    }
+}
+
+fn contract_deployment_instructions(
+    commit: iroha_data_model::isi::smart_contract_code::CommitContractDeployment,
+    hajimari_grantee: Option<&AccountId>,
+) -> Vec<InstructionBox> {
+    let contract_address = commit.contract_address.clone();
+    let mut instructions = vec![InstructionBox::from(commit)];
+    if let Some(grantee) = hajimari_grantee {
+        // Deployment stages the hook; its caller still needs an exact invocation grant.
+        // Keep that grant after Commit in the same ordinary ordered transaction.
+        let permission: Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: contract_address,
+                entrypoint: "hajimari".to_owned(),
+            }
+            .into();
+        instructions.push(Grant::account_permission(permission, grantee.clone()).into());
+    }
+    instructions
+}
+
+#[test]
+fn contract_v1_deployment_grants_only_the_exact_hajimari_invocation() {
+    use iroha_data_model::isi::smart_contract_code::CommitContractDeployment;
+    use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+
+    let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"contract-probe-deployment-grant",
+    )));
+    let address = |nonce| {
+        ContractAddress::derive(
+            &network,
+            &iroha_test_samples::ALICE_ID,
+            nonce,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("derive exact fixture address")
+    };
+    let contract_address = address(0);
+    let commit = CommitContractDeployment {
+        expected_deploy_nonce: 0,
+        contract_address: contract_address.clone(),
+        code_hash: Hash::new(b"exact-probe-artifact"),
+        contract_alias: iroha_data_model::smart_contract::ContractAlias::from_components(
+            "contract_state_probe",
+            None,
+            "universal",
+        )
+        .expect("probe alias"),
+        lease_expiry_ms: None,
+        expected_previous_contract_address: None,
+    };
+    let exact: Permission = CanInvokeContractEntrypoint {
+        contract: contract_address.clone(),
+        entrypoint: "hajimari".to_owned(),
+    }
+    .into();
+    let expected: Vec<InstructionBox> = vec![
+        commit.clone().into(),
+        Grant::account_permission(exact.clone(), iroha_test_samples::ALICE_ID.clone()).into(),
+    ];
+    let actual =
+        contract_deployment_instructions(commit.clone(), Some(&iroha_test_samples::ALICE_ID));
+    assert_eq!(
+        actual, expected,
+        "Commit must precede the exact Alice hook grant"
+    );
+    assert_eq!(
+        contract_deployment_instructions(commit.clone(), None),
+        vec![InstructionBox::from(commit)],
+        "other deployment fixtures retain their original instructions",
+    );
+    for (permission, grantee) in [
+        (
+            CanInvokeContractEntrypoint {
+                contract: address(1),
+                entrypoint: "hajimari".to_owned(),
+            }
+            .into(),
+            iroha_test_samples::ALICE_ID.clone(),
+        ),
+        (
+            CanInvokeContractEntrypoint {
+                contract: contract_address,
+                entrypoint: "verify".to_owned(),
+            }
+            .into(),
+            iroha_test_samples::ALICE_ID.clone(),
+        ),
+        (exact, iroha_test_samples::BOB_ID.clone()),
+        (
+            Permission::new(
+                "CanInvokeContractEntrypoint".to_owned(),
+                iroha_primitives::json::Json::new(()),
+            ),
+            iroha_test_samples::ALICE_ID.clone(),
+        ),
+    ] {
+        let wrong: InstructionBox = Grant::account_permission(permission, grantee).into();
+        assert_ne!(
+            actual[1], wrong,
+            "a different identity or unscoped token is not the hook grant"
+        );
+    }
+    let mut reversed = expected;
+    reversed.reverse();
+    assert_ne!(
+        actual, reversed,
+        "grant order is part of the fixture contract"
+    );
+}
+
+#[test]
+fn contract_v1_alias_permission_is_exact() {
+    let permission = contract_probe_alias_management_permission();
+    let AccountAliasPermissionScope::Alias(alias) = permission.scope else {
+        panic!("contract probe must not receive a domain- or dataspace-wide alias grant");
+    };
+    assert_eq!(alias.canonical_text(), "contract_state_probe@universal");
+    assert_eq!(
+        alias.dataspace_id,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL
+    );
+}
+
+#[test]
+fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
+    use iroha_data_model::isi::smart_contract_code::{
+        RegisterSmartContractBytes, RegisterSmartContractCode,
+    };
+    let artifact = contract_state_probe_artifact();
+    let verified = ivm::verify_contract_artifact(&artifact).expect("verify probe artifact");
+    let registrar_key = &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+    let registrar = AccountId::new(registrar_key.public_key().clone());
+    let permission: Permission = CanRegisterSmartContractCode.into();
+    let expected: Vec<InstructionBox> = vec![
+        Grant::account_permission(permission, registrar).into(),
+        RegisterSmartContractBytes {
+            code_hash: verified.code_hash,
+            code: artifact.clone(),
+        }
+        .into(),
+        RegisterSmartContractCode {
+            manifest: verified
+                .manifest
+                .try_signed(registrar_key)
+                .expect("sign manifest"),
+        }
+        .into(),
+    ];
+    let actual = contract_probe_genesis_registration(&artifact).expect("genesis registration");
+    assert_eq!(
+        actual, expected,
+        "permission must precede exact bytes and signed manifest"
+    );
+    let registered = actual[2]
+        .as_any()
+        .downcast_ref::<RegisterSmartContractCode>()
+        .expect("signed manifest instruction");
+    let signed = registered.manifest();
+    let provenance = signed.provenance.as_ref().expect("registrar provenance");
+    provenance
+        .signature
+        .verify(
+            registrar_key.public_key(),
+            &signed.signature_payload_bytes(),
+        )
+        .expect("canonical manifest signature must verify");
+    assert_eq!(signed.code_hash, Some(verified.code_hash));
+    assert_eq!(signed.abi_hash, Some(verified.abi_hash));
+    assert!(contract_probe_genesis_registration(b"not a contract artifact").is_err());
+}
+
+#[test]
+fn contract_v1_four_validator_probe_compiles_final_syntax() {
+    let artifact = contract_state_probe_artifact();
+    let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse V1 network probe");
+    let interface = parsed.contract_interface.expect("signed V1 interface");
+    assert!(interface.states.iter().any(|state| state.name == "Entries"));
+    assert!(
+        interface
+            .error_types
+            .iter()
+            .any(|ty| ty.identity == "kotodama::ListError")
+    );
+    let address = ContractAddress::derive(
+        &NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"contract-probe-test-network",
+        ))),
+        &iroha_test_samples::ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive probe address");
+    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        "contract_state_probe",
+        None,
+        "universal",
+    )
+    .expect("probe alias");
+    for entrypoint in ["hajimari", "verify"] {
+        let intent = contract_probe_call_intent(&artifact, &address, &alias, entrypoint)
+            .expect("bind exact zero-argument probe call");
+        assert_eq!(intent.invocation.contract_address, address);
+        assert_eq!(intent.invocation.entrypoint, entrypoint);
+        assert!(intent.invocation.arguments.is_none());
+        assert_eq!(intent.metadata.iter().count(), 4);
+        assert_eq!(
+            intent
+                .metadata
+                .get(&Name::from_str("contract_alias").unwrap()),
+            Some(&iroha_primitives::json::Json::new(alias.to_string())),
+        );
+        assert!(
+            intent
+                .metadata
+                .get(&Name::from_str("contract_payload").unwrap())
+                .is_none()
+        );
+    }
+    assert!(contract_probe_call_intent(&artifact, &address, &alias, "missing").is_err());
+    let hash = "ab".repeat(32);
+    for entrypoint in ["hajimari", "verify"] {
+        assert_eq!(
+            contract_probe_call_observation(entrypoint, &hash, 123).unwrap(),
+            format!("KOTODAMA_CONTRACT_CALL stage={entrypoint} hash={hash} unix_time_ms=123"),
+        );
+    }
+    assert!(contract_probe_call_observation("other", &hash, 123).is_err());
+    assert!(contract_probe_call_observation("verify", "abcd", 123).is_err());
+    assert!(contract_probe_call_observation("verify", &"AB".repeat(32), 123).is_err());
+    assert!(contract_probe_call_observation("verify", &hash, 0).is_err());
 }
 fn dynamic_access_counter_artifact() -> Vec<u8> {
     let src = r#"
@@ -120,7 +505,7 @@ seiyaku DynamicAccessCounter {
   }
 
   kotoage fn bump_via_helper(int key, int delta) authorize("CanEnactGovernance") {
-    bump_hidden(key, delta);
+    bump_hidden(key: key, delta: delta);
   }
 }
 "#;
@@ -456,132 +841,1242 @@ fn signed_consensus_handshake(
     norito::json::from_str(custom.payload().get())
         .map_err(|error| eyre!("decode signed consensus handshake metadata: {error}"))
 }
+fn lane_payload_contains_applied_transaction(
+    proposal_height: u64,
+    accepted_transaction_hashes: &[Hash],
+    applied_height: u64,
+    transaction_hash: &Hash,
+) -> bool {
+    // Payload planning precedes or coincides with execution in a certified global merge.
+    // Its proposal coordinate need not equal the transaction's authoritative Applied height.
+    proposal_height != 0
+        && proposal_height <= applied_height
+        && accepted_transaction_hashes.contains(transaction_hash)
+}
+
+#[test]
+fn contract_v1_rbc_transaction_uses_distinct_proposal_and_applied_heights() {
+    let transaction_hash = Hash::new(b"contract probe transaction");
+    let other_hash = Hash::new(b"different contract probe transaction");
+    let accepted = [transaction_hash];
+    assert!(lane_payload_contains_applied_transaction(
+        3,
+        &accepted,
+        4,
+        &transaction_hash
+    ));
+    assert!(lane_payload_contains_applied_transaction(
+        3,
+        &accepted,
+        3,
+        &transaction_hash
+    ));
+    assert!(!lane_payload_contains_applied_transaction(
+        5,
+        &accepted,
+        4,
+        &transaction_hash
+    ));
+    assert!(!lane_payload_contains_applied_transaction(
+        0,
+        &accepted,
+        4,
+        &transaction_hash
+    ));
+    assert!(!lane_payload_contains_applied_transaction(
+        3,
+        &accepted,
+        4,
+        &other_hash
+    ));
+    assert!(!lane_payload_contains_applied_transaction(
+        3,
+        &[],
+        4,
+        &transaction_hash
+    ));
+}
+
+// These tests replay a finite canonical prefix through the authenticated Blocks
+// API. Each connection, read and close stays within the current attempt deadline.
+const CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT: u64 = 64;
+const CONTRACT_RBC_FAILURE_LIMIT: usize = 8;
+const CONTRACT_RBC_QUERY_ATTEMPT_LIMIT: usize = 4;
+const CONTRACT_RBC_REPLAY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+
+#[derive(Clone, Debug)]
+enum CanonicalContractRbcBinding {
+    Ordinary(iroha_data_model::block::consensus::LaneBlockProposalV1),
+    Autonomous(iroha_data_model::block::consensus::LaneBlockProposalV1),
+}
+
+#[derive(Clone, Debug, Default)]
+struct CanonicalContractRbcCache {
+    bindings: Option<Vec<CanonicalContractRbcBinding>>,
+    attempts: usize,
+    errors: Vec<String>,
+}
+
+impl CanonicalContractRbcCache {
+    fn can_query(&self) -> bool {
+        self.bindings.is_none() && self.attempts < CONTRACT_RBC_QUERY_ATTEMPT_LIMIT
+    }
+
+    fn record_query(
+        &mut self,
+        result: std::result::Result<Vec<CanonicalContractRbcBinding>, String>,
+    ) -> Result<()> {
+        if !self.can_query() {
+            return Err(eyre!(
+                "canonical RBC query attempted after success or budget exhaustion"
+            ));
+        }
+        self.attempts += 1;
+        match result {
+            Ok(bindings) => self.bindings = Some(bindings),
+            Err(error) => self.errors.push(error.chars().take(512).collect()),
+        }
+        Ok(())
+    }
+}
+
+fn canonical_ordinary_contract_binding(
+    ownership: &iroha_data_model::block::consensus::SumeragiLanePayloadOwnership,
+) -> Result<CanonicalContractRbcBinding> {
+    use iroha_data_model::block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1};
+    ownership
+        .validate_replay_material()
+        .map_err(|error| eyre!("canonical ordinary ownership: {error}"))?;
+    let descriptor = LaneBlockDescriptorV1 {
+        lane_id: ownership.lane_id,
+        dataspace_id: ownership.dataspace_id,
+        lane_incarnation: ownership.lane_incarnation,
+        proposal_height: ownership.proposal_height,
+        previous_lane_block_height: ownership.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: ownership.previous_lane_block_descriptor_hash,
+        lane_block_height: ownership.lane_block_height,
+        lane_block_view: ownership.lane_block_view,
+        subject_hash: ownership.subject_hash,
+        payload_ownership_hash: ownership.payload_ownership_hash,
+        rbc_instance_hash: ownership.rbc_instance_hash,
+        accepted_candidate_indices: ownership.accepted_candidate_indices.clone(),
+        accepted_transaction_hashes: ownership.accepted_transaction_hashes.clone(),
+        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&ownership.lane_block_descriptor_validator_set),
+        validator_set: ownership.lane_block_descriptor_validator_set.clone(),
+        validator_count: ownership.lane_block_descriptor_validator_count,
+        min_quorum: ownership.lane_block_descriptor_min_quorum,
+        qc_mode_tag: ownership.qc_mode_tag.clone(),
+        descriptor_hash: ownership
+            .lane_block_descriptor_hash
+            .ok_or_else(|| eyre!("ordinary descriptor missing"))?,
+    };
+    let mut proposal = LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+        // A recovery hint is excluded from the public consensus hash preimage.
+        // The caller separately checks the ownership's exact canonical header.
+        payload_block_hint: None,
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    iroha_core::lane_consensus::validate_lane_block_proposal(&proposal)
+        .map_err(|error| eyre!("canonical ordinary proposal: {error}"))?;
+    Ok(CanonicalContractRbcBinding::Ordinary(proposal))
+}
+
+fn canonical_contract_replay_hashes(
+    descriptor: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
+) -> Result<(Hash, Hash, Hash)> {
+    use iroha_data_model::block::consensus::SumeragiLanePayloadOwnership;
+    let subject = SumeragiLanePayloadOwnership::compute_replay_subject_hash(
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+        descriptor.lane_block_height,
+        descriptor.lane_block_view,
+        &descriptor.accepted_candidate_indices,
+        &descriptor.accepted_transaction_hashes,
+        &descriptor.qc_mode_tag,
+    )
+    .map_err(|error| eyre!("canonical autonomous subject preimage: {error}"))?;
+    let ownership = SumeragiLanePayloadOwnership::compute_replay_payload_ownership_hash(
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+        descriptor.lane_block_height,
+        descriptor.lane_block_view,
+        subject,
+        &descriptor.accepted_candidate_indices,
+        &descriptor.accepted_transaction_hashes,
+        &descriptor.qc_mode_tag,
+    )
+    .map_err(|error| eyre!("canonical autonomous ownership preimage: {error}"))?;
+    let rbc = SumeragiLanePayloadOwnership::compute_replay_rbc_instance_hash(
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+        descriptor.lane_block_height,
+        descriptor.lane_block_view,
+        subject,
+        ownership,
+    )
+    .map_err(|error| eyre!("canonical autonomous RBC preimage: {error}"))?;
+    Ok((subject, ownership, rbc))
+}
+
+fn canonical_autonomous_contract_binding(
+    envelope: &iroha_data_model::block::execution_context::AutonomousLanePayloadEnvelopeV1,
+    block_height: u64,
+    network_id: iroha_data_model::NetworkId,
+) -> Result<CanonicalContractRbcBinding> {
+    use iroha_core::lane_consensus::{LaneExecutablePayloadV1, validate_lane_block_proposal};
+    use iroha_data_model::merge::MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES;
+    if envelope.version != iroha_data_model::block::AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1
+        || envelope.canonical_payload.is_empty()
+        || envelope.canonical_payload.len() > MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES
+    {
+        return Err(eyre!("canonical autonomous envelope version/byte bound"));
+    }
+    let payload: LaneExecutablePayloadV1 = norito::decode_canonical(&envelope.canonical_payload)
+        .map_err(|error| eyre!("canonical autonomous payload codec: {error}"))?;
+    if norito::encode_canonical(&payload)? != envelope.canonical_payload {
+        return Err(eyre!("canonical autonomous payload roundtrip"));
+    }
+    // The current Core constructor and validator use internal payload version1
+    // (LANE_EXECUTABLE_PAYLOAD_VERSION_V1), independently of envelope versioning.
+    if payload.version != 1 {
+        return Err(eyre!("canonical autonomous payload version"));
+    }
+    let proposal = &payload.origin_proposal;
+    let descriptor = &proposal.descriptor;
+    validate_lane_block_proposal(proposal)
+        .map_err(|error| eyre!("canonical autonomous proposal: {error}"))?;
+    if canonical_contract_replay_hashes(descriptor)?
+        != (
+            descriptor.subject_hash,
+            descriptor.payload_ownership_hash,
+            descriptor.rbc_instance_hash,
+        )
+    {
+        return Err(eyre!("canonical autonomous replay commitments"));
+    }
+    let hashes = payload
+        .entrypoints
+        .iter()
+        .map(|entrypoint| Hash::from(entrypoint.hash()))
+        .collect::<Vec<_>>();
+    // The finalized queried block supplies canonical provenance. This helper
+    // joins that exact body to diagnostics; it does not mint payload custody or
+    // replace consensus signature/lifecycle validation with a test-side policy.
+    if proposal.payload_block_hint.is_some()
+        || descriptor.lane_block_view != 0
+        || descriptor.proposal_height != block_height
+        || envelope.network_id != network_id
+        || payload.network_id != network_id
+        || envelope.epoch != payload.epoch
+        || envelope.lane_id != descriptor.lane_id
+        || envelope.dataspace_id != descriptor.dataspace_id
+        || envelope.lane_incarnation != descriptor.lane_incarnation
+        || envelope.proposal_height != descriptor.proposal_height
+        || envelope.lane_block_height != descriptor.lane_block_height
+        || envelope.lane_block_view != descriptor.lane_block_view
+        || envelope.proposal_hash != proposal.proposal_hash
+        || envelope.descriptor_hash != descriptor.descriptor_hash
+        || envelope.payload_hash != payload.payload_hash
+        || envelope.producer != payload.producer
+        || !descriptor.validator_set.contains(&payload.producer)
+        || payload.producer_signature.is_empty()
+        || hashes != payload.entrypoint_hashes
+        || hashes != descriptor.accepted_transaction_hashes
+    {
+        return Err(eyre!(
+            "canonical autonomous envelope/proposal/transaction binding"
+        ));
+    }
+    Ok(CanonicalContractRbcBinding::Autonomous(
+        payload.origin_proposal,
+    ))
+}
+
+fn contract_rbc_remaining(deadline: Instant) -> Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|remaining| !remaining.is_zero())
+        .ok_or_else(|| eyre!("canonical RBC replay deadline expired"))
+}
+
+fn contract_rbc_replay_end(head: u64, required_height: Option<u64>) -> Result<u64> {
+    if required_height.is_some_and(|height| {
+        !(2..=CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT).contains(&height) || height > head
+    }) {
+        return Err(eyre!(
+            "canonical RBC replay head does not cover required Applied height"
+        ));
+    }
+    let end = head.min(CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT);
+    if end < 2 {
+        return Err(eyre!("canonical RBC replay has no non-genesis prefix"));
+    }
+    Ok(end)
+}
+
+// The same finite stream consumer is exercised with fake rows below. Canonical
+// provenance in the network case belongs to the authenticated Blocks API.
+async fn receive_contract_rbc_prefix<S, T, F>(
+    stream: &mut S,
+    end: u64,
+    deadline: Instant,
+    mut identity: F,
+) -> Result<Vec<T>>
+where
+    S: futures_util::Stream<Item = Result<T>> + Unpin,
+    F: FnMut(&T) -> (u64, HashOf<BlockHeader>, Option<HashOf<BlockHeader>>),
+{
+    use futures_util::TryStreamExt as _;
+
+    if !(2..=CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT).contains(&end) {
+        return Err(eyre!("canonical RBC replay end exceeds the fixture bound"));
+    }
+    let mut blocks = Vec::new();
+    blocks
+        .try_reserve_exact((end - 1) as usize)
+        .map_err(|_| eyre!("cannot reserve bounded canonical RBC prefix"))?;
+    let mut previous_hash = None;
+    for expected_height in 2..=end {
+        contract_rbc_remaining(deadline)?;
+        let block =
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), stream.try_next())
+                .await
+                .map_err(|_| eyre!("canonical RBC replay timed out at height {expected_height}"))??
+                .ok_or_else(|| {
+                    eyre!("canonical RBC replay ended before height {expected_height}")
+                })?;
+        // An async timer cannot interrupt the synchronous Norito decoder.
+        contract_rbc_remaining(deadline)?;
+        let (height, hash, parent) = identity(&block);
+        contract_rbc_remaining(deadline)?;
+        if height != expected_height || parent.is_none() || (height > 2 && parent != previous_hash)
+        {
+            return Err(eyre!(
+                "canonical RBC replay is not an ascending contiguous hash chain"
+            ));
+        }
+        previous_hash = Some(hash);
+        blocks.push(block);
+    }
+    // Receiving exactly the frozen end avoids waiting for a future block or
+    // performing lookahead beyond the admitted canonical prefix.
+    Ok(blocks)
+}
+
+async fn stream_contract_rbc_prefix(
+    client: &iroha::client::Client,
+    end: u64,
+    deadline: Instant,
+) -> Result<Vec<SignedBlock>> {
+    let remaining = contract_rbc_remaining(deadline)?;
+    // Reserve a bounded portion of this same attempt for the close handshake.
+    let close_reserve = Duration::from_secs(1).min(remaining / 4);
+    let receive_deadline = deadline - close_reserve;
+    let mut stream = tokio::time::timeout_at(
+        tokio::time::Instant::from_std(receive_deadline),
+        client.listen_for_blocks_async(NonZeroU64::new(2).expect("nonzero replay start")),
+    )
+    .await
+    .map_err(|_| eyre!("canonical RBC replay connection timed out"))??;
+    let result = receive_contract_rbc_prefix(&mut stream, end, receive_deadline, |block| {
+        (
+            block.header().height().get(),
+            block.hash(),
+            block.header().prev_block_hash(),
+        )
+    })
+    .await;
+    finish_contract_rbc_replay(result, stream.close(), deadline).await
+}
+
+async fn finish_contract_rbc_replay<T>(
+    result: Result<Vec<T>>,
+    close: impl std::future::Future<Output = ()>,
+    deadline: Instant,
+) -> Result<Vec<T>> {
+    let close = tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), close).await;
+    match (result, close) {
+        (Ok(blocks), Ok(())) => {
+            contract_rbc_remaining(deadline)?;
+            Ok(blocks)
+        }
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(_)) => Err(eyre!("canonical RBC replay close timed out")),
+        (Err(error), Err(_)) => Err(eyre!("{error:#}; canonical RBC replay close timed out")),
+    }
+}
+
+fn replay_canonical_contract_rbc_bindings(
+    client: &iroha::client::Client,
+    deadline: Instant,
+    required_height: Option<u64>,
+) -> Result<Vec<CanonicalContractRbcBinding>> {
+    let mut client = client.clone();
+    client.torii_request_timeout = contract_rbc_remaining(deadline)?;
+    let head = client.get_status()?.blocks;
+    contract_rbc_remaining(deadline)?;
+    let end = contract_rbc_replay_end(head, required_height)?;
+    let blocks = tokio::runtime::Handle::current()
+        .block_on(stream_contract_rbc_prefix(&client, end, deadline))?;
+    let mut bindings = Vec::new();
+    for block in blocks {
+        contract_rbc_remaining(deadline)?;
+        let height = block.header().height().get();
+        let Some(context) = block.execution_context() else {
+            continue;
+        };
+        if context.lane_payload_ownerships.len() > 64 || context.autonomous_lane_payloads.len() > 64
+        {
+            return Err(eyre!("canonical RBC ownership count exceeds fixture bound"));
+        }
+        for ownership in &context.lane_payload_ownerships {
+            if ownership.proposal_height != height
+                || ownership.proposal_view != block.header().view_change_index()
+            {
+                return Err(eyre!(
+                    "ordinary ownership is bound to another canonical block"
+                ));
+            }
+            bindings.push(canonical_ordinary_contract_binding(ownership)?);
+            contract_rbc_remaining(deadline)?;
+        }
+        for envelope in &context.autonomous_lane_payloads {
+            bindings.push(canonical_autonomous_contract_binding(
+                envelope,
+                height,
+                client.network_id,
+            )?);
+            contract_rbc_remaining(deadline)?;
+        }
+    }
+    contract_rbc_remaining(deadline)?;
+    Ok(bindings)
+}
+
+fn contract_rbc_binding_matches(
+    binding: &CanonicalContractRbcBinding,
+    record: &SumeragiCommittedLaneBlock,
+    expected_validator_set: &[PeerId],
+    required_applied_transaction: Option<(u64, &Hash)>,
+) -> bool {
+    let (CanonicalContractRbcBinding::Ordinary(proposal)
+    | CanonicalContractRbcBinding::Autonomous(proposal)) = binding;
+    let descriptor = &proposal.descriptor;
+    iroha_core::lane_consensus::validate_lane_block_proposal(proposal).is_ok()
+        && proposal.proposal_hash == record.proposal_hash
+        && descriptor.lane_id == record.lane_id
+        && descriptor.dataspace_id == record.dataspace_id
+        && descriptor.lane_incarnation == record.lane_incarnation
+        && descriptor.lane_block_height == record.lane_block_height
+        && descriptor.lane_block_view == record.lane_block_view
+        && descriptor.descriptor_hash == record.descriptor_hash
+        && descriptor.subject_hash == record.subject_hash
+        && descriptor.payload_ownership_hash == record.payload_ownership_hash
+        && descriptor.rbc_instance_hash == record.rbc_instance_hash
+        && descriptor.qc_mode_tag == record.qc_mode_tag
+        && descriptor.validator_count == record.validator_count
+        && descriptor.min_quorum == record.min_quorum
+        && descriptor.validator_set.as_slice() == expected_validator_set
+        && required_applied_transaction.is_none_or(|(height, hash)| {
+            lane_payload_contains_applied_transaction(
+                descriptor.proposal_height,
+                &descriptor.accepted_transaction_hashes,
+                height,
+                hash,
+            )
+        })
+}
+
+fn shared_contract_rbc_record(
+    observations: &[Vec<SumeragiCommittedLaneBlock>],
+) -> Option<SumeragiCommittedLaneBlock> {
+    if observations.len() != 4 {
+        return None;
+    }
+    observations[0]
+        .iter()
+        .filter(|record| observations[1..].iter().all(|peer| peer.contains(record)))
+        .max_by_key(|record| (record.lane_block_height, record.lane_block_view))
+        .cloned()
+}
+
+fn contract_rbc_progress_failures(
+    record: &SumeragiCommittedLaneBlock,
+    after: Option<&SumeragiCommittedLaneBlock>,
+    validator_count: u32,
+    min_quorum: u32,
+) -> Vec<&'static str> {
+    let mut failures = Vec::new();
+    if !after.is_none_or(|baseline| {
+        record.lane_id == baseline.lane_id
+            && record.dataspace_id == baseline.dataspace_id
+            && record.lane_incarnation == baseline.lane_incarnation
+            && (record.lane_block_height, record.lane_block_view)
+                > (baseline.lane_block_height, baseline.lane_block_view)
+    }) {
+        failures.push("not_later_in_same_lane_incarnation");
+    }
+    if !record.executable_payload_available {
+        failures.push("payload_unavailable");
+    }
+    if !committed_lane_block_status_counts_as_progress(
+        &record.execution_status,
+        record.executable_payload_available,
+    ) {
+        failures.push("execution_status");
+    }
+    if record.validator_count != validator_count || record.min_quorum != min_quorum {
+        failures.push("committee_geometry");
+    }
+    if record.prepare_qc_signer_count != min_quorum || record.commit_qc_signer_count != min_quorum {
+        failures.push("exact_quorum_signers");
+    }
+    let zero = Hash::prehashed([0; Hash::LENGTH]);
+    if [
+        record.descriptor_hash,
+        record.proposal_hash,
+        record.subject_hash,
+        record.payload_ownership_hash,
+        record.rbc_instance_hash,
+    ]
+    .contains(&zero)
+    {
+        failures.push("zero_identity");
+    }
+    failures
+}
+
 async fn wait_for_cross_peer_rbc_diagnostics(
     network: &sandbox::SerializedNetwork,
     timeout: Duration,
     after: Option<&SumeragiCommittedLaneBlock>,
-    required_transaction: Option<(u64, &Hash)>,
+    required_applied_transaction: Option<(u64, &Hash)>,
 ) -> Result<SumeragiCommittedLaneBlock> {
     let expected_validator_count = u32::try_from(network.peers().len())
         .map_err(|_| eyre!("peer count does not fit in u32"))?;
     let expected_min_quorum = u32::try_from(commit_quorum_from_len(network.peers().len()).max(1))
         .map_err(|_| eyre!("commit quorum does not fit in u32"))?;
+    if required_applied_transaction
+        .is_some_and(|(height, _)| height > CONTRACT_RBC_CANONICAL_HEIGHT_LIMIT)
+    {
+        return Err(eyre!(
+            "required transaction exceeds the bounded canonical RBC prefix"
+        ));
+    }
     let mut expected_validator_set = network
         .peers()
         .iter()
         .map(|peer| peer.id())
         .collect::<Vec<_>>();
     expected_validator_set.sort();
-    let zero_hash = Hash::prehashed([0; Hash::LENGTH]);
     let deadline = Instant::now() + timeout;
+    // Freeze only a successfully validated prefix, after an eligible certificate
+    // exists. Failed reads remain visible and may retry within a four-attempt cap.
+    let mut canonical = vec![CanonicalContractRbcCache::default(); network.peers().len()];
     loop {
         let tasks = network
             .peers()
             .iter()
-            .map(|peer| {
-                let client = peer.client();
-                tokio::task::spawn_blocking(move || client.get_sumeragi_diagnostics())
+            .enumerate()
+            .map(|(index, peer)| {
+                let mut client = peer.client();
+                let can_query = canonical[index].can_query();
+                let baseline = after.cloned();
+                let validators = expected_validator_set.clone();
+                let required = required_applied_transaction.map(|(height, hash)| (height, *hash));
+                tokio::task::spawn_blocking(move || -> Result<_> {
+                    let attempt_deadline = deadline.min(Instant::now() + CONTRACT_RBC_REPLAY_ATTEMPT_TIMEOUT);
+                    client.torii_request_timeout = contract_rbc_remaining(attempt_deadline)?;
+                    let diagnostics = client.get_sumeragi_diagnostics()?;
+                    contract_rbc_remaining(attempt_deadline)?;
+                    let queried = (can_query
+                        && diagnostics.npos.is_some()
+                        && diagnostics.committed_lane_blocks.iter().any(|record| {
+                            contract_rbc_progress_failures(
+                                record,
+                                baseline.as_ref(),
+                                expected_validator_count,
+                                expected_min_quorum,
+                            )
+                            .is_empty()
+                        }))
+                    .then(|| {
+                        let bindings = replay_canonical_contract_rbc_bindings(
+                            &client,
+                            attempt_deadline,
+                            required.as_ref().map(|(height, _)| *height),
+                        )
+                        .map_err(|error| format!("{error:#}"))?;
+                        let requested = required.as_ref().map(|(height, hash)| (*height, hash));
+                        let joined = diagnostics.committed_lane_blocks.iter().any(|record| {
+                            contract_rbc_progress_failures(record, baseline.as_ref(), expected_validator_count, expected_min_quorum).is_empty()
+                                && bindings.iter().any(|binding| contract_rbc_binding_matches(binding, record, &validators, requested))
+                        });
+                        contract_rbc_remaining(attempt_deadline).map_err(|error| format!("{error:#}"))?;
+                        if !joined {
+                            return Err("canonical prefix does not yet contain an eligible certified transaction binding".to_owned());
+                        }
+                        Ok(bindings)
+                    });
+                    Ok((diagnostics, queried))
+                })
             })
             .collect::<Vec<_>>();
         let mut observations = Vec::with_capacity(tasks.len());
         let mut errors = Vec::new();
-        for task in tasks {
+        let mut predicate_failures = Vec::new();
+        for (index, task) in tasks.into_iter().enumerate() {
             match task.await {
-                Ok(Ok(diagnostics)) if diagnostics.npos.is_some() => {
-                    let ownerships = diagnostics.lane_payload_ownerships;
-                    let evidence = diagnostics
-                        .committed_lane_blocks
-                        .into_iter()
-                        .filter(|record| {
-                            let matching_ownership = ownerships.iter().find(|ownership| {
-                                ownership.validate_replay_material().is_ok()
-                                    && ownership.lane_id == record.lane_id
-                                    && ownership.dataspace_id == record.dataspace_id
-                                    && ownership.lane_incarnation == record.lane_incarnation
-                                    && ownership.lane_block_height == record.lane_block_height
-                                    && ownership.lane_block_view == record.lane_block_view
-                                    && ownership.lane_block_descriptor_hash
-                                        == Some(record.descriptor_hash)
-                                    && ownership.subject_hash == record.subject_hash
-                                    && ownership.payload_ownership_hash
-                                        == record.payload_ownership_hash
-                                    && ownership.rbc_instance_hash == record.rbc_instance_hash
-                                    && ownership.qc_mode_tag == record.qc_mode_tag
-                                    && ownership.lane_block_descriptor_validator_count
-                                        == record.validator_count
-                                    && ownership.lane_block_descriptor_min_quorum
-                                        == record.min_quorum
-                                    && ownership.lane_block_descriptor_validator_count
-                                        == expected_validator_count
-                                    && ownership.lane_block_descriptor_min_quorum
-                                        == expected_min_quorum
-                                    && ownership.lane_block_descriptor_validator_set.as_slice()
-                                        == expected_validator_set.as_slice()
+                Ok(Ok((diagnostics, queried))) if diagnostics.npos.is_some() => {
+                    if let Some(result) = queried {
+                        canonical[index].record_query(result)?;
+                    }
+                    let mut matches = Vec::new();
+                    let mut rejected = Vec::new();
+                    for record in diagnostics.committed_lane_blocks {
+                        let mut failures = contract_rbc_progress_failures(
+                            &record,
+                            after,
+                            expected_validator_count,
+                            expected_min_quorum,
+                        );
+                        let binding_matches =
+                            canonical[index].bindings.as_ref().is_some_and(|bindings| {
+                                bindings.iter().any(|binding| {
+                                    contract_rbc_binding_matches(
+                                        binding,
+                                        &record,
+                                        &expected_validator_set,
+                                        required_applied_transaction,
+                                    )
+                                })
                             });
-                            after.is_none_or(|baseline| {
-                                record.lane_id == baseline.lane_id
-                                    && record.dataspace_id == baseline.dataspace_id
-                                    && record.lane_incarnation == baseline.lane_incarnation
-                                    && (record.lane_block_height, record.lane_block_view)
-                                        > (baseline.lane_block_height, baseline.lane_block_view)
-                            }) && matching_ownership.is_some_and(|ownership| {
-                                required_transaction.is_none_or(
-                                    |(proposal_height, transaction_hash)| {
-                                        ownership.proposal_height == proposal_height
-                                            && ownership
-                                                .accepted_transaction_hashes
-                                                .contains(transaction_hash)
-                                    },
-                                )
-                            }) && record.executable_payload_available
-                                && committed_lane_block_status_counts_as_progress(
-                                    &record.execution_status,
-                                    record.executable_payload_available,
-                                )
-                                && record.validator_count == expected_validator_count
-                                && record.min_quorum == expected_min_quorum
-                                && record.prepare_qc_signer_count == record.min_quorum
-                                && record.commit_qc_signer_count == record.min_quorum
-                                && record.descriptor_hash != zero_hash
-                                && record.proposal_hash != zero_hash
-                                && record.subject_hash != zero_hash
-                                && record.payload_ownership_hash != zero_hash
-                                && record.rbc_instance_hash != zero_hash
-                        })
-                        .max_by_key(|record| (record.lane_block_height, record.lane_block_view));
-                    observations.push(evidence);
+                        if !binding_matches {
+                            failures.push("canonical_proposal_committee_or_transaction_join");
+                        }
+                        if failures.is_empty() {
+                            matches.push(record);
+                        } else if rejected.len() < CONTRACT_RBC_FAILURE_LIMIT {
+                            rejected.push(format!(
+                                "lane={}/height={}/view={}/proposal={}: {:?}",
+                                record.lane_id.as_u32(),
+                                record.lane_block_height,
+                                record.lane_block_view,
+                                record.proposal_hash,
+                                failures
+                            ));
+                        }
+                    }
+                    let (ordinary, autonomous) =
+                        canonical[index]
+                            .bindings
+                            .as_ref()
+                            .map_or((0, 0), |bindings| {
+                                bindings
+                                    .iter()
+                                    .fold((0, 0), |(o, a), binding| match binding {
+                                        CanonicalContractRbcBinding::Ordinary(_) => (o + 1, a),
+                                        CanonicalContractRbcBinding::Autonomous(_) => (o, a + 1),
+                                    })
+                            });
+                    predicate_failures.push(format!(
+                        "peer {index}: canonical ordinary={ordinary} autonomous={autonomous}; queries={}/{}; query_errors={:?}; rejected={rejected:?}",
+                        canonical[index].attempts, CONTRACT_RBC_QUERY_ATTEMPT_LIMIT, canonical[index].errors,
+                    ));
+                    observations.push(matches);
                 }
                 Ok(Ok(_)) => {
-                    errors.push("peer diagnostics did not expose NPoS state".to_owned());
-                    observations.push(None);
+                    errors.push(format!(
+                        "peer {index} diagnostics did not expose NPoS state"
+                    ));
+                    observations.push(Vec::new());
                 }
                 Ok(Err(error)) => {
-                    errors.push(error.to_string());
-                    observations.push(None);
+                    errors.push(
+                        format!("peer {index}: {error:#}")
+                            .chars()
+                            .take(512)
+                            .collect(),
+                    );
+                    observations.push(Vec::new());
                 }
                 Err(error) => {
-                    errors.push(format!("diagnostics task failed: {error}"));
-                    observations.push(None);
+                    errors.push(format!("peer {index} diagnostics task failed: {error}"));
+                    observations.push(Vec::new());
                 }
             }
         }
-        if let Some(first) = observations.first().and_then(Option::as_ref)
-            && observations
-                .iter()
-                .all(|observation| observation.as_ref() == Some(first))
-        {
-            return Ok(first.clone());
+        if Instant::now() < deadline {
+            if let Some(shared) = shared_contract_rbc_record(&observations) {
+                return Ok(shared);
+            }
         }
-        let last_observed = format!("evidence={observations:?}; errors={errors:?}");
+        let evidence_counts = observations.iter().map(Vec::len).collect::<Vec<_>>();
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "timed out waiting for identical four-peer certified RBC diagnostics; \
-                 last_observed={last_observed}"
+                "timed out waiting for identical four-peer certified RBC diagnostics; eligible_counts={evidence_counts:?}; errors={errors:?}; predicates={predicate_failures:?}"
             ));
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
+
+// A structural query/diagnostic join fixture. Quorum and producer-signature
+// execution remain covered by the real four-validator scenarios.
+fn contract_rbc_autonomous_join_fixture() -> (
+    iroha_data_model::block::AutonomousLanePayloadEnvelopeV1,
+    SumeragiCommittedLaneBlock,
+    Vec<PeerId>,
+    Hash,
+) {
+    use iroha_core::lane_consensus::LaneExecutablePayloadV1;
+    use iroha_data_model::{
+        block::consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1},
+        nexus::{DataSpaceId, LaneId},
+    };
+    let mut validators = (1..=4)
+        .map(|seed| {
+            PeerId::new(
+                KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .public_key()
+                    .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    validators.sort();
+    let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+        HashOf::from_untyped_unchecked(Hash::new(b"RBC join fixture genesis")),
+    );
+    let signed = TransactionBuilder::new(
+        network_id,
+        iroha_test_samples::ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "RBC canonical join".to_owned())])
+    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    let entrypoint = iroha_data_model::transaction::TransactionEntrypoint::External(signed);
+    let transaction_hash = Hash::from(entrypoint.hash());
+    let mut descriptor = LaneBlockDescriptorV1 {
+        lane_id: LaneId::new(0),
+        dataspace_id: DataSpaceId::new(0),
+        lane_incarnation: Hash::new(b"RBC join fixture incarnation"),
+        proposal_height: 3,
+        previous_lane_block_height: 0,
+        previous_lane_block_descriptor_hash: None,
+        lane_block_height: 1,
+        lane_block_view: 0,
+        subject_hash: Hash::new(b"subject"),
+        payload_ownership_hash: Hash::new(b"ownership"),
+        rbc_instance_hash: Hash::new(b"rbc"),
+        accepted_candidate_indices: vec![0],
+        accepted_transaction_hashes: vec![transaction_hash],
+        validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set_hash: HashOf::new(&validators),
+        validator_set: validators.clone(),
+        validator_count: 4,
+        min_quorum: 3,
+        qc_mode_tag: "npos".to_owned(),
+        descriptor_hash: Hash::prehashed([0; 32]),
+    };
+    (
+        descriptor.subject_hash,
+        descriptor.payload_ownership_hash,
+        descriptor.rbc_instance_hash,
+    ) = canonical_contract_replay_hashes(&descriptor).expect("fixture replay commitments");
+    descriptor.descriptor_hash = descriptor.computed_descriptor_hash();
+    let mut proposal = LaneBlockProposalV1 {
+        descriptor,
+        proposal_hash: Hash::prehashed([0; 32]),
+        payload_block_hint: None,
+    };
+    proposal.proposal_hash = proposal.computed_proposal_hash();
+    iroha_core::lane_consensus::validate_lane_block_proposal(&proposal)
+        .expect("valid structural proposal");
+    let d = &proposal.descriptor;
+    let record = SumeragiCommittedLaneBlock {
+        lane_id: d.lane_id,
+        dataspace_id: d.dataspace_id,
+        lane_incarnation: d.lane_incarnation,
+        lane_block_height: d.lane_block_height,
+        lane_block_view: d.lane_block_view,
+        descriptor_hash: d.descriptor_hash,
+        proposal_hash: proposal.proposal_hash,
+        execution_status: "state_applied_by_canonical_block".to_owned(),
+        executable_payload_available: true,
+        subject_hash: d.subject_hash,
+        payload_ownership_hash: d.payload_ownership_hash,
+        rbc_instance_hash: d.rbc_instance_hash,
+        qc_mode_tag: d.qc_mode_tag.clone(),
+        validator_count: 4,
+        min_quorum: 3,
+        prepare_qc_signer_count: 3,
+        commit_qc_signer_count: 3,
+    };
+    let payload = LaneExecutablePayloadV1 {
+        version: 1,
+        network_id,
+        epoch: 0,
+        origin_proposal: proposal.clone(),
+        entrypoint_hashes: vec![transaction_hash],
+        entrypoints: vec![entrypoint],
+        reservation_keys: Vec::new(),
+        routing_plans: Vec::new(),
+        native_amx_receipts: Vec::new(),
+        payload_hash: Hash::new(b"structural fixture payload commitment"),
+        producer: validators[0].clone(),
+        producer_signature: vec![1; 96],
+    };
+    let envelope = iroha_data_model::block::AutonomousLanePayloadEnvelopeV1 {
+        version: iroha_data_model::block::AUTONOMOUS_LANE_PAYLOAD_ENVELOPE_VERSION_V1,
+        network_id,
+        epoch: 0,
+        lane_id: d.lane_id,
+        dataspace_id: d.dataspace_id,
+        lane_incarnation: d.lane_incarnation,
+        proposal_height: d.proposal_height,
+        lane_block_height: d.lane_block_height,
+        lane_block_view: d.lane_block_view,
+        proposal_hash: proposal.proposal_hash,
+        descriptor_hash: d.descriptor_hash,
+        payload_hash: payload.payload_hash,
+        producer: payload.producer.clone(),
+        canonical_payload: norito::encode_canonical(&payload).expect("canonical fixture payload"),
+    };
+    (envelope, record, validators, transaction_hash)
+}
+
+#[test]
+fn contract_v1_rbc_autonomous_join_matches_without_ordinary_ownership() {
+    iroha_data_model::isi::set_instruction_registry(
+        iroha_data_model::instruction_registry::default(),
+    );
+    let (envelope, record, validators, hash) = contract_rbc_autonomous_join_fixture();
+    let binding = canonical_autonomous_contract_binding(&envelope, 3, envelope.network_id)
+        .expect("join canonical autonomous body");
+    assert!(matches!(
+        binding,
+        CanonicalContractRbcBinding::Autonomous(_)
+    ));
+    assert!(contract_rbc_binding_matches(
+        &binding,
+        &record,
+        &validators,
+        Some((4, &hash))
+    ));
+    assert!(contract_rbc_progress_failures(&record, None, 4, 3).is_empty());
+}
+
+#[test]
+fn contract_v1_rbc_autonomous_join_rejects_identity_committee_and_transaction_substitution() {
+    iroha_data_model::isi::set_instruction_registry(
+        iroha_data_model::instruction_registry::default(),
+    );
+    let (envelope, record, validators, hash) = contract_rbc_autonomous_join_fixture();
+    let binding = canonical_autonomous_contract_binding(&envelope, 3, envelope.network_id).unwrap();
+    for field in [
+        "proposal",
+        "descriptor",
+        "incarnation",
+        "subject",
+        "ownership",
+        "rbc",
+        "view",
+    ] {
+        let mut wrong = record.clone();
+        match field {
+            "proposal" => wrong.proposal_hash = Hash::new(b"other"),
+            "descriptor" => wrong.descriptor_hash = Hash::new(b"other"),
+            "incarnation" => wrong.lane_incarnation = Hash::new(b"other"),
+            "subject" => wrong.subject_hash = Hash::new(b"other"),
+            "ownership" => wrong.payload_ownership_hash = Hash::new(b"other"),
+            "rbc" => wrong.rbc_instance_hash = Hash::new(b"other"),
+            "view" => wrong.lane_block_view += 1,
+            _ => unreachable!(),
+        }
+        assert!(
+            !contract_rbc_binding_matches(&binding, &wrong, &validators, Some((4, &hash))),
+            "{field}"
+        );
+    }
+    let mut wrong_roster = validators.clone();
+    wrong_roster.swap(0, 1);
+    assert!(!contract_rbc_binding_matches(
+        &binding,
+        &record,
+        &wrong_roster,
+        Some((4, &hash))
+    ));
+    assert!(!contract_rbc_binding_matches(
+        &binding,
+        &record,
+        &validators,
+        Some((2, &hash))
+    ));
+    assert!(!contract_rbc_binding_matches(
+        &binding,
+        &record,
+        &validators,
+        Some((4, &Hash::new(b"unrelated transaction")))
+    ));
+}
+
+#[test]
+fn contract_v1_rbc_autonomous_envelope_rejects_wrong_canonical_body_and_malformed_bytes() {
+    iroha_data_model::isi::set_instruction_registry(
+        iroha_data_model::instruction_registry::default(),
+    );
+    let (envelope, _, _, _) = contract_rbc_autonomous_join_fixture();
+    assert!(canonical_autonomous_contract_binding(&envelope, 4, envelope.network_id).is_err());
+    let mut wrong = envelope.clone();
+    wrong.proposal_hash = Hash::new(b"other");
+    assert!(canonical_autonomous_contract_binding(&wrong, 3, envelope.network_id).is_err());
+    // Rehashing the enclosing structures cannot substitute arbitrary DA
+    // commitments for the canonical accepted-work preimages.
+    let mut wrong_replay = envelope.clone();
+    let mut payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
+        norito::decode_canonical(&wrong_replay.canonical_payload).unwrap();
+    payload.origin_proposal.descriptor.subject_hash = Hash::new(b"wrong subject preimage");
+    payload.origin_proposal.descriptor.descriptor_hash = payload
+        .origin_proposal
+        .descriptor
+        .computed_descriptor_hash();
+    payload.origin_proposal.proposal_hash = payload.origin_proposal.computed_proposal_hash();
+    wrong_replay.descriptor_hash = payload.origin_proposal.descriptor.descriptor_hash;
+    wrong_replay.proposal_hash = payload.origin_proposal.proposal_hash;
+    wrong_replay.canonical_payload = norito::encode_canonical(&payload).unwrap();
+    iroha_core::lane_consensus::validate_lane_block_proposal(&payload.origin_proposal)
+        .expect("outer hashes remain internally consistent");
+    assert!(
+        canonical_autonomous_contract_binding(&wrong_replay, 3, envelope.network_id)
+            .unwrap_err()
+            .to_string()
+            .contains("replay commitments")
+    );
+    for version in [0, 2] {
+        let mut wrong_version = envelope.clone();
+        let mut payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
+            norito::decode_canonical(&envelope.canonical_payload).unwrap();
+        payload.version = version;
+        wrong_version.canonical_payload = norito::encode_canonical(&payload).unwrap();
+        assert!(
+            canonical_autonomous_contract_binding(&wrong_version, 3, envelope.network_id)
+                .unwrap_err()
+                .to_string()
+                .contains("payload version")
+        );
+    }
+    let mut wrong_hashes = envelope.clone();
+    let mut payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
+        norito::decode_canonical(&envelope.canonical_payload).unwrap();
+    payload.entrypoint_hashes = vec![Hash::new(b"different entrypoint")];
+    wrong_hashes.canonical_payload = norito::encode_canonical(&payload).unwrap();
+    assert!(
+        canonical_autonomous_contract_binding(&wrong_hashes, 3, envelope.network_id)
+            .unwrap_err()
+            .to_string()
+            .contains("transaction binding")
+    );
+    let mut trailing = envelope.clone();
+    trailing.canonical_payload.push(0);
+    assert!(canonical_autonomous_contract_binding(&trailing, 3, envelope.network_id).is_err());
+    let mut malformed = envelope.clone();
+    malformed.canonical_payload = vec![1, 2, 3];
+    assert!(canonical_autonomous_contract_binding(&malformed, 3, envelope.network_id).is_err());
+}
+
+#[test]
+fn contract_v1_rbc_progress_rejects_missing_quorum_payload_and_baseline_only() {
+    let (_, record, _, _) = contract_rbc_autonomous_join_fixture();
+    assert_eq!(
+        contract_rbc_progress_failures(&record, Some(&record), 4, 3),
+        vec!["not_later_in_same_lane_incarnation"]
+    );
+    let mut wrong = record.clone();
+    wrong.prepare_qc_signer_count = 2;
+    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"exact_quorum_signers"));
+    wrong.prepare_qc_signer_count = 4;
+    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"exact_quorum_signers"));
+    wrong = record.clone();
+    wrong.executable_payload_available = false;
+    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"payload_unavailable"));
+    wrong = record.clone();
+    wrong.execution_status = "rejected_preflight".to_owned();
+    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"execution_status"));
+    wrong = record.clone();
+    wrong.rbc_instance_hash = Hash::prehashed([0; 32]);
+    assert!(contract_rbc_progress_failures(&wrong, None, 4, 3).contains(&"zero_identity"));
+    wrong = record.clone();
+    wrong.lane_block_height += 1;
+    assert!(contract_rbc_progress_failures(&wrong, Some(&record), 4, 3).is_empty());
+    wrong.lane_incarnation = Hash::new(b"other incarnation");
+    assert!(
+        contract_rbc_progress_failures(&wrong, Some(&record), 4, 3)
+            .contains(&"not_later_in_same_lane_incarnation")
+    );
+}
+
+#[test]
+fn contract_v1_rbc_ordinary_join_rejects_wrong_proposal_and_replay_material() {
+    use iroha_data_model::block::consensus::SumeragiLanePayloadOwnership;
+    iroha_data_model::isi::set_instruction_registry(
+        iroha_data_model::instruction_registry::default(),
+    );
+    let (envelope, record, validators, hash) = contract_rbc_autonomous_join_fixture();
+    let payload: iroha_core::lane_consensus::LaneExecutablePayloadV1 =
+        norito::decode_canonical(&envelope.canonical_payload).unwrap();
+    let d = payload.origin_proposal.descriptor;
+    // This models an actual ordinary canonical ownership, not an autonomous
+    // envelope reclassified by the query helper.
+    let ownership = SumeragiLanePayloadOwnership {
+        proposal_height: d.proposal_height,
+        proposal_view: 0,
+        lane_id: d.lane_id,
+        dataspace_id: d.dataspace_id,
+        lane_incarnation: d.lane_incarnation,
+        lane_block_height: d.lane_block_height,
+        lane_block_view: d.lane_block_view,
+        subject_hash: d.subject_hash,
+        qc_mode_tag: d.qc_mode_tag.clone(),
+        accepted_candidate_indices: d.accepted_candidate_indices.clone(),
+        accepted_transaction_hashes: d.accepted_transaction_hashes.clone(),
+        previous_lane_block_height: d.previous_lane_block_height,
+        previous_lane_block_descriptor_hash: d.previous_lane_block_descriptor_hash,
+        lane_block_descriptor_hash: Some(d.descriptor_hash),
+        lane_block_descriptor_validator_set: d.validator_set,
+        lane_block_descriptor_validator_count: d.validator_count,
+        lane_block_descriptor_min_quorum: d.min_quorum,
+        payload_ownership_hash: d.payload_ownership_hash,
+        rbc_instance_hash: d.rbc_instance_hash,
+    };
+    let binding = canonical_ordinary_contract_binding(&ownership).expect("valid ordinary replay");
+    assert!(matches!(binding, CanonicalContractRbcBinding::Ordinary(_)));
+    assert!(contract_rbc_binding_matches(
+        &binding,
+        &record,
+        &validators,
+        Some((4, &hash))
+    ));
+    let mut wrong = record.clone();
+    wrong.proposal_hash = Hash::new(b"unrelated ordinary proposal");
+    assert!(!contract_rbc_binding_matches(
+        &binding,
+        &wrong,
+        &validators,
+        Some((4, &hash))
+    ));
+    let mut wrong_replay = ownership;
+    wrong_replay.accepted_transaction_hashes = vec![Hash::new(b"different work")];
+    assert!(
+        canonical_ordinary_contract_binding(&wrong_replay)
+            .unwrap_err()
+            .to_string()
+            .contains("ordinary ownership")
+    );
+}
+
+#[test]
+fn contract_v1_rbc_canonical_query_retries_retain_errors_and_stop_at_budget_or_success() {
+    let mut cache = CanonicalContractRbcCache::default();
+    cache
+        .record_query(Err("transient first read".to_owned()))
+        .unwrap();
+    assert!(cache.can_query());
+    assert!(cache.bindings.is_none());
+    assert_eq!(cache.errors, vec!["transient first read"]);
+    cache.record_query(Ok(Vec::new())).unwrap();
+    assert_eq!(cache.attempts, 2);
+    assert!(cache.bindings.is_some());
+    assert!(!cache.can_query());
+    assert_eq!(cache.errors, vec!["transient first read"]);
+    assert!(cache.record_query(Err("must not run".to_owned())).is_err());
+    assert_eq!(cache.attempts, 2);
+
+    let mut exhausted = CanonicalContractRbcCache::default();
+    for attempt in 0..CONTRACT_RBC_QUERY_ATTEMPT_LIMIT {
+        assert!(exhausted.can_query());
+        exhausted
+            .record_query(Err(format!("failed attempt {attempt}")))
+            .unwrap();
+    }
+    assert!(!exhausted.can_query());
+    assert_eq!(exhausted.errors.len(), CONTRACT_RBC_QUERY_ATTEMPT_LIMIT);
+    assert!(exhausted.record_query(Ok(Vec::new())).is_err());
+    assert!(exhausted.bindings.is_none());
+    assert_eq!(exhausted.attempts, CONTRACT_RBC_QUERY_ATTEMPT_LIMIT);
+}
+
+#[test]
+fn contract_v1_rbc_four_peer_intersection_ignores_different_local_maxima() {
+    let (_, common, _, _) = contract_rbc_autonomous_join_fixture();
+    let mut observations = (0..4)
+        .map(|index| {
+            let mut later = common.clone();
+            later.lane_block_height += index + 1;
+            later.proposal_hash = Hash::new(index.to_le_bytes());
+            vec![common.clone(), later]
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        shared_contract_rbc_record(&observations),
+        Some(common.clone())
+    );
+    observations[3].remove(0);
+    assert_eq!(shared_contract_rbc_record(&observations), None);
+    observations[3].push(common.clone());
+    observations[3].last_mut().unwrap().commit_qc_signer_count = 2;
+    assert_eq!(shared_contract_rbc_record(&observations), None);
+    assert_eq!(shared_contract_rbc_record(&observations[..3]), None);
+}
+
+#[test]
+fn contract_v1_rbc_stream_end_covers_applied_height_within_the_fixture_cap() {
+    assert_eq!(contract_rbc_replay_end(3, Some(3)).unwrap(), 3);
+    assert_eq!(contract_rbc_replay_end(100, Some(64)).unwrap(), 64);
+    assert_eq!(contract_rbc_replay_end(2, None).unwrap(), 2);
+    for (head, required) in [
+        (0, None),
+        (1, None),
+        (2, Some(3)),
+        (100, Some(65)),
+        (3, Some(1)),
+    ] {
+        assert!(contract_rbc_replay_end(head, required).is_err());
+    }
+}
+
+// Fake stream rows exercise only finite replay order and cleanup. They are not
+// represented as signed blocks or consensus/provenance acceptance evidence.
+type ContractRbcReplayRow = (u64, HashOf<BlockHeader>, Option<HashOf<BlockHeader>>);
+
+fn contract_rbc_fake_replay_row(height: u64) -> ContractRbcReplayRow {
+    let hash = |height: u64| {
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(height.to_le_bytes()))
+    };
+    (height, hash(height), Some(hash(height - 1)))
+}
+
+#[tokio::test]
+async fn contract_v1_rbc_stream_reads_exact_end_without_lookahead() {
+    use futures_util::{StreamExt as _, TryStreamExt as _};
+
+    let polls = std::cell::Cell::new(0);
+    let mut stream =
+        futures_util::stream::iter((2..=65).map(|height| Ok(contract_rbc_fake_replay_row(height))))
+            .inspect(|_| polls.set(polls.get() + 1));
+    let blocks = receive_contract_rbc_prefix(
+        &mut stream,
+        64,
+        Instant::now() + Duration::from_secs(10),
+        |row| *row,
+    )
+    .await
+    .unwrap();
+    assert_eq!(blocks.len(), 63);
+    assert_eq!(blocks.first().unwrap().0, 2);
+    assert_eq!(blocks.last().unwrap().0, 64);
+    assert_eq!(polls.get(), 63);
+    assert_eq!(stream.try_next().await.unwrap().unwrap().0, 65);
+}
+
+#[tokio::test]
+async fn contract_v1_rbc_stream_rejects_gap_duplicate_hash_truncation_and_frame_errors() {
+    let two = contract_rbc_fake_replay_row(2);
+    let three = contract_rbc_fake_replay_row(3);
+    let four = contract_rbc_fake_replay_row(4);
+    let mut wrong_parent = three;
+    wrong_parent.2 = Some(four.1);
+    let mut absent_parent = two;
+    absent_parent.2 = None;
+    let cases: Vec<Vec<Result<ContractRbcReplayRow>>> = vec![
+        vec![Ok(three), Ok(two)],
+        vec![Ok(two), Ok(two)],
+        vec![Ok(two), Ok(four)],
+        vec![Ok(two), Ok(wrong_parent)],
+        vec![Ok(absent_parent), Ok(three)],
+        vec![Ok(two)],
+        vec![Ok(two), Err(eyre!("retained malformed frame error"))],
+    ];
+    for rows in cases {
+        let mut stream = futures_util::stream::iter(rows);
+        assert!(
+            receive_contract_rbc_prefix(
+                &mut stream,
+                3,
+                Instant::now() + Duration::from_secs(10),
+                |row| *row,
+            )
+            .await
+            .is_err()
+        );
+    }
+    for end in [0, 1, 65] {
+        let mut stream = futures_util::stream::pending::<Result<ContractRbcReplayRow>>();
+        let error = receive_contract_rbc_prefix(
+            &mut stream,
+            end,
+            Instant::now() + Duration::from_secs(10),
+            |row| *row,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("fixture bound"));
+    }
+}
+
+#[tokio::test]
+async fn contract_v1_rbc_stream_pending_and_expired_deadlines_are_failures() {
+    let mut stream = futures_util::stream::pending::<Result<ContractRbcReplayRow>>();
+    let error = receive_contract_rbc_prefix(
+        &mut stream,
+        2,
+        Instant::now() + Duration::from_millis(1),
+        |row| *row,
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        error.to_string().contains("timed out") || error.to_string().contains("deadline expired")
+    );
+    let error = receive_contract_rbc_prefix(&mut stream, 2, Instant::now(), |row| *row)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("deadline expired"));
+}
+
+#[tokio::test]
+async fn contract_v1_rbc_stream_close_is_bounded_and_retains_the_read_failure() {
+    let error = finish_contract_rbc_replay::<ContractRbcReplayRow>(
+        Err(eyre!("original replay failure")),
+        std::future::pending(),
+        Instant::now() + Duration::from_millis(1),
+    )
+    .await
+    .unwrap_err();
+    assert!(error.to_string().contains("original replay failure"));
+    assert!(error.to_string().contains("close timed out"));
+    let row = contract_rbc_fake_replay_row(2);
+    assert_eq!(
+        finish_contract_rbc_replay(
+            Ok(vec![row]),
+            async {},
+            Instant::now() + Duration::from_secs(10)
+        )
+        .await
+        .unwrap(),
+        vec![row],
+    );
+    let error = finish_contract_rbc_replay(Ok(vec![row]), std::future::pending(), Instant::now())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("close timed out"));
+}
+
 fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
     norito::json::object([
         ("key", norito::json::Value::from(key.to_string())),
@@ -799,16 +2294,27 @@ pub(super) fn deploy_contract_locally_signed(
     String,
     HashOf<iroha_data_model::transaction::SignedTransaction>,
 )> {
+    deploy_contract_locally_signed_with_registration(client, artifact, contract_alias, false, None)
+}
+
+fn deploy_contract_locally_signed_with_registration(
+    client: &iroha::client::Client,
+    artifact: &[u8],
+    contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    registered_in_genesis: bool,
+    hajimari_grantee: Option<&AccountId>,
+) -> Result<(
+    iroha_data_model::smart_contract::ContractAddress,
+    String,
+    String,
+    HashOf<iroha_data_model::transaction::SignedTransaction>,
+)> {
     use iroha_data_model::isi::smart_contract_code::{
         CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
         SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
     };
     let verified = ivm::verify_contract_artifact(artifact)
         .map_err(|error| eyre!("verify contract artifact: {error}"))?;
-    let manifest = verified
-        .manifest
-        .try_signed(&client.key_pair)
-        .map_err(|error| eyre!("sign contract manifest locally: {error}"))?;
     let authority: Account = client.query_single(FindAccountById::new(client.account.clone()))?;
     let nonce_key =
         Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)?;
@@ -836,39 +2342,45 @@ pub(super) fn deploy_contract_locally_signed(
             iroha_primitives::json::Json::new(contract_address.to_string()),
         );
     }
-    let total_size = u64::try_from(artifact.len())?;
-    let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
-    if chunk_count == 0 {
-        return Err(eyre!("contract artifact must not be empty"));
-    }
-    for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
-        let chunk_index = u32::try_from(index)?;
-        let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
-            code_hash: verified.code_hash,
-            total_size,
-            chunk_index,
-            chunk_count,
-            chunk: chunk.to_vec(),
-        })];
-        if chunk_index + 1 == chunk_count {
-            instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+    if !registered_in_genesis {
+        let manifest = verified
+            .manifest
+            .try_signed(&client.key_pair)
+            .map_err(|error| eyre!("sign contract manifest locally: {error}"))?;
+        let total_size = u64::try_from(artifact.len())?;
+        let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
+        if chunk_count == 0 {
+            return Err(eyre!("contract artifact must not be empty"));
+        }
+        for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
+            let chunk_index = u32::try_from(index)?;
+            let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
                 code_hash: verified.code_hash,
                 total_size,
+                chunk_index,
                 chunk_count,
-            }));
+                chunk: chunk.to_vec(),
+            })];
+            if chunk_index + 1 == chunk_count {
+                instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+                    code_hash: verified.code_hash,
+                    total_size,
+                    chunk_count,
+                }));
+            }
+            client.submit_all_blocking_with_metadata(
+                instructions,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                metadata.clone(),
+            )?;
         }
-        client.submit_all_blocking_with_metadata(
-            instructions,
+        client.submit_blocking_with_metadata(
+            RegisterSmartContractCode { manifest },
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             metadata.clone(),
         )?;
     }
-    client.submit_blocking_with_metadata(
-        RegisterSmartContractCode { manifest },
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        metadata.clone(),
-    )?;
-    let deployment_tx_hash = client.submit_blocking_with_metadata(
+    let deployment_instructions = contract_deployment_instructions(
         CommitContractDeployment {
             expected_deploy_nonce: deploy_nonce,
             contract_address: contract_address.clone(),
@@ -877,6 +2389,10 @@ pub(super) fn deploy_contract_locally_signed(
             lease_expiry_ms: None,
             expected_previous_contract_address: None,
         },
+        hajimari_grantee,
+    );
+    let deployment_tx_hash = client.submit_all_blocking_with_metadata(
+        deployment_instructions,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         metadata,
     )?;
@@ -971,7 +2487,7 @@ async fn contract_view_json_value(
             None,
             &entrypoint,
             None,
-            1_000_000,
+            CONTRACT_STATE_PROBE_GAS_LIMIT,
         )
     })
     .await??;
@@ -979,6 +2495,26 @@ async fn contract_view_json_value(
         .get("result")
         .cloned()
         .ok_or_else(|| eyre!("contract view response is missing result: {response:?}"))
+}
+
+async fn wait_for_contract_applied_height(
+    peer: &iroha_test_network::NetworkPeer,
+    height: u64,
+    timeout: Duration,
+) -> Result<()> {
+    let mut last_observation = "no applied-state status response".to_owned();
+    tokio::time::timeout(timeout, async {
+        loop {
+            match peer.status().await {
+                Ok(status) if status.blocks >= height => return,
+                Ok(status) => last_observation = format!("applied height {}", status.blocks),
+                Err(error) => last_observation = error.to_string(),
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    })
+    .await
+    .map_err(|_| eyre!("contract peer did not apply height {height}: {last_observation}"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2213,11 +3749,61 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     }
     Ok(())
 }
-#[tokio::test]
-async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<()> {
+#[test]
+fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<()> {
+    run_contract_v1_four_peer_da_rbc_restart(
+        false,
+        stringify!(contract_v1_executes_and_survives_four_peer_da_rbc_restart),
+    )
+}
+
+#[test]
+fn contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_da_rbc_restart()
+-> Result<()> {
+    run_contract_v1_four_peer_da_rbc_restart(
+        true,
+        stringify!(
+            contract_v1_genesis_registered_artifact_executes_and_survives_four_peer_da_rbc_restart
+        ),
+    )
+}
+
+fn run_contract_v1_four_peer_da_rbc_restart(
+    registered_in_genesis: bool,
+    context: &'static str,
+) -> Result<()> {
+    // Genesis construction needs the same native test stack as the other
+    // four-validator corridors. This does not change the IVM stack limit.
+    const TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
+    let worker = std::thread::Builder::new()
+        .name(context.to_owned())
+        .stack_size(TEST_STACK_BYTES)
+        .spawn(move || {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(TEST_STACK_BYTES)
+                .enable_all()
+                .build()
+                .expect("build four-validator contract runtime")
+                .block_on(contract_v1_four_peer_da_rbc_restart_impl(
+                    registered_in_genesis,
+                    context,
+                ))
+        })
+        .expect("spawn four-validator contract test");
+    match worker.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+async fn contract_v1_four_peer_da_rbc_restart_impl(
+    registered_in_genesis: bool,
+    context: &'static str,
+) -> Result<()> {
     let register_permission: Permission = CanRegisterSmartContractCode.into();
     let enact_permission: Permission = CanEnactGovernance.into();
-    let builder = NetworkBuilder::new()
+    let mut builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         // Leave one full signed cadence between full-mesh admission and the
@@ -2233,6 +3819,11 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],
                     1_073_741_824_i64,
+                )
+                .write(["logger", "level"], "INFO")
+                .write(
+                    ["logger", "filter"],
+                    "iroha_core::sumeragi=trace,iroha_p2p=debug",
                 )
                 // This gate exercises consensus and mandatory DA/RBC, not
                 // SoraNet admission-puzzle cost. Keep PoW enabled at the
@@ -2263,8 +3854,25 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
         .with_genesis_instruction(Grant::account_permission(
             enact_permission,
             iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(contract_probe_alias_management_permission()),
+            iroha_test_samples::ALICE_ID.clone(),
         ));
-    let context = stringify!(contract_v1_executes_and_survives_four_peer_da_rbc_restart);
+    // Genesis can register an artifact without an instance address. Its registrar signs the
+    // manifest normally; deployment still waits for the final genesis-derived network identity.
+    // This companion leaves the separate upload/register/Commit acceptance gate intact.
+    let pre_registered_artifact = if registered_in_genesis {
+        let artifact = contract_state_probe_artifact();
+        builder = builder
+            .with_genesis_keypair(iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone());
+        for instruction in contract_probe_genesis_registration(&artifact)? {
+            builder = builder.with_genesis_instruction(instruction);
+        }
+        Some(artifact)
+    } else {
+        None
+    };
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
     let Some(network) = sandbox::enforce_network_start_requirement(network, context)? else {
         return Ok(());
@@ -2287,18 +3895,44 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     let client = network.client();
     let http = integration_tests::http::client();
     network.ensure_blocks(1).await?;
-    let rbc_baseline =
-        wait_for_cross_peer_rbc_diagnostics(&network, Duration::from_secs(120), None, None).await?;
-    let code_bytes = contract_state_probe_artifact();
+    let code_bytes = pre_registered_artifact.unwrap_or_else(contract_state_probe_artifact);
+    if registered_in_genesis {
+        let verified = ivm::verify_contract_artifact(&code_bytes)
+            .map_err(|error| eyre!("verify pre-registered probe: {error}"))?;
+        let expected = verified
+            .manifest
+            .try_signed(&iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR)?;
+        for peer in network.peers() {
+            let actual = peer.client().query_single(
+                iroha_data_model::query::smart_contract::FindContractManifestByCodeHash::new(
+                    verified.code_hash,
+                ),
+            )?;
+            assert_eq!(
+                actual, expected,
+                "genesis must retain the exact signed manifest on every validator"
+            );
+        }
+    }
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "contract_state_probe",
         None,
         "universal",
     )
     .expect("contract alias");
-    let (contract_address, code_hash_hex, _, deployment_tx_hash) = tokio::task::spawn_blocking({
+    let (contract_address, _, _, deployment_tx_hash) = tokio::task::spawn_blocking({
         let client = client.clone();
-        move || deploy_contract_locally_signed(&client, &code_bytes, contract_alias)
+        let code_bytes = code_bytes.clone();
+        let contract_alias = contract_alias.clone();
+        move || {
+            deploy_contract_locally_signed_with_registration(
+                &client,
+                &code_bytes,
+                contract_alias,
+                registered_in_genesis,
+                Some(&iroha_test_samples::ALICE_ID),
+            )
+        }
     })
     .await
     .expect("locally signed contract deployment task")?;
@@ -2312,232 +3946,93 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
     .await?;
     network.ensure_blocks(deployment_height).await?;
     let deployment_hash = Hash::from(deployment_tx_hash);
+    // Genesis has a global QC but bootstraps the lane catalog without a lane-block
+    // certificate. The applied deployment is the first normal work whose certified
+    // lane payload can establish this test's cross-peer RBC baseline.
     let deployment_rbc = wait_for_cross_peer_rbc_diagnostics(
         &network,
         Duration::from_secs(120),
-        Some(&rbc_baseline),
+        None,
         Some((deployment_height, &deployment_hash)),
     )
     .await?;
-    let pk = iroha_data_model::prelude::ExposedPrivateKey(
-        iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
-    );
-    let authority_literal = iroha_test_samples::ALICE_ID.to_string();
-    let activate_body = norito::json::object([
-        (
-            "authority",
-            norito::json::to_value(&authority_literal).expect("serialize authority"),
-        ),
-        (
-            "private_key",
-            norito::json::to_value(&format!("{pk}")).expect("serialize private key"),
-        ),
-        (
-            "namespace",
-            norito::json::to_value("apps").expect("serialize namespace"),
-        ),
-        (
-            "contract_id",
-            norito::json::to_value("contract_state_probe.v1").expect("serialize contract id"),
-        ),
-        (
-            "code_hash",
-            norito::json::to_value(&code_hash_hex).expect("serialize code hash"),
-        ),
-    ])
-    .expect("serialize activate body");
-    let activate_baseline = client.get_status()?.txs_approved;
-    let activate_resp = http
-        .post(client.torii_url.join("/v1/contracts/instance/activate")?)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(norito::json::to_json(&activate_body)?)
-        .send()
-        .await?;
-    if !activate_resp.status().is_success() {
-        let status = activate_resp.status();
-        let body = activate_resp.text().await.unwrap_or_default();
-        return Err(eyre!("activate returned {status}: {body}"));
-    }
-    let activate_payload: norito::json::Value =
-        norito::json::from_str(&activate_resp.text().await?)?;
-    if activate_payload
-        .get("submitted")
-        .and_then(norito::json::Value::as_bool)
-        == Some(false)
-    {
-        return Err(eyre!(
-            "activate produced unsigned scaffold instead of submitting: {activate_payload:?}"
-        ));
-    }
-    if let Some(activate_tx_hash) = activate_payload
-        .get("tx_hash_hex")
-        .and_then(norito::json::Value::as_str)
-    {
-        wait_for_tx_applied(
+    // CommitContractDeployment already activates the address, binds its alias and stages
+    // hajimari; its transaction also grants Alice the exact hook invocation token.
+    // Pin the address/code in a trusted intent, then sign the SDK's exact quoted
+    // transaction locally. No payload is sent for either zero-parameter hook.
+    let mut verification_height = deployment_height;
+    for (entrypoint, gas_limit) in [
+        ("hajimari", 10_000),
+        ("verify", CONTRACT_STATE_PROBE_GAS_LIMIT),
+    ] {
+        let intent = contract_probe_call_intent(
+            &code_bytes,
+            &contract_address,
+            &contract_alias,
+            entrypoint,
+        )?;
+        let response = tokio::task::spawn_blocking({
+            let client = client.clone();
+            let alias = contract_alias.clone();
+            move || {
+                client.post_contract_call_json(
+                    &iroha_test_samples::ALICE_ID,
+                    Some(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+                    None,
+                    Some(&alias),
+                    entrypoint,
+                    None,
+                    None,
+                    None,
+                    None,
+                    &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(gas_limit)),
+                    &intent,
+                )
+            }
+        })
+        .await??;
+        if response
+            .get("submitted")
+            .and_then(norito::json::Value::as_bool)
+            != Some(true)
+        {
+            return Err(eyre!(
+                "{entrypoint} was not locally signed and submitted: {response:?}"
+            ));
+        }
+        let tx_hash = response
+            .get("tx_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| {
+                eyre!("{entrypoint} response is missing its exact transaction hash: {response:?}")
+            })?;
+        // Emit only the locally signed public identity returned by the SDK. This lets an
+        // external observer follow calls without transaction bodies or binary call-site guesses.
+        println!(
+            "{}",
+            contract_probe_call_observation(
+                entrypoint,
+                tx_hash,
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_millis(),
+            )?,
+        );
+        verification_height = wait_for_tx_applied(
             &http,
             &client.torii_url,
-            activate_tx_hash,
-            Duration::from_secs(30),
-            "activate",
-        )
-        .await?;
-    } else {
-        wait_for_approved_txs(
-            &client,
-            activate_baseline,
-            Duration::from_secs(30),
-            "activate",
+            tx_hash,
+            Duration::from_secs(60),
+            entrypoint,
         )
         .await?;
     }
-    let hajimari_body = norito::json::object([
-        (
-            "authority",
-            norito::json::to_value(&authority_literal).expect("serialize authority"),
-        ),
-        (
-            "private_key",
-            norito::json::to_value(&format!("{pk}")).expect("serialize private key"),
-        ),
-        (
-            "namespace",
-            norito::json::to_value("apps").expect("serialize namespace"),
-        ),
-        (
-            "contract_id",
-            norito::json::to_value("contract_state_probe.v1").expect("serialize contract id"),
-        ),
-        (
-            "entrypoint",
-            norito::json::to_value("hajimari").expect("serialize entrypoint"),
-        ),
-        (
-            "fee_payment",
-            norito::json::to_value(&FeePaymentIntent::authority(
-                Vec::new(),
-                NonZeroU64::new(10_000),
-            ))
-            .expect("serialize fee payment intent"),
-        ),
-    ])
-    .expect("serialize hajimari body");
-    let hajimari_baseline = client.get_status()?.txs_approved;
-    let hajimari_resp = http
-        .post(client.torii_url.join("/v1/contracts/call")?)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(norito::json::to_json(&hajimari_body)?)
-        .send()
-        .await?;
-    if !hajimari_resp.status().is_success() {
-        let status = hajimari_resp.status();
-        let body = hajimari_resp.text().await.unwrap_or_default();
-        return Err(eyre!("hajimari returned {status}: {body}"));
-    }
-    let hajimari_payload: norito::json::Value =
-        norito::json::from_str(&hajimari_resp.text().await?)?;
-    if hajimari_payload
-        .get("submitted")
-        .and_then(norito::json::Value::as_bool)
-        == Some(false)
-    {
-        return Err(eyre!(
-            "hajimari produced unsigned scaffold instead of submitting: {hajimari_payload:?}"
-        ));
-    }
-    if let Some(hajimari_tx_hash) = hajimari_payload
-        .get("tx_hash_hex")
-        .and_then(norito::json::Value::as_str)
-    {
-        wait_for_tx_applied(
-            &http,
-            &client.torii_url,
-            hajimari_tx_hash,
-            Duration::from_secs(30),
-            "hajimari",
-        )
-        .await?;
-    } else {
-        wait_for_approved_txs(
-            &client,
-            hajimari_baseline,
-            Duration::from_secs(30),
-            "hajimari",
-        )
-        .await?;
-    }
-    let verify_body = norito::json::object([
-        (
-            "authority",
-            norito::json::to_value(&authority_literal).expect("serialize authority"),
-        ),
-        (
-            "private_key",
-            norito::json::to_value(&format!("{pk}")).expect("serialize private key"),
-        ),
-        (
-            "namespace",
-            norito::json::to_value("apps").expect("serialize namespace"),
-        ),
-        (
-            "contract_id",
-            norito::json::to_value("contract_state_probe.v1").expect("serialize contract id"),
-        ),
-        (
-            "entrypoint",
-            norito::json::to_value("verify").expect("serialize entrypoint"),
-        ),
-        (
-            "fee_payment",
-            norito::json::to_value(&FeePaymentIntent::authority(
-                Vec::new(),
-                NonZeroU64::new(10_000),
-            ))
-            .expect("serialize fee payment intent"),
-        ),
-    ])
-    .expect("serialize verify body");
-    let verify_baseline = client.get_status()?.txs_approved;
-    let verify_resp = http
-        .post(client.torii_url.join("/v1/contracts/call")?)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(norito::json::to_json(&verify_body)?)
-        .send()
-        .await?;
-    if !verify_resp.status().is_success() {
-        let status = verify_resp.status();
-        let body = verify_resp.text().await.unwrap_or_default();
-        return Err(eyre!("verify returned {status}: {body}"));
-    }
-    let verify_payload: norito::json::Value = norito::json::from_str(&verify_resp.text().await?)?;
-    if verify_payload
-        .get("submitted")
-        .and_then(norito::json::Value::as_bool)
-        == Some(false)
-    {
-        return Err(eyre!(
-            "verify produced unsigned scaffold instead of submitting: {verify_payload:?}"
-        ));
-    }
-    if let Some(verify_tx_hash) = verify_payload
-        .get("tx_hash_hex")
-        .and_then(norito::json::Value::as_str)
-    {
-        wait_for_tx_applied(
-            &http,
-            &client.torii_url,
-            verify_tx_hash,
-            Duration::from_secs(30),
-            "verify",
-        )
-        .await?;
-    } else {
-        wait_for_approved_txs(&client, verify_baseline, Duration::from_secs(30), "verify").await?;
-    }
+    // Applied is local to the submitting peer. Compare state only after every
+    // validator has applied the exact verification transaction height.
+    network.ensure_blocks(verification_height).await?;
     let expected_result = norito::json::Value::from("7".to_owned());
     for (index, peer) in network.peers().iter().enumerate() {
+        wait_for_contract_applied_height(peer, verification_height, network.sync_timeout()).await?;
         let decoded =
             contract_view_json_value(peer.client(), &contract_address, "readback").await?;
         assert_eq!(
@@ -2597,6 +4092,10 @@ async fn contract_v1_executes_and_survives_four_peer_da_rbc_restart() -> Result<
             network.sync_timeout()
         )
     })?;
+    // A durable block journal can satisfy once_block before replay has rebuilt world state.
+    // The authoritative status endpoint must confirm applied recovery before contract reads.
+    wait_for_contract_applied_height(&restart_peer, recovery_height, network.sync_timeout())
+        .await?;
     let restarted_result =
         contract_view_json_value(restart_peer.client(), &contract_address, "readback").await?;
     assert_eq!(
