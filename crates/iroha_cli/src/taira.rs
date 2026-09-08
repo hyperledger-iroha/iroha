@@ -4482,10 +4482,16 @@ fn validate_prepared_transaction_closure(
                 eyre::bail!("prepared final-canary instruction or metadata closure is not exact");
             }
         }
-        PreparedTransactionOperationV1::OnboardingPrepared(_)
-        | PreparedTransactionOperationV1::FaucetPrepared(_) => {
+        PreparedTransactionOperationV1::OnboardingPrepared(_) => {
             if metadata.iter().len() != 3 {
-                eyre::bail!("server-prepared transaction metadata closure is not exact");
+                eyre::bail!("prepared onboarding metadata closure is not exact");
+            }
+        }
+        PreparedTransactionOperationV1::FaucetPrepared(_) => {
+            if !prepared_faucet_metadata_closure_is_exact(metadata) {
+                eyre::bail!(
+                    "prepared faucet metadata closure or claim marker version is not exact"
+                );
             }
         }
         PreparedTransactionOperationV1::OnboardingProofRequired(_) => {
@@ -4493,6 +4499,17 @@ fn validate_prepared_transaction_closure(
         }
     }
     Ok(())
+}
+
+fn prepared_faucet_metadata_closure_is_exact(metadata: &Metadata) -> bool {
+    use iroha::data_model::transaction::{
+        FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY, FAUCET_CLAIM_MARKER_VERSION_V1,
+    };
+    metadata.iter().len() == 4
+        && metadata.get(
+            &Name::from_str(FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY)
+                .expect("static faucet claim marker metadata key"),
+        ) == Some(&IrohaJson::new(FAUCET_CLAIM_MARKER_VERSION_V1))
 }
 
 /// Authenticate one exact first-release final-canary operation without network I/O.
@@ -7859,6 +7876,54 @@ mod tests {
                 let wire = hex::decode(operation.signed_transaction_wire_hex().unwrap()).unwrap();
                 let transaction = SignedTransaction::decode_all_versioned(&wire)
                     .expect("actual signed fixture transaction");
+                let verified = match &operation {
+                    PreparedTransactionOperationV1::OnboardingPrepared(prepared) => {
+                        let network = json::from_value(
+                            vector("onboarding_prepared")
+                                .pointer("/network_id")
+                                .unwrap()
+                                .clone(),
+                        )
+                        .unwrap();
+                        iroha::client::verify_account_onboarding_prepared_transaction_v1(
+                            network,
+                            &prepared.receipt.body.request,
+                            prepared,
+                            &prepared.receipt,
+                            &prepared.binding,
+                            &prepared.fee_payment,
+                        )
+                        .expect(
+                            "actual SDK onboarding verifier accepts the signed producer fixture",
+                        )
+                    }
+                    PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
+                        let network = json::from_value(
+                            vector("faucet_prepared")
+                                .pointer("/network_id")
+                                .unwrap()
+                                .clone(),
+                        )
+                        .unwrap();
+                        let policy = AccountFaucetPolicyV1::try_new(
+                            AccountId::new(fixture_key_pair(0x61).public_key().clone()),
+                            "4rPeAP6jAjiLVZThZYwwPRBuQagt".parse().unwrap(),
+                            5_u64.into(),
+                        )
+                        .expect("independent public fixture faucet policy");
+                        iroha::client::verify_account_faucet_prepared_transaction_v1(
+                            network,
+                            prepared,
+                            &prepared.claim,
+                            &prepared.binding,
+                            &prepared.fee_payment,
+                            &policy,
+                        )
+                        .expect("actual SDK faucet verifier accepts the signed producer fixture")
+                    }
+                    _ => unreachable!("selected server-prepared transaction variants"),
+                };
+                assert_eq!(verified.encode_wire_v1().unwrap(), wire);
                 validate_prepared_transaction_closure(
                     &transaction,
                     &operation,
@@ -7870,6 +7935,27 @@ mod tests {
                     prepared_operation_binding_matches(transaction.metadata(), &operation)
                         .expect("same exact binding check used by committed transaction proof")
                 );
+                if matches!(operation, PreparedTransactionOperationV1::FaucetPrepared(_)) {
+                    use iroha::data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY;
+                    let marker = Name::from_str(FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY).unwrap();
+                    for invalid in [None, Some(IrohaJson::new(2_u64)), Some(IrohaJson::new("1"))] {
+                        let mut metadata = transaction.metadata().clone();
+                        metadata.remove(&marker);
+                        if let Some(value) = invalid {
+                            metadata.insert(marker.clone(), value);
+                        }
+                        assert!(
+                            !prepared_faucet_metadata_closure_is_exact(&metadata),
+                            "faucet claim marker must exist as the exact numeric V1 value"
+                        );
+                    }
+                    let mut metadata = transaction.metadata().clone();
+                    metadata.insert(Name::from_str("unexpected").unwrap(), IrohaJson::new(1_u64));
+                    assert!(
+                        !prepared_faucet_metadata_closure_is_exact(&metadata),
+                        "faucet metadata remains a closed four-field shape"
+                    );
+                }
             }
         }
     }

@@ -5522,6 +5522,16 @@ fn expected_prepared_transaction_metadata(
             .expect("static semantic-hash metadata key"),
         iroha_primitives::json::Json::new(semantic_hash_hex.to_owned()),
     );
+    if operation == iroha_data_model::transaction::PREPARED_FAUCET_OPERATION {
+        metadata.insert(
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse()
+                .expect("static faucet claim marker version metadata key"),
+            iroha_primitives::json::Json::new(
+                iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1,
+            ),
+        );
+    }
     Ok(metadata)
 }
 
@@ -28618,7 +28628,7 @@ mod tests {
         let faucet = faucet_prepared_signature_fixture(&mut client);
         let fee_payment = prepared_fee_payment_fixture();
         let trusted = faucet_policy_fixture();
-        client
+        let transaction = client
             .verify_account_faucet_prepared_transaction(
                 &faucet,
                 &faucet.claim,
@@ -28627,6 +28637,87 @@ mod tests {
                 &trusted,
             )
             .expect("fixture must match the independent trusted faucet policy");
+
+        // This fixture is emitted by Torii's actual prepared-transaction producer.
+        // The marker is consensus replay protection, so it is part of the exact
+        // signed closure rather than an optional SDK extension.
+        let marker_name: Name =
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse()
+                .expect("static faucet marker key");
+        assert_eq!(transaction.metadata().iter().len(), 4);
+        assert_eq!(
+            transaction
+                .metadata()
+                .get(&marker_name)
+                .expect("signed faucet marker")
+                .try_into_any_norito::<u64>()
+                .expect("unsigned marker version"),
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1,
+        );
+        let signer = KeyPair::try_from_seed(vec![0x61; 32], Algorithm::Ed25519)
+            .expect("public fixture signer");
+        for variant in ["missing", "string", "wrong_version", "extra"] {
+            let mut payload = transaction.payload().clone();
+            payload.metadata.remove(&marker_name);
+            match variant {
+                "missing" => {}
+                "string" => {
+                    payload
+                        .metadata
+                        .insert(marker_name.clone(), iroha_primitives::json::Json::new("1"));
+                }
+                "wrong_version" => {
+                    payload.metadata.insert(
+                        marker_name.clone(),
+                        iroha_primitives::json::Json::new(2_u64),
+                    );
+                }
+                "extra" => {
+                    payload.metadata.insert(
+                        marker_name.clone(),
+                        iroha_primitives::json::Json::new(1_u64),
+                    );
+                    payload.metadata.insert(
+                        "unadmitted_faucet_field".parse().unwrap(),
+                        iroha_primitives::json::Json::new(true),
+                    );
+                }
+                _ => unreachable!(),
+            }
+            let changed_transaction = TransactionBuilder::from_payload(payload)
+                .expect("valid fixture payload")
+                .sign(signer.private_key());
+            let wire = changed_transaction
+                .encode_wire_v1()
+                .expect("signed fixture wire");
+            let mut changed = faucet.clone();
+            changed.transaction_hash_hex = hex::encode(changed_transaction.hash().as_ref());
+            changed.signed_transaction_wire_sha256 = hex::encode(Sha256::digest(&wire));
+            changed.signed_transaction_wire_hex = hex::encode(wire);
+            let transcript = AccountFaucetPreparedSignaturePayloadV1::from(&changed)
+                .signature_transcript()
+                .expect("fixture transcript");
+            let digest =
+                iroha_torii_shared::prepared_transaction::prepared_signature_digest_v1(&transcript);
+            changed.server_signature = Signature::try_new(signer.private_key(), digest.as_ref())
+                .expect("sign changed fixture envelope");
+            let error = client
+                .verify_account_faucet_prepared_transaction(
+                    &changed,
+                    &changed.claim,
+                    &changed.binding,
+                    &fee_payment,
+                    &trusted,
+                )
+                .expect_err(
+                    "a correctly signed but noncanonical faucet metadata closure must fail",
+                );
+            assert!(
+                error.to_string().contains("was substituted"),
+                "{variant}: {error:#}"
+            );
+        }
 
         let substituted_authority = AccountId::new(checked_random_keypair().public_key().clone());
         let authority_policy = AccountFaucetPolicyV1::try_new(
