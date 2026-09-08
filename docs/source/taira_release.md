@@ -33,7 +33,7 @@ remain empty. There are no embedded tool digests or release-number-specific path
 
 Before preparation starts, the clean checkout and its signed commit are checked.
 The command then reads that commit's Git objects into a private, read-only source
-capture under `target/taira-release-sources/`. It creates no Git repository,
+capture under the selected Cargo target's `taira-release-sources/`. It creates no Git repository,
 worktree or branch. Both native checks and the Linux build consume this capture;
 One explicit `source/target` binding points to the selected existing warm Cargo
 target for native fixture output; source inventories verify this binding without
@@ -55,6 +55,16 @@ reuse Cargo's cache. Interrupted source publication is recoverable; previous
 source directories and unfinished copies remain retained alongside the current
 capture.
 
+Cargo can retain dependency records pointing at an older source directory even
+when the selected manifest changes. Before compiling, preparation inspects local
+package records under Cargo's profile locks. Records for another source tree are
+retained under `taira-release-cache-retired/`, outside Cargo's active fingerprint
+lookup. Compiled outputs and registry/Git caches remain in place. Current-source
+records are reused. After building, the same admission must pass without repairs;
+Cargo's profile locks remain held through artifact capture. The regression suite
+reproduces the stale host build script with two real source directories and proves
+the corrected build executes the new source.
+
 Both commands default to the checkout's existing target/ directory. Supply
 --target-dir only to select another established warm lane. Preparation uses the
 unchanged release profile and six jobs for exactly iroha3d_taira, iroha,
@@ -72,7 +82,8 @@ Rerun the exact same `prepare` command and output directory after interruption.
 The command locks that owner-private preparation directory, checks that its
 recorded inputs still match the fixed signed source capture and tools, and resumes locally:
 
-- Completed native checks are reused for those exact inputs.
+- Completed native checks are reused for those exact inputs unless foreign
+  local-package fingerprints had to be retired.
 - A failed or interrupted build runs Cargo again in the same warm target. Cargo
   reuses its cache; each attempt gets a fresh private log and capture directory.
 - A completed read-only capture is revalidated and reused without running checks

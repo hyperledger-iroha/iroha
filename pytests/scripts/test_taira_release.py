@@ -66,7 +66,7 @@ class TairaPrepareTests(unittest.TestCase):
             path.write_bytes(elf(machine))
             path.chmod(0o755)
 
-    def prepare(self, *, check=None, build=None, snapshot=None):
+    def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
@@ -82,6 +82,9 @@ class TairaPrepareTests(unittest.TestCase):
              patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release, "captured_gate", return_value=release.gate), \
+             patch.object(release, "local_package_names", return_value=set()), \
+             patch.object(release, "admit_source_fingerprints", side_effect=cache_admission or (lambda *_a, **_k: [])), \
+             patch.object(release, "source_fingerprints", side_effect=lambda *_a, **_k: contextlib.nullcontext([])), \
              patch.object(release.gate, "run_checks", side_effect=check) as gate, \
              patch.object(release, "run_build", side_effect=wrapped_build) as compile, \
              patch.object(release, "capacity_preflight", return_value=[]), \
@@ -220,6 +223,27 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(gate.call_count, 1)
         self.assertEqual(build.call_count, 1)
         self.assertEqual(result["attempt"], "attempts/000001")
+
+    def test_cache_retirement_cannot_reuse_pass_after_failed_gate_rerun(self):
+        def failed_build(_root, _command, _environment, log):
+            log.write_bytes(b"fixture failed build")
+            raise release.PrepareError("fixture build failed")
+        with self.assertRaisesRegex(release.PrepareError, "fixture build failed"):
+            self.prepare(build=failed_build)
+        old_checks = (self.out / "checks.json").read_bytes()
+
+        def retire(*_args, before_retire):
+            before_retire()
+            self.assertFalse((self.out / "checks.json").exists())
+            return ["ivm"]
+
+        with self.assertRaisesRegex(release.PrepareError, "fixture native failure"):
+            self.prepare(cache_admission=retire, check=release.gate.CheckError("fixture native failure"))
+        self.assertFalse((self.out / "checks.json").exists())
+        self.assertEqual((self.out / "attempts/000002/retired-checks.json").read_bytes(), old_checks)
+        result, gate, _build = self.prepare()
+        self.assertEqual(gate.call_count, 1)
+        self.assertEqual(result["attempt"], "attempts/000003")
 
     def test_capture_checkpoint_recovers_missing_final_result_without_build(self):
         real_write = release.write_record

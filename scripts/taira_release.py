@@ -40,6 +40,7 @@ from release_artifact_contract import (
     stable_open_relative,
 )
 import taira_release_check as gate
+from taira_cargo_cache import admit_source_fingerprints, local_package_names, source_fingerprints
 
 
 TARGET = "aarch64-unknown-linux-gnu"
@@ -51,6 +52,7 @@ CAPTURE_HEADROOM_BYTES = 256 * 1024**2
 PROGRESS_SECONDS = 30
 SESSION_SCHEMA = "taira.local-preparation.v1"
 BUILD_SOURCES = ("scripts/taira_release.py", "scripts/taira_release_check.py",
+                 "scripts/taira_cargo_cache.py",
                  "scripts/release_artifact_contract.py", "scripts/cargo_fast.sh",
                  "scripts/cargo_zigbuild_linux.sh", "scripts/zig_linux_gnu.py")
 
@@ -618,7 +620,7 @@ def source_lane(root: Path, target_dir: Path):
     # One source path per established Cargo lane keeps absolute compiler paths
     # stable across releases. The same lock survives in any active Cargo child.
     key = hashlib.sha256(os.fsencode(target_dir)).hexdigest()[:24]
-    parent = root / "target/taira-release-sources" / key
+    parent = target_dir / "taira-release-sources" / key
     parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     real_path(parent)
     with preparation_lock(parent) as lock_fd:
@@ -741,8 +743,24 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int) -
                 print(f"[taira-release] {label} elapsed {timings[label]:.3f}s", flush=True)
 
         checks = output / "checks.json"
+        packages = local_package_names(source, env)
         if checks.exists():
             require(read_record(checks) == {"request": request, "passed": True}, "native check checkpoint differs")
+
+        def retire_checks():
+            # Remove the resumable success checkpoint before retiring any cache
+            # metadata. A crash or a failed rerun must never revive an old pass.
+            if checks.exists():
+                os.rename(checks, attempt / "retired-checks.json")
+                for directory in (attempt, output):
+                    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+
+        admit_source_fingerprints(source, target_dir, TARGET, packages, before_retire=retire_checks)
+        if checks.exists():
             print("[taira-release] reused completed native CLI checks", flush=True)
         else:
             selected_gate = captured_gate(source, before)
@@ -754,11 +772,13 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int) -
                     raise PrepareError(str(error)) from error
             stage("native CLI checks", run_native_checks)
             revalidate()
-            write_record(checks, {"request": request, "passed": True})
+            if not checks.exists():
+                write_record(checks, {"request": request, "passed": True})
         stage("Linux release build", lambda: run_build(source, command, env, attempt / "cargo.log", lock_fd=lock_fd, lane_lock_fd=lane_lock_fd))
-        revalidate()
-        artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, attempt))
-        revalidate()
+        with source_fingerprints(source, target_dir, TARGET, packages, repair=False):
+            revalidate()
+            artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, attempt))
+            revalidate()
         result = {**base, "artifacts": artifacts, "timings_seconds": timings,
                   "attempt": "attempts/" + attempt.name}
         freeze(attempt / "cargo.log")
@@ -799,7 +819,7 @@ def main() -> int:
         else:
             prepared = prepare(args)
             print(f"[taira-release] prepared {prepared['commit']}: {args.output_dir / 'result.json'}", flush=True)
-    except (PrepareError, ReleaseArtifactError, gate.CheckError, OSError, subprocess.SubprocessError) as error:
+    except (PrepareError, ReleaseArtifactError, gate.CheckError, OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"[taira-release] FAIL: {error}", file=sys.stderr, flush=True)
         return 1
     return 0
