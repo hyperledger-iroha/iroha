@@ -19372,9 +19372,9 @@ mod tests {
         let wave = norito::json!({
             "schema": "iroha.taira.public-reset.convergence-wave.v1",
             "wave": 0,
-            "height": first.0,
-            "height_context_id": first.1,
-            "block_hash": first.2,
+            "height": (first.0),
+            "height_context_id": (first.1),
+            "block_hash": (first.2),
             "last_commit_qc": (json::from_str::<norito::json::Value>(&first.3).unwrap()),
             "validator_reports": reports,
         });
