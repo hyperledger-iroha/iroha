@@ -225,36 +225,31 @@ fn read_file(path: impl AsRef<Path>) -> std::io::Result<Vec<u8>> {
     std::fs::File::open(path.as_ref())?.read_to_end(&mut blob)?;
     Ok(blob)
 }
-const IVM_SAMPLES_PREBUILT_DIR: &str = "crates/ivm/target/prebuilt/samples";
-const IVM_BUILD_CONFIG_PATH: &str = "crates/ivm/target/prebuilt/build_config.toml";
-/// Resolve the path of the IVM sample.
+/// Resolve a canonical IVM sample in this crate's Cargo-owned fixture output.
 pub fn sample_ivm_path(name: impl AsRef<str>) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../")
-        .canonicalize()
-        .expect("invoking from crates/iroha_test_samples, should be fine")
-        .join(IVM_SAMPLES_PREBUILT_DIR)
+    PathBuf::from(env!("OUT_DIR"))
+        .join("ivm/samples")
         .join(name.as_ref())
         .with_extension("to")
 }
-/// Load IVM smart contract from `ivm/samples` by the name of smart contract
-/// e.g. `default_executor`.
+/// Resolve the build profile staged alongside this crate's IVM samples.
+#[must_use]
+pub fn ivm_build_profile_path() -> PathBuf {
+    PathBuf::from(env!("OUT_DIR")).join("ivm/build_config.toml")
+}
+/// Load canonical IVM bytecode staged automatically by this crate's build script.
 ///
-/// Bytecode must be pre-built before running the tests
+/// Sample names are listed in `crates/ivm/prebuilt_samples.txt`.
 pub fn load_sample_ivm(name: impl AsRef<str>) -> IvmBytecode {
     let path = sample_ivm_path(name.as_ref());
     match read_file(&path) {
         Err(err) => {
-            eprintln!(
-                "ERROR: Could not load sample IVM `{}` from `{}`: {err}\n\
-                    There are two possible reasons why:\n\
-                    1. You haven't pre-built samples before running tests. See the project documentation for instructions.\n\
-                    2. `{}` is not a valid name. Check the `ivm/samples` directory and make sure you haven't made a mistake.",
+            panic!(
+                "could not load Cargo-staged IVM sample `{}` from `{}`: {err}; \
+                 use a canonical sample name and preserve the build's Cargo output",
                 name.as_ref(),
                 path.display(),
-                name.as_ref()
             );
-            panic!("could not build bytecode, see the message above");
         }
         Ok(blob) => IvmBytecode::from_compiled(blob),
     }
@@ -263,19 +258,14 @@ pub fn load_sample_ivm(name: impl AsRef<str>) -> IvmBytecode {
 ///
 /// Returns `None` if the build configuration cannot be found.
 pub fn load_ivm_build_profile() -> Option<Profile> {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../")
-        .canonicalize()
-        .expect("invoking from crates/iroha_test_samples, should be fine")
-        .join(IVM_BUILD_CONFIG_PATH);
-    load_ivm_build_profile_from(&path)
+    load_ivm_build_profile_from(&ivm_build_profile_path())
 }
 fn load_ivm_build_profile_from(path: &Path) -> Option<Profile> {
     match fs::read_to_string(path) {
         Err(err) => {
             eprintln!(
                 "WARN: Could not load build configuration file from `{}`: {err}\n\
-                 Ensure IVM samples are built before running tests.",
+                 Preserve the Cargo output containing this test build's staged IVM samples.",
                 path.display(),
             );
             None
@@ -326,6 +316,26 @@ mod tests {
     fn sample_ivm_path_has_to_extension() {
         let path = sample_ivm_path("dummy");
         assert_eq!(path.extension().and_then(|e| e.to_str()), Some("to"));
+        assert_eq!(
+            path.parent().unwrap(),
+            Path::new(env!("OUT_DIR")).join("ivm/samples")
+        );
+    }
+    #[test]
+    fn staged_ivm_profile_and_samples_share_the_cargo_output() {
+        let profile = ivm_build_profile_path();
+        assert_eq!(
+            profile,
+            Path::new(env!("OUT_DIR")).join("ivm/build_config.toml")
+        );
+        assert!(load_ivm_build_profile().is_some());
+        let sample = sample_ivm_path("mint_rose_trigger");
+        assert!(sample.is_file());
+        assert!(
+            !read_file(sample)
+                .expect("Cargo-staged canonical sample")
+                .is_empty()
+        );
     }
     #[test]
     fn load_ivm_build_profile_defaults_to_release_when_missing() {

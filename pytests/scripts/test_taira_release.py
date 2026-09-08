@@ -349,6 +349,56 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(set(env), {"PATH", "HOME", "SCCACHE_DIR", "LC_ALL", "PYTHONNOUSERSITE",
                                     "PYTHONDONTWRITEBYTECODE", "CARGO_TARGET_DIR"})
 
+    def test_native_incremental_admits_only_zero_or_one_without_release_environment_leak(self):
+        environment = {"CARGO": "/fixed/cargo", "CARGO_TARGET_DIR": "/warm",
+                       "RUSTC_WRAPPER": "/fixed/sccache", "CARGO_BUILD_JOBS": "6"}
+        original = dict(environment)
+        for inherited, expected in (({}, "1"), ({"CARGO_INCREMENTAL": "1"}, "1"),
+                                    ({"CARGO_INCREMENTAL": "0"}, "0")):
+            with self.subTest(inherited=inherited):
+                native = release.native_check_environment(environment, inherited)
+                self.assertEqual(native, original | {"CARGO_INCREMENTAL": expected})
+                self.assertEqual(environment, original)
+        for invalid in ("", "true", "false", "fixture-private-invalid-value"):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(release.PrepareError, "must be 0 or 1") as rejected:
+                release.native_check_environment(environment, {"CARGO_INCREMENTAL": invalid})
+            if invalid:
+                self.assertNotIn(invalid, str(rejected.exception))
+
+    def test_prepare_scopes_incremental_to_native_gate_and_binds_resume_preference(self):
+        for preference in ("0", "1"):
+            with self.subTest(preference=preference):
+                self.out = self.root / ("prepared-incremental-" + preference)
+                self.args.output_dir = self.out
+                def check(_root, *, environment, source_commit, lock_fds):
+                    self.assertEqual(environment["CARGO_INCREMENTAL"], preference)
+                    self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
+                    self.assertEqual(source_commit, self.args.expected_commit)
+                def build(_root, command, environment, log):
+                    self.assertNotIn("CARGO_INCREMENTAL", environment)
+                    self.assertNotIn("CARGO_PROFILE_TEST_INCREMENTAL", environment)
+                    self.assertEqual(command[command.index("--profile") + 1], "release")
+                    self.binaries()
+                    log.write_bytes(b"fixture compiler output\n")
+                with patch.dict(os.environ, {"CARGO_INCREMENTAL": preference}):
+                    _, gate, build = self.prepare(check=check, build=build)
+                self.assertEqual(gate.call_count, 1)
+                self.assertEqual(build.call_count, 1)
+                request = release.read_record(self.out / "request.json")
+                result = release.read_record(self.out / "result.json")
+                self.assertEqual(request["native_incremental"], preference == "1")
+                self.assertEqual(result["native_incremental"], preference == "1")
+                # The public transfer consumer reconstructs the immutable result
+                # identity from every request field except these three wrappers.
+                transfer_base = {key: value for key, value in request.items()
+                                 if key not in ("schema", "repo_root", "target_dir")}
+                self.assertEqual(set(result), set(transfer_base) | {"artifacts", "timings_seconds", "attempt"})
+                self.assertTrue(all(result[key] == value for key, value in transfer_base.items()))
+                self.assertEqual(release.read_record(self.out / result["attempt"] / "capture.json"), result)
+                with patch.dict(os.environ, {"CARGO_INCREMENTAL": "1" if preference == "0" else "0"}):
+                    with self.assertRaisesRegex(release.PrepareError, "checkpoint belongs to different inputs"):
+                        self.prepare()
+
     def test_build_command_uses_four_fixed_binaries_six_jobs_and_warm_lane(self):
         command = release.build_command(Path("/frozen"), self.target, "/fixed/cargo")
         self.assertEqual(command[:4], ["/fixed/cargo", "zigbuild", "--config", "/frozen/.cargo/config.toml"])
@@ -765,6 +815,7 @@ class TairaPrepareTests(unittest.TestCase):
             self.assertEqual(root, repo)
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(routine))
             self.assertNotIn("PRIVATE_KEY", environment)
+            self.assertEqual(environment["CARGO_INCREMENTAL"], "0")
             self.assertNotIn("RUSTFLAGS", environment)
             self.assertNotIn("CARGO_BUILD_TARGET", environment)
             descriptors.extend(lock_fds)
@@ -775,7 +826,7 @@ class TairaPrepareTests(unittest.TestCase):
                     self.fail("must not admit competing check")
         with patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (env, [])), \
              patch.object(release.gate, "run_checks", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
-            release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad"})
+            release.development_check(repo, None, {"PRIVATE_KEY": "fixture must not cross", "RUSTFLAGS": "bad", "CARGO_BUILD_TARGET": "bad", "CARGO_INCREMENTAL": "0"})
         with self.assertRaises(OSError):
             os.fstat(descriptors[0])
         self.assertEqual(stat.S_IMODE(routine.stat().st_mode), target_mode)

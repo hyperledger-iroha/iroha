@@ -62,7 +62,7 @@ transaction races, exact authority failures, balance conservation and matching
 finalized projections after a validator restart. Orderbook partial fills and
 expiry, elapsed rent collection, and hardware signing remain separate coverage.
 
-- IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
+- `iroha_test_samples/build.rs` copies the canonical `fixtures/ivm/*.to` files listed in `crates/ivm/prebuilt_samples.txt` into that crate's Cargo `OUT_DIR`, together with the build profile. All consumers use `sample_ivm_path` and `ivm_build_profile_path`; sealed source trees remain read-only and no manual prebuild or source-tree output fallback is used. Fixture regeneration remains a separate compiler-owned task.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
 - Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.

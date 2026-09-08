@@ -6,6 +6,8 @@ harnesses and run a four-peer network with isolated Cargo and fixture-only input
 The existing sibling .taira-testnet-build-targets/routine lane is the default;
 --target-dir or TAIRA_TESTNET_CARGO_TARGET_DIR may select another development
 lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
+Native checks retain incremental compilation unless CARGO_INCREMENTAL=0 is
+explicitly selected. This preference never changes Linux release compilation.
 
 Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
@@ -390,6 +392,10 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                 if name in artifacts and artifacts[name] != executable:
                     raise CheckError("native network binary has conflicting Cargo artifacts")
                 artifacts[name] = executable
+                print("[taira-check] native network artifact " + json.dumps({
+                    "name": name, "executable": executable, "profile": event["profile"],
+                    "manifest_path": event.get("manifest_path"),
+                }, sort_keys=True), flush=True)
         code = child.wait()
     if code or set(artifacts) != {"iroha3d", "iroha"}:
         raise CheckError(f"native network build did not produce both executable artifacts (exit {code})")
@@ -431,16 +437,18 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     env["VERGEN_GIT_SHA"] = head
     env["IROHA_GIT_COMMIT_HASH"] = head
     print(f"[taira-check] source {head}; {root}", flush=True)
-    harness = compile_harness(root, env, lock_fds=lock_fds)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
+    # Exercise the composed runtime before the independent contract harnesses:
+    # source staging and consensus defects must not wait behind their full builds.
+    if NETWORK_STAGES:
+        run_network_checks(root, fixture_root, env, lock_fds)
+    harness = compile_harness(root, env, lock_fds=lock_fds)
     run_stages(harness, fixture_root, env, STAGES, lock_fds)
     for name, stages in (("core", CORE_STAGES), ("proof", PROOF_STAGES),
                          ("proof-flows", PROOF_FLOW_STAGES), ("torii", TORII_STAGES)):
         if stages:
             selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
             run_stages(selected_harness, fixture_root, env, stages, lock_fds)
-    if NETWORK_STAGES:
-        run_network_checks(root, fixture_root, env, lock_fds)
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")

@@ -1,14 +1,13 @@
 //! Build script that stages deterministic IVM sample bytecode for integration tests.
 //!
 //! The fixtures are versioned under `integration_tests/fixtures/ivm` and copied
-//! into `crates/ivm/target/prebuilt/samples` so existing test helpers keep
-//! working without compiling Kotodama/IVM logic in the build script.
+//! into this sample crate's Cargo `OUT_DIR`. Consumers resolve that exact output
+//! through `iroha_test_samples`; the source tree is never a staging directory.
 use std::{
     env, fs,
     path::{Path, PathBuf},
 };
-const SAMPLE_MANIFEST: &str = include_str!("../crates/ivm/prebuilt_samples.txt");
-const SKIP_PREBUILT_STAGE_ENV: &str = "IROHA_INTEGRATION_TESTS_SKIP_PREBUILT_STAGE";
+const SAMPLE_MANIFEST: &str = include_str!("../ivm/prebuilt_samples.txt");
 fn prebuilt_sample_names() -> Vec<&'static str> {
     SAMPLE_MANIFEST
         .lines()
@@ -20,8 +19,9 @@ fn workspace_root() -> PathBuf {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     manifest_dir
         .parent()
+        .and_then(Path::parent)
         .map(Path::to_path_buf)
-        .expect("integration_tests must be in workspace root")
+        .expect("iroha_test_samples must belong to the workspace")
 }
 fn sample_path(dir: &Path, name: &str) -> PathBuf {
     dir.join(name).with_extension("to")
@@ -39,25 +39,13 @@ fn write_file_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=../crates/ivm/prebuilt_samples.txt");
-    println!("cargo:rerun-if-env-changed={SKIP_PREBUILT_STAGE_ENV}");
-    // OpenAPI-only xtask builds link this crate but never load its runtime fixtures.
-    // Their sealed source clones therefore opt out before this script writes ignored files.
-    if env::var(SKIP_PREBUILT_STAGE_ENV).ok().as_deref() == Some("1") {
-        return;
-    }
+    println!("cargo:rerun-if-changed=../ivm/prebuilt_samples.txt");
+    println!("cargo:rerun-if-env-changed=IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR");
     let root = workspace_root();
     let fixtures_dir = root.join("integration_tests/fixtures/ivm");
-    let prebuilt_dir = root.join("crates/ivm/target/prebuilt");
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"));
+    let prebuilt_dir = out_dir.join("ivm");
     let samples_dir = prebuilt_dir.join("samples");
-    if let Ok(entries) = fs::read_dir(&fixtures_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().is_some_and(|ext| ext == "to") {
-                println!("cargo:rerun-if-changed={}", path.display());
-            }
-        }
-    }
     let profile = if env::var("PROFILE").ok().as_deref() == Some("release") {
         "Release"
     } else {
@@ -78,6 +66,7 @@ fn main() {
     for name in sample_names {
         let source = sample_path(&fixtures_dir, name);
         let destination = sample_path(&samples_dir, name);
+        println!("cargo:rerun-if-changed={}", source.display());
         match fs::read(&source) {
             Ok(bytes) => {
                 write_file_if_changed(&destination, &bytes).unwrap_or_else(|err| {

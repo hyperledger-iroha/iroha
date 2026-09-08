@@ -52,6 +52,19 @@ existing development lane; both must agree if supplied. Ambient
 `CARGO_TARGET_DIR` does not select this lane. Neither command creates or cleans
 a Cargo target. Keep a stable lane for repeated checks.
 
+The focused native gate enables incremental compilation in that existing lane.
+An explicit `CARGO_INCREMENTAL=0` preserves a constrained or CI build policy;
+only `0` and `1` are admitted. This preference is passed only to native builds
+and tests, and preparation records it with the native-check checkpoint. Linux
+release compilation retains its original sanitized environment and release
+profile. Each feature graph keeps its own Cargo cache; no test features are
+added or removed to force reuse. The first incremental run populates those
+caches, so a speed improvement must be measured on subsequent focused changes.
+The four-validator runtime check runs first, so source-staging or consensus
+failures stop before compiling the independent contract harnesses. Its log
+records the actual Cargo-selected native binary paths and profiles separately
+from the later Linux release artifacts.
+
 Authenticated `prepare` retains the repository's `target/` lane and its fixed
 Git-object source capture. Its explicit `--target-dir` override remains available;
 the development environment selector does not affect preparation. Checks refuse
@@ -151,7 +164,7 @@ configuration and mode lock. Only this fetch sets `CARGO_NET_OFFLINE=false`; the
 gate itself remains offline. The subsequent
 full workspace build acquires the same development lane lock and uses the same
 target, isolated Cargo home and explicit configuration. It explicitly preserves
-CI's `CARGO_INCREMENTAL=0` after sanitizing the environment. Matching dependencies can
+CI's `CARGO_INCREMENTAL=0` after sanitizing the environment, as does the native gate. Matching dependencies can
 therefore reuse the gate's artifacts instead of being rebuilt into a second tree. The existing local Taira release caller should run
 it before cross-compilation. The canonical
 release artifact producer remains `scripts/run_release_pipeline.py`; it does

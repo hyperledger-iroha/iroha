@@ -264,10 +264,7 @@ fn install_quiet_tracing() {
     });
 }
 fn ivm_build_profile_exists() -> bool {
-    use std::path::PathBuf;
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../crates/ivm/target/prebuilt/build_config.toml")
-        .exists()
+    iroha_test_samples::ivm_build_profile_path().is_file()
 }
 fn quiet_network_builder_base() -> NetworkBuilder {
     init_instruction_registry();

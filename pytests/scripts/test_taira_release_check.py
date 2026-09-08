@@ -144,7 +144,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
 
     def test_mutable_check_keeps_git_checks_and_inherits_lane_lock_in_every_child(self):
-        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine"}
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine", "CARGO_INCREMENTAL": "0"}
         results = [subprocess.CompletedProcess([], 0, "fixture: test\n", ""),
                    subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]
         with patch.object(gate.subprocess, "check_output", return_value="a" * 40) as git, \
@@ -162,6 +162,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,)})
         self.assertTrue(all(call.kwargs["pass_fds"] == (77,) for call in run.call_args_list))
         self.assertTrue(all(call.kwargs["cwd"] == Path("/mutable") for call in run.call_args_list))
+        self.assertEqual(env, {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/routine", "CARGO_INCREMENTAL": "0"})
+        self.assertEqual(compile.call_args.args[1]["CARGO_INCREMENTAL"], "0")
+        self.assertTrue(all(call.kwargs["env"]["CARGO_INCREMENTAL"] == "0" for call in run.call_args_list))
 
     def test_torii_contract_failure_prevents_overall_pass_and_keeps_same_custody(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
@@ -191,15 +194,27 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         output = io.StringIO()
         with patch.object(gate, "compile_harness", side_effect=["/warm/cli", "/warm/core"]) as compile, \
+             patch.object(gate, "run_network_checks") as network, \
              patch.object(gate, "run_stages", side_effect=[None, gate.CheckError("ordinary transaction stalled")]) as run, \
              contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(gate.CheckError, "ordinary transaction stalled"):
                 gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 2)
+        network.assert_called_once()
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harness": "core"})
         self.assertEqual(run.call_args.args[3], gate.CORE_STAGES)
         self.assertEqual(run.call_args.args[4], (77,))
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_network_failure_stops_before_independent_harness_builds(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+        with patch.object(gate, "run_network_checks", side_effect=gate.CheckError("consensus stalled")) as network, \
+             patch.object(gate, "compile_harness") as compile, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gate.CheckError, "consensus stalled"):
+                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+        network.assert_called_once_with(Path("/frozen"), Path("/warm"),
+            env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,))
+        compile.assert_not_called()
 
     def test_unisolated_low_level_check_is_rejected_before_git_or_cargo(self):
         with patch.object(gate.subprocess, "check_output") as git, patch.object(gate, "compile_harness") as compile:

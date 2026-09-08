@@ -88,6 +88,13 @@ def child_environment(inherited: dict[str, str], target_dir: Path) -> dict[str, 
     return env
 
 
+
+def native_check_environment(environment: dict[str, str], inherited: dict[str, str]) -> dict[str, str]:
+    """Admit one native cache preference without changing the release environment."""
+    incremental = inherited.get("CARGO_INCREMENTAL", "1")
+    require(incremental in ("0", "1"), "native CARGO_INCREMENTAL must be 0 or 1")
+    return environment | {"CARGO_INCREMENTAL": incremental}
+
 def git(root: Path, *args: str) -> bytes:
     result = subprocess.run(["git", "--no-replace-objects", *args], cwd=root, stdin=subprocess.DEVNULL,
                             capture_output=True, check=False, timeout=60,
@@ -706,7 +713,7 @@ def development_check(root: Path, target: Path | None, inherited: dict[str, str]
         env = child_environment(inherited, target_dir)
         env, _ = isolated_cargo_environment(root, root, env)
         print(f"[taira-check] development lane {target_dir}; mutable source; not release-qualified", flush=True)
-        gate.run_checks(root, environment=env, lock_fds=(lock_fd,))
+        gate.run_checks(root, environment=native_check_environment(env, inherited), lock_fds=(lock_fd,))
 
 
 @contextlib.contextmanager
@@ -753,7 +760,8 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     entries = commit_entries(root, args.expected_commit)
     source = capture_source(root, source, target_dir, args.expected_commit, entries)
     before = frozen_snapshot(source, entries, target_dir)
-    env = child_environment(dict(os.environ), target_dir)
+    inherited = dict(os.environ)
+    env = child_environment(inherited, target_dir)
     tools = [verify_tool(args.zig, args.zig_sha256),
              verify_tool(args.cargo_zigbuild, args.cargo_zigbuild_sha256)]
     selected = shutil.which("cargo-zigbuild", path=env.get("PATH", ""))
@@ -762,8 +770,10 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
     env.update(IROHA_ZIG_BINARY=str(args.zig), IROHA_GIT_COMMIT_HASH=args.expected_commit,
                VERGEN_GIT_SHA=args.expected_commit)
     env, compiler_tools = isolated_cargo_environment(root, source, env)
+    native_env = native_check_environment(env, inherited)
     command = build_command(source, target_dir, env["CARGO"])
     base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
+            "native_incremental": native_env["CARGO_INCREMENTAL"] == "1",
             "tree": tree, "target": TARGET, "profile": "release", "jobs": 6,
             "source_unchanged": True, "toolchain_unchanged": True,
             "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
@@ -860,7 +870,7 @@ def prepare_in_lane(args: argparse.Namespace, source: Path, lane_lock_fd: int, m
             selected_gate = captured_gate(source, before)
             def run_native_checks():
                 try:
-                    selected_gate.run_checks(source, environment=env, source_commit=args.expected_commit,
+                    selected_gate.run_checks(source, environment=native_env, source_commit=args.expected_commit,
                                              lock_fds=(lock_fd, lane_lock_fd, mode_lock_fd))
                 except selected_gate.CheckError as error:
                     raise PrepareError(str(error)) from error
