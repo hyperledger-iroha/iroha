@@ -606,7 +606,7 @@ mod physical_mapping_tests {
                 .map(|cell| {
                     manager
                         .assigned_advices
-                        .get(cell)
+                        .resolve(cell)
                         .expect("every virtual witness must be mapped")
                         .column
                         .index()
@@ -620,7 +620,10 @@ mod physical_mapping_tests {
             virtual_cells
                 .iter()
                 .map(|cell| {
-                    let physical = manager.assigned_advices[cell];
+                    let physical = manager
+                        .assigned_advices
+                        .resolve(cell)
+                        .expect("virtual witness cell is assigned");
                     (physical.column.index(), physical.row_offset)
                 })
                 .collect::<Vec<_>>()
@@ -635,7 +638,10 @@ mod physical_mapping_tests {
             virtual_cells
                 .iter()
                 .map(|cell| {
-                    let physical = manager.assigned_advices[cell];
+                    let physical = manager
+                        .assigned_advices
+                        .resolve(cell)
+                        .expect("virtual witness cell is assigned");
                     (physical.column.index(), physical.row_offset)
                 })
                 .collect::<Vec<_>>()
@@ -664,7 +670,10 @@ mod physical_mapping_tests {
             virtual_cells
                 .iter()
                 .map(|cell| {
-                    let physical = manager.assigned_advices[cell];
+                    let physical = manager
+                        .assigned_advices
+                        .resolve(cell)
+                        .expect("virtual witness cell is assigned");
                     (physical.column.index(), physical.row_offset)
                 })
                 .collect::<Vec<_>>()

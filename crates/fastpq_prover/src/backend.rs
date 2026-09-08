@@ -59,6 +59,8 @@ mod compact_hash_quotient;
 mod compact_model_statement;
 #[path = "backend/compact_protocol.rs"]
 mod compact_protocol;
+#[path = "backend/compact_prover_resources.rs"]
+mod compact_prover_resources;
 #[path = "backend/compact_public_api.rs"]
 mod compact_public_api;
 #[path = "backend/compact_public_batch.rs"]
@@ -68,6 +70,8 @@ mod compact_public_transfer;
 #[cfg(test)]
 #[path = "backend/compact_quantity_diagnostic.rs"]
 mod compact_quantity_diagnostic;
+#[path = "backend/compact_quantity_producer.rs"]
+mod compact_quantity_producer;
 #[cfg(test)]
 #[path = "backend/compact_quantity_tests.rs"]
 mod compact_quantity_tests;

@@ -471,10 +471,7 @@ fn prepare_first_claim_blueprint_v1<'a>(
 pub fn generate_kagemusha_mint_hash_artifacts_v1(
     witness: KagemushaMintHashArtifactGenerationWitnessV1<'_>,
 ) -> Result<KagemushaGeneratedMintHashArtifactsV1, KagemushaArtifactGenerationErrorV1> {
-    generate_kagemusha_mint_hash_artifacts_with_limits_v1(
-        witness,
-        KagemushaCompactKeyLimitsV1::release(),
-    )
+    generate_kagemusha_mint_hash_artifacts_with_limits_v1(witness, KagemushaKeyLimitsV1::release())
 }
 
 /// Exercise genuine claim keygen and proving under the external aggregate-memory guard.
@@ -489,14 +486,14 @@ pub(crate) fn generate_kagemusha_mint_hash_artifacts_for_guarded_test_v1(
 ) -> Result<KagemushaGeneratedMintHashArtifactsV1, KagemushaArtifactGenerationErrorV1> {
     generate_kagemusha_mint_hash_artifacts_with_limits_v1(
         witness,
-        KagemushaCompactKeyLimitsV1::guarded_real_proof(),
+        KagemushaKeyLimitsV1::guarded_real_proof(),
     )
 }
 
 #[allow(clippy::too_many_lines)]
 fn generate_kagemusha_mint_hash_artifacts_with_limits_v1(
     witness: KagemushaMintHashArtifactGenerationWitnessV1<'_>,
-    claim_key_limits: KagemushaCompactKeyLimitsV1,
+    claim_key_limits: KagemushaKeyLimitsV1,
 ) -> Result<KagemushaGeneratedMintHashArtifactsV1, KagemushaArtifactGenerationErrorV1> {
     witness
         .certificate
@@ -1068,7 +1065,7 @@ where
         parity,
         label,
         proving_key,
-        KagemushaCompactKeyLimitsV1::release(),
+        KagemushaKeyLimitsV1::release(),
     )
 }
 
@@ -1076,7 +1073,7 @@ fn serialize_helper_keys_with_limits_v1<C>(
     parity: KagemushaPastaParityV1,
     label: &'static str,
     proving_key: ProvingKey<C>,
-    limits: KagemushaCompactKeyLimitsV1,
+    limits: KagemushaKeyLimitsV1,
 ) -> Result<(Arc<[u8]>, Arc<[u8]>), KagemushaArtifactGenerationErrorV1>
 where
     C: CurveAffine + halo2_proofs::SerdeCurveAffine,
@@ -1091,9 +1088,9 @@ where
         false,
     )?;
     let mut proving =
-        compact_proving_key_buffer_v1(parity, label, limits.proving_key_maximum, &proving_key)?;
+        structured_proving_key_buffer_v1(parity, label, limits.proving_key_maximum, &proving_key)?;
     proving_key
-        .write_compact_v1_consuming(&mut proving)
+        .write_structured_v1_consuming(&mut proving)
         .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity,
             kind: label,
@@ -1113,7 +1110,7 @@ fn serialize_helper_keys_streaming_with_limits_v1<C>(
     parity: KagemushaPastaParityV1,
     label: &'static str,
     proving_key: &ProvingKey<C>,
-    limits: KagemushaCompactKeyLimitsV1,
+    limits: KagemushaKeyLimitsV1,
 ) -> Result<(Vec<u8>, Vec<u8>), KagemushaArtifactGenerationErrorV1>
 where
     C: CurveAffine + halo2_proofs::SerdeCurveAffine,
@@ -1128,9 +1125,9 @@ where
         false,
     )?;
     let mut proving =
-        compact_proving_key_buffer_v1(parity, label, limits.proving_key_maximum, proving_key)?;
+        structured_proving_key_buffer_v1(parity, label, limits.proving_key_maximum, proving_key)?;
     proving_key
-        .write_compact_v1(&mut proving)
+        .write_structured_v1(&mut proving)
         .map_err(|error| KagemushaArtifactGenerationErrorV1::KeyGeneration {
             parity,
             kind: label,
@@ -1383,7 +1380,7 @@ where
     ConcreteCircuit: halo2_proofs::plonk::Circuit<C::Scalar>,
 {
     let mut cursor = Cursor::new(bytes);
-    let key = ProvingKey::read_compact_v1_checked::<_, ConcreteCircuit>(
+    let key = ProvingKey::read_structured_v1_checked::<_, ConcreteCircuit>(
         &mut cursor,
         k,
         u64::try_from(bytes.len()).map_err(|error| key_decode_error(parity, kind, error))?,
@@ -1392,13 +1389,13 @@ where
     .map_err(|error| key_decode_error(parity, kind, error))?;
     ensure_cursor_consumed(parity, kind, &cursor, bytes.len())?;
     let mut canonical = ExactBytesWriterV1::new(bytes);
-    key.write_compact_v1(&mut canonical)
+    key.write_structured_v1(&mut canonical)
         .map_err(|error| key_decode_error(parity, kind, error))?;
     if !canonical.matches() {
         return Err(key_decode_message(
             parity,
             kind,
-            "compact proving-key encoding is non-canonical",
+            "structured proving-key encoding is non-canonical",
         ));
     }
     Ok(key)

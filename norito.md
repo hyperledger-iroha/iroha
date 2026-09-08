@@ -133,6 +133,15 @@ checksum writers, canonical comparisons, and separately constructed nested
 buffers always receive actual bytes. Count overflow remains an error even if a
 custom serializer ignores an individual failed write.
 
+`core::SequencePayloadLength` retains exact generic element-sequence lengths
+incrementally. Each append counts its supplied element once under a validated,
+frozen layout; snapshots and reads use constant-size counters. It includes the
+sequence count, element prefixes or packed offset table, and rejects overflow.
+This is an observation of the supplied elements, not a serializer or a promise
+about later bytes: callers must preserve their values and serialization behavior.
+The raw `Vec<u8>` specialization is a different layout and is excluded. Existing
+writers retain their checked count/write behavior and all v1 bytes are unchanged.
+
 Embedded instruction frames retain the counting destination through a
 codec-owned prefix writer. A size-only pass measures the concrete payload and
 adds the fixed header/alignment overhead; it does not construct a checksum writer.

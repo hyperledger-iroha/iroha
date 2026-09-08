@@ -7,8 +7,11 @@ reports build, stage and test durations. Python 3.11+ and the repository Rust
 and Cargo toolchain are required. Use an existing `CARGO_TARGET_DIR` only for
 an established separate native build lane; no clean or per-run target is needed.
 
-The check runs 33 regressions for secure inherited configuration FDs,
+The check runs 51 regressions for secure inherited configuration and signing FDs,
 network-369 inventory decoding, aggregate timeout admission before custody,
+required preseed budgets, per-host carrier verification and the exact action ledger,
+native genesis-path rebasing with secret-free errors and owner-only output,
+configuration artifact custody and signed genesis startup,
 generated stages frozen to 0400 and their native consumers, preseed receipt
 ordering, KVM ioctl error preservation on a regular file, and all five read-only
 host preflights. The process-stream checks send an exact-digest 64 MiB closure

@@ -17,19 +17,38 @@ preparation, every segment, cumulative queries and cumulative Norito decode char
 The opaque success result covers every ordered child and retains all six coordinates
 of each AIR row root. This API grants no source finality or admission authority.
 
+The same facade now exposes ordinary and AXT quantity producers to normal callers.
+They check independent expectations and explicit byte, trace-cell, decode and
+private-tree budgets before expanding a physical trace. Supplied touched-tree
+roots must match the derived private witnesses. Every segment is preflighted,
+segments are proved sequentially, and one process-local admission guard bounds
+concurrent producer requests. The public verifier checks the complete artifact
+before it is returned. The conservative per-segment payload charge is a local
+allocation policy, not an RSS reservation or a consensus parameter; actual and
+inherited decoder budgets remain authoritative at final verification.
+
+Exact incremental Norito sequence lengths, quantity-prefix validation and the
+transactional E/T/D/I/M/S reservation ledger are applied. The complete Norito
+suite passes 1,317 tests; the 16 sequence-length cases and 20 quantity-prefix
+cases pass. The Core accounting modules still have no production State consumer:
+their 40 registered tests await the shared Core build, and source quotas are not
+activated by these helpers.
+
 The fixed candidate identity is
 `fastpq:compact-shake256:h16:g375:c401:342cols:923slots:65536rows:8blowup:17folds:prefix-body:v1`.
 Its sampler takes 401 candidates to produce 375 query positions. Fresh complete
 single and two-segment ordinary/AXT proofs pass verification after private paths
 and traces are dropped. Both complete transport-artifact tests and the separate
 136-query typed-transfer diagnostic also pass. The normal library and registered
-integration harness compile without compiler warnings; the library suite passes
-909 tests, with 20 opt-in diagnostics ignored by that default run. The complete
-registered integration suite passes all 19 tests, with four opt-in CPU measurements
+integration harness compile without compiler warnings; the latest full library
+run passes 953 tests, with 21 opt-in diagnostics ignored. The final producer
+selection passes 14 tests, including the subsequent early-decode wiring case.
+The complete registered integration suite passes all 20 tests, with four opt-in CPU measurements
 ignored by that default run. Its resource fixture now uses canonical balance keys,
 and both ordering goldens are regenerated for the current key and operation-tag
 encodings. The three current profile/framing scripts,
-retired-codec guard and workspace formatting check pass. Scoped Clippy still reports
+retired-codec guard and formatting of the edited FASTPQ/accounting files pass.
+Scoped Clippy's last run reports
 154 findings and is not a passing gate.
 
 | Fresh two-segment quantity artifact | Complete transport bytes | Raw verification, CPU test profile | Checked work |
@@ -37,7 +56,9 @@ retired-codec guard and workspace formatting check pass. Scoped Clippy still rep
 | Ordinary | 7,967,817 | 8.40 s | 750 AIR evaluations, two terminal checks |
 | AXT | 8,024,804 | 9.28 s | 750 AIR evaluations, two terminal checks |
 
-These are single local diagnostics, not release latency or peak-memory guarantees.
+These are the retained verifier diagnostics preceding the normal producer API,
+not release latency or peak-memory guarantees. Fresh end-to-end verification of
+the new public producers is pending at this source checkpoint.
 The four separate CPU measurements of the existing public replay API also pass:
 two and four transition rows produce accepted canonical proofs of 150,028 and
 323,936 bytes; eight and sixteen rows reject at the unchanged 524,288-byte

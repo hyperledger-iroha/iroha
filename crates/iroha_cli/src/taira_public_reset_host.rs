@@ -679,16 +679,16 @@ impl HostAction {
         }
     }
 
-    const fn timeout_secs(self, inventory: &InventoryV1) -> u64 {
-        match self {
+    fn timeout_secs(self, inventory: &InventoryV1, host_slug: &str) -> Result<u64> {
+        Ok(match self {
             Self::Preflight | Self::Upload | Self::Stage | Self::InrouStageUpload => {
                 inventory.timeouts.install_secs
             }
             Self::Stop => inventory.timeouts.stop_secs,
             Self::Install => inventory.timeouts.install_secs,
             Self::Reset => inventory.timeouts.reset_secs,
-            Self::Preseed => inventory.timeouts.reset_secs,
-            Self::Start => inventory.timeouts.start_secs,
+            Self::Preseed => inventory.timeouts.preseed_secs,
+            Self::Start => validator_start_timeout_secs(inventory, host_slug)?,
             Self::Restart => inventory.timeouts.restart_secs,
             Self::EdgeStage | Self::EdgeCutover | Self::EdgeVerify | Self::Seal => {
                 inventory.timeouts.edge_secs
@@ -696,7 +696,27 @@ impl HostAction {
             Self::Cleanup => inventory.timeouts.cleanup_secs,
             Self::Rollback => inventory.timeouts.rollback_secs,
             Self::MutationReserve => inventory.timeouts.canary_secs,
-        }
+        })
+    }
+}
+
+/// Only the first validator on each physical host performs the offline all-store
+/// verification. Charge that work separately from starting its daemon.
+fn validator_start_timeout_secs(inventory: &InventoryV1, host_slug: &str) -> Result<u64> {
+    let validator = inventory
+        .validators
+        .iter()
+        .find(|validator| validator.slug == host_slug)
+        .ok_or_else(|| eyre!("start timeout requires an admitted validator"))?;
+    let carrier = inrou_stage_carrier(inventory, &validator.endpoint.host_identity_sha256)?;
+    if carrier.slug == validator.slug {
+        inventory
+            .timeouts
+            .start_secs
+            .checked_add(inventory.timeouts.preseed_secs)
+            .ok_or_else(|| eyre!("carrier verification and start timeout overflow"))
+    } else {
+        Ok(inventory.timeouts.start_secs)
     }
 }
 
@@ -3253,7 +3273,7 @@ fn validate_action_deadline(
     now_ms: u64,
 ) -> Result<()> {
     let action_window_ms = action
-        .timeout_secs(inventory)
+        .timeout_secs(inventory, &request.host_slug)?
         .checked_mul(1_000)
         .and_then(|value| value.checked_add(super::MAX_CLOCK_SKEW_MS))
         .ok_or_else(|| eyre!("host action deadline overflow"))?;
@@ -7079,7 +7099,7 @@ fn validator_preseed_store(
     )?;
     let text = std::str::from_utf8(&bytes).wrap_err("installed validator config is not UTF-8")?;
     let config: toml::Value =
-        toml::from_str(text).wrap_err("installed validator config is not valid TOML")?;
+        toml::from_str(text).map_err(|_| eyre!("installed validator config is not valid TOML"))?;
     let placement =
         inventory_inrou_placement_target_for_slug(&admitted.inventory, &validator.slug)?;
     let configured_peer_literal = config
@@ -15226,7 +15246,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
 
     fn validator_step(
         &mut self,
-        _inventory: &InventoryV1,
+        inventory: &InventoryV1,
         validator: &ValidatorV1,
         step: ExecutionStep,
         timeout_secs: u64,
@@ -15239,6 +15259,11 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             ExecutionStep::Reset => HostAction::Reset,
             ExecutionStep::Start => HostAction::Start,
             other => return Err(eyre!("validator received invalid step `{}`", other.label())),
+        };
+        let timeout_secs = if action == HostAction::Start {
+            validator_start_timeout_secs(inventory, &validator.slug)?
+        } else {
+            timeout_secs
         };
         self.bootstrap_and_dispatch_validator(validator, action, timeout_secs)?;
         Ok(())
@@ -17011,9 +17036,7 @@ fn validate_receipt_name(name: &str) -> Result<()> {
         || name.len() > 128
         || !name.ends_with(".json")
         || !name.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'-' | b'_' | b'.')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_' | b'.')
         })
     {
         return Err(eyre!("receipt name escaped the closed local namespace"));
@@ -17407,6 +17430,112 @@ mod tests {
     struct HostProtocolProbe {
         #[command(flatten)]
         host: PublicResetHost,
+    }
+
+    #[test]
+    fn preseed_and_start_deadlines_charge_only_each_physical_host_carrier() {
+        let mut inventory = super::super::sample_inventory_fixture();
+        inventory.timeouts.reset_secs = 60;
+        inventory.timeouts.preseed_secs = 1_800;
+        inventory.timeouts.start_secs = 120;
+        for validator in &mut inventory.validators {
+            validator.endpoint.host_identity_sha256 = "a".repeat(64);
+        }
+        assert_eq!(
+            HostAction::Preseed
+                .timeout_secs(&inventory, "taira-validator-1")
+                .unwrap(),
+            1_800
+        );
+        assert_eq!(
+            HostAction::Reset
+                .timeout_secs(&inventory, "taira-validator-1")
+                .unwrap(),
+            60
+        );
+        for (index, validator) in inventory.validators.iter().enumerate() {
+            assert_eq!(
+                HostAction::Start
+                    .timeout_secs(&inventory, &validator.slug)
+                    .unwrap(),
+                if index == 0 { 1_920 } else { 120 }
+            );
+        }
+        assert!(validator_start_timeout_secs(&inventory, "taira-edge").is_err());
+        for (index, validator) in inventory.validators.iter_mut().enumerate() {
+            validator.endpoint.host_identity_sha256 = hex::encode([index as u8 + 1; 32]);
+        }
+        for validator in &inventory.validators {
+            assert_eq!(
+                validator_start_timeout_secs(&inventory, &validator.slug).unwrap(),
+                1_920
+            );
+        }
+        inventory.timeouts.preseed_secs = u64::MAX;
+        assert!(validator_start_timeout_secs(&inventory, "taira-validator-1").is_err());
+    }
+
+    #[test]
+    fn host_admission_accepts_combined_carrier_verification_but_rejects_borrowed_time() {
+        let mut admitted = progress_admission();
+        admitted.inventory.timeouts.preseed_secs = 1_800;
+        admitted.inventory.timeouts.start_secs = 120;
+        let now = 1_000;
+        let mut request = admitted.request.clone();
+        request.host_slug = "taira-validator-1".to_owned();
+        request.action_deadline_unix_ms = now + 1_920_000 + super::super::MAX_CLOCK_SKEW_MS;
+        validate_action_deadline(
+            &request,
+            HostAction::Start,
+            &admitted.inventory,
+            &admitted.authorization,
+            now,
+        )
+        .expect("carrier has a signed store verification plus daemon start window");
+        request.action_deadline_unix_ms += 1;
+        assert!(
+            validate_action_deadline(
+                &request,
+                HostAction::Start,
+                &admitted.inventory,
+                &admitted.authorization,
+                now
+            )
+            .is_err()
+        );
+        request.action_deadline_unix_ms -= 1;
+        request.host_slug = "taira-validator-2".to_owned();
+        assert!(
+            validate_action_deadline(
+                &request,
+                HostAction::Start,
+                &admitted.inventory,
+                &admitted.authorization,
+                now
+            )
+            .is_err(),
+            "ordinary validator cannot borrow the carrier verification budget"
+        );
+        request.action_deadline_unix_ms = now + 1_800_000;
+        validate_action_deadline(
+            &request,
+            HostAction::Preseed,
+            &admitted.inventory,
+            &admitted.authorization,
+            now,
+        )
+        .expect("preseed uses its explicit work budget");
+        assert!(
+            validate_action_deadline(
+                &request,
+                HostAction::Reset,
+                &admitted.inventory,
+                &admitted.authorization,
+                now
+            )
+            .is_err(),
+            "atomic reset cannot borrow the preseed budget"
+        );
     }
 
     #[test]
@@ -18506,6 +18635,37 @@ mod tests {
         }
     }
 
+    #[test]
+    fn config_upload_admission_requires_owner_private_artifact_mode() {
+        let admitted = progress_admission();
+        let selected = artifact(admitted.target.artifacts(), "config").unwrap();
+        assert_eq!(selected.mode, 0o600);
+        let mut request = admitted.request.clone();
+        request.artifact_role = selected.role.clone();
+        request.artifact_sha256 = selected.sha256.clone();
+        request.artifact_size = selected.size;
+        request.artifact_mode = selected.mode;
+        validate_host_artifact_request(
+            &request,
+            &admitted.inventory,
+            &admitted.target,
+            HostAction::Upload,
+        )
+        .unwrap();
+        for mode in [0o400, 0o640, 0o644] {
+            request.artifact_mode = mode;
+            assert!(
+                validate_host_artifact_request(
+                    &request,
+                    &admitted.inventory,
+                    &admitted.target,
+                    HostAction::Upload,
+                )
+                .is_err()
+            );
+        }
+    }
+
     fn progress_admission() -> HostAdmission {
         let mut inventory = super::super::sample_inventory_fixture();
         let shared_identity = "a".repeat(64);
@@ -18791,18 +18951,47 @@ mod tests {
     #[test]
     fn receipt_names_reject_path_control_and_unicode_escape() {
         for name in [
-            "", ".", "..", "receipt", "../receipt.json", "/receipt.json",
-            "dir/receipt.json", "dir\\receipt.json", "receipt.json/..",
-            "receipt.json\0", "receipt.json\n", "receipt.json\r", "receipt\t.json",
-            "receipt name.json", "Receipt.json", "réceipt.json", "receipt．json",
+            "",
+            ".",
+            "..",
+            "receipt",
+            "../receipt.json",
+            "/receipt.json",
+            "dir/receipt.json",
+            "dir\\receipt.json",
+            "receipt.json/..",
+            "receipt.json\0",
+            "receipt.json\n",
+            "receipt.json\r",
+            "receipt\t.json",
+            "receipt name.json",
+            "Receipt.json",
+            "réceipt.json",
+            "receipt．json",
         ] {
-            assert!(validate_receipt_name(name).is_err(), "unsafe receipt {name:?}");
+            assert!(
+                validate_receipt_name(name).is_err(),
+                "unsafe receipt {name:?}"
+            );
         }
         let longest = format!("{}.json", "a".repeat(123));
         validate_receipt_name(&longest).expect("exact 128-byte bound");
         assert!(validate_receipt_name(&format!("a{longest}")).is_err());
-        for role in ["", "../iroha_cli", "iroha/cli", "iroha\\cli", "iroha.cli", "iroha-cli", "iroha_cli\0", "iroha_cli\n", "iróha_cli"] {
-            assert!(host_receipt_name(HostAction::Upload, role).is_err(), "unsafe role {role:?}");
+        for role in [
+            "",
+            "../iroha_cli",
+            "iroha/cli",
+            "iroha\\cli",
+            "iroha.cli",
+            "iroha-cli",
+            "iroha_cli\0",
+            "iroha_cli\n",
+            "iróha_cli",
+        ] {
+            assert!(
+                host_receipt_name(HostAction::Upload, role).is_err(),
+                "unsafe role {role:?}"
+            );
         }
         assert!(host_receipt_name(HostAction::Upload, &"a".repeat(65)).is_err());
     }

@@ -3,12 +3,14 @@
 
 package org.hyperledger.iroha.sdk.offline
 
+import java.nio.ByteBuffer
 import java.security.SecureRandom
 import java.util.concurrent.locks.Lock
 import kotlin.concurrent.withLock
 import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoEncoder
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
 
 /** Ownership of a public retry record; none of these records confer monetary authority. */
@@ -129,7 +131,10 @@ interface KagemushaOperationIntentStoreV1 {
     fun save(intent: KagemushaOperationIntentV1)
 }
 
-/** Exact Norito host-storage format. No prior schema or permissive decoder is accepted. */
+/**
+ * Exact Norito host-storage format. No prior schema or permissive decoder is accepted.
+ * Uncompressed archives with zero layout flags are required before decoding any fields.
+ */
 object KagemushaOperationIntentCodecV1 {
     const val MAXIMUM_BYTES = 256 * 1024
     private const val SCHEMA = "iroha::sdk::offline::OperationIntentV1"
@@ -203,22 +208,32 @@ object KagemushaOperationIntentCodecV1 {
     }
     /** Structural history decoding only; native Core must authenticate the retained tuple. */
     internal fun decodeQualification(bytes: ByteArray): KagemushaHardwareQualificationV1 {
-        require(bytes.size <= 4096)
-        val fields = NoritoCodec.decode(bytes, qualificationAdapter, QUALIFICATION_SCHEMA)
+        require(bytes.size in 1..4096)
+        val canonical = bytes.copyOf()
+        val header = NoritoHeader.decodeView(ByteBuffer.wrap(canonical), null).header
+        require(header.compression == NoritoHeader.COMPRESSION_NONE && header.flags == 0) {
+            "operation qualification requires an uncompressed archive with zero layout flags"
+        }
+        val fields = NoritoCodec.decode(canonical, qualificationAdapter, QUALIFICATION_SCHEMA)
         require(fields[0].contentEquals(KagemushaCoreCoordinatorFrameV1.u32(1)))
         val value = KagemushaHardwareQualificationV1(1,
             KagemushaNoritoV1.decodeHardwareProfileShapeExact(fields[4]),
             KagemushaNoritoV1.decodeHardwareCredentialShapeExact(fields[5]), fields[1], fields[2], fields[3],
             java.util.EnumSet.allOf(KagemushaHardwareCapabilityV1::class.java))
-        require(encodeQualification(value).contentEquals(bytes))
+        require(encodeQualification(value).contentEquals(canonical))
         return value
     }
     @JvmStatic fun encode(value: KagemushaOperationIntentV1): ByteArray =
         NoritoCodec.encode(value, SCHEMA, adapter, 0).also { require(it.size <= MAXIMUM_BYTES) }
     @JvmStatic fun decodeExact(bytes: ByteArray): KagemushaOperationIntentV1 {
         require(bytes.size in 1..MAXIMUM_BYTES)
-        return NoritoCodec.decode(bytes.copyOf(), adapter, SCHEMA).also {
-            require(encode(it).contentEquals(bytes)) { "noncanonical operation intent" }
+        val canonical = bytes.copyOf()
+        val header = NoritoHeader.decodeView(ByteBuffer.wrap(canonical), null).header
+        require(header.compression == NoritoHeader.COMPRESSION_NONE && header.flags == 0) {
+            "operation intent requires an uncompressed archive with zero layout flags"
+        }
+        return NoritoCodec.decode(canonical, adapter, SCHEMA).also {
+            require(encode(it).contentEquals(canonical)) { "noncanonical operation intent" }
         }
     }
 }

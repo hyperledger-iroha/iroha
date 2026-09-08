@@ -28,6 +28,7 @@ mod evaluation;
 mod keygen;
 mod lookup;
 pub mod permutation;
+mod structured_key;
 // mod shuffle;
 mod vanishing;
 

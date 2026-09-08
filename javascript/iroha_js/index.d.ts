@@ -5446,7 +5446,8 @@ export type ParliamentPublicTransitionTagV1 =
   | "RecordInvitationResponse"
   | "RegisterBallotParticipant"
   | "RecordBallotDropout"
-  | "FailPublicFindingNoResult";
+  | "FailPublicFindingNoResult"
+  | "RegisterInitialSortition";
 
 export interface ParliamentTransitionLayoutV1 {
   readonly noritoIndex: number;
@@ -5632,8 +5633,12 @@ export type ParliamentProposalV1 =
 
 export type ParliamentLifecycleTransitionV1 =
   | { transition: "CompleteQualification" }
+  | { transition: "RegisterInitialSortition" }
   | {
-      transition: Exclude<ParliamentPublicTransitionTagV1, "CompleteQualification">;
+      transition: Exclude<
+        ParliamentPublicTransitionTagV1,
+        "CompleteQualification" | "RegisterInitialSortition"
+      >;
       payload: Record<string, unknown>;
     };
 

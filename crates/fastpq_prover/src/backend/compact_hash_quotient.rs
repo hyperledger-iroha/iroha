@@ -44,8 +44,15 @@ pub(super) const LOCAL_SLOTS: usize = 597;
 /// Stable adjacent-row slots; excluded edges contribute exact zero polynomials.
 pub(super) const TRANSITION_SLOTS: usize = 83;
 const INPUT_CELLS: usize = 2 * hash::COLUMN_COUNT;
-#[cfg(test)]
 const MAX_PROVER_MASK_CYCLE: usize = 4096;
+/// Fixed-source upper bound on compiled arithmetic scratch cells.
+pub(super) const MAX_PROVER_LEDGER_NODES: usize = 32_768;
+/// Fixed-source upper bound on cached selector masks.
+pub(super) const MAX_PROVER_SELECTOR_MASKS: usize = 2_048;
+/// Fixed-source upper bound on selector run descriptors.
+pub(super) const MAX_PROVER_SELECTOR_RUNS: usize = 16_384;
+/// Fixed-source upper bound on compiled output terms.
+pub(super) const MAX_PROVER_OUTPUT_TERMS: usize = 16_384;
 
 /// Canonical base or extension values accepted by this ledger's opening boundary.
 pub(super) trait LedgerField: IntegerAirField {
@@ -103,7 +110,6 @@ pub(super) struct HashNumerators<F> {
 /// previous witness values never enter the next result. The workspace holds no
 /// masks or domain parameters, and its immutable graph identity is checked before
 /// use. It neither grows with the trace nor retains witness data in global state.
-#[cfg(test)]
 pub(super) struct EvaluationScratch<F> {
     compiled: &'static CompiledLedger,
     values: Box<[F]>,
@@ -141,11 +147,8 @@ pub(super) struct CompactHashQuotient {
     #[cfg(test)]
     trace_rows: usize,
     compiled: &'static CompiledLedger,
-    #[cfg(test)]
     lde_domain: FriDomain,
-    #[cfg(test)]
     lde_rows: usize,
-    #[cfg(test)]
     mask_cycle_rows: usize,
 }
 
@@ -163,16 +166,39 @@ impl CompactHashQuotient {
             params.omega_coset,
         )?;
         static COMPILED: OnceLock<CompiledLedger> = OnceLock::new();
+        let compiled = COMPILED.get_or_init(CompiledLedger::compile);
+        for (actual, max) in [
+            (compiled.nodes.len(), MAX_PROVER_LEDGER_NODES),
+            (compiled.masks.len(), MAX_PROVER_SELECTOR_MASKS),
+            (
+                compiled.masks.iter().map(|mask| mask.runs.len()).sum(),
+                MAX_PROVER_SELECTOR_RUNS,
+            ),
+            (
+                compiled
+                    .local
+                    .iter()
+                    .chain(&compiled.transitions)
+                    .map(Vec::len)
+                    .sum(),
+                MAX_PROVER_OUTPUT_TERMS,
+            ),
+        ] {
+            if actual > max {
+                return Err(Error::VerifierLimitExceeded {
+                    limit: "max_compact_prover_ledger_structure",
+                    actual,
+                    max,
+                });
+            }
+        }
         Ok(Self {
             selectors,
             #[cfg(test)]
             trace_rows,
-            compiled: COMPILED.get_or_init(CompiledLedger::compile),
-            #[cfg(test)]
+            compiled,
             lde_domain: _lde_domain,
-            #[cfg(test)]
             lde_rows,
-            #[cfg(test)]
             mask_cycle_rows: PERIOD * blowup,
         })
     }
@@ -195,7 +221,6 @@ impl CompactHashQuotient {
     }
 
     /// Allocate fixed-size arithmetic storage for reuse within one proof operation.
-    #[cfg(test)]
     pub(super) fn evaluation_scratch<F: LedgerField>(&self) -> EvaluationScratch<F> {
         EvaluationScratch {
             compiled: self.compiled,
@@ -209,7 +234,6 @@ impl CompactHashQuotient {
     /// independently of N. This optional prover-only preparation refuses larger
     /// cycles instead of allocating a full/custom LDE-sized table. The borrowed
     /// view retains its exact owner and cannot be relabelled to another domain.
-    #[cfg(test)]
     pub(super) fn prepare_prover_masks(&self) -> Result<ProverMaskCycle<'_>> {
         if self.mask_cycle_rows > MAX_PROVER_MASK_CYCLE {
             return Err(Error::VerifierLimitExceeded {
@@ -266,15 +290,14 @@ impl CompactHashQuotient {
 }
 
 /// Prover-only mask cycle tied by borrow to one exact ledger and LDE geometry.
-#[cfg(test)]
 pub(super) struct ProverMaskCycle<'a> {
     ledger: &'a CompactHashQuotient,
     values: Box<[u64]>,
 }
 
-#[cfg(test)]
 impl ProverMaskCycle<'_> {
     /// Evaluate shared arithmetic at one bounded LDE index with cached fixed masks.
+    #[cfg(test)]
     pub(super) fn evaluate<F: LedgerField>(
         &self,
         index: usize,

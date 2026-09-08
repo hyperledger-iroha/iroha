@@ -4,7 +4,9 @@
 Requires Python 3.11+, Git, the repository Rust toolchain, a warm Cargo target,
 and explicitly hash-pinned Zig/cargo-zigbuild executables. `check` runs the
 maintained native CLI gate; `prepare` also builds the four Linux release binaries
-with six jobs and captures read-only copies in a fresh output directory.
+with six jobs and captures read-only copies. Rerun the same prepare command to
+reuse completed checks/captures or retry an incomplete local build in the same
+warm Cargo lane. Failed attempt directories and logs remain intact.
 No keys, runtime configuration, SSH, signing, activation or publishing inputs
 are accepted. Output is a local build observation, not release qualification.
 Existing source, outputs and Cargo caches are never overwritten or cleaned.
@@ -13,6 +15,9 @@ Existing source, outputs and Cargo caches are never overwritten or cleaned.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import json
 import hashlib
 import os
 from pathlib import Path
@@ -24,6 +29,7 @@ import struct
 import subprocess
 import sys
 import time
+import uuid
 
 sys.dont_write_bytecode = True
 from release_artifact_contract import (
@@ -38,6 +44,10 @@ TARGET = "aarch64-unknown-linux-gnu"
 BINARIES = (("iroha3d_taira", "irohad"), ("iroha", "iroha_cli"),
             ("sorafs-node", "sorafs_node"), ("kagami", "iroha_kagami"))
 MAX_BINARY_BYTES = 4 * 1024**3
+BUILD_FREE_FLOOR_BYTES = 8 * 1024**3
+CAPTURE_HEADROOM_BYTES = 256 * 1024**2
+PROGRESS_SECONDS = 30
+SESSION_SCHEMA = "taira.local-preparation.v1"
 BUILD_SOURCES = ("scripts/taira_release.py", "scripts/taira_release_check.py",
                  "scripts/release_artifact_contract.py", "scripts/cargo_fast.sh",
                  "scripts/cargo_zigbuild_linux.sh", "scripts/zig_linux_gnu.py")
@@ -183,16 +193,27 @@ def build_command(root: Path, target_dir: Path) -> list[str]:
     return command
 
 
-def run_build(root: Path, command: list[str], env: dict[str, str], log: Path) -> None:
+def run_build(root: Path, command: list[str], env: dict[str, str], log: Path,
+              *, lock_fd: int | None = None) -> None:
     failure = None
+    started = time.monotonic()
     # Commit diagnostic output even on compiler failure; the result is published
     # only after a successful build and independent source/tool revalidation.
     with exclusive_output_fd(log, mode=0o600) as output:
         try:
             child = subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.DEVNULL,
-                                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
+                                     stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
+                                     pass_fds=() if lock_fd is None else (lock_fd,))
             try:
-                require(child.wait() == 0, "Linux build failed; inspect " + str(log))
+                while True:
+                    try:
+                        code = child.wait(timeout=PROGRESS_SECONDS)
+                        break
+                    except subprocess.TimeoutExpired:
+                        print(f"[taira-release] Linux build running {time.monotonic() - started:.0f}s; "
+                              f"compiler output {os.fstat(output).st_size} bytes; log {log}", flush=True)
+                require(code == 0, "Linux build failed; inspect " + str(log)
+                        + "; rerun the same prepare command to reuse the warm Cargo lane")
             except BaseException:
                 if child.poll() is None:
                     try:
@@ -237,12 +258,16 @@ def freeze(path: Path, *, directory: bool = False) -> None:
 
 
 def capture_artifacts(target_dir: Path, output_dir: Path) -> list[dict[str, object]]:
+    sources = [(name, package, stable_hash_path(target_dir / TARGET / "release" / name,
+                                                max_size=MAX_BINARY_BYTES))
+               for name, package in BINARIES]
+    capacity_preflight([(output_dir, sum(info.size for _, _, info in sources)
+                        + CAPTURE_HEADROOM_BYTES, "artifact capture")])
     capture = create_fresh_directory(output_dir / "bin", mode=0o700)
     rows = []
-    for name, package in BINARIES:
+    for name, package, expected in sources:
         relative = f"{TARGET}/release/{name}"
         original = target_dir / relative
-        expected = stable_hash_path(original, max_size=MAX_BINARY_BYTES)
         require(expected.size >= 20 and bool(expected.mode & stat.S_IXUSR),
                 "release artifact must be an executable ELF")
         require(original.stat().st_uid == os.geteuid(), "release artifact must be owner-held")
@@ -273,13 +298,123 @@ def capture_artifacts(target_dir: Path, output_dir: Path) -> list[dict[str, obje
     return rows
 
 
+def capacity_preflight(requirements: list[tuple[Path, int, str]]) -> list[dict[str, object]]:
+    """Sum additional bytes on each actual filesystem, using descriptor-based free space."""
+    devices: dict[int, dict[str, object]] = {}
+    for path, required, label in requirements:
+        require(type(required) is int and required >= 0, "invalid capacity requirement")
+        anchor = real_path(path, exists=False)
+        while not anchor.exists():
+            anchor = anchor.parent
+        fd = os.open(anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        try:
+            info, space = os.fstat(fd), os.fstatvfs(fd)
+            require((info.st_dev, info.st_ino) == (anchor.stat().st_dev, anchor.stat().st_ino),
+                    "capacity filesystem changed during inspection")
+            available = space.f_bavail * space.f_frsize
+            require(available >= 0, "filesystem reported invalid available space")
+            row = devices.setdefault(info.st_dev, {"path": str(anchor), "required_bytes": 0,
+                                                   "available_bytes": available, "uses": []})
+            row["required_bytes"] += required
+            row["available_bytes"] = min(row["available_bytes"], available)
+            row["uses"].append(label)
+        finally:
+            os.close(fd)
+    for row in devices.values():
+        require(row["available_bytes"] >= row["required_bytes"],
+                f"insufficient free space at {row['path']}: need {row['required_bytes']} additional bytes "
+                f"for {', '.join(row['uses'])}, available {row['available_bytes']}; "
+                "free obsolete output copies, retain the warm Cargo lane, then rerun the same command")
+    return list(devices.values())
+
+
+def read_record(path: Path) -> dict[str, object]:
+    require(path.lstat().st_uid == os.geteuid() and stat.S_IMODE(path.lstat().st_mode) == 0o400,
+            "preparation checkpoint must remain owner-held and read-only: " + str(path))
+    expected = stable_hash_path(path, max_size=16 * 1024**2)
+    with stable_open_relative(path.parent, path.name, expected=expected) as fd:
+        raw = bytearray()
+        while block := os.read(fd, 1024 * 1024):
+            raw.extend(block)
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError) as error:
+        raise PrepareError("invalid preparation checkpoint: " + str(path)) from error
+    require(isinstance(value, dict) and canonical_json_bytes(value) == raw,
+            "noncanonical preparation checkpoint: " + str(path))
+    return value
+
+
+def write_record(path: Path, value: dict[str, object]) -> None:
+    # The session flock serializes all checkpoint writers. A crash leaves either the
+    # complete read-only checkpoint or an unreferenced private temporary file.
+    temporary = path.with_name(path.name + ".pending-" + uuid.uuid4().hex)
+    exclusive_write_bytes(temporary, canonical_json_bytes(value), mode=0o600)
+    freeze(temporary)
+    require(not os.path.lexists(path), "checkpoint already exists: " + str(path))
+    os.rename(temporary, path)
+    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
+@contextlib.contextmanager
+def preparation_lock(output: Path):
+    info = output.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) in (0o700, 0o500),
+            "preparation output must remain an owner-private directory")
+    path = output / "session.lock"
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        opened = os.fstat(fd)
+        require(stat.S_ISREG(opened.st_mode) and opened.st_uid == os.geteuid()
+                and opened.st_nlink == 1 and stat.S_IMODE(opened.st_mode) == 0o600
+                and (opened.st_dev, opened.st_ino) == (path.lstat().st_dev, path.lstat().st_ino),
+                "preparation lock custody changed")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise PrepareError("preparation is still running; inspect retained attempt logs at "
+                               + str(output / "attempts")) from error
+        yield fd
+    finally:
+        os.close(fd)
+
+
+def verify_capture(result: dict[str, object], base: dict[str, object], output: Path) -> None:
+    require(all(result.get(key) == value for key, value in base.items())
+            and set(result) == set(base) | {"artifacts", "timings_seconds", "attempt"},
+            "completed preparation identity differs from this command")
+    attempt = result["attempt"]
+    require(isinstance(attempt, str) and re.fullmatch(r"attempts/[0-9]{6}", attempt),
+            "invalid completed attempt path")
+    capture = real_path(output / attempt / "bin")
+    require(stat.S_IMODE(capture.stat().st_mode) == 0o500, "capture directory is not read-only")
+    rows = result["artifacts"]
+    require(isinstance(rows, list) and len(rows) == len(BINARIES), "incomplete captured binaries")
+    for row, (name, package) in zip(rows, BINARIES):
+        path = capture / name
+        require(isinstance(row, dict) and set(row) == {"name", "package", "path", "sha256", "size"}
+                and row["name"] == name and row["package"] == package and row["path"] == str(path),
+                "captured artifact path or role differs")
+        actual = stable_hash_path(path, max_size=MAX_BINARY_BYTES)
+        require(actual.sha256 == row["sha256"] and actual.size == row["size"]
+                and actual.mode == 0o500 and path.stat().st_uid == os.geteuid(),
+                "captured artifact changed; retained output must be inspected: " + str(path))
+
+
 def prepare(args: argparse.Namespace) -> dict[str, object]:
     root, target_dir = real_path(args.repo_root), real_path(args.target_dir)
     output = real_path(args.output_dir, exists=False)
     require(Path(__file__).resolve() == root / "scripts/taira_release.py",
             "prepare must use the maintained script from the selected checkout")
     require(target_dir.is_dir(), "target-dir must be an existing warm Cargo lane")
-    require(not output.exists(), "output-dir must be fresh")
+    fresh = not os.path.lexists(output)
+    require(fresh or (output / "request.json").is_file(),
+            "existing output has no preparation checkpoint; retain it and choose a fresh output directory")
     if output.is_relative_to(root):
         require(output.is_relative_to(root / "target"), "repository outputs must stay under target/")
     require(output != target_dir and not target_dir.is_relative_to(output),
@@ -294,42 +429,98 @@ def prepare(args: argparse.Namespace) -> dict[str, object]:
             "PATH must select the explicitly pinned cargo-zigbuild")
     env.update(IROHA_ZIG_BINARY=str(args.zig), IROHA_GIT_COMMIT_HASH=args.expected_commit,
                VERGEN_GIT_SHA=args.expected_commit)
-    output = create_fresh_directory(output, mode=0o700)
-    timings: dict[str, float] = {}
-
-    def stage(label, operation):
-        print(f"[taira-release] start {label}", flush=True)
-        started = time.monotonic()
-        try:
-            return operation()
-        finally:
-            timings[label] = round(time.monotonic() - started, 3)
-            print(f"[taira-release] {label} elapsed {timings[label]:.3f}s", flush=True)
+    command = build_command(root, target_dir)
+    base = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer,
+            "tree": tree, "target": TARGET, "profile": "release", "jobs": 6,
+            "source_unchanged": True, "toolchain_unchanged": True,
+            "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
+            "tools": tools, "command": command, "release_qualified": False, "deployed": False}
+    request = {"schema": SESSION_SCHEMA, "repo_root": str(root), "target_dir": str(target_dir), **base}
+    if fresh:
+        capacity_preflight([(target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
+                            (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
+        output = create_fresh_directory(output, mode=0o700)
 
     def revalidate():
-        require(verify_checkout(root, args.expected_commit, args.expected_signer) == tree and source_snapshot(root) == before,
-                "signed source changed during preparation")
+        require(verify_checkout(root, args.expected_commit, args.expected_signer) == tree
+                and source_snapshot(root) == before, "signed source changed during preparation")
         require([verify_tool(args.zig, args.zig_sha256),
                  verify_tool(args.cargo_zigbuild, args.cargo_zigbuild_sha256)] == tools,
                 "toolchain changed during preparation")
 
-    stage("native CLI checks", lambda: gate.run_checks(root, environment=env))
-    revalidate()
-    command = build_command(root, target_dir)
-    stage("Linux release build", lambda: run_build(root, command, env, output / "cargo.log"))
-    revalidate()
-    artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, output))
-    revalidate()
-    result = {"commit": args.expected_commit, "signer_fingerprint": args.expected_signer, "tree": tree, "target": TARGET, "profile": "release",
-              "jobs": 6, "source_unchanged": True, "toolchain_unchanged": True,
-              "source_snapshot_sha256": hashlib.sha256(canonical_json_bytes(before)).hexdigest(),
-              "tools": tools, "command": command, "artifacts": artifacts, "timings_seconds": timings,
-              "release_qualified": False, "deployed": False}
-    exclusive_write_bytes(output / "result.json", canonical_json_bytes(result), mode=0o600)
-    freeze(output / "cargo.log")
-    freeze(output / "result.json")
-    freeze(output, directory=True)
-    return result
+    with preparation_lock(output) as lock_fd:
+        if fresh:
+            write_record(output / "request.json", request)
+            create_fresh_directory(output / "attempts", mode=0o700)
+        else:
+            require(read_record(output / "request.json") == request,
+                    "preparation checkpoint belongs to different inputs; retain it and select a new output")
+        # request.json is the durable initialization checkpoint. If its publication
+        # survived but the following mkdir did not, complete that empty namespace
+        # under the same lock after the exact request has been revalidated.
+        if not os.path.lexists(output / "attempts"):
+            create_fresh_directory(output / "attempts", mode=0o700)
+        if (output / "result.json").exists():
+            result = read_record(output / "result.json")
+            verify_capture(result, base, output)
+            revalidate()
+            freeze(output / result["attempt"], directory=True)
+            freeze(output, directory=True)
+            print("[taira-release] reused completed captured binaries; no checks or build needed", flush=True)
+            return result
+        attempts = output / "attempts"
+        names = sorted(path.name for path in attempts.iterdir())
+        require(all(re.fullmatch(r"[0-9]{6}", name) for name in names), "unexpected preparation attempt entry")
+        # Only an immutable completed capture can bypass Cargo. Partial builds/captures are
+        # retained, then Cargo reuses its own warm cache in a fresh attempt directory.
+        for name in reversed(names):
+            candidate = attempts / name / "capture.json"
+            if candidate.exists():
+                result = read_record(candidate)
+                require(result.get("attempt") == "attempts/" + name, "capture attempt differs")
+                verify_capture(result, base, output)
+                revalidate()
+                freeze(attempts / name, directory=True)
+                write_record(output / "result.json", result)
+                freeze(output, directory=True)
+                print("[taira-release] recovered completed capture; no rebuild needed", flush=True)
+                return result
+        capacity_preflight([(target_dir, BUILD_FREE_FLOOR_BYTES, "Cargo working space floor"),
+                            (output, CAPTURE_HEADROOM_BYTES, "capture headroom")])
+        attempt_number = 1 if not names else int(names[-1]) + 1
+        require(attempt_number <= 999999, "preparation attempt namespace exhausted")
+        attempt = create_fresh_directory(attempts / f"{attempt_number:06d}", mode=0o700)
+        timings: dict[str, float] = {}
+
+        def stage(label, operation):
+            print(f"[taira-release] start {label}", flush=True)
+            started = time.monotonic()
+            try:
+                return operation()
+            finally:
+                timings[label] = round(time.monotonic() - started, 3)
+                print(f"[taira-release] {label} elapsed {timings[label]:.3f}s", flush=True)
+
+        checks = output / "checks.json"
+        if checks.exists():
+            require(read_record(checks) == {"request": request, "passed": True}, "native check checkpoint differs")
+            print("[taira-release] reused completed native CLI checks", flush=True)
+        else:
+            stage("native CLI checks", lambda: gate.run_checks(root, environment=env))
+            revalidate()
+            write_record(checks, {"request": request, "passed": True})
+        stage("Linux release build", lambda: run_build(root, command, env, attempt / "cargo.log", lock_fd=lock_fd))
+        revalidate()
+        artifacts = stage("read-only artifact capture", lambda: capture_artifacts(target_dir, attempt))
+        revalidate()
+        result = {**base, "artifacts": artifacts, "timings_seconds": timings,
+                  "attempt": "attempts/" + attempt.name}
+        freeze(attempt / "cargo.log")
+        write_record(attempt / "capture.json", result)
+        freeze(attempt, directory=True)
+        write_record(output / "result.json", result)
+        freeze(output, directory=True)
+        return result
 
 
 def parser() -> argparse.ArgumentParser:

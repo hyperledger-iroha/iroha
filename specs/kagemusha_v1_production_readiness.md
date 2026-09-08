@@ -17,7 +17,7 @@ enable an offline monetary profile.
    and every exposed byte; absence of qualified hardware must remain unavailable.
 3. Complete SDK interoperability: caller-persisted request/payment/mint/redemption
    identities; exact canonical reservation bytes; identical response binding;
-   current-source native artifacts; Swift, Kotlin, mirrored Java and remaining
+   current-source native artifacts; Swift, Kotlin, Java consumers and remaining
    SDK conformance. A syntax check or mocked provider does not qualify native use.
 4. Close security and performance evidence: 1,024 real recursive handoffs,
    1,000 independently funded balances through aggregate spend and redemption,
@@ -31,6 +31,58 @@ Proof ceilings remain 6,528 paired-proof bytes and 9,211/12,288 complete raw/tex
 exchange bytes. Device gates retain 128 MiB process RSS, 10 s proving p95,
 1 s verification p95, and 30 s handoff p95. These are required acceptance limits,
 not current achieved measurements or a claim of optimality.
+
+## Current validation boundary — 2026-09-08
+
+The canonical checkout is `optimizations`. The completed R5 SDK chain at
+`e7a8083753a46bad47535816fff7fe7d29ba8b05` includes freshly invoked host bridge
+and fixture-generator builds, 16 direct balance-key fixture cases, 91 focused JVM
+tests, 1,490 full JVM tests, 12 managed wallet Android tests and 108 managed client
+Android tests. All executed tests passed with no skips; focused and full JVM
+counts overlap. Its source and artifact boundaries were retained. The resulting
+five repair files were committed in `8c322866d0556060f4794ab5d178af2acaba1a92`.
+A separate Android host JNI test also passed actual software-key generation,
+reload, signing and verification. These are host/managed SDK results, not device
+or monetary qualification.
+
+After the release71 source hold ended at
+`f0322420c46aa6cfc35b37b4b0c4abe57457817f`, the Kotlin retry-archive correction
+below passed all 13 focused tests. JavaScript Parliament parity passed all 24
+tests, including the TypeScript consumer check for `RegisterInitialSortition`.
+The corresponding Swift source and tests are preserved in a local reapply patch
+for the clean native checkpoint. The required canonical ABI-23
+`dist/NoritoBridge.xcframework` is absent, so Swift execution remains open.
+Neither focused SDK result rebuilds native proof authority for later Core changes.
+
+The reviewed vendor memory candidate is applied. Its actual default and
+no-multicore runs each passed 45 regular tests, 12 additional proof-test
+executions and 12 lookup-test executions: 138 executions in total. The runs
+retain exact source, executable, recipe and index boundaries. Test-execution
+counts are not counts of constructed proofs. The exact Core structured-key
+overlay passed 92 regular Core tests and two separately executed row-emission
+benchmarks from the shared native build. All 54 journal/recovery tests also
+passed. The real-proof API check exposed a test-only helper guard; extending
+that guard to the existing profiling feature fixed the compile, and the focused
+retry passed. The method body and tested behavior are unchanged. This is
+focused validation, not a workspace or warning-free Clippy result. The separate
+Base lane passed 14 regular tests, including small BN256/KZG key and seeded-proof
+equality against the original map, and two separately executed benchmarks.
+Its offline lock generation left the then-current root dependency graph
+unchanged; one test-only trait import fixed its initial compile failure. The historical 5,302,980-cell map benchmark retained an identical
+checksum while process RSS fell from 557,727,744 to 4,145,152 bytes. These are
+unoptimized host map measurements. The separate 1,008-source Core row benchmark
+retained the exact 131,046-row checksum while peak RSS fell from 189,562,880
+to 28,262,400 bytes; both runs took about 52.6 seconds. Neither benchmark
+measures full-proof or device resources.
+Full-process memory/latency and the required genuine aggregate proofs remain
+open. Local receipts are retained in
+`target/kagemusha-main-native-jvm-validation-r5`,
+`target/kagemusha-sdk-security-parity-validation-r1` and
+`target/kagemusha-validation/kagemusha-combined-memory-r2-actual-20260908` and
+`target/kagemusha-proof-work-inventory/base-test-lane/actual-r2`,
+`target/kagemusha-validation/kagemusha-core-structured-shared-r2-20260908`,
+`target/kagemusha-validation/kagemusha-wal-shared-r1-20260908` and
+`target/kagemusha-validation/kagemusha-api-cfg-retry-r1`.
 
 ## Requested device scope
 
@@ -62,6 +114,30 @@ and [device bridge contract](kagemusha_device_bridge_v1.md).
 
 ## Security findings and implementation work
 
+- **KGM-22 — Corrected; focused retry-archive validation passes.** The Kotlin
+  intent and historical qualification decoders previously entered generic
+  decompression before rejecting noncanonical compressed archives. Both now
+  bound and snapshot input, inspect the header without decompression, require
+  uncompressed zero-layout archives, and retain schema/checksum/complete-decode
+  and exact re-encoding checks against that same snapshot. All nine existing
+  intent tests and four added regression tests pass. Small malformed-header
+  cases verify early rejection; enclosing decode-state and defensive-copy
+  behavior are preserved. Historical qualification decoding still confers no
+  hardware authentication. Source:
+  [retry archive codec](../kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/offline/KagemushaOperationIntentV1.kt).
+- **KGM-23 — Fixed; 54 Core recovery tests passed.** Outgoing-index
+  reconciliation alone did not pair a separately supplied coordinator WAL with
+  the checkpoint-selected journal when only Reserve/BeginIntent records existed.
+  Core now requires the selected frame count, hash and byte boundary to occur in
+  the held, fully replayed WAL before serving it. Ownership/generation checks
+  remain mandatory even for a cached match; valid appended suffixes remain
+  recoverable. Creation rejects before touching a new path once selected history
+  has advanced beyond the initializer. Three new regressions and 51 retained
+  tests passed on the fresh shared Core harness. This source finding does not establish an
+  exported-ABI or monetary exploit, and the fix does not supply hardware
+  freshness or qualified speculative-suffix authentication. Sources:
+  [coordinator pairing](../crates/iroha_core/src/zk/kagemusha_v1_state/coordinator_operation_store.rs)
+  and [owned journal ancestry](../crates/iroha_core/src/zk/kagemusha_v1_state/private_journal.rs).
 - **KGM-01 — High, monetary relation incomplete.** The original MintFold private
   recipient credential and credit opening were retained by Core but not fully
   constrained to the receiving lane and verified authorization in the composite

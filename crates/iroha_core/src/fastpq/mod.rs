@@ -2,6 +2,10 @@
 pub mod lane;
 mod quantity_statement;
 mod source_capture;
+#[cfg(test)]
+mod source_prefix_lengths;
+#[cfg(test)]
+mod source_reservation;
 pub(crate) use source_capture::preflight_fastpq_source_transcripts;
 mod source_context;
 pub use quantity_statement::{

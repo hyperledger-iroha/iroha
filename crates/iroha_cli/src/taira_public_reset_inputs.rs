@@ -445,41 +445,7 @@ fn sign_inventory(
 
 #[cfg(unix)]
 fn inherited_signing_key(fd: u32, public_key: &PublicKey) -> Result<KeyPair> {
-    if !(3..=65535).contains(&fd) {
-        return Err(eyre!(
-            "signing key must use an inherited descriptor in 3..=65535"
-        ));
-    }
-    #[cfg(target_os = "linux")]
-    let path = PathBuf::from(format!("/proc/self/fd/{fd}"));
-    #[cfg(not(target_os = "linux"))]
-    let path = PathBuf::from(format!("/dev/fd/{fd}"));
-    // NONBLOCK prevents an inherited pipe from blocking before its descriptor type is checked.
-    let mut file = File::from(
-        rustix::fs::open(
-            &path,
-            rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NONBLOCK | rustix::fs::OFlags::CLOEXEC,
-            rustix::fs::Mode::empty(),
-        )
-        .map_err(|_| eyre!("cannot open inherited signing descriptor"))?,
-    );
-    let metadata = file.metadata()?;
-    let before = file_snapshot(&metadata)?;
-    require_owner_private_snapshot(&before, "inherited signing key")?;
-    if !metadata.is_file() || before.len == 0 || before.len > 512 {
-        return Err(eyre!(
-            "inherited signing key must be a bounded owner-private regular file"
-        ));
-    }
-    file.rewind()?;
-    let mut bytes = Zeroizing::new(Vec::new());
-    (&mut file)
-        .take(513)
-        .read_to_end(&mut bytes)
-        .map_err(|_| eyre!("cannot read inherited signing key"))?;
-    if file_snapshot(&file.metadata()?)? != before || bytes.len() as u64 != before.len {
-        return Err(eyre!("inherited signing key changed while loading"));
-    }
+    let bytes = crate::client_config::read_inherited_private_file(fd, 512, "owner signing key")?;
     let text =
         std::str::from_utf8(&bytes).map_err(|_| eyre!("invalid owner signing key encoding"))?;
     let private = PrivateKey::from_str(text.strip_suffix('\n').unwrap_or(text))
@@ -493,7 +459,7 @@ fn inherited_signing_key(_: u32, _: &PublicKey) -> Result<KeyPair> {
     Err(eyre!("owner signing requires Unix inherited descriptors"))
 }
 
-fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(super) fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
     validate_absolute_normal_path(path, "release output")?;
     let parent = path
         .parent()
@@ -508,7 +474,7 @@ fn write_new_private(path: &Path, bytes: &[u8]) -> Result<()> {
         .map_err(|_| eyre!("cannot publish fresh release output"))?;
     File::open(parent)?.sync_all()?;
     let pinned = pin_owner_private_file(path, "release output")?;
-    if pinned_bytes(&pinned, MAX_JSON_BYTES)?.as_slice() != bytes {
+    if zeroize::Zeroizing::new(pinned_bytes(&pinned, MAX_JSON_BYTES)?).as_slice() != bytes {
         return Err(eyre!(
             "published release output differs from the retained bytes"
         ));

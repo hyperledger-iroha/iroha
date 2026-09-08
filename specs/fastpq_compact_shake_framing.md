@@ -1,7 +1,7 @@
 # SHAKE prefix/body candidate framing
 
-2026-09-08. The framing and arithmetic below describe the prospective
-401-label `compact_shake_candidate` successor.
+2026-09-08. The framing and arithmetic below describe the implemented
+401-label `compact_shake_candidate`.
 It is not a qualified proof profile or a production admission path. The existing
 136-query diagnostic protocol does not use this candidate. The mathematical
 conditions remain those of [projected-XOF model](fastpq_compact_projected_xof.md) and
@@ -88,8 +88,10 @@ The state clone and body encoding work remain real costs. Relative to the
 predecessor, P is five bytes longer and the query tape grows by three bytes.
 The final tape crosses seven 136-byte output blocks and requires an eighth,
 adding one squeezing permutation per segment. These Python calculations are
-build-independent checks; successor Rust compilation and fresh full-proof
-execution have not run.
+build-independent checks. The normal library, 909 unit tests and 19 integration
+tests pass; separate fresh ordinary/AXT single and bundle proof diagnostics and
+both complete artifact verification diagnostics also pass. Their current bytes,
+timings and evidence scope are recorded in [production readiness](fastpq_production_readiness.md#current-optimizations-integration).
 
 Canonical body lengths are 2817 bytes for a full row, 184 for a parent, 29724 for
 the largest chain input, and 127 for G. The callback-based Merkle adapter
@@ -98,13 +100,13 @@ verification.
 
 ## Retained predecessor measurements
 
-All measurements, test counts, artifact hashes and applied-stage statements in
-this section and the retained sections below belong to the predecessor identity
-without `:c401:`. They are retained history, not evidence for this successor.
-The earlier local aarch64 build measured a 352-byte prefix state. New sampler
-vectors are independently derived by the Python checker, but the existing
-full-proof pins must be regenerated and reconciled under the successor before
-its retained-artifact tests can be counted as evidence.
+The measurements, test counts and artifact hashes in this section and the
+explicitly labeled predecessor evidence below belong to the identity without
+`:c401:`. They are retained history, not evidence for the current candidate.
+The earlier local aarch64 build measured a 352-byte prefix state. Current sampler
+vectors are independently derived by the Python checker, and current full-proof
+pins were regenerated and checked in the integration linked above. Neither
+replaces the predecessor measurements retained here.
 
 A direct-rustc staged harness passed 26 tests (6 XOF, 13 candidate and 7 actual
 field tests), including partial block boundaries and all tree/message roles. One
@@ -137,8 +139,8 @@ modulus, extension nonresidue, domain root/log size/coset, blowup, arity, fold
 count, terminal length/degree, query count and full public statement bytes in
 that order. Its fixture remains 225 bytes and the successor complete prefix is
 382 bytes (the predecessor was 377 bytes). The five successor zero-leaf roots are rebound
-from independent Python Norito/SHAKE calculations; their Rust assertions have
-not yet run. Canonical String uses a compact length, while Vec uses the fixed sequence count; the
+from independent Python Norito/SHAKE calculations; all five Rust assertions pass
+in the current unit suite. Canonical String uses a compact length, while Vec uses the fixed sequence count; the
 reference encoder's initial mismatch was corrected without changing the engine.
 The self-contained `scripts/fastpq/check_compact_shake_encoding.py`
 reproduces these and the prefix/body/resource controls without retained artifacts.

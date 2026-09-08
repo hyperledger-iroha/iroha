@@ -8,8 +8,8 @@ use group::Curve;
 use super::{
     Assigned, Challenge, Error, LagrangeCoeff, Polynomial, ProvingKey, VerifyingKey,
     circuit::{
-        Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Fixed, FloorPlanner, Instance,
-        Selector,
+        Advice, Any, Assignment, Circuit, Column, ConstraintSystem, Fixed,
+        FixedColumnModeAccumulator, FixedColumnModeCounts, FloorPlanner, Instance, Selector,
     },
     evaluation::Evaluator,
     permutation,
@@ -277,6 +277,20 @@ pub struct KeygenCircuitResourceProfile {
     pub selector_columns: usize,
     /// Fixed columns produced by the selected selector-materialization strategy.
     pub materialized_selector_columns: usize,
+    /// Constant fixed columns, including configured and materialized selector columns.
+    ///
+    /// Constant zero, one, and other values all use one scalar payload and take precedence
+    /// over the binary mode. No rational inversions or selector field expansion are required.
+    pub constant_fixed_columns: usize,
+    /// Nonconstant fixed columns containing only field zero and one.
+    ///
+    /// Each column uses `domain_rows.div_ceil(8)` payload bytes.
+    pub binary_fixed_columns: usize,
+    /// Remaining fixed columns, each using `domain_rows` scalar payloads.
+    ///
+    /// The three mode counts are disjoint and sum to `configured_fixed_columns` plus
+    /// `materialized_selector_columns` for this selector strategy.
+    pub raw_fixed_columns: usize,
     /// Columns participating in the permutation argument.
     pub permutation_columns: usize,
     /// Whether selector compression is selected for key construction.
@@ -301,11 +315,41 @@ fn keygen_circuit_resource_profile<F: Field>(
     assembly: &Assembly<F>,
     compress_selectors: bool,
 ) -> KeygenCircuitResourceProfile {
-    let materialized_selector_columns = if compress_selectors {
-        cs.compressed_selector_columns(&assembly.selectors)
+    keygen_circuit_resource_profile_with_fixed_modes(
+        domain_rows,
+        cs,
+        assembly,
+        compress_selectors,
+        configured_fixed_modes(assembly),
+    )
+}
+
+fn configured_fixed_modes<F: Field>(assembly: &Assembly<F>) -> FixedColumnModeCounts {
+    let mut modes = FixedColumnModeCounts::default();
+    for polynomial in &assembly.fixed {
+        let mut column = FixedColumnModeAccumulator::new();
+        for &value in polynomial.iter() {
+            column.observe(value, 1);
+        }
+        modes.add(column.finish());
+    }
+    modes
+}
+
+fn keygen_circuit_resource_profile_with_fixed_modes<F: Field>(
+    domain_rows: usize,
+    cs: &ConstraintSystem<F>,
+    assembly: &Assembly<F>,
+    compress_selectors: bool,
+    mut fixed_modes: FixedColumnModeCounts,
+) -> KeygenCircuitResourceProfile {
+    let selector_modes = if compress_selectors {
+        cs.compressed_selector_modes(&assembly.selectors)
     } else {
-        cs.num_selectors()
+        cs.direct_selector_modes(&assembly.selectors)
     };
+    let materialized_selector_columns = selector_modes.total();
+    fixed_modes.add(selector_modes);
     KeygenCircuitResourceProfile {
         domain_rows,
         advice_columns: cs.num_advice_columns(),
@@ -313,8 +357,36 @@ fn keygen_circuit_resource_profile<F: Field>(
         configured_fixed_columns: cs.num_fixed_columns(),
         selector_columns: cs.num_selectors(),
         materialized_selector_columns,
+        constant_fixed_columns: fixed_modes.constant,
+        binary_fixed_columns: fixed_modes.binary,
+        raw_fixed_columns: fixed_modes.raw,
         permutation_columns: cs.permutation().get_columns().len(),
         compress_selectors,
+    }
+}
+
+fn keygen_selector_profiles<F: Field>(
+    domain_rows: usize,
+    cs: &ConstraintSystem<F>,
+    assembly: &Assembly<F>,
+) -> KeygenSelectorProfiles {
+    // Both alternatives share the same configured fixed assignments. Scan those only once.
+    let fixed_modes = configured_fixed_modes(assembly);
+    KeygenSelectorProfiles {
+        compressed: keygen_circuit_resource_profile_with_fixed_modes(
+            domain_rows,
+            cs,
+            assembly,
+            true,
+            fixed_modes,
+        ),
+        direct: keygen_circuit_resource_profile_with_fixed_modes(
+            domain_rows,
+            cs,
+            assembly,
+            false,
+            fixed_modes,
+        ),
     }
 }
 
@@ -590,10 +662,7 @@ where
     let (cs, assembly, generated_domain) =
         synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
             .map_err(KeygenWithExtractorError::Keygen)?;
-    let profiles = KeygenSelectorProfiles {
-        compressed: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, true),
-        direct: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, false),
-    };
+    let profiles = keygen_selector_profiles(params.n() as usize, &cs, &assembly);
     let (compress_selectors, extracted) =
         extractor(&circuit, profiles).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
@@ -791,10 +860,7 @@ where
     let (cs, assembly, generated_domain) =
         synthesize_keygen_assembly::<C, _, _>(params, None, &circuit)
             .map_err(KeygenWithExtractorError::Keygen)?;
-    let profiles = KeygenSelectorProfiles {
-        compressed: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, true),
-        direct: keygen_circuit_resource_profile(params.n() as usize, &cs, &assembly, false),
-    };
+    let profiles = keygen_selector_profiles(params.n() as usize, &cs, &assembly);
     let (compress_selectors, extracted) =
         extractor(&circuit, profiles).map_err(KeygenWithExtractorError::Extractor)?;
     drop(circuit);
@@ -979,5 +1045,194 @@ where
         fixed_polys,
         permutation: permutation_pk,
         ev,
+    }
+}
+
+#[cfg(test)]
+mod fixed_column_profile_tests {
+    use super::*;
+    use crate::poly::Rotation;
+    use halo2curves::pasta::{Fp, Fq};
+
+    fn materialized_modes<F: Field>(columns: &[Vec<F>]) -> (usize, usize, usize) {
+        let mut result = (0, 0, 0);
+        for values in columns {
+            if values.iter().all(|value| value == &values[0]) {
+                result.0 += 1;
+            } else if values
+                .iter()
+                .all(|value| *value == F::ZERO || *value == F::ONE)
+            {
+                result.1 += 1;
+            } else {
+                result.2 += 1;
+            }
+        }
+        result
+    }
+
+    fn profile_cases<F: WithSmallOrderMulGroup<3>>() {
+        let rows = 8;
+        let mut cs = ConstraintSystem::<F>::default();
+        let advice = cs.advice_column();
+        cs.instance_column();
+        cs.enable_equality(advice);
+        for index in 0..5 {
+            let fixed = cs.fixed_column();
+            if index == 0 {
+                cs.enable_equality(fixed);
+            }
+        }
+        let simple = [cs.selector(), cs.selector(), cs.selector()];
+        cs.complex_selector();
+        cs.set_minimum_degree(4);
+        cs.create_gate("profile selectors", |meta| {
+            simple.map(|selector| {
+                meta.query_selector(selector) * meta.query_advice(advice, Rotation::cur())
+            })
+        });
+        let one = F::ONE;
+        let two = one + one;
+        let domain = EvaluationDomain::<F>::new(cs.degree() as u32, 3);
+        let values = vec![
+            vec![Assigned::Rational(one, F::ZERO); rows],
+            vec![Assigned::Rational(two, two); rows],
+            vec![Assigned::Rational(two + two, two); rows],
+            (0..rows)
+                .map(|row| {
+                    if row % 2 == 0 {
+                        Assigned::Zero
+                    } else {
+                        Assigned::Rational(two, two)
+                    }
+                })
+                .collect(),
+            (0..rows)
+                .map(|row| {
+                    if row % 2 == 0 {
+                        Assigned::Zero
+                    } else {
+                        Assigned::Trivial(two)
+                    }
+                })
+                .collect(),
+        ];
+        let schedules = [
+            (
+                vec![
+                    vec![false; rows],
+                    vec![true; rows],
+                    vec![false; rows],
+                    (0..rows).map(|row| row % 2 == 0).collect(),
+                ],
+                (4, 2, 1),
+                (6, 2, 1),
+            ),
+            (
+                vec![
+                    (0..rows).map(|row| row == 0).collect(),
+                    (0..rows).map(|row| row < 2).collect(),
+                    (0..rows).map(|row| row == 2).collect(),
+                    vec![false; rows],
+                ],
+                (4, 2, 2),
+                (4, 4, 1),
+            ),
+        ];
+        for (selectors, compressed_expected, direct_expected) in schedules {
+            let assembly = Assembly {
+                k: 3,
+                fixed: values
+                    .iter()
+                    .cloned()
+                    .map(|column| domain.lagrange_assigned_from_vec(column))
+                    .collect(),
+                permutation: permutation::keygen::Assembly::new(rows, &cs.permutation),
+                selectors: selectors.clone(),
+                usable_rows: 0..rows,
+                _marker: std::marker::PhantomData,
+            };
+            let profiles = keygen_selector_profiles(rows, &cs, &assembly);
+            assert_eq!(
+                profiles.compressed,
+                keygen_circuit_resource_profile(rows, &cs, &assembly, true)
+            );
+            assert_eq!(
+                profiles.direct,
+                keygen_circuit_resource_profile(rows, &cs, &assembly, false)
+            );
+            for (profile, expected) in [
+                (profiles.compressed, compressed_expected),
+                (profiles.direct, direct_expected),
+            ] {
+                assert_eq!(profile.domain_rows, rows);
+                assert_eq!(profile.advice_columns, 1);
+                assert_eq!(profile.instance_columns, 1);
+                assert_eq!(profile.configured_fixed_columns, 5);
+                assert_eq!(profile.selector_columns, 4);
+                assert_eq!(profile.permutation_columns, 2);
+                let (_, selector_values) = if profile.compress_selectors {
+                    cs.clone().compress_selectors(selectors.clone())
+                } else {
+                    cs.clone()
+                        .directly_convert_selectors_to_fixed(selectors.clone())
+                };
+                assert_eq!(profile.materialized_selector_columns, selector_values.len());
+                let mut materialized = values
+                    .iter()
+                    .map(|column| column.iter().copied().map(Assigned::evaluate).collect())
+                    .collect::<Vec<_>>();
+                materialized.extend(selector_values);
+                let actual = (
+                    profile.constant_fixed_columns,
+                    profile.binary_fixed_columns,
+                    profile.raw_fixed_columns,
+                );
+                assert_eq!(actual, expected);
+                assert_eq!(actual, materialized_modes(&materialized));
+                assert_eq!(
+                    actual.0 + actual.1 + actual.2,
+                    profile.configured_fixed_columns + profile.materialized_selector_columns
+                );
+            }
+            // Profiling only borrows the still-owned assembly and configured constraint system.
+            assert_eq!(assembly.selectors, selectors);
+            for (polynomial, original) in assembly.fixed.iter().zip(&values) {
+                assert_eq!(polynomial.values, *original);
+            }
+            assert_eq!(cs.num_fixed_columns(), 5);
+            assert_eq!(cs.num_selectors(), 4);
+        }
+    }
+
+    #[test]
+    fn profiles_match_materialized_fixed_columns_and_preserve_assembly_in_both_fields() {
+        profile_cases::<Fp>();
+        profile_cases::<Fq>();
+    }
+
+    #[test]
+    fn profiles_with_no_fixed_columns_or_selectors_have_zero_mode_counts() {
+        let cs = ConstraintSystem::<Fp>::default();
+        let assembly = Assembly {
+            k: 3,
+            fixed: vec![],
+            permutation: permutation::keygen::Assembly::new(8, &cs.permutation),
+            selectors: vec![],
+            usable_rows: 0..8,
+            _marker: std::marker::PhantomData,
+        };
+        let profiles = keygen_selector_profiles(8, &cs, &assembly);
+        for profile in [profiles.compressed, profiles.direct] {
+            assert_eq!(profile.materialized_selector_columns, 0);
+            assert_eq!(
+                (
+                    profile.constant_fixed_columns,
+                    profile.binary_fixed_columns,
+                    profile.raw_fixed_columns
+                ),
+                (0, 0, 0)
+            );
+        }
     }
 }

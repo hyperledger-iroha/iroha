@@ -440,7 +440,27 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     let (world_batch, _, _) = build_transfer_world(None);
     let kura_batch = Kura::blank_kura_for_testing();
     let query_batch = crate::query::store::LiveQueryStore::start_test();
-    let state_batch = State::new(world_batch, Arc::clone(&kura_batch), query_batch);
+    let mut state_batch = State::new(world_batch, Arc::clone(&kura_batch), query_batch);
+    let first_lane = LaneId::new(0);
+    let second_lane = LaneId::new(1);
+    let rejected_lane = LaneId::new(2);
+    {
+        let nexus = state_batch.nexus.get_mut();
+        nexus.lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
+            nonzero!(3_u32),
+            (0..3)
+                .map(|index| iroha_data_model::nexus::LaneConfig {
+                    id: LaneId::new(index),
+                    alias: format!("grouped-transfer-{index}"),
+                    ..iroha_data_model::nexus::LaneConfig::default()
+                })
+                .collect(),
+        )
+        .expect("three distinct routing lanes");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+    }
+    state_batch.reseed_static_lane_incarnations_for_tests();
     let mut block_batch = state_batch.block(header);
     let batch_start_fragments = block_batch.committed_fragment_count();
     let mut first_delta = DetachedStateTransactionDelta::default();
@@ -457,21 +477,143 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
         &mut second_delta,
     )
     .expect("second detached transfer should be recorded");
+    let rejected_call_hash = iroha_crypto::Hash::prehashed([9_u8; iroha_crypto::Hash::LENGTH]);
+    let mut rejected_delta = DetachedStateTransactionDelta::default();
+    let rejected_instruction: InstructionBox =
+        Transfer::asset_quantity(alice_asset_id.clone(), 99_u32, BOB_ID.clone()).into();
+    crate::executor::execute_instruction_detached(
+        &ALICE_ID,
+        &rejected_instruction,
+        &mut rejected_delta,
+    )
+    .expect("record an overdrawn attempt for merge-time rejection");
     {
         let mut tx = block_batch.transaction();
+        tx.current_lane_id = Some(first_lane);
         tx.tx_call_hash = Some(call_hash);
         first_delta
             .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
             .expect("first delta should be a single transfer")
             .expect("first batch transfer merge");
+        tx.current_lane_id = Some(second_lane);
         tx.tx_call_hash = Some(second_call_hash);
         second_delta
             .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
             .expect("second delta should be a single transfer")
             .expect("second batch transfer merge");
+        tx.current_lane_id = Some(rejected_lane);
+        tx.tx_call_hash = Some(rejected_call_hash);
+        let successful_events = tx.world.external_event_buf.len();
+        rejected_delta
+            .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
+            .expect("rejected delta is one transparent transfer")
+            .expect_err("99 units must exceed the five units left after successful merges");
+        assert_eq!(tx.world.external_event_buf.len(), successful_events);
+        assert_eq!(
+            tx.world.assets().get(&alice_asset_id).unwrap().0,
+            Quantity::from(5_u32)
+        );
+        assert_eq!(
+            tx.world.assets().get(&bob_asset_id).unwrap().0,
+            Quantity::from(5_u32)
+        );
         tx.tx_call_hash = None;
+        tx.current_lane_id = None;
         tx.apply();
     }
+    block_batch.record_applied_batch_lanes(BTreeSet::from([first_lane, second_lane]));
+    assert_eq!(
+        block_batch.touched_lanes,
+        BTreeSet::from([first_lane, second_lane])
+    );
+    assert!(!block_batch.touched_lanes.contains(&rejected_lane));
+    // A successful merge in a subsequently dropped overlay publishes neither
+    // its balances nor its lane. A zero-success overlay has the same rule.
+    let applied_fragments = block_batch.committed_fragment_count();
+    let applied_events = block_batch.world.external_event_buf.len();
+    for successful_before_drop in [true, false] {
+        let mut tx = block_batch.transaction();
+        tx.current_lane_id = Some(rejected_lane);
+        tx.tx_call_hash = Some(rejected_call_hash);
+        let result = if successful_before_drop {
+            &first_delta
+        } else {
+            &rejected_delta
+        }
+        .merge_numeric_transfer_batch_into_transaction(&mut tx, &ALICE_ID)
+        .expect("control delta is one transparent transfer");
+        if successful_before_drop {
+            result.expect("the dropped overlay can transfer three of the five remaining units");
+        } else {
+            result.expect_err("zero-success overlay rejects the overdrawn transfer");
+        }
+        drop(tx);
+        assert_eq!(
+            block_batch.touched_lanes,
+            BTreeSet::from([first_lane, second_lane])
+        );
+        assert_eq!(block_batch.committed_fragment_count(), applied_fragments);
+        assert_eq!(block_batch.world.external_event_buf.len(), applied_events);
+        assert_eq!(
+            block_batch.world.assets().get(&bob_asset_id).unwrap().0,
+            Quantity::from(5_u32)
+        );
+        assert_eq!(
+            block_batch.world.assets().get(&alice_asset_id).unwrap().0,
+            Quantity::from(5_u32)
+        );
+    }
+    block_batch.record_applied_batch_lanes(BTreeSet::new());
+    assert_eq!(
+        block_batch.touched_lanes,
+        BTreeSet::from([first_lane, second_lane])
+    );
+    // Exercise the production touched-lane DA predicate with only the later
+    // successful lane covered. The earlier successful lane must still fail.
+    let record = |lane_id| {
+        iroha_data_model::da::commitment::DaCommitmentRecord::new(
+            lane_id,
+            1,
+            1,
+            iroha_data_model::da::types::BlobDigest::new([0x31; 32]),
+            iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0x41; 32]),
+            iroha_data_model::da::commitment::DaProofScheme::MerkleSha256,
+            iroha_crypto::Hash::prehashed([0x51; 32]),
+            None,
+            iroha_data_model::da::commitment::RetentionClass::default(),
+            iroha_data_model::da::types::StorageTicketId::new([0x61; 32]),
+            iroha_crypto::Signature::new(
+                crate::state::checked_keypair().private_key(),
+                b"grouped-transfer DA cursor fixture",
+            ),
+        )
+    };
+    let mut cursors = DaShardCursorIndex::new(&block_batch.nexus.lane_config);
+    let height = header.height().get();
+    cursors
+        .advance(
+            block_batch.nexus.lane_config.shard_id(second_lane),
+            &record(second_lane),
+            height,
+        )
+        .expect("later successful lane cursor");
+    assert!(
+        matches!(block_batch.validate_touched_lane_cursors(&cursors, height),
+            Err(BlockValidationError::DaShardCursor(DaShardCursorError::MissingCursor {
+                lane_id, block_height, ..
+            })) if lane_id == first_lane && block_height == height
+        )
+    );
+    cursors
+        .advance(
+            block_batch.nexus.lane_config.shard_id(first_lane),
+            &record(first_lane),
+            height,
+        )
+        .expect("earlier successful lane cursor");
+    block_batch
+        .validate_touched_lane_cursors(&cursors, height)
+        .expect("both successful lanes are covered; rejected lane requires no cursor");
     block_batch.add_committed_fragments(1);
     assert_eq!(
         block_batch.committed_fragment_count(),
@@ -479,6 +621,17 @@ fn check_detached_asset_transfer_matches_sequential_transcript_and_events() {
     );
     let events_batch = block_batch.world.take_external_events();
     let transcripts_batch = block_batch.drain_transfer_transcripts();
+    assert!(
+        !transcripts_batch.contains_key(&rejected_call_hash),
+        "rejected and dropped attempts must not publish transcripts"
+    );
+    let captured_sources = block_batch.captured_fastpq_transcript_sources().unwrap();
+    assert!(captured_sources.contains_key(&call_hash));
+    assert!(captured_sources.contains_key(&second_call_hash));
+    assert!(
+        !captured_sources.contains_key(&rejected_call_hash),
+        "rejected and dropped attempts must not publish source captures"
+    );
     block_batch
         .commit_world_overlay_for_testing()
         .expect("commit batch detached block");

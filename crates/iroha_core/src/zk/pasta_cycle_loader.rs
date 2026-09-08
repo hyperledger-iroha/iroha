@@ -2646,6 +2646,10 @@ where
 }
 
 #[cfg(test)]
+#[path = "pasta_cycle_loader_allocation_tests.rs"]
+mod allocation_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use halo2_base::gates::circuit::builder::BaseCircuitBuilder;

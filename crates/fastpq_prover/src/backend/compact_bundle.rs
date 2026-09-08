@@ -400,7 +400,6 @@ pub(super) fn verify_shake_axt_transfer_bundle<V: CompactTransferValue>(
 }
 
 /// Encode a bounded candidate ordinary carrier; child proof validity is separate.
-#[cfg(test)]
 pub(super) fn encode_shake_wire(
     wire: &ShakeBundleWire,
     count: usize,
@@ -426,7 +425,6 @@ pub(super) fn encode_shake_wire(
 }
 
 /// Encode a bounded nominal candidate AXT carrier without replacing caller context.
-#[cfg(test)]
 pub(super) fn encode_shake_axt_wire(
     wire: &ShakeAxtBundleWire,
     count: usize,
