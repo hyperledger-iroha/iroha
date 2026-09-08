@@ -4199,7 +4199,7 @@ mod tests {
         fs::create_dir_all(dir.path().join("modules")).expect("create modules directory");
         fs::write(
             dir.path().join("contracts/app.ko"),
-            "seiyaku App { view fn run() -> int { return Math::value(1); } }",
+            "seiyaku App { view fn run() -> int { return Math::value(unused: 1); } }",
         )
         .expect("write project root");
         fs::write(
@@ -4233,6 +4233,17 @@ mod tests {
         )
         .expect("write developer manifest");
         let lint = dev_run_lints(&manifest_path, false).expect("lint locked project");
+        assert_eq!(
+            lint.pointer("/diagnostics/0/kind")
+                .and_then(norito::json::Value::as_str),
+            Some("lint"),
+            "the valid project must reach lint collection: {lint:?}"
+        );
+        assert_eq!(
+            lint.pointer("/diagnostics/0/diagnostics/0/code")
+                .and_then(norito::json::Value::as_str),
+            Some("K5003")
+        );
         assert_eq!(
             lint.pointer("/diagnostics/0/package")
                 .and_then(norito::json::Value::as_str),
