@@ -54,3 +54,21 @@ Focused validation: `python3 scripts/tests/taira_disk_capacity_test.py` covers
 cohost aggregation, inode exhaustion, sparse backing-host refusal, symlink
 rejection, arithmetic bounds, required runtime allocations, exact copy topology,
 and metadata-only reads.
+
+
+## Derive the retained first-release footprint
+
+`derive_capacity` constructs guest and physical backing plans from the actual
+maintained build receipt and the public `taira.public-capacity-inputs.v1` and
+`taira.public-runtime-capacity-inputs.v1` observations. The maintained
+[`taira_retry.py` command](taira_retry.md) obtains these observations automatically
+from the preceding native inventory and its current stage. It checks the three
+small manifest hashes against native SF1 admission before using the 64 KiB chunk
+minimum; it never decodes Norito in Python or rereads large payloads for hashing.
+
+The derivation charges four daemon, four SoraFS and five CLI role copies; each
+config uses the native 1 MiB output bound. It includes all four guest hydration,
+writable root/data leases, ephemeral storage and bundle publication footprints.
+Unknown stage or service-artifact layouts reject rather than produce a partial
+budget. The backing plan includes full future guest growth plus 2 GiB beyond the
+guest's own 2 GiB reserve. Both plans still require fresh filesystem evaluation.

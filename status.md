@@ -8,6 +8,23 @@ The previous dirty working copies are preserved in the [dated historical archive
 
 ## Current implementation and local evidence
 
+The latest Taira rollout completed rollback after a mandatory Inrou startup
+probe failed. Linux rejected `io.max` for partition `254:2`; the whole device
+`254:0` accepted and retained the required finite limits in an actual empty
+cgroup regression. The resolver now follows validated sysfs device ownership to
+the whole device. Startup qualification moves before the consensus thread so a
+fatal host prerequisite cannot create consensus recovery work. The same rollout
+also exposed cold recovery rejecting an authenticated Proposal after its next
+Vote advanced; the bounded Proposal/Prepare/Commit recovery correction and its
+native tests are in progress. No live chain or application rollout is qualified.
+
+The maintained Taira retry command reuses completed build and transfer receipts,
+derives capacity from actual deployment inputs, and resumes postconditions after
+an authenticated completed apply. Its 35 offline tests and the 18 capacity tests
+pass. Unchanged retries require no new build or transfer. The latest changed
+native source build took 573 seconds, plus 216 seconds for captured CLI checks;
+these timings do not predict completion of a subsequent rollout.
+
 The 110-path merge resolution retains the final StateScan/cursor ABI, validated seven-field Native AMX control, immutable asynchronous account contexts and shared signer custody. Current source bindings are checked before deferred-carrier classification. Fresh custody tests pass 23, snapshot resource tests pass 4, JavaScript selections pass 59 and all 55 consensus source contracts pass. Workspace formatting, scoped conflict-diff checks and codec retirement checks pass. Current IVM ABI/artifact/gas/pointer selections pass 17/58/2/4, including exact SDK fixture reproduction. SDK/Core/Torii/JS-host/CLI/Kagami/daemon production checks pass; workspace, native SDK and four-validator qualification remain open.
 
 The earlier 26-path merge resolution keeps canonical participant control,

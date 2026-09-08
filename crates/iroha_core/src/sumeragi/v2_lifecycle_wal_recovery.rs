@@ -31,6 +31,7 @@ use crate::sumeragi::{
     },
 };
 use iroha_data_model::block::consensus_v2 as wire;
+include!("v2_lifecycle_control_continuation.rs");
 /// Why one recovered WAL vote could not join its exact Validate predecessor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RecoveredWalVoteLifecycleRepairErrorKind {

@@ -57,7 +57,10 @@ capture.
 
 Cargo can retain dependency records pointing at an older source directory even
 when the selected manifest changes. Before compiling, preparation inspects local
-package records under Cargo's profile locks. Records for another source tree are
+package records under Cargo's profile locks. Native checks inspect only the
+debug profile family; Linux release builds inspect only the release profile
+family, including their host build-script records. One family's admission never
+retires the other's reusable fingerprints. Records for another source tree are
 retained under `taira-release-cache-retired/`, outside Cargo's active fingerprint
 lookup. Compiled outputs and registry/Git caches remain in place. Current-source
 records are reused. After building, the same admission must pass without repairs;
@@ -138,6 +141,20 @@ the retained artifacts still match their successful preparation and transfer
 receipts. After a completed native rollback, retain its terminal record and
 create fresh deployment custody and authorization for the same artifacts. Never
 replay the failed authorization or edit a terminal journal to resume it.
+
+Use the maintained retry command with the retained preparation, transfer and
+runtime evidence:
+
+    python3 scripts/taira_retry.py \
+      --plan /private/runtime/taira-retry/operator-plan.json \
+      --output-root /private/runtime/taira-retry/local-evidence
+
+It allocates a new attempt automatically, preserves completed rollback history,
+runs native assembly and authorization, and completes seed continuity and boot
+persistence. Repeating it before apply resumes the same operation; after the
+durable apply frontier, a real native rollback terminal is required. See
+[the retry command](taira_retry.md) for input custody, capacity admission and
+public application validation. No numbered retry adapter needs to be edited.
 
 Before preparing a deployment, and again immediately before apply, run:
 

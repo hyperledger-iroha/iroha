@@ -160,6 +160,11 @@ use tokio::{sync::RwLock as AsyncRwLock, task::JoinHandle};
 #[cfg(target_os = "linux")]
 #[path = "soracloud_runtime/inrou_cgroup.rs"]
 mod inrou_cgroup;
+// Exercise the same portable sysfs resolver on developer hosts without compiling
+// Linux-only cgroup and namespace syscalls into their daemon.
+#[cfg(all(test, not(target_os = "linux")))]
+#[path = "soracloud_runtime/inrou_cgroup/io_device.rs"]
+mod inrou_cgroup_io_device_tests;
 #[cfg(target_os = "linux")]
 #[path = "soracloud_runtime/inrou_namespace.rs"]
 mod inrou_namespace;
@@ -3669,6 +3674,7 @@ pub(crate) struct SoracloudRuntimeManager {
     last_inrou_host_advert_attempt_ms: Mutex<Option<u64>>,
     pending_inrou_host_capability_advert: Mutex<Option<SoraInrouHostCapabilityRecordV1>>,
     inrou_startup_capability: Option<InrouStartupCapabilitySnapshot>,
+    inrou_startup_qualified_config: Option<SoracloudRuntimeManagerConfig>,
     last_inrou_host_withdraw_attempt_ms: Mutex<Option<u64>>,
     last_inrou_placement_reconcile_attempt_ms: Mutex<Option<u64>>,
     last_runtime_state_submission_commitments:
@@ -4146,6 +4152,7 @@ impl SoracloudRuntimeManager {
             last_inrou_host_advert_attempt_ms: Mutex::new(None),
             pending_inrou_host_capability_advert: Mutex::new(None),
             inrou_startup_capability: None,
+            inrou_startup_qualified_config: None,
             last_inrou_host_withdraw_attempt_ms: Mutex::new(None),
             last_inrou_placement_reconcile_attempt_ms: Mutex::new(None),
             last_runtime_state_submission_commitments: Mutex::new(BTreeMap::new()),
@@ -4160,8 +4167,21 @@ impl SoracloudRuntimeManager {
         }
     }
     fn qualify_inrou_startup_capability(&mut self) -> eyre::Result<()> {
+        if let Some(qualified) = self.inrou_startup_qualified_config.as_ref() {
+            if qualified != &self.config {
+                eyre::bail!("Soracloud configuration changed after startup qualification");
+            }
+            return Ok(());
+        }
         self.inrou_startup_capability = InrouStartupCapabilitySnapshot::qualify(&self.config)?;
+        self.inrou_startup_qualified_config = Some(self.config.clone());
         Ok(())
+    }
+    /// Exercise mandatory host prerequisites before consensus can emit durable work.
+    /// The same manager carries the exact configuration and qualification into start.
+    pub(crate) fn preflight_startup(mut self) -> eyre::Result<Self> {
+        self.qualify_inrou_startup_capability()?;
+        Ok(self)
     }
     /// Attach the authoritative mutation sink used for runtime-originated Soracloud health reports.
     #[must_use]
@@ -28348,6 +28368,42 @@ mod tests {
             test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-limit"));
         let manager = inrou_capability_unit_test_manager(config, test_state().expect("test state"));
         assert_eq!(manager.hosted_http_concurrency_limit(), 1);
+    }
+    #[test]
+    fn inrou_startup_qualification_rejects_configuration_drift() {
+        let mut config =
+            test_runtime_manager_config(PathBuf::from("/tmp/test-soracloud-runtime-prequalified"));
+        config.production_mode = false;
+        config.inrou = iroha_config::parameters::actual::SoracloudRuntimeInrou::default();
+        let mut manager =
+            SoracloudRuntimeManager::new(config.clone(), test_state().expect("state"))
+                .preflight_startup()
+                .expect("disabled Inrou needs no host launcher");
+        manager
+            .qualify_inrou_startup_capability()
+            .expect("the same configuration retains its qualification");
+        manager.config.state_dir.push("changed-after-qualification");
+        let error = manager
+            .qualify_inrou_startup_capability()
+            .expect_err("an earlier qualification cannot authorize changed configuration");
+        assert!(
+            error
+                .to_string()
+                .contains("changed after startup qualification")
+        );
+        assert_eq!(manager.inrou_startup_qualified_config, Some(config));
+    }
+    #[test]
+    fn inrou_startup_qualification_failure_never_publishes_a_qualification() {
+        let mut config = test_runtime_manager_config(PathBuf::from(
+            "/tmp/test-soracloud-runtime-preflight-failure",
+        ));
+        config.production_mode = true;
+        config.egress.default_allow = true;
+        let mut manager = SoracloudRuntimeManager::new(config, test_state().expect("state"));
+        assert!(manager.qualify_inrou_startup_capability().is_err());
+        assert!(manager.inrou_startup_qualified_config.is_none());
+        assert!(manager.inrou_startup_capability.is_none());
     }
     #[test]
     fn inrou_capability_activates_only_after_exact_host_preflight() {
