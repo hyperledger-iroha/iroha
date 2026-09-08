@@ -7,7 +7,7 @@ manifest is not a release qualification decision.
 
 The replay resource defaults now share an opening-shape derivation for the
 unchanged 256-transition, 512-column admission profile: 2,163,774 bytes of
-approximate payload and 2,372,261 bytes for the complete canonical Norito frame.
+approximate payload and 2,372,085 bytes for the complete canonical Norito frame.
 The verifier uses the payload bound; Core encoding and the sidecar default use
 the frame bound. The derivation includes the existing 136 queries, 2,048-point
 maximum default LDE, nine binary folds, all authentication paths and framing.

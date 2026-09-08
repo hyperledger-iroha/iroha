@@ -117,16 +117,9 @@ const fn frame_bound() -> usize {
         vector(TERMINAL_VALUES, FP4_BYTES),
         vector(1, DIGEST_BYTES),
     ]);
-    // Fixed arrays have one prefix per byte and no sequence-count header.
-    let public_io = fields(&[
-        16 * prefixed(1),
-        8,
-        32 * prefixed(1),
-        32 * prefixed(1),
-        32 * prefixed(1),
-        32 * prefixed(1),
-        32 * prefixed(1),
-    ]);
+    // Norito derives encode fixed byte-array fields as raw bytes; each array
+    // has one outer field prefix, unlike the generic per-element array codec.
+    let public_io = fields(&[16, 8, 32, 32, 32, 32, 32]);
     40 + fields(&[
         2,
         prefixed(FASTPQ_FINAL_V1.name.len()),

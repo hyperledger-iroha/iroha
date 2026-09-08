@@ -128,7 +128,7 @@ must be exact and profile-bound, not any prover-selected value below a cap.
 
 `FASTPQ_FINAL_V1` fixes q=136, maximum trace log 16, LDE log 19,
 terminal 4 and maximum 17 reductions. The replay resource defaults separately
-admit at most 256 transitions and derive 2,163,774 payload bytes and 2,372,261
+admit at most 256 transitions and derive 2,163,774 payload bytes and 2,372,085
 framed bytes from their opening geometry. These replay bounds do not qualify or
 activate the compact profiles discussed here. An implementation
 must change the complete profile identity/parameters, transcript binding,

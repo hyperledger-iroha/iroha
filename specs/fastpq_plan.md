@@ -534,7 +534,7 @@ proof semantics profile.
 
 The replay verifier's default approximate payload cap is derived from the
 256-transition, 512-column opening geometry: 2,163,774 bytes. Its complete Norito
-frame bound is 2,372,261 bytes, shared by Core encoding and the sidecar default.
+frame bound is 2,372,085 bytes, shared by Core encoding and the sidecar default.
 AXT retains its separate 1 MiB encoded-payload limit before the outer blob limit;
 changing replay resource defaults grants no exception to that boundary.
 The 64-row mixed raw fixture has 136 query openings, a 1,026,222-byte admission
