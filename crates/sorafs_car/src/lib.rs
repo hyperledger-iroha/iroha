@@ -206,7 +206,7 @@ pub enum CarWriteError {
 /// Errors that can occur while ingesting chunk metadata from a stream.
 #[derive(Debug, Error)]
 pub enum ChunkStoreError {
-    #[error("reader failed: {0}")]
+    #[error("chunk storage I/O failed: {0}")]
     Io(#[from] io::Error),
     #[error("chunk {chunk_index} ended before reading {expected} bytes")]
     UnexpectedEof { chunk_index: usize, expected: u32 },
@@ -1818,7 +1818,7 @@ fn set_atomic_no_follow(options: &mut OpenOptions) {
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,
@@ -1850,6 +1850,55 @@ fn platform_no_follow_flag() -> i32 {
 ))]
 fn platform_no_follow_flag() -> i32 {
     0
+}
+#[cfg(unix)]
+#[derive(Debug)]
+struct ChunkIoOperation {
+    operation: &'static str,
+    chunk_index: Option<usize>,
+    source: io::Error,
+}
+#[cfg(unix)]
+impl std::fmt::Display for ChunkIoOperation {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.operation)?;
+        if let Some(index) = self.chunk_index {
+            write!(formatter, " for chunk {index}")?;
+        }
+        write!(formatter, ": {}", self.source)
+    }
+}
+#[cfg(unix)]
+impl std::error::Error for ChunkIoOperation {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.source)
+    }
+}
+#[cfg(unix)]
+fn chunk_io_error(
+    operation: &'static str,
+    chunk_index: Option<usize>,
+    source: io::Error,
+) -> ChunkStoreError {
+    ChunkStoreError::Io(io::Error::new(
+        source.kind(),
+        ChunkIoOperation {
+            operation,
+            chunk_index,
+            source,
+        },
+    ))
+}
+#[cfg(unix)]
+fn chunk_io_context(
+    operation: &'static str,
+    chunk_index: Option<usize>,
+    error: ChunkStoreError,
+) -> ChunkStoreError {
+    match error {
+        ChunkStoreError::Io(source) => chunk_io_error(operation, chunk_index, source),
+        error => error,
+    }
 }
 /// Writes each chunk into a deterministic directory layout (`chunk_{idx:05}.bin`).
 ///
@@ -1949,11 +1998,14 @@ impl DirectoryChunkSink {
     #[cfg(unix)]
     // Only used inside unpublished private staging. The returned original writer must remain
     // open until flush_pending_chunks checks its durability; this rename is not publication.
-    fn write_staged_chunk(path: &Path, data: &[u8]) -> Result<File, ChunkStoreError> {
+    fn write_staged_chunk(path: &Path, data: &[u8], index: usize) -> Result<File, ChunkStoreError> {
         let parent = normalized_parent(path)?;
-        validate_directory_path(parent)?;
-        let parent_before = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
-        validate_atomic_destination_absent(path)?;
+        validate_directory_path(parent)
+            .map_err(|error| chunk_io_context("inspect staging parent", Some(index), error))?;
+        let parent_before = fs::symlink_metadata(parent)
+            .map_err(|error| chunk_io_error("stat staging parent", Some(index), error))?;
+        validate_atomic_destination_absent(path)
+            .map_err(|error| chunk_io_context("inspect staged destination", Some(index), error))?;
         let file_name = path
             .file_name()
             .and_then(|name| name.to_str())
@@ -1973,14 +2025,18 @@ impl DirectoryChunkSink {
                     if let Err(error) = validate_atomic_temp(&candidate, &file) {
                         drop(file);
                         let _ = fs::remove_file(&candidate);
-                        return Err(error);
+                        return Err(chunk_io_context(
+                            "inspect new staged writer",
+                            Some(index),
+                            error,
+                        ));
                     }
                     temp_path = Some(candidate);
                     temp_file = Some(file);
                     break;
                 }
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(err) => return Err(ChunkStoreError::Io(err)),
+                Err(err) => return Err(chunk_io_error("open staged chunk", Some(index), err)),
             }
         }
         let temp_path = temp_path.ok_or_else(|| {
@@ -1995,9 +2051,12 @@ impl DirectoryChunkSink {
             ))
         })?;
         let result = (|| {
-            file.write_all(data).map_err(ChunkStoreError::Io)?;
-            validate_atomic_temp(&temp_path, &file)?;
-            let parent_after = fs::symlink_metadata(parent).map_err(ChunkStoreError::Io)?;
+            file.write_all(data)
+                .map_err(|error| chunk_io_error("write staged chunk", Some(index), error))?;
+            validate_atomic_temp(&temp_path, &file)
+                .map_err(|error| chunk_io_context("inspect staged writer", Some(index), error))?;
+            let parent_after = fs::symlink_metadata(parent)
+                .map_err(|error| chunk_io_error("stat staging parent", Some(index), error))?;
             if !metadata_identifies_same_file(&parent_before, &parent_after) {
                 return Err(ChunkStoreError::Io(io::Error::other(format!(
                     "atomic chunk parent `{}` changed during write",
@@ -2005,8 +2064,11 @@ impl DirectoryChunkSink {
                 ))));
             }
             validate_directory_metadata(parent, &parent_after)?;
-            validate_atomic_destination_absent(path)?;
-            fs::rename(&temp_path, path).map_err(ChunkStoreError::Io)?;
+            validate_atomic_destination_absent(path).map_err(|error| {
+                chunk_io_context("inspect staged destination", Some(index), error)
+            })?;
+            fs::rename(&temp_path, path)
+                .map_err(|error| chunk_io_error("rename staged chunk", Some(index), error))?;
             Ok(file)
         })();
         if result.is_err() {
@@ -2040,13 +2102,17 @@ impl DirectoryChunkSink {
                     ChunkStoreError::Io(io::Error::other("pending chunk writer was not retained"))
                 })?;
                 let path = staging.join(format!("chunk_{:05}.bin", first_index + offset));
-                validate_atomic_temp(&path, file)?;
+                validate_atomic_temp(&path, file).map_err(|error| {
+                    chunk_io_context("inspect retained writer", Some(first_index + offset), error)
+                })?;
             }
             #[cfg(test)]
             if matches!(self.commit_fault, Some(DirectoryCommitFault::BatchFlush)) {
-                return Err(ChunkStoreError::Io(io::Error::other(
-                    "injected chunk batch flush failure",
-                )));
+                return Err(chunk_io_error(
+                    "syncfs chunk batch",
+                    Some(first_index),
+                    io::Error::from_raw_os_error(5),
+                ));
             }
             // Linux flushes the filesystem once for the batch, amortizing writeback barriers.
             // Still fsync every ORIGINAL writer below: syncfs alone is insufficient for portable
@@ -2058,7 +2124,9 @@ impl DirectoryChunkSink {
                 })?;
                 rustix::fs::syncfs(file)
                     .map_err(io::Error::from)
-                    .map_err(ChunkStoreError::Io)?;
+                    .map_err(|error| {
+                        chunk_io_error("syncfs chunk batch", Some(first_index), error)
+                    })?;
             }
             for (offset, file) in self.pending_files[..self.pending_len].iter().enumerate() {
                 let file = file.as_ref().ok_or_else(|| {
@@ -2069,13 +2137,23 @@ impl DirectoryChunkSink {
                     self.commit_fault,
                     Some(DirectoryCommitFault::ChunkFlush(index)) if index == offset
                 ) {
-                    return Err(ChunkStoreError::Io(io::Error::other(
-                        "injected chunk file flush failure",
-                    )));
+                    return Err(chunk_io_error(
+                        "fsync original chunk writer",
+                        Some(first_index + offset),
+                        io::Error::from_raw_os_error(5),
+                    ));
                 }
-                file.sync_all().map_err(ChunkStoreError::Io)?;
+                file.sync_all().map_err(|error| {
+                    chunk_io_error(
+                        "fsync original chunk writer",
+                        Some(first_index + offset),
+                        error,
+                    )
+                })?;
                 let path = staging.join(format!("chunk_{:05}.bin", first_index + offset));
-                validate_atomic_temp(&path, file)?;
+                validate_atomic_temp(&path, file).map_err(|error| {
+                    chunk_io_context("inspect retained writer", Some(first_index + offset), error)
+                })?;
             }
             self.validate_staging_unchanged(staging)
         })();
@@ -2159,9 +2237,14 @@ impl DirectoryChunkSink {
             let mut options = OpenOptions::new();
             options.read(true);
             set_atomic_no_follow(&mut options);
-            let mut file = options.open(&path).map_err(ChunkStoreError::Io)?;
-            validate_atomic_temp(&path, &file)?;
-            let metadata = file.metadata().map_err(ChunkStoreError::Io)?;
+            let mut file = options
+                .open(&path)
+                .map_err(|error| chunk_io_error("open staged readback", Some(index), error))?;
+            validate_atomic_temp(&path, &file)
+                .map_err(|error| chunk_io_context("inspect staged readback", Some(index), error))?;
+            let metadata = file
+                .metadata()
+                .map_err(|error| chunk_io_error("stat staged readback", Some(index), error))?;
             if metadata.len() != u64::from(expected.length) {
                 return Err(ChunkStoreError::SinkChunkLengthMismatch {
                     chunk_index: index,
@@ -2171,7 +2254,9 @@ impl DirectoryChunkSink {
             }
             let mut hasher = blake3::Hasher::new();
             loop {
-                let read = file.read(&mut read_buffer).map_err(ChunkStoreError::Io)?;
+                let read = file
+                    .read(&mut read_buffer)
+                    .map_err(|error| chunk_io_error("read staged chunk", Some(index), error))?;
                 if read == 0 {
                     break;
                 }
@@ -2204,9 +2289,11 @@ impl DirectoryChunkSink {
         validate_atomic_destination_absent(&self.root)?;
         self.validate_staging_unchanged(staging)?;
         self.validate_staged_chunks(staging)?;
-        sync_directory(staging).map_err(ChunkStoreError::Io)?;
+        sync_directory(staging)
+            .map_err(|error| chunk_io_error("fsync staging directory", None, error))?;
         validate_atomic_destination_absent(&self.root)?;
-        fs::rename(staging, &self.root).map_err(ChunkStoreError::Io)?;
+        fs::rename(staging, &self.root)
+            .map_err(|error| chunk_io_error("publish chunk directory", None, error))?;
         let staged = self
             .staging_before
             .as_ref()
@@ -2373,7 +2460,7 @@ impl ChunkSink for DirectoryChunkSink {
             .ok_or_else(|| ChunkStoreError::Io(io::Error::other("chunk sink was not prepared")))?;
         self.validate_staging_unchanged(staging)?;
         let path = staging.join(&file_name);
-        let file = Self::write_staged_chunk(&path, data)?;
+        let file = Self::write_staged_chunk(&path, data, index)?;
         self.pending_files[self.pending_len] = Some(file);
         self.pending_len += 1;
         self.records.push(PersistedChunkRecord {
@@ -7365,6 +7452,85 @@ mod tests {
     }
     #[cfg(unix)]
     #[test]
+    fn directory_open_flags_reject_symlink_in_the_kernel() {
+        let base = tempdir().expect("base");
+        let target = base.path().join("target");
+        fs::write(&target, b"must not be opened through a symlink").expect("target");
+        let link = base.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("symlink");
+        let mut options = OpenOptions::new();
+        options.read(true);
+        set_atomic_no_follow(&mut options);
+        assert!(
+            options.open(&link).is_err(),
+            "the kernel must reject the link before validation or reading"
+        );
+    }
+    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
+    #[test]
+    fn directory_open_flags_match_linux_aarch64_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x8000);
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    #[test]
+    fn directory_open_flags_match_linux_x86_64_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x20000);
+    }
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn directory_open_flags_preserve_macos_abi() {
+        assert_eq!(platform_no_follow_flag(), 0x100);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn directory_io_context_preserves_operation_chunk_and_original_os_error() {
+        let error = chunk_io_error(
+            "write staged chunk",
+            Some(17),
+            io::Error::from_raw_os_error(5),
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("write staged chunk for chunk 17")
+        );
+        let ChunkStoreError::Io(error) = error else {
+            panic!("I/O error");
+        };
+        assert_eq!(error.kind(), io::Error::from_raw_os_error(5).kind());
+        let context = error
+            .get_ref()
+            .expect("operation context")
+            .downcast_ref::<ChunkIoOperation>()
+            .expect("typed operation context");
+        assert_eq!(context.source.raw_os_error(), Some(5));
+        let wrapped = chunk_io_context(
+            "inspect staged readback",
+            Some(4),
+            ChunkStoreError::Io(io::Error::from_raw_os_error(5)),
+        );
+        assert!(
+            wrapped
+                .to_string()
+                .contains("inspect staged readback for chunk 4")
+        );
+        let directory = chunk_io_error(
+            "fsync staging directory",
+            None,
+            io::Error::from_raw_os_error(5),
+        );
+        assert!(directory.to_string().contains("fsync staging directory: "));
+        assert!(matches!(
+            chunk_io_context(
+                "inspect staged readback",
+                Some(4),
+                ChunkStoreError::DigestMismatch { chunk_index: 4 }
+            ),
+            ChunkStoreError::DigestMismatch { chunk_index: 4 }
+        ));
+    }
+    #[cfg(unix)]
+    #[test]
     fn directory_sink_batches_full_and_tail_with_bounded_writer_handles() {
         let base = tempdir().expect("base");
         let root = fs::canonicalize(base.path())
@@ -7439,10 +7605,24 @@ mod tests {
                     .expect("private write before flush");
             }
             let index = DIRECTORY_SYNC_BATCH_CHUNKS - 1;
-            assert!(
-                sink.write_chunk(index, &plan.chunks[index], &payload[index..index + 1])
-                    .is_err()
-            );
+            let error = sink
+                .write_chunk(index, &plan.chunks[index], &payload[index..index + 1])
+                .expect_err("injected original writeback error");
+            let operation = match fault {
+                DirectoryCommitFault::BatchFlush => "syncfs chunk batch for chunk 0",
+                DirectoryCommitFault::ChunkFlush(_) => "fsync original chunk writer for chunk 63",
+                _ => unreachable!("flush fault"),
+            };
+            assert!(error.to_string().contains(operation), "{error}");
+            let ChunkStoreError::Io(error) = error else {
+                panic!("I/O error");
+            };
+            let context = error
+                .get_ref()
+                .expect("operation context")
+                .downcast_ref::<ChunkIoOperation>()
+                .expect("typed operation context");
+            assert_eq!(context.source.raw_os_error(), Some(5));
             assert!(sink.durability_failed);
             assert_eq!(sink.pending_len, DIRECTORY_SYNC_BATCH_CHUNKS);
             assert!(sink.pending_files.iter().all(Option::is_some));
@@ -7581,7 +7761,7 @@ mod tests {
         let victim = dir.path().join("victim");
         fs::write(&victim, b"victim").expect("victim");
         std::os::unix::fs::symlink(&victim, &stale_partial).expect("partial symlink");
-        DirectoryChunkSink::write_staged_chunk(&output, b"new chunk").expect("atomic write");
+        DirectoryChunkSink::write_staged_chunk(&output, b"new chunk", 0).expect("atomic write");
         assert_eq!(fs::read(&output).expect("output"), b"new chunk");
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");
         assert!(fs::symlink_metadata(&stale_partial).is_ok());
@@ -7603,7 +7783,7 @@ mod tests {
         let output = dir.path().join("chunk.bin");
         fs::write(&output, b"old chunk").expect("old chunk");
         assert!(matches!(
-            DirectoryChunkSink::write_staged_chunk(&output, b"new chunk"),
+            DirectoryChunkSink::write_staged_chunk(&output, b"new chunk", 0),
             Err(ChunkStoreError::Io(_))
         ));
         assert_eq!(fs::read(&output).expect("output"), b"old chunk");
@@ -7618,14 +7798,14 @@ mod tests {
         let symlink_path = dir.path().join("symlink-chunk");
         symlink(&victim, &symlink_path).expect("symlink");
         assert!(matches!(
-            DirectoryChunkSink::write_staged_chunk(&symlink_path, b"attack"),
+            DirectoryChunkSink::write_staged_chunk(&symlink_path, b"attack", 0),
             Err(ChunkStoreError::Io(_))
         ));
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");
         let hardlink_path = dir.path().join("hardlink-chunk");
         fs::hard_link(&victim, &hardlink_path).expect("hard link");
         assert!(matches!(
-            DirectoryChunkSink::write_staged_chunk(&hardlink_path, b"attack"),
+            DirectoryChunkSink::write_staged_chunk(&hardlink_path, b"attack", 0),
             Err(ChunkStoreError::Io(_))
         ));
         assert_eq!(fs::read(&victim).expect("victim"), b"victim");

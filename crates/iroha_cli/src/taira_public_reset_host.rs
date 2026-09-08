@@ -16,7 +16,7 @@ use iroha::{
     client::{
         AccountFaucetPolicyV1, AccountFaucetPreparedTransactionV1, AccountOnboardingPlanReceiptV1,
         AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
-        TairaPublicResetMutationBindingV1, verify_account_faucet_prepared_transaction_v1,
+        verify_account_faucet_prepared_transaction_v1,
         verify_account_onboarding_prepared_transaction_v1,
         verify_account_onboarding_proof_required_result_v1,
     },
@@ -1423,9 +1423,10 @@ fn validate_prepared_mutation_envelope(
         }
         None
     } else {
-        let exact: TairaPublicResetMutationBindingV1 = json::from_value(binding_value.clone())
-            .wrap_err("prepared write binding is not exact typed V1 JSON")?;
-        if exact.schema != TairaPublicResetMutationBindingV1::SCHEMA
+        let exact: crate::taira::PreparedMutationBindingV1 =
+            json::from_value(binding_value.clone())
+                .wrap_err("prepared write binding is not exact typed V1 JSON")?;
+        if exact.schema != crate::taira::PreparedMutationBindingV1::SCHEMA
             || json::to_value(&exact)? != *binding_value
         {
             return Err(eyre!(
@@ -1519,7 +1520,7 @@ fn validate_prepared_mutation_envelope(
                 .get("schema")
                 .and_then(norito::json::Value::as_str)
                 != Some("iroha.taira.prepared-onboarding-proof-required.v1")
-            || exact_binding != &result.binding
+            || exact_binding.onboarding_binding(&receipt)? != result.binding
             || receipt.body.request != admitted.inventory.canary_onboarding_request
         {
             return Err(eyre!(
@@ -1531,7 +1532,7 @@ fn validate_prepared_mutation_envelope(
             &admitted.inventory.canary_onboarding_request,
             &result,
             &receipt,
-            exact_binding,
+            &exact_binding.onboarding_binding(&receipt)?,
         )
         .wrap_err("proof-required onboarding receipt or result authentication failed")?;
         return Ok((
@@ -1540,7 +1541,10 @@ fn validate_prepared_mutation_envelope(
             "onboarding_proof_required".to_owned(),
         ));
     }
-    if operation.len() != 2 || operation_envelope.get("binding") != root.get("binding") {
+    if operation.len() != 2
+        || ((is_inrou || admitted.request.mutation_kind == "write_canary")
+            && operation_envelope.get("binding") != root.get("binding"))
+    {
         return Err(eyre!(
             "prepared mutation operation does not duplicate the exact binding"
         ));
@@ -1695,7 +1699,11 @@ fn validate_prepared_mutation_envelope(
             if json::to_value(&prepared)? != norito::json::Value::Object(operation_envelope.clone())
                 || prepared.schema != AccountOnboardingPreparedTransactionV1::SCHEMA
                 || prepared.operation != AccountOnboardingPreparedTransactionV1::OPERATION
-                || Some(&prepared.binding) != exact_write_binding.as_ref()
+                || prepared.binding
+                    != exact_write_binding
+                        .as_ref()
+                        .expect("onboarding custody")
+                        .onboarding_binding(&prepared.receipt)?
                 || prepared.receipt.body.request != admitted.inventory.canary_onboarding_request
             {
                 return Err(eyre!(
@@ -1711,9 +1719,10 @@ fn validate_prepared_mutation_envelope(
                 &admitted.inventory.canary_onboarding_request,
                 &prepared,
                 &prepared.receipt,
-                exact_write_binding
+                &exact_write_binding
                     .as_ref()
-                    .expect("prepared onboarding uses a write binding"),
+                    .expect("prepared onboarding uses a write binding")
+                    .onboarding_binding(&prepared.receipt)?,
                 &expected_fee_payment,
             )
             .wrap_err("prepared onboarding transaction authentication failed")?;
@@ -1725,7 +1734,11 @@ fn validate_prepared_mutation_envelope(
             if json::to_value(&prepared)? != norito::json::Value::Object(operation_envelope.clone())
                 || prepared.schema != AccountFaucetPreparedTransactionV1::SCHEMA
                 || prepared.operation != AccountFaucetPreparedTransactionV1::OPERATION
-                || Some(&prepared.binding) != exact_write_binding.as_ref()
+                || prepared.binding
+                    != exact_write_binding
+                        .as_ref()
+                        .expect("faucet custody")
+                        .faucet_binding(&prepared.claim)?
                 || prepared.account_id != admitted.inventory.canary_onboarding_request.account_id
             {
                 return Err(eyre!(
@@ -1742,9 +1755,10 @@ fn validate_prepared_mutation_envelope(
                 network_id,
                 &prepared,
                 &prepared.claim,
-                exact_write_binding
+                &exact_write_binding
                     .as_ref()
-                    .expect("prepared faucet uses a write binding"),
+                    .expect("prepared faucet uses a write binding")
+                    .faucet_binding(&prepared.claim)?,
                 &expected_fee_payment,
                 &expected_faucet_policy,
             )
@@ -1916,11 +1930,23 @@ fn validate_prepared_mutation_envelope(
             "prepared mutation fee payer differs from the signed reset inventory"
         ));
     }
+    let public_operation = matches!(
+        admitted.request.mutation_kind.as_str(),
+        "onboarding" | "faucet"
+    );
     let binding_json = json::to_json(
-        root.get("binding")
-            .expect("binding was validated immediately above"),
+        if public_operation {
+            operation_envelope.get("binding")
+        } else {
+            root.get("binding")
+        }
+        .expect("binding was authenticated immediately above"),
     )?;
-    let binding_name = Name::from_str("taira_public_reset_binding")?;
+    let binding_name = Name::from_str(if public_operation {
+        "prepared_operation_binding"
+    } else {
+        "taira_public_reset_binding"
+    })?;
     let committed_binding_matches = transaction
         .metadata()
         .get(&binding_name)
@@ -2035,16 +2061,21 @@ fn validate_prepared_mutation_envelope(
             .and_then(norito::json::Value::as_str)
             .ok_or_else(|| eyre!("prepared write transaction omits its semantic hash"))?;
         let is_final_canary = admitted.request.mutation_kind == "write_canary";
-        if transaction.metadata().iter().count() != if is_final_canary { 5 } else { 3 }
+        if transaction.metadata().iter().count()
+            != match admitted.request.mutation_kind.as_str() {
+                "write_canary" => 5,
+                "faucet" => 4,
+                _ => 3,
+            }
             || transaction
                 .metadata()
-                .get(&Name::from_str("taira_prepared_operation")?)
+                .get(&Name::from_str("prepared_operation")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
                 != Some(operation_label)
             || transaction
                 .metadata()
-                .get(&Name::from_str("taira_prepared_semantic_hash")?)
+                .get(&Name::from_str("prepared_semantic_hash")?)
                 .and_then(|value| value.try_into_any_norito::<String>().ok())
                 .as_deref()
                 != Some(semantic)
@@ -20715,16 +20746,25 @@ time.sleep(30)
         admitted.inventory.next_genesis_hash = hex::encode(network_id.as_bytes());
         admitted.inventory.inrou_canary.public_root = public_root.to_owned();
         admitted.inventory.canary_onboarding_request = typed_receipt.body.request.clone();
-        admitted.inventory.authorization_nonce = typed_result.binding.authorization_nonce.clone();
-        admitted.authorization_sha256 = typed_result.binding.authorization_sha256.clone();
+        let native_binding = crate::taira::PreparedMutationBindingV1 {
+            schema: crate::taira::PreparedMutationBindingV1::SCHEMA.to_owned(),
+            authorization_sha256: "11".repeat(32),
+            authorization_nonce: "n".repeat(32),
+            kind: "onboarding".to_owned(),
+            phase: "pre_edge".to_owned(),
+            idempotency_key: typed_result.binding.request_id.clone(),
+            execution_expires_at_unix_ms: typed_result.binding.execution_expires_at_unix_ms,
+        };
+        admitted.inventory.authorization_nonce = native_binding.authorization_nonce.clone();
+        admitted.authorization_sha256 = native_binding.authorization_sha256.clone();
         admitted.authorization.claims.authorization_nonce =
-            typed_result.binding.authorization_nonce.clone();
+            native_binding.authorization_nonce.clone();
         admitted.authorization.claims.execution_expires_at_unix_ms =
             typed_result.binding.execution_expires_at_unix_ms;
         admitted.request.authorization_semantic_sha256 = admitted.authorization_sha256.clone();
         admitted.request.mutation_kind = typed_result.binding.kind.clone();
-        admitted.request.mutation_phase = typed_result.binding.phase.clone();
-        admitted.request.mutation_idempotency_key = typed_result.binding.idempotency_key.clone();
+        admitted.request.mutation_phase = native_binding.phase.clone();
+        admitted.request.mutation_idempotency_key = native_binding.idempotency_key.clone();
         admitted.action_deadline = Instant::now() + Duration::from_secs(10);
         // This captured signed proof fixture deliberately uses a foreign chain_id. Its
         // inventory is only hashed here, never passed to the Taira admission decoder.
@@ -20736,7 +20776,7 @@ time.sleep(30)
 
         let envelope = norito::json!({
             "schema": "iroha.taira.prepared-mutation-envelope.v1",
-            "binding": (json::to_value(&typed_result.binding).expect("fixture binding")),
+            "binding": (json::to_value(&native_binding).expect("native fixture custody")),
             "public_root": public_root,
             "chain_id": (admitted.inventory.chain_id.clone()),
             "network_id": network_id_literal,

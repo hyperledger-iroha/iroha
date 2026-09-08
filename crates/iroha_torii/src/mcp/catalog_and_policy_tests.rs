@@ -1188,7 +1188,7 @@ async fn faucet_tools_dispatch_only_exact_json_bodies_to_exact_routes() {
     .expect("prepare dispatch");
 
     let submit_body = norito::json!({
-        "schema": "iroha.taira.prepared-transaction.v1",
+        "schema": "iroha.prepared-transaction.v1",
         "binding": {},
         "operation": "faucet",
         "claim": {},
@@ -2969,3 +2969,44 @@ fn generated_projection_schema_bounds_selector_work() {
 }
 #[path = "catalog_and_policy_tests/registry_security.rs"]
 mod registry_security;
+
+#[test]
+fn manual_descriptor_loader_accepts_content_updates_and_preserves_policy() {
+    let Value::Object(mut root) =
+        json::from_slice::<Value>(MANUAL_STATIC_TOOL_ASSET).expect("embedded descriptor JSON")
+    else {
+        panic!("descriptor root")
+    };
+    let Value::Array(mut descriptors) = root.remove("descriptors").expect("descriptors") else {
+        panic!("descriptor array")
+    };
+    let Value::Object(record) = &mut descriptors[0] else {
+        panic!("descriptor record")
+    };
+    let function = record
+        .get("function")
+        .and_then(Value::as_str)
+        .expect("function")
+        .to_owned();
+    record.insert(
+        "description".into(),
+        Value::from("Updated public tool documentation."),
+    );
+    root.insert("descriptors".into(), Value::Array(descriptors));
+    let updated = json::to_vec(&Value::Object(root.clone())).expect("updated descriptor JSON");
+    assert_ne!(updated.len(), MANUAL_STATIC_TOOL_ASSET.len());
+    let loaded = parse_manual_static_tool_descriptors(&updated);
+    assert_eq!(loaded.len(), MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT);
+    assert_eq!(
+        loaded[&function].description,
+        "Updated public tool documentation."
+    );
+
+    root.insert("schema_version".into(), Value::from(2_u64));
+    let unsupported = json::to_vec(&Value::Object(root)).expect("unsupported descriptor JSON");
+    assert!(
+        std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&unsupported)).is_err()
+    );
+    let oversized = vec![b' '; MANUAL_STATIC_TOOL_ASSET_MAX_BYTES + 1];
+    assert!(std::panic::catch_unwind(|| parse_manual_static_tool_descriptors(&oversized)).is_err());
+}

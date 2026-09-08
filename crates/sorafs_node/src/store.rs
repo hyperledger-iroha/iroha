@@ -269,8 +269,8 @@ pub enum StorageError {
         /// Maximum sample count accepted by the v1 protocol.
         maximum: u32,
     },
-    /// Failed to rebuild the PoR tree from persisted chunk data.
-    #[error("failed to build PoR tree: {0}")]
+    /// Chunk ingestion, integrity checking, or persistence failed.
+    #[error("chunk storage operation failed: {0}")]
     ChunkStore(#[from] ChunkStoreError),
     /// Bounded PoR commitment geometry overflowed its persistent representation.
     #[error("PoR commitment geometry overflow while accounting for {context}")]
@@ -3765,6 +3765,50 @@ impl StorageBackend {
         self.ensure_durability_healthy()?;
         work(&manifest)
     }
+    /// Verify an entire offline payload under one manifest lifecycle read lease.
+    ///
+    /// Each stored chunk receives the normal no-follow, exact-length, stable-identity, and
+    /// digest checks. The expected stream must match every byte and end at the admitted length.
+    /// This maintenance read does not update access metadata or issue provider attestations.
+    /// Retirement cannot remove the manifest until verification returns.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for unavailable or retiring manifests, damaged chunks, source I/O errors,
+    /// or differing, truncated, or trailing expected bytes.
+    pub fn verify_offline_payload<R: Read>(
+        &self,
+        manifest_id: &str,
+        expected: &mut R,
+    ) -> Result<(), StorageError> {
+        self.with_manifest_io(manifest_id, |manifest| {
+            let mut expected_chunk = Vec::new();
+            for (chunk_index, record) in manifest.chunk_files.iter().enumerate() {
+                self.ensure_durability_healthy()?;
+                let actual = read_verified_chunk(record, chunk_index)?;
+                expected_chunk.try_reserve(actual.len()).map_err(|_| {
+                    StorageError::ChunkStore(ChunkStoreError::AllocationFailed {
+                        context: "offline payload verification buffer",
+                        requested: actual.len(),
+                    })
+                })?;
+                expected_chunk.resize(actual.len(), 0);
+                expected.read_exact(&mut expected_chunk)?;
+                if actual != expected_chunk {
+                    return Err(StorageError::ChunkDigestMismatch { chunk_index });
+                }
+                expected_chunk.clear();
+            }
+            let mut trailing = [0_u8; 1];
+            if expected.read(&mut trailing)? != 0 {
+                return Err(StorageError::Io(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "offline payload contains trailing bytes",
+                )));
+            }
+            self.ensure_durability_healthy()
+        })?
+    }
     /// Read an exact range from the stored payload.
     pub fn read_payload_range(
         &self,
@@ -6933,6 +6977,172 @@ mod tests {
                 Err(StorageError::CorruptStorageState { .. })
             ));
         }
+    }
+    #[test]
+    fn offline_payload_verification_preserves_access_metadata_across_chunks() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload: Vec<u8> = (0..ChunkProfile::DEFAULT.max_size + 4096)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xC1);
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        assert!(stored.chunk_count() >= 2);
+        let metadata_path = stored
+            .manifest_path()
+            .parent()
+            .expect("manifest dir")
+            .join(METADATA_FILE_NAME);
+        let before_metadata = fs::read(&metadata_path).expect("metadata before");
+        let before_index = fs::read(&backend.index_path).expect("index before");
+        let before_modified = fs::metadata(&metadata_path)
+            .expect("metadata stat")
+            .modified()
+            .expect("modified");
+        for _ in 0..2 {
+            backend
+                .verify_offline_payload(&manifest_id, &mut payload.as_slice())
+                .expect("verify full offline payload");
+        }
+        assert_eq!(
+            fs::read(&metadata_path).expect("metadata after"),
+            before_metadata
+        );
+        assert_eq!(
+            fs::read(&backend.index_path).expect("index after"),
+            before_index
+        );
+        assert_eq!(
+            fs::metadata(&metadata_path)
+                .expect("metadata stat")
+                .modified()
+                .expect("modified"),
+            before_modified
+        );
+        assert_eq!(
+            backend
+                .manifest(&manifest_id)
+                .expect("manifest")
+                .last_access(),
+            stored.last_access()
+        );
+    }
+    #[test]
+    fn offline_payload_verification_rejects_source_and_stored_integrity_failures() {
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload: Vec<u8> = (0..ChunkProfile::DEFAULT.max_size + 4096)
+            .map(|index| (index % 251) as u8)
+            .collect();
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, &payload, 0xC2);
+        let mut wrong = payload.clone();
+        *wrong.last_mut().expect("payload") ^= 1;
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut wrong.as_slice()),
+            Err(StorageError::ChunkDigestMismatch { .. })
+        ));
+        assert!(
+            matches!(backend.verify_offline_payload(&manifest_id, &mut &payload[..payload.len() - 1]),
+            Err(StorageError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof)
+        );
+        let mut trailing = payload.clone();
+        trailing.push(0);
+        assert!(
+            matches!(backend.verify_offline_payload(&manifest_id, &mut trailing.as_slice()),
+            Err(StorageError::Io(error)) if error.kind() == io::ErrorKind::InvalidData)
+        );
+        let stored = backend.manifest(&manifest_id).expect("stored manifest");
+        let chunk = stored.chunk_files.last().expect("last chunk");
+        let original = fs::read(&chunk.path).expect("chunk bytes");
+        let mut corrupt = original.clone();
+        corrupt[0] ^= 1;
+        fs::write(&chunk.path, &corrupt).expect("corrupt stored chunk");
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut payload.as_slice()),
+            Err(StorageError::ChunkStore(
+                ChunkStoreError::DigestMismatch { .. }
+            ))
+        ));
+        fs::write(&chunk.path, &original[..original.len() - 1]).expect("truncate chunk");
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut payload.as_slice()),
+            Err(StorageError::ChunkStore(
+                ChunkStoreError::LengthMismatch { .. }
+            ))
+        ));
+        #[cfg(unix)]
+        {
+            let other = temp_dir.path().join("other-chunk");
+            fs::write(&other, &original).expect("other chunk");
+            fs::remove_file(&chunk.path).expect("remove chunk");
+            std::os::unix::fs::symlink(&other, &chunk.path).expect("substitute symlink");
+            assert!(
+                backend
+                    .verify_offline_payload(&manifest_id, &mut payload.as_slice())
+                    .is_err()
+            );
+        }
+    }
+    #[test]
+    fn offline_payload_verification_holds_retirement_lease_until_stream_finishes() {
+        let _serial = MANIFEST_IO_WRITE_WAIT_TEST_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let payload = b"offline verification holds one lifecycle lease";
+        let (_config, backend, manifest_id) = ingest_test_payload(&temp_dir, payload, 0xC3);
+        let backend = Arc::new(backend);
+        let (entered_tx, entered_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let verifier_backend = Arc::clone(&backend);
+        let verifier_id = manifest_id.clone();
+        let verifier = thread::spawn(move || {
+            let mut expected = GatedReader {
+                bytes: Cursor::new(payload.to_vec()),
+                entered: Some(entered_tx),
+                release: release_rx,
+                fail_after_release: false,
+            };
+            verifier_backend.verify_offline_payload(&verifier_id, &mut expected)
+        });
+        entered_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("verification entered lease");
+        let (waiting_tx, waiting_rx) = mpsc::channel();
+        *MANIFEST_IO_WRITE_WAIT_TEST_HOOK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(ManifestIoWriteWaitTestHook {
+                manifest_id: manifest_id.clone(),
+                waiting: waiting_tx,
+            });
+        let (done_tx, done_rx) = mpsc::channel();
+        let eviction_backend = Arc::clone(&backend);
+        let eviction_id = manifest_id.clone();
+        let eviction = thread::spawn(move || {
+            done_tx
+                .send(eviction_backend.evict_manifest(&eviction_id))
+                .expect("eviction result");
+        });
+        waiting_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("eviction waits for lease");
+        assert!(matches!(done_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        assert!(matches!(
+            backend.verify_offline_payload(&manifest_id, &mut payload.as_slice()),
+            Err(StorageError::ManifestRetirementInProgress { .. })
+        ));
+        release_tx.send(()).expect("release expected stream");
+        verifier
+            .join()
+            .expect("verification joins")
+            .expect("verification succeeds");
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_secs(2))
+                .expect("eviction completes")
+                .expect("eviction succeeds"),
+            payload.len() as u64
+        );
+        eviction.join().expect("eviction joins");
     }
     #[test]
     fn last_access_persists_after_reads() {

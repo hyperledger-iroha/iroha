@@ -289,14 +289,16 @@ fn onboarding_current_state_request(alias: &str, account_id: &AccountId) -> nori
         json_entry("alias", alias),
     ])
 }
-fn mutation_binding(kind: &str, expires_at_unix_ms: u64) -> norito::json::Value {
+fn mutation_binding(
+    kind: &str,
+    semantic_hash_hex: &str,
+    expires_at_unix_ms: u64,
+) -> norito::json::Value {
     json_object(vec![
-        json_entry("schema", "iroha.taira.public-reset.mutation-binding.v1"),
-        json_entry("authorization_sha256", "11".repeat(32)),
-        json_entry("authorization_nonce", "reset_nonce_00000000000000000000"),
+        json_entry("schema", "iroha.prepared-operation.binding.v1"),
+        json_entry("semantic_hash_hex", semantic_hash_hex),
         json_entry("kind", kind),
-        json_entry("phase", format!("prepare_{kind}")),
-        json_entry("idempotency_key", "22".repeat(32)),
+        json_entry("request_id", "22".repeat(32)),
         json_entry("execution_expires_at_unix_ms", expires_at_unix_ms),
     ])
 }
@@ -307,11 +309,26 @@ fn onboarding_prepare_request_with_expiry(
     receipt: norito::json::Value,
     expires_at_unix_ms: u64,
 ) -> norito::json::Value {
+    let plan_hash: iroha_crypto::Hash =
+        norito::json::from_value(receipt["plan_hash"].clone()).expect("typed plan hash");
+    let semantic_hash_hex = hex::encode(plan_hash.as_ref());
     json_object(vec![
         json_entry("schema", "iroha.accounts.onboard.prepare.v1"),
         json_entry(
             "binding",
-            mutation_binding("onboarding", expires_at_unix_ms),
+            mutation_binding(
+                "onboarding",
+                &semantic_hash_hex,
+                expires_at_unix_ms.min(
+                    receipt["body"]["valid_until_ms"]
+                        .as_u64()
+                        .expect("receipt deadline"),
+                ),
+            ),
+        ),
+        json_entry(
+            "fee_payment",
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
         json_entry("receipt", receipt),
     ])
@@ -710,7 +727,7 @@ async fn sponsored_onboarding_prepare_is_non_mutating_and_exact_submit_is_replay
     assert_eq!(prepared.status, StatusCode::OK, "{}", prepared.raw_body);
     assert_eq!(
         response_field(&prepared.payload, "schema"),
-        "iroha.taira.prepared-transaction.v1"
+        "iroha.prepared-transaction.v1"
     );
     assert_eq!(response_field(&prepared.payload, "operation"), "onboarding");
     assert_eq!(disposition_kind(&prepared.payload), "create");

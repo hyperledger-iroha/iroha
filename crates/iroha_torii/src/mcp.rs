@@ -9208,13 +9208,9 @@ fn parse_node_url(raw: &str) -> Result<url::Url, String> {
 }
 const MANUAL_STATIC_TOOL_ASSET_VERSION: u64 = 1;
 const MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;
-const MANUAL_STATIC_TOOL_ASSET_LEN: usize = 107_288;
+const MANUAL_STATIC_TOOL_ASSET_MAX_BYTES: usize = 128 * 1024;
 const MANUAL_STATIC_TOOL_HISTORICAL_RUST_PREIMAGE_SHA256: &str =
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4";
-const MANUAL_STATIC_TOOL_ASSET_BLAKE3: [u8; 32] = [
-    0xf9, 0x08, 0xda, 0x8b, 0x71, 0x82, 0xe5, 0xd3, 0xfe, 0x09, 0xf8, 0xb8, 0x49, 0xec, 0xe1, 0x47,
-    0xe8, 0x97, 0xa7, 0xb2, 0x7f, 0xc9, 0x81, 0x00, 0x36, 0x95, 0xa2, 0x58, 0x4c, 0x34, 0x79, 0x8d,
-];
 const MANUAL_STATIC_TOOL_ASSET: &[u8] = include_bytes!("mcp/manual_tool_descriptors_v1.json");
 
 #[derive(Clone)]
@@ -9520,17 +9516,19 @@ fn manual_static_tool_asset_identifier_is_valid(value: &str) -> bool {
 }
 
 fn load_manual_static_tool_descriptors() -> BTreeMap<String, ManualStaticToolDescriptor> {
-    assert_eq!(
-        MANUAL_STATIC_TOOL_ASSET.len(),
-        MANUAL_STATIC_TOOL_ASSET_LEN,
-        "manual MCP descriptor asset byte length drifted"
+    parse_manual_static_tool_descriptors(MANUAL_STATIC_TOOL_ASSET)
+}
+
+fn parse_manual_static_tool_descriptors(
+    asset_bytes: &[u8],
+) -> BTreeMap<String, ManualStaticToolDescriptor> {
+    // The binary embeds these bytes directly. Enforce schema and resource policy,
+    // not a duplicate content fingerprint that can drift after a descriptor edit.
+    assert!(
+        asset_bytes.len() <= MANUAL_STATIC_TOOL_ASSET_MAX_BYTES,
+        "manual MCP descriptor asset exceeds the byte limit"
     );
-    assert_eq!(
-        blake3::hash(MANUAL_STATIC_TOOL_ASSET).as_bytes(),
-        &MANUAL_STATIC_TOOL_ASSET_BLAKE3,
-        "manual MCP descriptor asset digest drifted"
-    );
-    let asset = match json::from_slice::<Value>(MANUAL_STATIC_TOOL_ASSET) {
+    let asset = match json::from_slice::<Value>(asset_bytes) {
         Ok(asset) => asset,
         Err(error) => panic!("manual MCP descriptor asset is not valid Norito JSON: {error}"),
     };

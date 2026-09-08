@@ -28,20 +28,49 @@ verification binds the maintained helper scripts to the supplied signed commit.
 Git replacement refs are disabled. Every tracked file is checked against its
 indexed blob and mode even when Git index flags conceal local edits.
 Gitlinks retain their exact indexed mode and commit; their worktree paths must
-be uninitialized empty directories or absent. Populated submodules are rejected
-before checks or compilation. There are no embedded tool digests or release-number-specific paths to update.
+be uninitialized empty directories or absent. Initial admission rejects populated worktree submodules; captured gitlinks always
+remain empty. There are no embedded tool digests or release-number-specific paths to update.
+
+Before preparation starts, the clean checkout and its signed commit are checked.
+The command then reads that commit's Git objects into a private, read-only source
+capture under `target/taira-release-sources/`. It creates no Git repository,
+worktree or branch. Both native checks and the Linux build consume this capture;
+One explicit `source/target` binding points to the selected existing warm Cargo
+target for native fixture output; source inventories verify this binding without
+traversing generated files. Native fixture processes also run from that external
+target directory. The snapshot covers signed Git entries; the output binding is
+recorded separately as `source_output_target`. Every signed source path remains
+read-only. Subsequent
+checkout edits, merges or HEAD changes cannot mix source versions into
+the build. Native test selection is loaded from the captured gate helper, including
+a resumed check after the checkout has changed. Resume authenticates the recorded
+commit and captured bytes without
+requiring the working checkout to remain unchanged.
+
+Each selected warm Cargo lane has one stable source path. A lane-wide lock covers
+capture refresh, native checks, Linux compilation and artifact capture, including
+an active child if its launcher exits. Source replacement occurs only between
+preparations. Unchanged files retain their timestamps so routine releases can
+reuse Cargo's cache. Interrupted source publication is recoverable; previous
+source directories and unfinished copies remain retained alongside the current
+capture.
 
 Both commands default to the checkout's existing target/ directory. Supply
 --target-dir only to select another established warm lane. Preparation uses the
-unchanged release profile, six jobs, and the maintained Zig wrapper for exactly
-iroha3d_taira, iroha, sorafs-node and kagami. It never cleans the target or changes
-source. Compiler overrides, interpreter hooks and runtime credentials are not
-forwarded to the child environment; local Cargo/Rustup and sccache paths remain
-available. The gate receives the same explicit target directory.
+unchanged release profile and six jobs for exactly iroha3d_taira, iroha,
+sorafs-node and kagami. Preparation selects the Rust toolchain from the captured
+`rust-toolchain.toml`, then runs Cargo from `/` with the captured manifest and
+`.cargo/config.toml` explicitly selected. A persistent config-free Cargo home
+under the project target reuses the existing registry and Git caches. Ancestor
+and home Cargo configuration cannot override these inputs; a root-level Cargo
+config stops preparation with an actionable error. The captured Zig driver and
+installed sccache remain in use. No target or cache is cleaned or replaced.
+Compiler overrides, interpreter hooks and runtime credentials are not forwarded.
+The native gate receives the same source, toolchain and explicit target directory.
 
 Rerun the exact same `prepare` command and output directory after interruption.
 The command locks that owner-private preparation directory, checks that its
-recorded inputs still match the signed checkout and tools, and resumes locally:
+recorded inputs still match the fixed signed source capture and tools, and resumes locally:
 
 - Completed native checks are reused for those exact inputs.
 - A failed or interrupted build runs Cargo again in the same warm target. Cargo
@@ -54,11 +83,12 @@ recorded inputs still match the signed checkout and tools, and resumes locally:
 The command reports stage durations and emits elapsed time, compiler-output size,
 and the log path every 30 seconds during Linux compilation. It does not repeatedly
 hash source or artifacts while reporting progress and does not impose an arbitrary
-cold-build deadline. Source, tools and artifacts are checked at actual consumption
+cold-build deadline. Captured source, tools and artifacts are checked at actual consumption
 and reuse boundaries. Runtime secrets remain excluded from the child environment.
 
-Before compilation, local admission groups requirements by filesystem and checks
-an 8 GiB Cargo working-space floor plus 256 MiB capture headroom. Before capture,
+Before initial source capture, local admission includes its exact file bytes.
+Before compilation, it groups requirements by filesystem and checks an 8 GiB
+Cargo working-space floor plus 256 MiB capture headroom. Before capture,
 it checks the exact binary-copy bytes plus that headroom. The build floor is an
 operational minimum, not a prediction of Cargo's peak use. This local check cannot
 observe a remote guest's sparse backing disk; native host capacity admission and

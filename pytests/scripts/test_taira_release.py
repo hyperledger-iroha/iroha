@@ -39,6 +39,7 @@ class TairaPrepareTests(unittest.TestCase):
         self.target.mkdir()
         self.target_mode = stat.S_IMODE(self.target.stat().st_mode)
         self.out = self.root / "prepared"
+        self.source = self.target / "frozen-source"
         self.zig, self.zigbuild = self.root / "zig", self.root / "cargo-zigbuild"
         for tool in (self.zig, self.zigbuild):
             tool.write_bytes(b"disposable tool fixture")
@@ -71,9 +72,16 @@ class TairaPrepareTests(unittest.TestCase):
             log.write_bytes(b"fixture compiler output\n")
         def wrapped_build(*args, **kwargs):
             return (build or default_build)(*args)
-        with patch.object(release, "verify_checkout", return_value="b" * 40), \
-             patch.object(release, "source_snapshot", side_effect=snapshot or (lambda _: [])), \
+        with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, 88))), \
+             patch.object(release, "verify_checkout", return_value="b" * 40), \
+             patch.object(release, "source_snapshot", return_value=[]), \
+             patch.object(release, "verify_signed_source", return_value="b" * 40), \
+             patch.object(release, "commit_entries", return_value=b""), \
+             patch.object(release, "capture_source", return_value=self.source), \
+             patch.object(release, "frozen_snapshot", side_effect=(lambda *_: snapshot(self.source)) if snapshot else (lambda *_: [])), \
+             patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
+             patch.object(release, "captured_gate", return_value=release.gate), \
              patch.object(release.gate, "run_checks", side_effect=check) as gate, \
              patch.object(release, "run_build", side_effect=wrapped_build) as compile, \
              patch.object(release, "capacity_preflight", return_value=[]), \
@@ -83,13 +91,13 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_prepare_orders_gate_build_capture_and_publishes_read_only_files(self):
         events = []
-        def check(_root, *, environment):
+        def check(_root, *, environment, source_commit, lock_fds):
             events.append("gate")
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
         def build(_root, command, environment, log):
             events.append("build")
             self.assertEqual(environment["IROHA_GIT_COMMIT_HASH"], self.args.expected_commit)
-            self.assertEqual(command, release.build_command(SCRIPT.parent.parent, self.target))
+            self.assertEqual(command, release.build_command(self.source, self.target, "/fixed/cargo"))
             self.binaries()
             log.write_bytes(b"fixture build\n")
         result, gate, compile = self.prepare(check=check, build=build)
@@ -110,13 +118,13 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_failed_gate_never_starts_linux_build_or_capture(self):
         with patch.object(release, "run_build") as build:
-            with self.assertRaisesRegex(release.gate.CheckError, "fixture gate failed"):
+            with self.assertRaisesRegex(release.PrepareError, "fixture gate failed"):
                 self.prepare(check=release.gate.CheckError("fixture gate failed"))
             build.assert_not_called()
         self.assertFalse(list(self.out.glob("attempts/*/bin")))
         self.assertFalse((self.out / "result.json").exists())
 
-    def test_source_drift_stops_before_linux_build(self):
+    def test_captured_source_drift_stops_before_linux_build(self):
         snapshots = iter([[], [{"path": "changed"}]])
         with self.assertRaisesRegex(release.PrepareError, "source changed"):
             self.prepare(snapshot=lambda _: next(snapshots))
@@ -195,7 +203,7 @@ class TairaPrepareTests(unittest.TestCase):
         self.assertEqual(build.call_count, 1)
         self.assertEqual(result["attempt"], "attempts/000002")
         self.assertEqual(original.read_bytes(), before)
-        self.assertEqual(build.call_args.args[1], release.build_command(SCRIPT.parent.parent, self.target))
+        self.assertEqual(build.call_args.args[1], release.build_command(self.source, self.target, "/fixed/cargo"))
 
     def test_crash_after_request_recovers_attempts_directory_before_work(self):
         real_create = release.create_fresh_directory
@@ -261,8 +269,14 @@ class TairaPrepareTests(unittest.TestCase):
                 release.capacity_preflight([(self.target, 60, "build"), (self.out, 41, "capture")])
 
     def test_low_space_stops_before_output_or_native_gate(self):
-        with patch.object(release, "verify_checkout", return_value="b" * 40), \
+        with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, 88))), \
+             patch.object(release, "verify_checkout", return_value="b" * 40), \
              patch.object(release, "source_snapshot", return_value=[]), \
+             patch.object(release, "verify_signed_source", return_value="b" * 40), \
+             patch.object(release, "commit_entries", return_value=b""), \
+             patch.object(release, "capture_source", return_value=self.source), \
+             patch.object(release, "frozen_snapshot", return_value=[]), \
+             patch.object(release, "isolated_cargo_environment", side_effect=lambda _r, _s, env: (dict(env, CARGO="/fixed/cargo"), [])), \
              patch.object(release.shutil, "which", return_value=str(self.zigbuild)), \
              patch.object(release, "capacity_preflight", side_effect=release.PrepareError("insufficient free space")), \
              patch.object(release.gate, "run_checks") as gate:
@@ -303,14 +317,16 @@ class TairaPrepareTests(unittest.TestCase):
                                     "PYTHONDONTWRITEBYTECODE", "CARGO_TARGET_DIR"})
 
     def test_build_command_uses_four_fixed_binaries_six_jobs_and_warm_lane(self):
-        command = release.build_command(Path("/repo"), self.target)
-        self.assertEqual(command[1:7], ["--target-dir", str(self.target), "--linker", "off", "--jobs", "6"])
+        command = release.build_command(Path("/frozen"), self.target, "/fixed/cargo")
+        self.assertEqual(command[:4], ["/fixed/cargo", "zigbuild", "--config", "/frozen/.cargo/config.toml"])
+        self.assertEqual(command[4:6], ["--manifest-path", "/frozen/Cargo.toml"])
         self.assertEqual(command.count("--bin"), 4)
         self.assertEqual(command[command.index("--profile") + 1], "release")
         self.assertNotIn("clean", command)
 
     def test_failed_build_keeps_diagnostic_log(self):
         class FailedChild:
+            pid = 123
             def wait(self, timeout=None):
                 return 101
             def poll(self):
@@ -437,9 +453,160 @@ class TairaPrepareTests(unittest.TestCase):
         self.fixture_git("add", "--", source.name)
         self.fixture_git("config", "core.filemode", "false")
         source.chmod(0o755)
-        self.fixture_git("diff-files", "--quiet", "--", source.name)
+        self.fixture_git("diff", "--quiet", "--", source.name)
         with self.assertRaisesRegex(release.PrepareError, "mode differs from the index"):
             release.source_snapshot(self.root)
+
+
+    def source_entries(self, files):
+        self.fixture_git("init", "--quiet")
+        rows = []
+        for name, (mode, payload) in sorted(files.items()):
+            oid = ("c" * 40 if mode == "160000" else
+                   self.fixture_git("hash-object", "-w", "--stdin", payload=payload).decode())
+            rows.append(f"{mode} {oid} 0\t{name}".encode())
+        return b"\0".join(rows) + b"\0"
+
+    def test_fixed_capture_reads_git_objects_and_survives_working_source_changes(self):
+        entries = self.source_entries({"source.rs": ("100644", b"signed source"),
+                                       "iroha-docs": ("160000", b"")})
+        (self.root / "source.rs").write_bytes(b"concurrent unsaved edit")
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            self.assertEqual((source / "source.rs").read_bytes(), b"signed source")
+            self.assertFalse((source / ".git").exists())
+            self.assertEqual(list((source / "iroha-docs").iterdir()), [])
+            (self.root / "source.rs").write_bytes(b"another unrelated merge")
+            self.assertEqual(release.capture_source(self.root, source, self.target, "a" * 40, entries), source)
+            release.frozen_snapshot(source, entries, self.target)
+
+    def test_lane_path_and_unchanged_mtimes_survive_next_commit(self):
+        entries = self.source_entries({"same.rs": ("100644", b"same"), "edit.rs": ("100644", b"old")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            unchanged_mtime = (source / "same.rs").stat().st_mtime_ns
+            original = source
+        updated = self.source_entries({"same.rs": ("100644", b"same"), "edit.rs": ("100644", b"new")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            with patch.object(release, "commit_entries", return_value=entries):
+                release.capture_source(self.root, source, self.target, "b" * 40, updated)
+            self.assertEqual(source, original)
+            self.assertEqual((source / "same.rs").stat().st_mtime_ns, unchanged_mtime)
+            self.assertEqual((source / "edit.rs").read_bytes(), b"new")
+            self.assertEqual(len(list(source.parent.glob("source.retained-*"))), 1)
+
+    def test_captured_source_tampering_or_extra_files_cannot_resume(self):
+        entries = self.source_entries({"source.rs": ("100644", b"signed")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            source.chmod(0o700)
+            (source / "injected.rs").write_bytes(b"untracked build input")
+            source.chmod(0o500)
+            with self.assertRaisesRegex(release.PrepareError, "extra inputs"):
+                release.capture_source(self.root, source, self.target, "a" * 40, entries)
+
+    def test_capture_rejects_escaping_symlink_before_publication(self):
+        entries = self.source_entries({"escape": ("120000", b"../../outside")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            with self.assertRaisesRegex(release.PrepareError, "symlink escapes"):
+                release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            self.assertFalse(source.exists())
+
+    def test_source_refresh_recovers_after_old_directory_was_retained(self):
+        entries = self.source_entries({"source.rs": ("100644", b"old")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            updated = self.source_entries({"source.rs": ("100644", b"new")})
+            rename = release.os.rename
+            def fail_publication(src, dst):
+                if Path(dst) == source:
+                    raise OSError("fixture interrupted source publication")
+                return rename(src, dst)
+            with patch.object(release.os, "rename", side_effect=fail_publication), \
+                 patch.object(release, "commit_entries", return_value=entries):
+                with self.assertRaisesRegex(OSError, "interrupted"):
+                    release.capture_source(self.root, source, self.target, "b" * 40, updated)
+            self.assertFalse(source.exists())
+            release.capture_source(self.root, source, self.target, "b" * 40, updated)
+            self.assertEqual((source / "source.rs").read_bytes(), b"new")
+            self.assertTrue(list(source.parent.glob("source.retained-*")))
+
+    def test_source_lane_blocks_another_output_until_owner_releases_it(self):
+        with release.source_lane(self.root, self.target):
+            with self.assertRaisesRegex(release.PrepareError, "still running"):
+                with release.source_lane(self.root, self.target):
+                    self.fail("another preparation replaced a live source lane")
+
+    def test_working_checkout_is_never_rechecked_after_capture(self):
+        def check(*_args, **kwargs):
+            guard = patch.object(release, "source_snapshot", side_effect=AssertionError("mutable source read"))
+            guard.start()
+            self.addCleanup(guard.stop)
+            self.assertEqual(kwargs["source_commit"], self.args.expected_commit)
+            self.assertEqual(kwargs["lock_fds"][1], 88)
+        result, _, build = self.prepare(check=check)
+        self.assertEqual(build.call_args.args[0], self.source)
+        self.assertEqual(result["source_root"], str(self.source))
+
+    def test_frozen_native_fixture_output_uses_only_the_exact_warm_target(self):
+        entries = self.source_entries({"crates/iroha_cli/source.rs": ("100644", b"signed")})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            before = release.frozen_snapshot(source, entries, self.target)
+            fixture = source / "crates/iroha_cli/../../target/disposable-native-fixture"
+            fixture.mkdir()
+            (fixture / "generated").write_bytes(b"fixture output, never inventoried")
+            self.assertEqual(before, release.frozen_snapshot(source, entries, self.target))
+            self.assertTrue((self.target / "disposable-native-fixture/generated").is_file())
+            self.assertNotIn("target", [row["path"] for row in before])
+            source.chmod(0o700)
+            (source / "target").unlink()
+            (source / "target").symlink_to(self.root, target_is_directory=True)
+            source.chmod(0o500)
+            with self.assertRaisesRegex(release.PrepareError, "output binding differs"):
+                release.frozen_snapshot(source, entries, self.target)
+
+    def test_native_gate_selection_is_loaded_from_verified_captured_source(self):
+        code = b"SELECTION = ('captured regression',)\n"
+        entries = self.source_entries({"scripts/taira_release_check.py": ("100644", code)})
+        with release.source_lane(self.root, self.target) as (source, _fd):
+            release.capture_source(self.root, source, self.target, "a" * 40, entries)
+            before = release.frozen_snapshot(source, entries, self.target)
+            (self.root / "scripts").mkdir()
+            (self.root / "scripts/taira_release_check.py").write_text("raise RuntimeError('mutable gate must not execute')")
+            selected = release.captured_gate(source, before)
+            self.assertEqual(selected.SELECTION, ("captured regression",))
+
+    def test_isolated_cargo_ignores_home_and_ancestor_configuration(self):
+        self.source.mkdir()
+        (self.source / "rust-toolchain.toml").write_text('[toolchain]\nchannel="1.93.1"\n')
+        home = self.root / "home"
+        cache = home / ".cargo"
+        cache.mkdir(parents=True)
+        for name in ("registry", "git"):
+            (cache / name).mkdir()
+        (cache / "config.toml").write_text('this fixture config must never be parsed')
+        env = release.child_environment({"HOME": str(home), "PATH": "/fixture", "RUSTFLAGS": "injected"}, self.target)
+        with patch.object(release.subprocess, "check_output", return_value=str(self.zig) + "\n"), \
+             patch.object(release.shutil, "which", return_value=None):
+            selected, tools = release.isolated_cargo_environment(self.root, self.source, env)
+            reused, _ = release.isolated_cargo_environment(self.root, self.source, env)
+        self.assertEqual(selected, reused)
+        self.assertEqual(selected["CARGO_BUILD_JOBS"], "6")
+        self.assertEqual(selected["CARGO_TARGET_DIR"], str(self.target))
+        self.assertNotIn("RUSTFLAGS", selected)
+        isolated = Path(selected["CARGO_HOME"])
+        self.assertNotEqual(isolated, cache)
+        self.assertEqual((isolated / "registry").resolve(), cache / "registry")
+        self.assertFalse((isolated / "config.toml").exists())
+        command = release.build_command(self.source, self.target, selected["CARGO"])
+        self.assertEqual(command[2:4], ["--config", str(self.source / ".cargo/config.toml")])
+        class Child:
+            def wait(self, timeout=None): return 0
+        with patch.object(release.subprocess, "Popen", return_value=Child()) as spawn:
+            release.run_build(self.source, command, selected, self.root / "isolated.log", lock_fd=77, lane_lock_fd=88)
+        self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
+        self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
 
 
 if __name__ == "__main__":

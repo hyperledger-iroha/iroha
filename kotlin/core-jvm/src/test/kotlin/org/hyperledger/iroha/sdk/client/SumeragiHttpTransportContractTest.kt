@@ -21,7 +21,7 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
 import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
-import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
+import org.hyperledger.iroha.sdk.alias.PreparedOperationBindingV1
 import org.hyperledger.iroha.sdk.client.transport.RequestReplayPolicy
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
@@ -194,7 +194,7 @@ class SumeragiHttpTransportContractTest {
             override fun prepareSponsoredAccountOnboarding(
                 request: AccountOnboardingPlanRequestV1,
                 receipt: AccountOnboardingPlanReceiptV1,
-                binding: TairaPublicResetMutationBindingV1,
+                binding: PreparedOperationBindingV1,
                 feePayment: FeePaymentIntent,
                 onboardingToken: String,
                 expectedAuthority: String,
@@ -206,7 +206,7 @@ class SumeragiHttpTransportContractTest {
                 proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
                 request: AccountOnboardingPlanRequestV1,
                 receipt: AccountOnboardingPlanReceiptV1,
-                binding: TairaPublicResetMutationBindingV1,
+                binding: PreparedOperationBindingV1,
                 expectedAuthority: String,
                 expectedNetworkId: NetworkId,
                 canonicalAuth: ToriiCanonicalRequestAuth,
@@ -225,7 +225,7 @@ class SumeragiHttpTransportContractTest {
 
             override fun prepareAccountFaucetTransaction(
                 claim: AccountFaucetClaimV1,
-                binding: TairaPublicResetMutationBindingV1,
+                binding: PreparedOperationBindingV1,
                 feePayment: FeePaymentIntent,
                 policy: AccountFaucetPolicyV1,
                 expectedNetworkId: NetworkId,

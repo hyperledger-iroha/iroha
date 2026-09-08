@@ -26,7 +26,7 @@ class PreparedTransactionSignatureFixtureTest {
             JsonParser.parse(String(Files.readAllBytes(resolveFixture()), StandardCharsets.UTF_8)),
             "fixture",
         )
-        assertEquals("iroha.taira.prepared-transaction-signature-fixture.v1", string(root, "schema"))
+        assertEquals("iroha.prepared-transaction-signature-fixture.v1", string(root, "schema"))
         assertEquals("u64_be", string(root, "frame_length_encoding"))
         assertEquals("iroha_blake2b_256", string(root, "digest_algorithm"))
         assertEquals(PreparedTransactionSignatureV1.TRANSCRIPT_SCHEMA, string(root, "transcript_schema"))
@@ -208,12 +208,10 @@ class PreparedTransactionSignatureFixtureTest {
         rejected(copyPrepared(prepared, signedTransactionWireHex = flipHex(prepared.signedTransactionWireHex)))
         rejected(copyPrepared(prepared, transactionHashHex = flipHex(prepared.transactionHashHex)))
         val binding = prepared.binding
-        val alteredBinding = TairaPublicResetMutationBindingV1(
-            authorizationSha256 = flipHex(binding.authorizationSha256),
-            authorizationNonce = binding.authorizationNonce,
+        val alteredBinding = PreparedOperationBindingV1(
+            semanticHashHex = flipHex(binding.semanticHashHex),
             kind = binding.kind,
-            phase = binding.phase,
-            idempotencyKey = binding.idempotencyKey,
+            requestId = binding.requestId,
             executionExpiresAtUnixMs = binding.executionExpiresAtUnixMs,
         )
         rejected(copyPrepared(prepared, binding = alteredBinding))
@@ -327,7 +325,7 @@ class PreparedTransactionSignatureFixtureTest {
 
     private fun copyPrepared(
         source: AccountOnboardingPreparedTransactionV1,
-        binding: TairaPublicResetMutationBindingV1 = source.binding,
+        binding: PreparedOperationBindingV1 = source.binding,
         transactionHashHex: String = source.transactionHashHex,
         signedTransactionWireHex: String = source.signedTransactionWireHex,
         serverSignature: String = source.serverSignature,

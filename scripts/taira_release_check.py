@@ -149,13 +149,16 @@ def show_build_diagnostic(line: str) -> None:
             sys.stderr.flush()
 
 
-def compile_harness(root: Path, env: dict[str, str]) -> str:
-    command = compile_command(root)
+def compile_harness(root: Path, env: dict[str, str], *, frozen: bool = False, lock_fds: tuple[int, ...] = ()) -> str:
+    command = ([env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
+                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
+                "-p", "iroha_cli", "--bin", "iroha", "--no-run",
+                "--message-format=json-render-diagnostics"] if frozen else compile_command(root))
     print("[taira-check] build native CLI test harness", flush=True)
     started = time.monotonic()
     artifacts: set[str] = set()
-    with subprocess.Popen(command, cwd=root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                          text=True, encoding="utf-8", errors="replace") as child:
+    with subprocess.Popen(command, cwd="/" if frozen else root, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
@@ -190,20 +193,22 @@ def require_one_pass(name: str, result: subprocess.CompletedProcess[str]) -> Non
         raise CheckError(f"regression did not execute and pass: {name} (exit {result.returncode})")
 
 
-def run_checks(root: Path, *, environment: dict[str, str] | None = None) -> None:
+def run_checks(root: Path, *, environment: dict[str, str] | None = None,
+               source_commit: str | None = None, lock_fds: tuple[int, ...] = ()) -> None:
     if sys.platform not in {"darwin", "linux"}:
         raise CheckError("the Taira descriptor/stage gate requires macOS or Linux")
     started = time.monotonic()
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root,
-                                   stdin=subprocess.DEVNULL, text=True).strip()
+    head = source_commit if source_commit is not None else subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, stdin=subprocess.DEVNULL, text=True).strip()
     env = dict(os.environ if environment is None else environment)
     env.pop("CARGO_BUILD_TARGET", None)  # This check executes a host-native harness.
     env["VERGEN_GIT_SHA"] = head
     env["IROHA_GIT_COMMIT_HASH"] = head
-    print(f"[taira-check] source HEAD {head}; current worktree inputs", flush=True)
-    harness = compile_harness(root, env)
-    listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=root,
-                             env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False)
+    print(f"[taira-check] source {head}; {root}", flush=True)
+    harness = compile_harness(root, env, frozen=source_commit is not None, lock_fds=lock_fds)
+    fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
+    listing = subprocess.run([harness, "--list", "--format", "terse"], cwd=fixture_root,
+                             env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, pass_fds=lock_fds)
     if listing.returncode:
         raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
     require_tests(listing.stdout)
@@ -214,12 +219,12 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None) -> None
             test_start = time.monotonic()
             print(f"[taira-check] start {name}", flush=True)
             result = subprocess.run([harness, name, "--exact", "--color", "never"],
-                                    cwd=root, env=env, stdin=subprocess.DEVNULL,
-                                    text=True, capture_output=True, check=False)
+                                    cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
+                                    text=True, capture_output=True, check=False, pass_fds=lock_fds)
             require_one_pass(name, result)
             print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
         print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
-    if subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root,
+    if source_commit is None and subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
     count = sum(len(names) for _, names in STAGES)
