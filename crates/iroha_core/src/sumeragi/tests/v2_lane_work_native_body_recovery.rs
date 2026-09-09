@@ -3149,7 +3149,7 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
     }
 
     let (mut previous_adapter, keys, participant_lane, participant_dataspace, previous) =
-        native_coordinator_after_applied_participant_fixture(Some(1));
+        native_coordinator_after_applied_participant_fixture(Some(0));
     let parent_height = NonZeroUsize::new(previous_adapter.state.committed_height()).unwrap();
     let parent = previous_adapter.kura.get_block(parent_height).unwrap();
     complete_applied_ordinary_lane_sessions(&mut previous_adapter, &keys, &parent);
@@ -3163,12 +3163,12 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
     )
     .expect("coordinator predecessor is fully applied before participant interruption");
     assert_eq!(
-        slot.lane_block_height, 2,
-        "fixture reserves the second lane slot"
+        slot.lane_block_height, 1,
+        "the coordinator has not yet produced a lane block"
     );
     assert_eq!(
         slot.author, previous_adapter.local_peer,
-        "the storage owner must be the deterministic second-slot author from initial construction"
+        "the storage owner must be the deterministic first-slot author from initial construction"
     );
     let mut adapter = previous_adapter;
     let active_view = (0..2 * adapter
