@@ -9,7 +9,7 @@ use iroha_data_model::{
     metadata::Metadata,
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
-use iroha_test_network::init_instruction_registry;
+use iroha_test_network::{init_instruction_registry, read_on_dedicated_thread};
 use std::{path::Path, time::Duration};
 use tokio::time::{Instant, sleep, timeout, timeout_at};
 
@@ -51,7 +51,11 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
         .wrap_err("four-peer startup exceeded its deadline")??;
     let result = timeout(Duration::from_secs(90), async {
         ensure!(network.peers().len() == 4, "the fixture must start all four validators");
-        let initial = try_join_all(network.peers().iter().map(|peer| peer.status())).await?;
+        let initial = try_join_all(network.peers().iter().map(|peer| async move {
+            let mut client = peer.client().client().clone();
+            client.torii_request_timeout = Duration::from_secs(5);
+            read_on_dedicated_thread(move || client.get_status()).await
+        })).await?;
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
         let mut client = network.client().client().clone();
         client.transaction_status_timeout = Duration::from_secs(75);
@@ -81,24 +85,29 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
             .collect::<String>();
         loop {
             let observations = try_join_all(network.peers().iter().map(|peer| async move {
-                let status = peer.status().await?;
-                let client = peer.client();
-                let transaction = client.client().fetch_transaction_status_response_global(expected_hash).await?;
-                Ok::<_, eyre::Report>((status.blocks, transaction))
+                let mut client = peer.client().client().clone();
+                client.torii_request_timeout = Duration::from_secs(5);
+                let global = client.fetch_transaction_status_response_global(expected_hash).await?;
+                // Global lookups may fan out to another validator. Prove this
+                // peer's own committed state before counting it as applied.
+                let (status, local) = read_on_dedicated_thread(move || {
+                    Ok((client.get_status()?, client.get_transaction_status_response_local(expected_hash)?))
+                }).await?;
+                Ok::<_, eyre::Report>((status.blocks, global, local))
             })).await?;
-            let all_applied = observations.iter().all(|(height, response)| {
-                response.as_ref().is_some_and(|response| {
+            let all_applied = observations.iter().all(|(height, global, local)| {
+                [("global", global), ("local", local)].iter().all(|(scope, response)| response.as_ref().is_some_and(|response| {
                     response.hash == expected_hex
-                        && response.scope == "global"
+                        && response.scope == *scope
                         && response.resolved_from == "state"
                         && response.status.kind == "Applied"
                         && response.status.block_height.is_some_and(|applied| applied > 1 && *height >= applied)
-                })
+                }))
             });
             if all_applied {
                 let applied_height = observations[0].1.as_ref().unwrap().status.block_height;
-                ensure!(observations.iter().all(|(_, response)| response.as_ref().unwrap().status.block_height == applied_height), "peers disagree on the exact transaction's applied height");
-                eprintln!("Taira four-peer Ordinary transaction Applied: hash={expected_hex}, height={applied_height:?}, peer_heights={:?}", observations.iter().map(|(height, _)| *height).collect::<Vec<_>>());
+                ensure!(observations.iter().all(|(_, global, local)| global.as_ref().unwrap().status.block_height == applied_height && local.as_ref().unwrap().status.block_height == applied_height), "peers disagree on the exact transaction's applied height");
+                eprintln!("Taira four-peer Ordinary transaction Applied in local and global state: hash={expected_hex}, height={applied_height:?}, peer_heights={:?}", observations.iter().map(|(height, _, _)| *height).collect::<Vec<_>>());
                 return Ok(());
             }
             eprintln!("waiting for all four peers to apply exact Ordinary transaction {expected_hex}: {observations:?}");

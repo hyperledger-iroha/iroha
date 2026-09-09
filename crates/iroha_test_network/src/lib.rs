@@ -9884,6 +9884,7 @@ impl NetworkPeer {
             .copied()
             .expect("peer must be attached to a network before creating clients");
         let config = ConfigReader::new()
+            .without_env()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
@@ -11607,6 +11608,41 @@ mod tests {
     fn torii_request_error_is_transient_ignores_validation_errors() {
         let report = eyre!("Validation failed: domain already exists");
         assert!(!torii_request_error_is_transient(&report));
+    }
+    #[test]
+    fn peer_client_ignores_ambient_identity_and_endpoint_overrides() {
+        let _guard = lock_env_guard(&CONFIG_ENV_GUARD);
+        let dir = tempdir().expect("peer client fixture directory");
+        let environment = Environment {
+            dir: dir.path().to_path_buf(),
+        };
+        let peer = NetworkPeer::builder().build(&environment);
+        let network_id = NetworkId::from_genesis_hash(
+            HashOf::<iroha_data_model::block::BlockHeader>::from_untyped_unchecked(
+                CryptoHash::prehashed([0xA5; CryptoHash::LENGTH]),
+            ),
+        );
+        assert!(peer.network_id.set(network_id).is_ok());
+        let _overrides = [
+            EnvVarRestore::set("CHAIN", "foreign-client-chain"),
+            EnvVarRestore::set("NETWORK_ID", "invalid-ambient-network"),
+            EnvVarRestore::set("TORII_URL", "http://127.0.0.1:1"),
+            EnvVarRestore::set("ACCOUNT_PUBLIC_KEY", "invalid-ambient-public-key"),
+            EnvVarRestore::set("ACCOUNT_PRIVATE_KEY", "invalid-ambient-private-key"),
+            EnvVarRestore::set("ACCOUNT_PRIVATE_KEY_FILE", "nonexistent-ambient-key-file"),
+        ];
+        let client = peer.client();
+        assert_eq!(client.client().chain, config::chain_id());
+        assert_eq!(client.client().network_id, network_id);
+        assert_eq!(client.client().account, *ALICE_ID);
+        assert_eq!(
+            client.client().key_pair.public_key(),
+            ALICE_KEYPAIR.public_key()
+        );
+        assert_eq!(
+            client.client().torii_url.as_str(),
+            format!("http://127.0.0.1:{}/", peer.port_api)
+        );
     }
     #[test]
     fn client_status_timeout_defaults_are_generous() {

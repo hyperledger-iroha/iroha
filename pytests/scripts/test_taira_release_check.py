@@ -27,6 +27,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         mock = patch.object(gate, "run_pure_fsm_checks")
         self.pure_fsm = mock.start()
         self.addCleanup(mock.stop)
+        capacity = patch.object(gate, "require_network_fixture_capacity")
+        self.capacity = capacity.start()
+        self.addCleanup(capacity.stop)
 
     def test_failed_regression_does_not_hide_later_independent_failures(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -281,13 +284,47 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "run_stages") as run, contextlib.redirect_stdout(io.StringIO()):
             gate.run_network_checks(Path("/frozen"), Path("/warm"), env, (77, 88))
         selected = run.call_args.args[2]
-        for key in ("IROHA_TEST_SKIP_BUILD", "IROHA_FAIL_ON_SANDBOX_SKIP", "IROHA_TEST_REQUIRE_NETWORK", "IROHA_TEST_SERIALIZE_NETWORKS"):
+        for key in ("IROHA_TEST_SKIP_BUILD", "IROHA_FAIL_ON_SANDBOX_SKIP", "IROHA_TEST_REQUIRE_NETWORK", "IROHA_TEST_SERIALIZE_NETWORKS", "IROHA_TEST_NETWORK_KEEP_DIRS"):
             self.assertEqual(selected[key], "1")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHAD"], "/warm/node")
         self.assertEqual(selected["TEST_NETWORK_BIN_IROHA"], "/warm/client")
         self.assertEqual(selected["TEST_NETWORK_TMP_DIR"], "/warm/private-fixture")
         self.assertEqual(run.call_args.args[3:], (gate.NETWORK_STAGES, (77, 88)))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
+
+
+class NetworkFixtureCapacityTests(unittest.TestCase):
+    def test_storage_floor_accepts_exact_boundary_and_rejects_one_byte_less(self):
+        for available, passes in ((gate.NETWORK_FIXTURE_FREE_BYTES, True),
+                                  (gate.NETWORK_FIXTURE_FREE_BYTES - 1, False)):
+            with self.subTest(available=available), patch.object(
+                    gate.shutil, "disk_usage", return_value=MagicMock(free=available)) as usage:
+                if passes:
+                    gate.require_network_fixture_capacity(Path("/warm"))
+                else:
+                    with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
+                        gate.require_network_fixture_capacity(Path("/warm"))
+                usage.assert_called_once_with(Path("/warm"))
+
+    def test_insufficient_space_stops_before_compilation(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+        with patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=0)), \
+             patch.object(gate, "compile_harness") as compile, \
+             patch.object(gate, "run_pure_fsm_checks") as fsm, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
+                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40)
+        compile.assert_not_called()
+        fsm.assert_not_called()
+
+    def test_capacity_is_checked_again_after_builds_before_starting_peers(self):
+        with patch.object(gate, "compile_network_binaries", return_value={"iroha3d": "/node", "iroha": "/cli"}), \
+             patch.object(gate, "compile_harness", return_value="/harness"), \
+             patch.object(gate.shutil, "disk_usage", return_value=MagicMock(free=0)), \
+             patch.object(gate, "run_stages") as run, patch.object(gate.tempfile, "mkdtemp") as fixture:
+            with self.assertRaisesRegex(gate.CheckError, "four-peer fixtures require"):
+                gate.run_network_checks(Path("/frozen"), Path("/warm"), {"CARGO_TARGET_DIR": "/warm"}, ())
+        run.assert_not_called()
+        fixture.assert_not_called()
 
 
 class PureFsmGateTests(unittest.TestCase):

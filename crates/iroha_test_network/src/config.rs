@@ -128,6 +128,13 @@ pub fn base_iroha_config() -> Table {
         // There is no need in persistence in tests.
         .write(["snapshot", "mode"], "disabled")
         .write(["kura", "store_dir"], "./storage")
+        // Each temporary peer owns a bounded budget on the shared development
+        // filesystem. Production auto-sizing reserves 20% of the whole device,
+        // which is inappropriate for several small test peers sharing a host.
+        .write(
+            ["nexus", "storage", "local_budget_bytes"],
+            1_073_741_824_i64,
+        )
         .write(
             ["kura", "lane_history_retention"],
             i64::try_from(defaults::kura::LANE_HISTORY_RETENTION.get())
@@ -1456,6 +1463,97 @@ mod tests {
                 .and_then(|value| value.as_str()),
             Some("extended"),
             "test networks should expose expensive telemetry metrics"
+        );
+    }
+    #[test]
+    fn base_config_applies_bounded_storage_caps() {
+        for sora_enabled in [false, true] {
+            let mut base = base_iroha_config();
+            if sora_enabled {
+                let lanes = (0_i64..3)
+                    .map(|index| {
+                        toml::Value::Table(
+                            Table::new()
+                                .write("index", index)
+                                .write("alias", format!("storage-budget-{index}"))
+                                .write("dataspace", "universal")
+                                .write("visibility", "public"),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                base = base
+                    .write(["nexus", "lane_count"], 3_i64)
+                    .write(["nexus", "lane_catalog"], toml::Value::Array(lanes));
+            }
+            let layers = vec![base];
+            assert_eq!(crate::config_requires_sora_profile(&layers), sora_enabled);
+            let merged = crate::merged_sora_profile_detection_config(&layers);
+            let actual = crate::parse_actual_config_for_genesis_result(merged, &layers)
+                .expect("test network storage config must parse");
+            assert!(!actual.torii.sorafs_storage.enabled);
+            assert_eq!(
+                actual
+                    .nexus
+                    .storage
+                    .local_budget_bytes
+                    .map(|bytes| bytes.get()),
+                Some(1_073_741_824)
+            );
+            assert_eq!(
+                actual
+                    .nexus
+                    .storage
+                    .effective_local_budget_bytes
+                    .map(|bytes| bytes.get()),
+                Some(1_073_741_824)
+            );
+            assert_eq!(actual.kura.max_disk_usage_bytes.get(), 375_809_640);
+            assert_eq!(actual.tiered_state.max_cold_bytes.get(), 214_748_364);
+            assert_eq!(
+                actual.torii.sorafs_storage.max_capacity_bytes.get(),
+                483_183_820
+            );
+            assert_eq!(
+                actual.nexus.storage.budget_enforce_interval_blocks,
+                defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS
+            );
+        }
+    }
+    #[test]
+    fn base_config_preserves_caller_storage_budget_and_smaller_component_cap() {
+        let layers = vec![
+            base_iroha_config(),
+            Table::new()
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    2_147_483_648_i64,
+                )
+                .write(["kura", "max_disk_usage_bytes"], 4_096_i64),
+        ];
+        let merged = crate::merged_sora_profile_detection_config(&layers);
+        let actual = crate::parse_actual_config_for_genesis_result(merged, &layers)
+            .expect("caller storage overrides must parse");
+        assert_eq!(
+            actual
+                .nexus
+                .storage
+                .local_budget_bytes
+                .map(|bytes| bytes.get()),
+            Some(2_147_483_648)
+        );
+        assert_eq!(
+            actual
+                .nexus
+                .storage
+                .effective_local_budget_bytes
+                .map(|bytes| bytes.get()),
+            Some(2_147_483_648)
+        );
+        assert_eq!(actual.kura.max_disk_usage_bytes.get(), 4_096);
+        assert_eq!(actual.tiered_state.max_cold_bytes.get(), 429_496_729);
+        assert_eq!(
+            actual.torii.sorafs_storage.max_capacity_bytes.get(),
+            966_367_641
         );
     }
     #[test]

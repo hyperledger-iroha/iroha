@@ -20,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -263,6 +264,10 @@ NETWORK_STAGES = (("four-validator multi-route transaction commit", (
     "four_peer_multiroute_ordinary_transaction_reaches_applied",
 )),)
 
+# Four peers use the shared test-network 1 GiB/node cap. Keep another 4 GiB
+# available for fixture logs, temporary files and concurrent build output.
+NETWORK_FIXTURE_FREE_BYTES = 8 * 1024**3
+
 HARNESS_TARGETS = {
     "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
     "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
@@ -437,6 +442,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
     binaries = compile_network_binaries(root, env, lock_fds)
     harness = compile_harness(root, env, lock_fds=lock_fds, harness="network")
+    require_network_fixture_capacity(fixture_root)
     # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
     directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
     network_env = env | {
@@ -444,6 +450,7 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
         "TEST_NETWORK_BIN_IROHA": binaries["iroha"],
         "IROHA_TEST_TARGET_DIR": env["CARGO_TARGET_DIR"],
         "TEST_NETWORK_TMP_DIR": str(directory),
+        "IROHA_TEST_NETWORK_KEEP_DIRS": "1",
         "IROHA_TEST_SKIP_BUILD": "1",
         "IROHA_FAIL_ON_SANDBOX_SKIP": "1",
         "IROHA_TEST_REQUIRE_NETWORK": "1",
@@ -451,6 +458,15 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
     }
     print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
     run_stages(harness, fixture_root, network_env, NETWORK_STAGES, lock_fds)
+
+
+def require_network_fixture_capacity(directory: Path) -> None:
+    """Reject an undersized shared test volume before building or starting peers."""
+    available = shutil.disk_usage(directory).free
+    if available < NETWORK_FIXTURE_FREE_BYTES:
+        raise CheckError(
+            f"four-peer fixtures require {NETWORK_FIXTURE_FREE_BYTES} free bytes "
+            f"for bounded storage and scratch space; {available} available at {directory}")
 
 
 def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
@@ -512,6 +528,8 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     env["IROHA_GIT_COMMIT_HASH"] = head
     print(f"[taira-check] source {head}; {root}", flush=True)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
+    if NETWORK_STAGES:
+        require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
     # Fail on focused scheduling regressions before building the full node and
     # network harness; exercise the composed runtime before unrelated contracts.

@@ -42,14 +42,24 @@ rejecting malformed or failed status responses without resubmission.
 
 The next gate launches four validators from the freshly emitted native
 `iroha3d` binary using the same three-route fixture as the consensus integration
-suite. It requires one exact ordinary transaction to reach Applied on every
-validator. Cargo emits both node and client paths explicitly; fallback builds and
+suite. It requires one exact ordinary transaction to reach state-resolved Applied
+in both local and global status on every validator at the same committed height.
+Global status can query other peers, so only the additional local observation
+establishes each validator's own application. Peer clients ignore ambient client
+identity and endpoint overrides; status observations have five-second requests.
+Cargo emits both node and client paths explicitly; fallback builds and
 sandbox skips are disabled. The focused `taira_consensus_contracts` harness avoids
 compiling the full consensus suite, and keeps private fixture logs in the warm
 target for failure diagnosis. Test ports use lifetime-held OS leases in an
 owner-private host runtime directory. A reserved but unbound port remains
 exclusive; process exit releases its lease without writing into the source
 tree or deleting shared lock files.
+
+Each temporary peer has an explicit 1 GiB storage budget on the shared host.
+The gate requires 8 GiB free before compilation and checks again before peer
+startup: 4 GiB for the four budgets and 4 GiB for scratch files and logs.
+Production filesystem auto-sizing remains unchanged. Codec table fixtures are
+embedded, materialized without source permissions, and reused across restarts.
 
 For a testnet attempt stuck on an unresolved canary before edge staging,
 `iroha taira public-reset abandon` takes the original signed inventory,
