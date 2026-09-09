@@ -93,7 +93,13 @@ def native_check_environment(environment: dict[str, str], inherited: dict[str, s
     """Admit one native cache preference without changing the release environment."""
     incremental = inherited.get("CARGO_INCREMENTAL", "1")
     require(incremental in ("0", "1"), "native CARGO_INCREMENTAL must be 0 or 1")
-    return environment | {"CARGO_INCREMENTAL": incremental}
+    native = environment | {"CARGO_INCREMENTAL": incremental}
+    # sccache rejects CARGO_INCREMENTAL=1 before invoking rustc. Cargo's warm
+    # incremental artifacts own this lane; retain sccache for nonincremental
+    # native checks and the separate sanitized Linux release environment.
+    if incremental == "1" and Path(native.get("RUSTC_WRAPPER", "")).name == "sccache":
+        native.pop("RUSTC_WRAPPER")
+    return native
 
 def git(root: Path, *args: str) -> bytes:
     result = subprocess.run(["git", "--no-replace-objects", *args], cwd=root, stdin=subprocess.DEVNULL,

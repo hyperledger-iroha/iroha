@@ -506,6 +506,14 @@ select_linker() {
 }
 
 enabled_sccache="no"
+# Explicit incremental compilation and sccache cannot share one invocation.
+# Do not remove a caller's unrelated compiler instrumentation wrapper.
+if [[ "${CARGO_INCREMENTAL:-}" == 1 ]]; then
+	if [[ "${RUSTC_WRAPPER:-}" == sccache || "${RUSTC_WRAPPER:-}" == */sccache ]]; then
+		unset RUSTC_WRAPPER
+	fi
+	auto_sccache=false
+fi
 if [[ "${auto_sccache}" == true ]]; then
 	if [[ -n "${RUSTC_WRAPPER:-}" ]]; then
 		enabled_sccache="already-set(${RUSTC_WRAPPER})"

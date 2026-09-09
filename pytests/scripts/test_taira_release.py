@@ -357,7 +357,10 @@ class TairaPrepareTests(unittest.TestCase):
                                     ({"CARGO_INCREMENTAL": "0"}, "0")):
             with self.subTest(inherited=inherited):
                 native = release.native_check_environment(environment, inherited)
-                self.assertEqual(native, original | {"CARGO_INCREMENTAL": expected})
+                expected_environment = original | {"CARGO_INCREMENTAL": expected}
+                if expected == "1":
+                    expected_environment.pop("RUSTC_WRAPPER")
+                self.assertEqual(native, expected_environment)
                 self.assertEqual(environment, original)
         for invalid in ("", "true", "false", "fixture-private-invalid-value"):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(release.PrepareError, "must be 0 or 1") as rejected:

@@ -705,3 +705,24 @@ def test_wrapper_stays_compatible_with_stock_macos_bash() -> None:
         re.compile(r"\$\{[^}\n]+(?:,,|\^\^)[^}\n]*\}"),
     ):
         assert pattern.search(source) is None, pattern.pattern
+
+
+@pytest.mark.parametrize("inherited", [False, True])
+def test_incremental_never_dispatches_sccache(tmp_path: Path, inherited: bool) -> None:
+    extra = {"RUSTC_WRAPPER": "/fixed/sccache", "CARGO_INCREMENTAL": "1"} if inherited else {}
+    result, environment, arguments = _run_wrapper(
+        tmp_path, *(() if inherited else ("--incremental",)), "--", "check", "-p", "iroha_core",
+        extra_env=extra, binaries={"sccache": "#!/bin/sh\nexit 99\n"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["CARGO_INCREMENTAL"] == "1"
+    assert "RUSTC_WRAPPER" not in environment
+    assert arguments == ["check", "-p", "iroha_core"]
+
+
+def test_incremental_retains_unrelated_compiler_wrapper(tmp_path: Path) -> None:
+    result, environment, _ = _run_wrapper(
+        tmp_path, "--incremental", "--", "check", extra_env={"RUSTC_WRAPPER": "/fixed/instrument-rustc"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == "/fixed/instrument-rustc"

@@ -66,6 +66,8 @@ existing development lane; both must agree if supplied. Ambient
 a Cargo target. Keep a stable lane for repeated checks.
 
 The focused native gate enables incremental compilation in that existing lane.
+Incremental native runs bypass sccache, which rejects `CARGO_INCREMENTAL=1`.
+Nonincremental native and Linux release builds retain the persistent sccache.
 An explicit `CARGO_INCREMENTAL=0` preserves a constrained or CI build policy;
 only `0` and `1` are admitted. This preference is passed only to native builds
 and tests, and preparation records it with the native-check checkpoint. Linux
