@@ -357,7 +357,11 @@ class TairaPrepareTests(unittest.TestCase):
                                     ({"CARGO_INCREMENTAL": "0"}, "0")):
             with self.subTest(inherited=inherited):
                 native = release.native_check_environment(environment, inherited)
-                expected_environment = original | {"CARGO_INCREMENTAL": expected}
+                expected_environment = original | {
+                    "CARGO_INCREMENTAL": expected,
+                    "CARGO_PROFILE_DEV_SPLIT_DEBUGINFO": "unpacked",
+                    "CARGO_PROFILE_TEST_SPLIT_DEBUGINFO": "unpacked",
+                }
                 if expected == "1":
                     expected_environment.pop("RUSTC_WRAPPER")
                 self.assertEqual(native, expected_environment)
@@ -380,6 +384,8 @@ class TairaPrepareTests(unittest.TestCase):
                 def build(_root, command, environment, log):
                     self.assertNotIn("CARGO_INCREMENTAL", environment)
                     self.assertNotIn("CARGO_PROFILE_TEST_INCREMENTAL", environment)
+                    self.assertNotIn("CARGO_PROFILE_DEV_SPLIT_DEBUGINFO", environment)
+                    self.assertNotIn("CARGO_PROFILE_TEST_SPLIT_DEBUGINFO", environment)
                     self.assertEqual(command[command.index("--profile") + 1], "release")
                     self.binaries()
                     log.write_bytes(b"fixture compiler output\n")

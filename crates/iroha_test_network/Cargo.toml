@@ -10,6 +10,10 @@ license.workspace = true
 [features]
 default = []
 
+[[test]]
+name = "taira_consensus_contracts"
+path = "tests/taira_consensus_contracts.rs"
+
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha.workspace = true

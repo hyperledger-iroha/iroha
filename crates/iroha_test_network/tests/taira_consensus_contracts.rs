@@ -1,8 +1,7 @@
 //! Mandatory four-validator Ordinary-transaction qualification with production NPoS/DA defaults.
 //! Requires a prebuilt native daemon; sandbox denials and missing peers always fail.
-use eyre::{Result, WrapErr, ensure, eyre};
-use futures_util::future::try_join_all;
-use integration_tests::sandbox;
+use color_eyre::eyre::{self, Result, WrapErr, ensure, eyre};
+use futures::future::try_join_all;
 use iroha::client::{AccountTransactionDraft, FeeQuoteRequest};
 use iroha_data_model::{
     Level,
@@ -11,34 +10,53 @@ use iroha_data_model::{
     transaction::{FeePaymentIntent, TransactionAdmissionIntent},
 };
 use iroha_test_network::init_instruction_registry;
-use std::time::Duration;
-use tokio::time::{sleep, timeout};
+use std::{path::Path, time::Duration};
+use tokio::time::{Instant, sleep, timeout, timeout_at};
 
-#[path = "../sumeragi_localnet_smoke/multiroute.rs"]
+#[path = "support/multiroute.rs"]
 mod multiroute;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<()> {
     init_instruction_registry();
-    let network = timeout(
-        Duration::from_secs(180),
-        sandbox::start_network_async_or_skip(
-            multiroute::network_builder(),
-            stringify!(four_peer_multiroute_ordinary_transaction_reaches_applied),
-        ),
+    for variable in ["TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA"] {
+        let binary = std::env::var_os(variable)
+            .ok_or_else(|| eyre!("{variable} must name the prebuilt native executable"))?;
+        ensure!(
+            Path::new(&binary).is_file(),
+            "{variable} must name an existing executable file"
+        );
+    }
+    let startup_deadline = Instant::now() + Duration::from_secs(180);
+    let network = timeout_at(
+        startup_deadline,
+        tokio::task::spawn_blocking(|| {
+            multiroute::network_builder()
+                .with_base_seed_if_unset(stringify!(
+                    four_peer_multiroute_ordinary_transaction_reaches_applied
+                ))
+                .build()
+        }),
     )
     .await
-    .wrap_err("four-peer startup exceeded its deadline")??
-    .ok_or_else(|| eyre!("the mandatory four-peer fixture cannot be skipped"))?;
+    .wrap_err("four-peer genesis preparation exceeded its deadline")?
+    .wrap_err("four-peer genesis preparation failed")?;
+    let result = async {
+        timeout_at(startup_deadline, async {
+            network.start_all().await?;
+            network.ensure_blocks(1).await?;
+            Ok::<(), eyre::Report>(())
+        })
+        .await
+        .wrap_err("four-peer startup exceeded its deadline")??;
     let result = timeout(Duration::from_secs(90), async {
         ensure!(network.peers().len() == 4, "the fixture must start all four validators");
         let initial = try_join_all(network.peers().iter().map(|peer| peer.status())).await?;
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
-        let client = integration_tests::sync::rebind_blocking_client(&network.client(), |client| {
-            client.transaction_status_timeout = Duration::from_secs(75);
-            client.torii_request_timeout = Duration::from_secs(5);
-        });
-        let account = client.account_client();
+        let mut client = network.client().client().clone();
+        client.transaction_status_timeout = Duration::from_secs(75);
+        client.torii_request_timeout = Duration::from_secs(5);
+        let account = client.account_client()?;
         // The SDK draft defaults to QueuePlanSynced. Explicit Ordinary admission is the
         // contract under test: autonomous lanes must not starve the global work provider.
         let mut payload = account.prepare_transaction(
@@ -56,7 +74,11 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
         let submitted_hash = account.submit_transaction_and_wait(&transaction).await
             .wrap_err("the exact Ordinary transaction did not reach state-resolved Applied")?;
         ensure!(submitted_hash == expected_hash, "submission returned a different signed transaction hash");
-        let expected_hex = hex::encode(expected_hash.as_ref());
+        let expected_hex = expected_hash
+            .as_ref()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         loop {
             let observations = try_join_all(network.peers().iter().map(|peer| async move {
                 let status = peer.status().await?;
@@ -83,8 +105,11 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
             sleep(Duration::from_millis(200)).await;
         }
     }).await;
+        result.map_err(|_| {
+            eyre!("four-peer Ordinary transaction confirmation exceeded its fixed 90-second deadline")
+        })?
+    }
+    .await;
     network.shutdown().await;
-    result.map_err(|_| {
-        eyre!("four-peer Ordinary transaction confirmation exceeded its fixed 90-second deadline")
-    })?
+    result
 }

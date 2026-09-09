@@ -269,7 +269,7 @@ HARNESS_TARGETS = {
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
     "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
-    "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "integration_tests", "--test", "taira_consensus_contracts"]),
+    "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "iroha_test_network", "--test", "taira_consensus_contracts"]),
 }
 
 

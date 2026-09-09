@@ -77,7 +77,7 @@ use tokio::{sync::Mutex, task, time::sleep};
 use toml::{Table, Value as TomlValue};
 #[path = "sumeragi_localnet_smoke/idle_chain.rs"]
 mod idle_chain;
-#[path = "sumeragi_localnet_smoke/multiroute.rs"]
+#[path = "../../crates/iroha_test_network/tests/support/multiroute.rs"]
 mod multiroute;
 use multiroute::{ROUTE_VALIDATOR_FEE_SEED_AMOUNT, route_fee_asset_definition_id};
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
