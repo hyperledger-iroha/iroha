@@ -12,7 +12,7 @@ use crate::puzzle_work_admission::{
 use crate::{
     ConsensusConfigCaps, ConsensusHandshakeCaps, ConsensusMode, Error, RelayRole,
     boilerplate::*,
-    preauth::InboundAuthCompletion,
+    preauth::{InboundAuthCompletion, PreauthDeadline},
     puzzle_work_admission::{SoranetPuzzleWorkAdmission, run_soranet_admission_work},
 };
 use bytes::{Buf, BufMut, BytesMut};
@@ -647,6 +647,7 @@ impl SoranetHandshakeConfig {
     pub(crate) fn admission_summary(&self) -> ChallengeAdmission {
         self.admission()
     }
+    #[cfg(test)]
     pub(crate) fn mint_challenge_ticket<R: TryCryptoRng>(
         &self,
         transcript_hash: &[u8; 32],
@@ -791,10 +792,20 @@ async fn mint_handshake_challenge(
     // gate bounds concurrent memory use independently from connection count.
     run_soranet_admission_work(
         config.puzzle_work_admission.outbound_mint_gate(),
-        move || {
-            let minted = config
-                .mint_challenge_ticket(&transcript_hash, &mut rng)
-                .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+        move |cancellation| {
+            let binding = config.puzzle_binding(&transcript_hash);
+            let ticket = puzzle::mint_ticket_while(
+                config.puzzle_params.as_ref(),
+                &binding,
+                config.effective_ticket_ttl(),
+                &mut rng,
+                || !cancellation.is_cancelled(),
+            )
+            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+            let minted = MintedChallenge {
+                credential: ticket.to_vec(),
+                admission: config.admission(),
+            };
             Ok((minted, rng))
         },
     )
@@ -821,7 +832,7 @@ async fn verify_handshake_challenge_with_gate(
 ) -> Result<ChallengeAdmission, Error> {
     // Argon2 verification must never run on a peer task, and every verifier
     // shares the bounded inbound work gate.
-    run_soranet_admission_work(gate, move || {
+    run_soranet_admission_work(gate, move |_cancellation| {
         config
             .verify_challenge_ticket(&ticket, &transcript_hash)
             .map_err(|error| Error::HandshakeSoranet(error.to_string()))
@@ -3208,6 +3219,7 @@ pub mod handles {
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
         dial_timeout: Duration,
+        authentication_deadline: PreauthDeadline,
         network_id: iroha_data_model::NetworkId,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -3273,6 +3285,7 @@ pub mod handles {
             peer,
             service_message_sender,
             idle_timeout,
+            authentication_deadline,
             inbound_auth_completion: None,
             post_capacity,
             outbound_frame_queue_limits,
@@ -3335,6 +3348,7 @@ pub mod handles {
             peer,
             service_message_sender,
             idle_timeout,
+            authentication_deadline: inbound_auth_completion.deadline(),
             inbound_auth_completion: Some(inbound_auth_completion),
             post_capacity,
             outbound_frame_queue_limits,
@@ -5121,6 +5135,7 @@ mod run {
             peer,
             service_message_sender,
             idle_timeout,
+            authentication_deadline,
             inbound_auth_completion,
             post_capacity,
             outbound_frame_queue_limits,
@@ -5139,17 +5154,9 @@ mod run {
         async {
             // Try to do handshake process
             let hs_start = Instant::now();
-            let handshake_result = if let Some(completion) = inbound_auth_completion.as_ref() {
-                completion
-                    .deadline()
-                    .run(Some(idle_timeout), peer.handshake())
-                    .await
-                    .map_err(|_| ())
-            } else {
-                tokio::time::timeout(idle_timeout, peer.handshake())
-                    .await
-                    .map_err(|_| ())
-            };
+            let handshake_result = authentication_deadline
+                .run(None, peer.handshake())
+                .await;
             let ready_peer = match handshake_result {
                 Ok(Ok(ready)) => {
                     let ms = u64::try_from(hs_start.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -5175,7 +5182,7 @@ mod run {
                     return;
                 },
                 Err(_) => {
-                    iroha_logger::warn!(timeout=?idle_timeout, "Other peer has been idle during handshake");
+                    iroha_logger::warn!(?authentication_deadline, "Peer exhausted its authentication deadline");
                     HANDSHAKE_FAILURES.fetch_add(1, Ordering::Relaxed);
                     HSE_TIMEOUT.fetch_add(1, Ordering::Relaxed);
                     return;
@@ -6494,6 +6501,7 @@ mod run {
         pub peer: P,
         pub service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         pub idle_timeout: Duration,
+        pub authentication_deadline: PreauthDeadline,
         pub inbound_auth_completion: Option<InboundAuthCompletion>,
         pub post_capacity: usize,
         pub outbound_frame_queue_limits: OutboundFrameQueueLimits,
@@ -8603,6 +8611,70 @@ mod run {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
+        }
+        struct PendingHandshake;
+        #[async_trait::async_trait]
+        impl<E: Enc> Handshake<E> for PendingHandshake {
+            async fn handshake(self) -> Result<Ready<E>, crate::Error> {
+                std::future::pending().await
+            }
+        }
+        impl<E: Enc> Entrypoint<E> for PendingHandshake {
+            fn connection_id(&self) -> ConnectionId {
+                73
+            }
+            fn log_description(&self) -> String {
+                "controlled pending authentication".to_owned()
+            }
+        }
+        #[tokio::test(start_paused = true)]
+        async fn peer_run_authentication_deadline_precedes_long_idle_and_retires_exact_connection()
+        {
+            let (service_tx, mut service_rx) = mpsc::channel::<ServiceMessage<Dummy>>(2);
+            let authentication_deadline = PreauthDeadline::from_now(Duration::from_secs(35))
+                .expect("authentication deadline");
+            let task = tokio::spawn(run::<Dummy, ChaCha20Poly1305, _>(RunPeerArgs {
+                peer: PendingHandshake,
+                service_message_sender: service_tx,
+                idle_timeout: Duration::from_secs(300),
+                authentication_deadline,
+                inbound_auth_completion: None,
+                post_capacity: 1,
+                outbound_frame_queue_limits: OutboundFrameQueueLimits::new(1, 1, 1, 1),
+                outbound_post_byte_budgets: OutboundPostByteBudgets::new(1, 1, 0, 1)
+                    .expect("outbound budget"),
+                inbound_frame_byte_budgets: InboundFrameByteBudgets::new(1, 1, 0, 1)
+                    .expect("inbound budget"),
+                max_frame_bytes: 1,
+                quic_datagrams_enabled: false,
+                quic_datagram_max_payload_bytes: 0,
+            }));
+            tokio::task::yield_now().await;
+            tokio::time::advance(Duration::from_secs(34)).await;
+            assert!(
+                !task.is_finished(),
+                "authentication remains owned before its deadline"
+            );
+            assert!(service_rx.try_recv().is_err());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            tokio::time::timeout(Duration::from_secs(1), task)
+                .await
+                .expect("authentication must not wait for the 300-second idle timeout")
+                .expect("peer task must exit without panic");
+            assert!(
+                matches!(
+                    service_rx.recv().await,
+                    Some(ServiceMessage::Terminated(Terminated {
+                        peer: None,
+                        conn_id: 73
+                    }))
+                ),
+                "the expired unauthenticated tenure must publish its exact termination witness"
+            );
+            assert!(
+                service_rx.try_recv().is_err(),
+                "termination is published exactly once"
+            );
         }
         #[test]
         fn authenticated_via_survives_clone_mapping_and_into_parts() {

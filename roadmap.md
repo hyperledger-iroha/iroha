@@ -15,9 +15,9 @@ migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
 
-Taira rollout is currently blocked by daemon startup attestation and supervisor
-lifetime defects. Qualify the corrected compiled startup path, including death
-during construction, then complete four-peer finality, canaries, restart proof,
+Taira rollout is blocked by failed four-validator startup. Qualify the bounded
+authentication/cancellation and durable finalization handoff fixes, then prove
+public transaction application on all four validators, canaries, restart proof,
 public cutover and application connectivity. Reuse stable build lanes and verify
 closed-attempt reclamation through the maintained retry path.
 

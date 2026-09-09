@@ -25,13 +25,14 @@ fn production_exact_output_observes_finality_only_after_state_commit() {
             .canonical_proposal_wire_hash()
             .expect("canonical proposal wire"),
     };
-    let mut execution_commitment = wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
-        Hash::new(b"worker applied-finality parent state"),
-        Hash::new(b"worker applied-finality post state"),
-        Hash::new(b"worker applied-finality writes"),
-        1,
-        Hash::new(b"worker applied-finality executed block"),
-    );
+    let mut execution_commitment =
+        wire::ExecutionCommitment::without_kagemusha_top_ups_or_merge_carrier(
+            Hash::new(b"worker applied-finality parent state"),
+            Hash::new(b"worker applied-finality post state"),
+            Hash::new(b"worker applied-finality writes"),
+            1,
+            Hash::new(b"worker applied-finality executed block"),
+        );
     execution_commitment.executed_block_wire_len = u64::try_from(
         block
             .as_ref()
@@ -374,7 +375,7 @@ fn applied_height_finality_releases_only_covered_ticketless_payload_chunks() {
 }
 
 #[test]
-fn terminal_retry_revalidates_only_ticketless_exact_kura_advert() {
+fn terminal_retry_revalidates_exact_kura_advert_before_retiring_ranked_output() {
     // Binding is process-lifetime, so probe one fresh durable fixture per
     // CommitQC signer until the deterministic keeper is found.
     let signer_indices = durable_history_fixture().artifact.commit_qc.signers.clone();
@@ -538,8 +539,8 @@ fn terminal_retry_revalidates_only_ticketless_exact_kura_advert() {
         "release must schedule the durable source before losing the occurrence"
     );
 
-    // State-applied finality cannot supersede an occurrence while its live
-    // actor ticket still owns progress for the frozen topology membership.
+    // Independently revalidated Kura finality releases a previously attempted
+    // occurrence even when the unavailable peer still owns an actor rank.
     let mut ticketed = new_service();
     commit_history_to_state(&ticketed);
     let live_ticket_fixtures = Arc::new(Mutex::new(Vec::new()));
@@ -569,29 +570,29 @@ fn terminal_retry_revalidates_only_ticketless_exact_kura_advert() {
         .expect("publish a live-ticket Kura advert");
     assert!(ticketed_refresh.fanout_attempted);
     assert!(
-        ticketed
+        !ticketed
             .retry_pending_exact_output()
-            .expect("live actor tickets retain the advert")
+            .expect("exact Kura reconstruction supersedes the ranked advert")
     );
     assert!(
-        ticketed
+        !ticketed
             .has_pending_exact_output()
-            .expect("inspect live-ticket advert")
+            .expect("inspect released ranked advert")
     );
     assert!(
         live_ticket_fixtures
             .lock()
             .expect("inspect live advert actor-ticket fixtures")
             .iter()
-            .all(|fixture| fixture.waiter_count() == 1)
+            .all(|fixture| fixture.waiter_count() == 0)
     );
     assert!(
         ticketed
             .kura_replica_advert_refresh
             .lock_state()
-            .expect("inspect live-ticket advert refresh owner")
+            .expect("inspect released ranked advert refresh owner")
             .urgent_heights
-            .is_empty()
+            .contains(&source_height)
     );
 
     // A syntactically valid, keeper-signed claim still stays owned when its
@@ -667,7 +668,7 @@ fn terminal_retry_revalidates_only_ticketless_exact_kura_advert() {
 }
 
 #[test]
-fn terminal_retry_revalidates_only_ticketless_exact_kura_queue_plan_admission() {
+fn terminal_retry_revalidates_exact_kura_queue_plan_admission_before_retiring_ranked_output() {
     let history = durable_history_fixture();
     let leader_index = usize::try_from(history.artifact.height_context.leader(0))
         .expect("QueuePlan leader index fits usize");
@@ -827,8 +828,8 @@ fn terminal_retry_revalidates_only_ticketless_exact_kura_queue_plan_admission() 
         "QueuePlan release must not schedule a Kura advert refresh"
     );
 
-    // State-applied finality and exact Kura bytes do not supersede a live
-    // actor ticket for the frozen leader.
+    // Exact Kura bytes let the applied-height retry release an already
+    // attempted occurrence without waiting for the frozen leader's actor rank.
     let mut ticketed = new_service();
     commit_history_to_state(&ticketed);
     let (target, rollover_claim, messages) =
@@ -870,20 +871,20 @@ fn terminal_retry_revalidates_only_ticketless_exact_kura_queue_plan_admission() 
     );
     operation.complete();
     assert!(
-        ticketed
+        !ticketed
             .retry_pending_exact_output()
-            .expect("live actor ticket retains QueuePlan output")
+            .expect("exact Kura reconstruction supersedes ranked QueuePlan output")
     );
     assert!(
-        ticketed
+        !ticketed
             .has_pending_exact_output()
-            .expect("inspect live-ticket QueuePlan output")
+            .expect("inspect released ranked QueuePlan output")
     );
     let fixtures = live_ticket_fixtures
         .lock()
         .expect("inspect live QueuePlan actor-ticket fixture");
     assert_eq!(fixtures.len(), 1);
-    assert_eq!(fixtures[0].waiter_count(), 1);
+    assert_eq!(fixtures[0].waiter_count(), 0);
 }
 
 #[test]

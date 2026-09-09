@@ -223,7 +223,40 @@ TORII_STAGES = (("routed onboarding and faucet contracts", (
     "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
 )),)
 
+CRYPTO_STAGES = (("puzzle cancellation and exact solution predicate", (
+    "soranet::puzzle::tests::mint_cancellation_stops_before_first_evaluation",
+    "soranet::puzzle::tests::mint_cancellation_discards_inflight_solutions_and_stops_search",
+    "soranet::puzzle::tests::mint_and_verify_ticket",
+    "soranet::puzzle::tests::invalid_solution_rejected",
+    "soranet::puzzle::tests::mint_reanchors_each_candidate_across_long_search",
+    "soranet::puzzle::tests::mint_discards_valid_candidate_that_completed_below_ttl_floor",
+)),)
+
+P2P_STAGES = (("bounded peer authentication and validator retry ownership", (
+    "peer::run::tests::peer_run_authentication_deadline_precedes_long_idle_and_retires_exact_connection",
+    "peer::handshake_config_tests::puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellation",
+    "peer::handshake_config_tests::authentication_deadline_cancels_puzzle_work_without_releasing_inflight_memory",
+    "peer::handshake_config_tests::puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_responsive",
+    "peer::handshake_config_tests::inbound_puzzle_pressure_cannot_consume_outbound_recovery_capacity",
+    "peer::handshake_config_tests::closed_puzzle_work_gate_fails_closed_without_running_work",
+    "peer::handshake_config_tests::inbound_puzzle_verification_accepts_a_fresh_valid_ticket",
+    "peer::handshake_config_tests::inbound_puzzle_verification_rejects_an_invalid_ticket",
+    "peer::handshake_config_tests::inbound_puzzle_ticket_expiring_while_queued_is_rejected",
+    "network::accept_stream_tests::tls_listener_closes_silent_transport_at_absolute_preauth_deadline",
+    "network::accept_stream_tests::tls_source_gate_precedes_global_capacity_and_deadline_releases_it",
+    "network::tests::outbound_authentication_lifetime_rejects_unrepresentable_budgets",
+    "network::tests::four_validator_full_mesh_has_exactly_six_balanced_initial_dial_owners",
+    "network::tests::validator_standby_dials_after_authentication_tenure_despite_long_idle_timeout",
+    "network::tests::failed_pre_handshake_dial_retains_exact_backoff_retry_owner",
+    "network::tests::authenticated_session_restart_has_one_immediate_reconnector_and_stable_backup_deadline",
+    "network::tests::authenticated_session_cancels_obsolete_standby_attempt_without_reschedule_loop",
+)),)
+
 CORE_STAGES = (("consensus scheduling and multi-route progress", (
+    "sumeragi::v2_runner::tests::finalized_rollover_drains_source_effects_after_handoff_reopens_capacity",
+    "sumeragi::v2_runner::tests::terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain",
+    "sumeragi::v2_lifecycle_coordinator::launch::tests::pending_kura_actor_backpressure_reaches_durable_rollover_after_closed_prefix",
+    "sumeragi::v2_lifecycle_coordinator::launch::tests::pending_kura_mixed_decision_fetch_services_older_cold_output_before_producer_turn",
     "sumeragi::lane_planner::tests::autonomous_reservation_retries_only_transient_planning_failures",
     "sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery",
     "sumeragi::v2_worker::tests::deferred_apply_retry_full_queue_preserves_output_and_exact_task",
@@ -249,6 +282,31 @@ CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
 )),)
 
+CORE_STAGES += (("durable output capacity and strict handoff", (
+    "sumeragi::v2_worker::tests::final_exact_output_seal_is_one_shot_and_blocks_late_enqueue",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor",
+    "sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically",
+    "sumeragi::v2_worker::tests::independent_applied_handoff_releases_covered_states_and_retains_lane_owners",
+    "sumeragi::v2_worker::tests::independent_applied_handoff_retains_active_historical_recovery_request",
+    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically",
+    "sumeragi::v2_worker::tests::autonomous_payload_carrier_comparison_promotes_only_a_missing_advisory_hint",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically",
+    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically",
+    "sumeragi::v2_worker::tests::prepared_historical_body_retries_after_exact_output_capacity_rejection",
+    "sumeragi::v2_worker::tests::prepared_historical_body_capacity_recovers_from_applied_finality_without_peer_delivery",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate",
+    "sumeragi::v2_worker::tests::applied_height_handoff_authenticates_exact_payload_chunk_fanout",
+    "sumeragi::v2_worker::tests::production_exact_output_observes_finality_only_after_state_commit",
+    "sumeragi::v2_worker::tests::applied_height_finality_releases_only_ticketless_global_topology_target",
+    "sumeragi::v2_worker::tests::applied_height_finality_releases_only_covered_ticketless_payload_chunks",
+    "sumeragi::v2_worker::tests::terminal_retry_revalidates_exact_kura_advert_before_retiring_ranked_output",
+    "sumeragi::v2_worker::tests::terminal_retry_revalidates_exact_kura_queue_plan_admission_before_retiring_ranked_output",
+    "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
+)),)
+
 PROOF_STAGES = (("canonical proof resource bounds", (
     "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
     "proof::tests::raw_fixture_verifier_preserves_explicit_admission_limits",
@@ -261,6 +319,12 @@ PROOF_FLOW_STAGES = (("default proof production and verification", (
     "resource_profile::public_transfer_default_profile_accepts_sixteen_rows",
 )),)
 
+TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
+    "config::tests::base_config_applies_bounded_storage_caps",
+    "config::tests::base_config_preserves_caller_storage_budget_and_smaller_component_cap",
+    "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
+)),)
+
 NETWORK_STAGES = (("four-validator multi-route transaction commit", (
     "four_peer_multiroute_public_transaction_reaches_applied",
 )),)
@@ -271,16 +335,28 @@ NETWORK_FIXTURE_FREE_BYTES = 8 * 1024**3
 
 HARNESS_TARGETS = {
     "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
+    "crypto": ("native puzzle cryptography", "iroha_crypto", "lib", ["-p", "iroha_crypto", "--lib"]),
+    "p2p": ("native peer transport", "iroha_p2p", "lib", ["-p", "iroha_p2p", "--lib"]),
     "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
     "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
+    "test-network": ("native validator fixture configuration", "iroha_test_network", "lib", ["-p", "iroha_test_network", "--lib"]),
     "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "iroha_test_network", "--test", "taira_consensus_contracts"]),
 }
 
 
 class CheckError(Exception):
     """A build or selected regression did not pass."""
+
+
+def selected_regression_count() -> int:
+    """Return the complete native census shared by execution and result capture."""
+    return sum(len(names)
+               for stages in (STAGES, CRYPTO_STAGES, P2P_STAGES, CORE_STAGES,
+                              TEST_NETWORK_STAGES, NETWORK_STAGES, PROOF_STAGES,
+                              PROOF_FLOW_STAGES, TORII_STAGES)
+               for _, names in stages)
 
 
 def compile_command(root: Path, env: dict[str, str], *, harness: str = "cli") -> list[str]:
@@ -532,11 +608,20 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if NETWORK_STAGES:
         require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
+    # Check the authentication lifetime and its bounded cryptographic work
+    # before paying for daemon startup or a four-validator consensus deadline.
+    for name, stages in (("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES)):
+        if stages:
+            selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
+            run_stages(selected_harness, fixture_root, env, stages, lock_fds)
     # Fail on focused scheduling regressions before building the full node and
     # network harness; exercise the composed runtime before unrelated contracts.
     if CORE_STAGES:
         core = compile_harness(root, env, lock_fds=lock_fds, harness="core")
         run_stages(core, fixture_root, env, CORE_STAGES, lock_fds)
+    if TEST_NETWORK_STAGES:
+        fixture_harness = compile_harness(root, env, lock_fds=lock_fds, harness="test-network")
+        run_stages(fixture_harness, fixture_root, env, TEST_NETWORK_STAGES, lock_fds)
     if NETWORK_STAGES:
         run_network_checks(root, fixture_root, env, lock_fds)
     harness = compile_harness(root, env, lock_fds=lock_fds)
@@ -549,8 +634,7 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
-    count = sum(len(names) for _, names in STAGES + CORE_STAGES + PROOF_STAGES + PROOF_FLOW_STAGES + TORII_STAGES + NETWORK_STAGES)
-    print(f"[taira-check] PASS: {count} regressions in {time.monotonic() - started:.1f}s", flush=True)
+    print(f"[taira-check] PASS: {selected_regression_count()} regressions in {time.monotonic() - started:.1f}s", flush=True)
 
 
 def main() -> int:

@@ -666,6 +666,10 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
     );
 
     let finite_drain = &run_inner[close_start..];
+    assert!(
+        !finite_drain.contains("terminal_exact_output_pending"),
+        "an offline validator cannot block the authenticated durable output handoff"
+    );
     let close = finite_drain
         .find("close_runner_ingress_for_finalized_drain")
         .expect("finalization closes physical ingress");
@@ -1456,96 +1460,149 @@ fn reserved_lane_output_bypasses_unserviceable_head_without_losing_owner() {
 }
 #[test]
 fn finalized_rollover_drains_source_effects_after_handoff_reopens_capacity() {
-    let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
-    let mut lane_work = fixture.adapter;
-    let mut services =
-        super::super::v2_worker::tests::service_for_history_context_with_local_validator(
-            Arc::clone(&fixture.kura),
-            fixture.context,
-            &fixture.validators,
-            fixture.local_validator,
-        );
-    services
-        .set_exact_output_shared_unit_capacity_for_test(1)
-        .expect("install one shared exact-output slot");
-    let actor_reservations = Arc::new(Mutex::new(Vec::new()));
-    let actor_reservations_for_hook = Arc::clone(&actor_reservations);
-    services.set_exact_output_admission_hook(move |post, ticket| {
-        let ticket = ticket.unwrap_or_else(|| {
-            let (reservation, ticket) =
-                iroha_p2p::network::NetworkActorAdmissionTicketTestFixture::for_topology(&post);
-            actor_reservations_for_hook
-                .lock()
-                .expect("retain actor reservation")
-                .push(reservation);
-            ticket
-        });
-        let rank = ticket.rank().expect("ranked predecessor actor reservation");
-        Err(NetworkActorAdmissionError::Backpressured {
-            message: post,
-            ticket: Some(ticket),
-            rank,
-        })
-    });
-    let (receipt, artifact) =
-        super::super::v2_worker::tests::durable_finality_fixture(&services, &fixture.validators);
-    let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
-        &artifact,
-        Hash::new(b"rollover source-effect capacity witness"),
-    );
-    let local = fixture.request.responder.clone();
-    let remote = fixture.request.requester.clone();
-    let outbound = |sequence: u64| {
-        let mut request = fixture.request.clone();
-        request.requester = local.clone();
-        request.responder = remote.clone();
-        request.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
-            NonZeroU64::new(sequence).expect("non-zero rollover request sequence"),
-        );
-        request.request_id = request.canonical_request_id();
-        V2LaneWorkEffect::PostCertifiedMergeSidecar {
-            peer: remote.clone(),
-            reply_routes: None,
-            message: Arc::new(CertifiedMergeSidecarMessage::Request(request)),
-        }
-    };
-    let current = outbound(100);
-    let mut retained = 0_u64;
-    while services
-        .can_retain_lane_work_effect(&current)
-        .expect("inspect exact-output rollover capacity")
-    {
-        assert!(matches!(
-            dispatch_lane_work_effect(&services, outbound(retained.saturating_add(1)))
-                .expect("retain one actor-backpressured predecessor request"),
-            LaneWorkEffectDispatch::Complete
-        ));
-        retained = retained.saturating_add(1);
-        assert!(retained < 8, "the exact-output fixture remains bounded");
-    }
-    assert_ne!(retained, 0, "the fixture must retain predecessor output");
-    assert!(
+    // Invalid authority closes its process guard. Use a fresh owner for the
+    // successful scenario instead of reviving a failed production owner.
+    for foreign_receipt_case in [true, false] {
+        let fixture = super::super::v2_lane_work::tests::certified_sidecar_server_fixture();
+        let mut lane_work = fixture.adapter;
+        let mut services =
+            super::super::v2_worker::tests::service_for_history_context_with_local_validator(
+                Arc::clone(&fixture.kura),
+                fixture.context,
+                &fixture.validators,
+                fixture.local_validator,
+            );
         services
-            .has_pending_exact_output()
-            .expect("inspect retained predecessor output")
-    );
-    assert!(lane_work.requeue_effect(current));
+            .set_exact_output_shared_unit_capacity_for_test(1)
+            .expect("install one shared exact-output slot");
+        let actor_reservations = Arc::new(Mutex::new(Vec::new()));
+        let actor_reservations_for_hook = Arc::clone(&actor_reservations);
+        services.set_exact_output_admission_hook(move |post, ticket| {
+            let ticket = ticket.unwrap_or_else(|| {
+                let (reservation, ticket) =
+                    iroha_p2p::network::NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+                actor_reservations_for_hook
+                    .lock()
+                    .expect("retain actor reservation")
+                    .push(reservation);
+                ticket
+            });
+            let rank = ticket.rank().expect("ranked predecessor actor reservation");
+            Err(NetworkActorAdmissionError::Backpressured {
+                message: post,
+                ticket: Some(ticket),
+                rank,
+            })
+        });
+        let (receipt, artifact) = super::super::v2_worker::tests::durable_finality_fixture(
+            &services,
+            &fixture.validators,
+        );
+        let lane_authority = DurableLaneRolloverAuthority::missing_winning_witness_for_test(
+            &artifact,
+            Hash::new(b"rollover source-effect capacity witness"),
+        );
+        let local = fixture.request.responder.clone();
+        let remote = fixture.request.requester.clone();
+        let outbound = |sequence: u64| {
+            let mut request = fixture.request.clone();
+            request.requester = local.clone();
+            request.responder = remote.clone();
+            request.semantic_sequence = CertifiedMergeSidecarSemanticSequenceV1(
+                NonZeroU64::new(sequence).expect("non-zero rollover request sequence"),
+            );
+            request.request_id = request.canonical_request_id();
+            V2LaneWorkEffect::PostCertifiedMergeSidecar {
+                peer: remote.clone(),
+                reply_routes: None,
+                message: Arc::new(CertifiedMergeSidecarMessage::Request(request)),
+            }
+        };
+        let current = outbound(100);
+        let mut retained = 0_u64;
+        while services
+            .can_retain_lane_work_effect(&current)
+            .expect("inspect exact-output rollover capacity")
+        {
+            assert!(matches!(
+                dispatch_lane_work_effect(&services, outbound(retained.saturating_add(1)))
+                    .expect("retain one actor-backpressured predecessor request"),
+                LaneWorkEffectDispatch::Complete
+            ));
+            retained = retained.saturating_add(1);
+            assert!(retained < 8, "the exact-output fixture remains bounded");
+        }
+        assert_ne!(retained, 0, "the fixture must retain predecessor output");
+        assert!(
+            services
+                .has_pending_exact_output()
+                .expect("inspect retained predecessor output")
+        );
+        assert!(lane_work.requeue_effect(current));
 
-    drain_finalized_lane_work_output(
-        &mut lane_work,
-        &services,
-        &receipt,
-        &artifact,
-        &lane_authority,
-        1,
-    )
-    .expect("durable handoff frees capacity for every retained source effect");
-    assert_eq!(lane_work.effect_count(), 0);
-    assert!(
-        !services
-            .has_pending_exact_output()
-            .expect("all finalized exact output crosses durable handoff")
-    );
+        for _ in 0..3 {
+            assert!(
+                retry_exact_output_and_apply_sidecar_admissions(&mut lane_work, &services, 1)
+                    .expect("retry a permanently backpressured exact-output owner"),
+                "network delivery cannot become a prerequisite for durable finality handoff"
+            );
+        }
+        assert_eq!(lane_work.effect_count(), 1);
+        if foreign_receipt_case {
+            let (foreign_service, foreign_validators) = super::super::v2_worker::tests::fixture();
+            let (foreign_receipt, _) = super::super::v2_worker::tests::durable_finality_fixture(
+                &foreign_service,
+                &foreign_validators,
+            );
+            assert_ne!(foreign_receipt.context_id(), receipt.context_id());
+            let error = services
+                .handoff_applied_height_output_to_durable_reconstruction(
+                    &foreign_receipt,
+                    &artifact,
+                    &lane_authority,
+                )
+                .expect_err("foreign durable authority cannot retire retained output");
+            assert!(error.contains("mismatched finality authority"));
+            assert!(services.exact_output_restart_required_for_test());
+            assert!(
+                services
+                    .has_pending_exact_output()
+                    .expect("failed handoff retains exact output")
+            );
+            assert_eq!(lane_work.effect_count(), 1);
+            assert!(
+                actor_reservations
+                    .lock()
+                    .expect("retained actor ownership")
+                    .iter()
+                    .any(|reservation| reservation.waiter_count() != 0)
+            );
+            continue;
+        }
+
+        drain_finalized_lane_work_output(
+            &mut lane_work,
+            &services,
+            &receipt,
+            &artifact,
+            &lane_authority,
+            1,
+        )
+        .expect("durable handoff frees capacity for every retained source effect");
+        assert_eq!(lane_work.effect_count(), 0);
+        assert!(
+            !services
+                .has_pending_exact_output()
+                .expect("all finalized exact output crosses durable handoff")
+        );
+        assert!(
+            actor_reservations
+                .lock()
+                .expect("retired actor ownership")
+                .iter()
+                .all(|reservation| reservation.waiter_count() == 0)
+        );
+    }
 }
 #[test]
 fn runner_dispatch_preserves_durable_lane_certificate_reply_routes() {

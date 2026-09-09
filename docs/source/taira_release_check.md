@@ -2,7 +2,7 @@
 
 Run either `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` before the Taira four-binary Linux
-release build. Both compile focused CLI, Core, proof, Torii and consensus
+release build. Both compile focused crypto, P2P, CLI, Core, proof, Torii and consensus
 harnesses plus native network binaries with six Cargo jobs
 and report build, stage and test durations. Python 3.11+, the repository Rust
 toolchain, and previously fetched dependencies are required; Cargo runs offline.
@@ -23,6 +23,12 @@ traces exercise reordered messages, duplicates, loss and recovery, including
 durable append before acknowledgement; they simulate authenticated I/O and do
 not replace cryptographic or network execution.
 
+The crypto and P2P gates check authentication deadlines, puzzle cancellation,
+memory ownership during in-flight work, exact solution verification and validator
+dial/retry ownership. Dial plus preauth bounds outbound authentication and standby
+takeover independently of established-session idle. Dev/test profiles optimize
+Argon2 and Blake2 arithmetic while retaining the production puzzle policy.
+
 The Core gate then exercises bounded worker backpressure, durable-sidecar retry
 ownership, QueuePlan handoff across view changes and inventory changes, and
 participant predecessor recovery with the exact reservation retained. It also
@@ -31,6 +37,18 @@ Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
 transactions require their autonomous reservations, and actual reservation
 conflicts still defer ordinary work. A regression in any of these paths stops
 preparation before the Linux release build.
+
+Finalization regressions keep a recipient permanently backpressured and require
+the exact durable output handoff to release its retained work. Foreign finality
+authority must fail without retiring output. Live and already-applied restart
+recovery drain their finite ingress prefix before reaching this handoff; remote
+delivery cannot block the local durable boundary that reconstructs that output.
+Before lane preflight, committed global finality and exact Kura sources can
+already release independently reconstructible fanouts. This frees shared
+capacity for pending historical responses and lane certification, including when
+older output owns an actor ticket, a parked route or an unfinished writer flush.
+The partial handoff preserves unresolved lane evidence, exact surviving FIFO
+ownership and sidecar receipts; it does not fabricate network delivery.
 
 The proof gate produces and verifies fully witnessed eight- and sixteen-row
 transfers with the default resource limits, checks the maximum admitted proof

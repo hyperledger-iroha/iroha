@@ -1613,8 +1613,8 @@ fn run_lifecycle_active_height(
             };
             // Completion can publish a fresh exact-output source after the
             // top-of-loop sample. Recheck after preflight and immediately
-            // before closure so transient backpressure cannot enter the
-            // restart-closed finalized-output drain.
+            // before closure. Independently durable output can release capacity
+            // here; remaining lane-owned output crosses the final handoff.
             let _ = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
@@ -1681,7 +1681,7 @@ fn run_lifecycle_active_height(
             let cut = terminal_finalization_cut
                 .as_ref()
                 .expect("rollover-ready closure authenticated the terminal cut above");
-            let terminal_exact_output_pending = activated.with_runner_runtime(
+            let _ = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, _executor, services, _local_proposal| {
                     reconcile_terminal_lane_output_handoffs(
@@ -1692,10 +1692,11 @@ fn run_lifecycle_active_height(
                     )
                 },
             )?;
-            if terminal_exact_output_pending {
-                let _ = wake_rx.recv_timeout(IDLE_POLL);
-                continue;
-            }
+            // The finite ingress prefix must drain, but delivery to every peer
+            // is not a finality condition. The consuming rollover below owns
+            // exact output until its receipt- and lane-authenticated durable
+            // reconstruction handoff succeeds. Waiting for the network here
+            // would prevent that handoff when a validator is offline.
             if drained_terminal_ingress || drained_terminal_relay {
                 continue;
             }

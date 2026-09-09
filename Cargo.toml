@@ -384,6 +384,22 @@ codegen-units = 8
 debug = 0
 codegen-units = 256
 
+# Local validators execute the production memory-hard authentication puzzle.
+# Optimize only its arithmetic dependencies so debug builds can service the
+# same bounded authentication lifetime without weakening the puzzle policy.
+# Match dev and test profiles to reuse these artifacts between node and harness.
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.test.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.test.package.blake2]
+opt-level = 3
+
 # Eight, 16, and 64 CGUs all measured about 12.1 GiB before decoder de-duplication;
 # one CGU reached 19.32 GiB. Eight was the lowest measured partition count, and
 # the shared decoder engine reduced its exact no-run reproducer to 11.466 GiB.

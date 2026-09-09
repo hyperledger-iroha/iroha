@@ -2,7 +2,10 @@
 
 use std::{
     num::NonZeroUsize,
-    sync::{Arc, LazyLock, Mutex, Weak},
+    sync::{
+        Arc, LazyLock, Mutex, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 #[cfg(test)]
@@ -88,21 +91,47 @@ pub fn process_wide_admission(
     Ok(admission)
 }
 
-/// Execute one blocking admission job while retaining its permit even if the
-/// surrounding async handshake is cancelled.
+/// Cooperative lifetime shared with one blocking admission job.
+pub struct SoranetAdmissionCancellation(Arc<AtomicBool>);
+
+impl SoranetAdmissionCancellation {
+    /// Whether the asynchronous owner has stopped waiting for this work.
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+
+struct CancelAdmissionOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelAdmissionOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+/// Execute one blocking admission job while retaining its permit until the
+/// current cryptographic evaluation exits. Cancellation stops subsequent work.
 pub async fn run_soranet_admission_work<T, F>(gate: Arc<Semaphore>, work: F) -> Result<T, Error>
 where
     T: Send + 'static,
-    F: FnOnce() -> Result<T, Error> + Send + 'static,
+    F: FnOnce(SoranetAdmissionCancellation) -> Result<T, Error> + Send + 'static,
 {
     let permit = gate.acquire_owned().await.map_err(|error| {
         Error::HandshakeSoranet(format!("SoraNet admission work gate closed: {error}"))
     })?;
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let _cancel_on_drop = CancelAdmissionOnDrop(Arc::clone(&cancelled));
     tokio::task::spawn_blocking(move || {
-        // Tokio cannot cancel blocking work after a handshake timeout. Holding
-        // the permit here prevents the next attempt from overlapping it.
+        // Tokio cannot interrupt an Argon2 evaluation. Keep its memory charged
+        // while the cooperative token prevents another evaluation after expiry.
         let _permit = permit;
-        work()
+        let cancellation = SoranetAdmissionCancellation(cancelled);
+        if cancellation.is_cancelled() {
+            return Err(Error::HandshakeSoranet(
+                "SoraNet admission work was cancelled before execution".to_owned(),
+            ));
+        }
+        work(cancellation)
     })
     .await
     .map_err(|error| {

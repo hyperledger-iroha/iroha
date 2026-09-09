@@ -107,8 +107,6 @@ fn pending_kura_mixed_decision_fetch_services_older_cold_output_before_producer_
             "settle_certified_serve_completion_for_no_clock_recovery",
             "drain_lane_relay_ingress(",
             "reconcile_pending_kura_terminal_lane_output_handoffs(",
-            "if terminal_exact_output_pending",
-            "wake_rx.recv_timeout(IDLE_POLL)",
             "settle_recovered_lifecycle_output_for_no_clock_recovery",
             "RecoveredLifecycleOutputSettlementV1::SourceRetained",
             "RecoveredLifecycleOutputSettlementV1::Completed",
@@ -121,7 +119,7 @@ fn pending_kura_mixed_decision_fetch_services_older_cold_output_before_producer_
 }
 
 #[test]
-fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
+fn pending_kura_actor_backpressure_reaches_durable_rollover_after_closed_prefix() {
     let pending_runner_source = include_str!("v2_runner/lifecycle_pending_kura.rs");
     let worker_source = include_str!("v2_worker_services_impl.rs");
 
@@ -148,17 +146,16 @@ fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
 
     let runtime_readiness = source_region(
         pending_runner_source,
-        "let (ready_to_finish, terminal_exact_output_pending) =",
+        "let ready_to_finish = match activated.with_runner_runtime(",
         "let finalization_ready = activated.ready_for_finalized_rollover",
     );
     assert_source_tokens_in_order(
         runtime_readiness,
         &[
             "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)",
-            "let terminal_exact_output_pending =\n                    retry_exact_output_and_apply_sidecar_admissions(",
-            "Ok((executor.ready_to_finish(), terminal_exact_output_pending))",
+            "let _ = retry_exact_output_and_apply_sidecar_admissions(",
+            "Ok(executor.ready_to_finish())",
             "let ready = ready_to_finish",
-            "&& !terminal_exact_output_pending",
             "&& !block_sync_server.has_pending_historical_body_serve()",
             "if !ready",
             "wake_rx.recv_timeout(IDLE_POLL)",
@@ -181,7 +178,7 @@ fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
     );
     assert!(
         !finalized_preflight.contains("if terminal_exact_output_pending"),
-        "successful preflight closes shared admission before exact-output waiting"
+        "successful preflight closes shared admission regardless of remote availability"
     );
 
     let closed_prefix = source_region(
@@ -197,12 +194,32 @@ fn pending_kura_actor_backpressure_gates_rollover_through_closed_prefix() {
             "drain_finalized_lane_relay_prefix(",
             "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)",
             "reconcile_pending_kura_terminal_lane_output_handoffs(",
-            "if terminal_exact_output_pending",
+            "if block_sync_server.has_pending_historical_body_serve()",
             "wake_rx.recv_timeout(IDLE_POLL)",
             "if !drained_terminal_ingress",
             "!drained_terminal_relay",
             "break;",
             "ensure_closed_drained_cut()",
+        ],
+    );
+    assert!(
+        !pending_runner_source.contains("terminal_exact_output_pending"),
+        "already-applied recovery must reach strict durable handoff while a peer is offline"
+    );
+    let rollover = include_str!("v2_runner/finalized_output_rollover.rs");
+    assert_source_tokens_in_order(
+        source_region(
+            rollover,
+            "fn rollover_finalized_height_outputs(",
+            "/// Run the existing finalized-output handoff",
+        ),
+        &[
+            "durable_completion_matches_finality(artifact)",
+            "durable_lane_rollover_authority(artifact)",
+            "drain_finalized_lane_work_output(",
+            "has_pending_exact_output()",
+            "seal_applied_height_output_handoff(",
+            "into_retained_merge_sidecars(",
         ],
     );
 }

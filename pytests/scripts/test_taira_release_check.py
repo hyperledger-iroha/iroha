@@ -92,6 +92,21 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             with self.assertRaises(gate.CheckError):
                 gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}, **selection)
 
+    def test_transport_selections_require_their_actual_library_test_artifacts(self):
+        for harness, package in (("crypto", "iroha_crypto"), ("p2p", "iroha_p2p"),
+                                 ("test-network", "iroha_test_network")):
+            with self.subTest(harness=harness):
+                command = gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}, harness=harness)
+                self.assertEqual(command[8:11], ["-p", package, "--lib"])
+                self.assertNotIn("--no-default-features", command)
+                event = {"reason": "compiler-artifact", "target": {"name": package, "kind": ["lib"]},
+                         "profile": {"test": True}, "executable": "/warm/" + package}
+                self.assertEqual(gate.test_artifact(json.dumps(event), harness=harness), event["executable"])
+                for changes in ({"profile": {"test": False}}, {"executable": None},
+                                {"target": {"name": package, "kind": ["bin"]}},
+                                {"target": {"name": "unrelated", "kind": ["lib"]}}):
+                    self.assertIsNone(gate.test_artifact(json.dumps(event | changes), harness=harness))
+
     def test_failed_build_preserves_rendered_compiler_error(self):
         diagnostic = "error[E0308]: synthetic fixture type mismatch\n"
         event = {"reason": "compiler-message", "message": {"rendered": diagnostic}}
@@ -127,6 +142,24 @@ class EarlyReleaseCheckTests(unittest.TestCase):
             names,
         )
 
+    def test_transport_selectors_are_mandatory_unique_and_fail_when_missing(self):
+        for stages in (gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.TEST_NETWORK_STAGES):
+            names = [name for _, tests in stages for name in tests]
+            self.assertTrue(names)
+            self.assertEqual(len(names), len(set(names)))
+            gate.require_tests("\n".join(f"{name}: test" for name in names), stages)
+            with self.assertRaisesRegex(gate.CheckError, "required regressions missing"):
+                gate.require_tests("\n".join(f"{name}: test" for name in names[1:]), stages)
+
+    def test_complete_regression_census_tracks_every_native_stage_group(self):
+        self.assertEqual(gate.selected_regression_count(), 231)
+        for group in ("STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES",
+                      "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
+                      "PROOF_FLOW_STAGES", "TORII_STAGES"):
+            original_count = sum(len(names) for _, names in getattr(gate, group))
+            with self.subTest(group=group), patch.object(gate, group, (("fixture", ("one", "two")),)):
+                self.assertEqual(gate.selected_regression_count(), 231 - original_count + 2)
+
     def test_exact_one_test_passes(self):
         result = subprocess.CompletedProcess([], 0,
             "test example ... ok\n\ntest result: ok. 1 passed; 0 failed; 0 ignored; 99 filtered out\n", "")
@@ -160,7 +193,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
              patch.object(gate.subprocess, "run", side_effect=[subprocess.CompletedProcess([], 0, "fixture: test\n", ""), subprocess.CompletedProcess([], 0, "test fixture ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]) as run, \
              patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
+             patch.object(gate, "CRYPTO_STAGES", ()), \
+             patch.object(gate, "P2P_STAGES", ()), \
              patch.object(gate, "CORE_STAGES", ()), \
+             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
              patch.object(gate, "NETWORK_STAGES", ()), \
              patch.object(gate, "PROOF_STAGES", ()), \
              patch.object(gate, "PROOF_FLOW_STAGES", ()), \
@@ -179,7 +215,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
              patch.object(gate, "compile_harness", return_value="/fixture/harness") as compile, \
              patch.object(gate.subprocess, "run", side_effect=results) as run, \
              patch.object(gate, "STAGES", (("fixtures", ("fixture",)),)), \
+             patch.object(gate, "CRYPTO_STAGES", ()), \
+             patch.object(gate, "P2P_STAGES", ()), \
              patch.object(gate, "CORE_STAGES", ()), \
+             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
              patch.object(gate, "NETWORK_STAGES", ()), \
              patch.object(gate, "PROOF_STAGES", ()), \
              patch.object(gate, "PROOF_FLOW_STAGES", ()), \
@@ -204,7 +243,10 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         with patch.object(gate, "compile_harness", side_effect=["/warm/cli", "/warm/routes"]) as compile, \
              patch.object(gate.subprocess, "run", side_effect=results) as run, \
              patch.object(gate, "STAGES", (("CLI", ("cli",)),)), \
+             patch.object(gate, "CRYPTO_STAGES", ()), \
+             patch.object(gate, "P2P_STAGES", ()), \
              patch.object(gate, "CORE_STAGES", ()), \
+             patch.object(gate, "TEST_NETWORK_STAGES", ()), \
              patch.object(gate, "NETWORK_STAGES", ()), \
              patch.object(gate, "PROOF_STAGES", ()), \
              patch.object(gate, "PROOF_FLOW_STAGES", ()), \
@@ -223,6 +265,8 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(gate, "compile_harness", return_value="/warm/core") as compile, \
              patch.object(gate, "run_network_checks") as network, \
+             patch.object(gate, "CRYPTO_STAGES", ()), \
+             patch.object(gate, "P2P_STAGES", ()), \
              patch.object(gate, "run_stages", side_effect=gate.CheckError("public transaction stalled")) as run, \
              contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(gate.CheckError, "public transaction stalled"):
@@ -243,9 +287,35 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
         network.assert_called_once_with(Path("/frozen"), Path("/warm"),
             env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,))
-        compile.assert_called_once()
-        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harness": "core"})
-        stages.assert_called_once()
+        self.assertEqual([call.kwargs["harness"] for call in compile.call_args_list],
+                         ["crypto", "p2p", "core", "test-network"])
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harness": "test-network"})
+        self.assertEqual([call.args[3] for call in stages.call_args_list],
+                         [gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES])
+
+    def test_transport_or_fixture_failure_stops_before_network_and_release_success(self):
+        env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
+        for failed, outcomes, expected in (("crypto", [gate.CheckError("crypto failed")], ["crypto"]),
+                                           ("p2p", [None, gate.CheckError("p2p failed")], ["crypto", "p2p"]),
+                                           ("fixture", [None, None, None, gate.CheckError("fixture failed")],
+                                            ["crypto", "p2p", "core", "test-network"])):
+            output = io.StringIO()
+            with self.subTest(failed=failed), \
+                 patch.object(gate, "compile_harness", return_value="/warm/transport") as compile, \
+                 patch.object(gate, "run_stages", side_effect=outcomes) as run, \
+                 patch.object(gate, "run_network_checks") as network, contextlib.redirect_stdout(output):
+                with self.assertRaisesRegex(gate.CheckError, failed + " failed"):
+                    gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+            self.assertEqual([call.kwargs["harness"] for call in compile.call_args_list], expected)
+            network.assert_not_called()
+            for call in compile.call_args_list:
+                self.assertEqual(call.args[0], Path("/frozen"))
+                self.assertEqual(call.args[1]["CARGO_TARGET_DIR"], "/warm")
+                self.assertEqual(call.kwargs["lock_fds"], (77,))
+            for call in run.call_args_list:
+                self.assertEqual(call.args[1], Path("/warm"))
+                self.assertEqual(call.args[4], (77,))
+            self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
     def test_unisolated_low_level_check_is_rejected_before_git_or_cargo(self):
         with patch.object(gate.subprocess, "check_output") as git, patch.object(gate, "compile_harness") as compile:
