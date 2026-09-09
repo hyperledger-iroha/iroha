@@ -9384,11 +9384,14 @@ export class ToriiClient {
    * Prepare an unsigned contract-call transaction for local signing
    * (`POST /v1/contracts/call`).
    * @param {ContractCallRequest} request
-   * @param {{signal?: AbortSignal}} [options]
+   * @param {{signal?: AbortSignal, canonicalAuth?: CanonicalRequestAuth}} [options]
    * @returns {Promise<ContractCallResponse>}
   */
   async prepareContractCall(request = {}, options = {}) {
-    const { signal } = normalizeSignalOnlyOption(options, "prepareContractCall");
+    const { signal, canonicalAuth, rest } = normalizeCanonicalApplicationPostOptions(
+      options, "prepareContractCall", ToriiClient, this.#canonicalRequestAuth,
+    );
+    assertSupportedOptionKeys(rest, new Set([]), "prepareContractCall options");
     const payload = normalizeContractCallRequest(request);
     const draftIntent = normalizeContractCallDraftIntent(
       request,
@@ -9408,10 +9411,12 @@ export class ToriiClient {
       this._localSigningContext,
       "prepareContractCall",
     );
+    requireCanonicalApplicationAuthority(canonicalAuth, payload.authority, "prepareContractCall");
     const response = await this._request("POST", "/v1/contracts/call", {
       headers: JSON_REQUEST_HEADERS,
       body: JSON.stringify(payload),
       signal,
+      canonicalAuth,
     });
     await this._expectStatus(response, [200]);
     const body = await this._maybeJson(response);
@@ -22400,6 +22405,7 @@ async function normalizeContractCallDraftResponse(
     draftIntent,
     localSigningContext,
     "contractCall draft",
+    "queue_plan_synced",
   );
   return response;
 }
@@ -23413,6 +23419,7 @@ async function validateUnsignedResponsePayloadBinding(
   draftIntent,
   localSigningContext,
   context,
+  expectedAdmissionIntent,
 ) {
   if (draftIntent === null) {
     rejectType(`${context} requires a caller-trusted draftIntent`);
@@ -23427,6 +23434,7 @@ async function validateUnsignedResponsePayloadBinding(
     bindings = inspectCanonicalTransactionPayloadBindings(
       strictDecodeBase64(response.transaction_payload_b64),
       authority,
+      expectedAdmissionIntent,
     );
   } catch (error) {
     rejectType(`${context}.transaction_payload_b64 must contain one canonical transaction payload bound to the requested signer`, { cause: error });
@@ -23485,6 +23493,7 @@ async function validateMultisigResponseRequestBinding(
       draftIntent,
       localSigningContext,
       context,
+      "ordinary",
     );
   }
   return response;
@@ -34796,7 +34805,7 @@ function identifierCanonicalU8(value, context) {
 function identifierAccountIdPayload(accountId, context) {
   const literal = requireExactAccountId(accountId, context);
   const address = AccountAddress.fromI105(literal);
-  const controller = address._controller;
+  const controller = address.controllerInfo();
   if (!controller || typeof controller.tag !== "number") {
     rejectError(`${context} could not resolve account controller information`);
   }

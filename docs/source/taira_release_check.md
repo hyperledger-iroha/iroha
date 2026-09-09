@@ -2,7 +2,7 @@
 
 Run either `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` before the Taira four-binary Linux
-release build. Both compile focused crypto, P2P, CLI, Core, proof, Torii and consensus
+release build. Both compile focused configuration, crypto, P2P, CLI, Core, proof, Torii and consensus
 harnesses plus native network binaries with six Cargo jobs
 and report build, stage and test durations. Python 3.11+, the repository Rust
 toolchain, and previously fetched dependencies are required; Cargo runs offline.
@@ -23,6 +23,36 @@ traces exercise reordered messages, duplicates, loss and recovery, including
 durable append before acknowledgement; they simulate authenticated I/O and do
 not replace cryptographic or network execution.
 
+After the standalone FSM and lifecycle source checks, the dedicated
+`iroha_config --test taira_config_contracts` target checks production descriptor
+defaults, malformed collection values and the maintained Taira Nexus profile.
+It loads no runtime signers and has no Core or test-network dependency. These
+four unchanged contracts execute before the shared Core/library build, so schema
+failures stop before that compilation. Storage-budget and ambient-client isolation
+checks remain in the test-network harness. The complete native census stays at
+263 cases. The configuration target uses the same source capture, Cargo environment,
+warm target, profile and inherited locks; it retains all package defaults. Its real
+model/crypto/codec dependency graph may require a separate first warm compilation
+when its feature union differs from the later node graph. No first-run or total
+runtime improvement is claimed without measurement.
+
+The same library batch includes Rust SDK envelope verification and Torii's exact
+retained-payload, detached-signature and canonical response checks. The public
+HTTP contract fixture then runs before node compilation and the four-validator
+gate. It prepares and signs the exact QueuePlan payload through real routes;
+its synthetic ledger has no certified committee, so submission must fail without
+local enqueue. Separate execution overlays retain contract state assertions.
+Only the four-validator and deployed checks establish canonical Applied state.
+
+Every Cargo-produced harness and native executable is copied under Cargo's
+profile locks into a private read-only directory before execution. Captured
+release checks verify source fingerprints while holding those locks; foreign
+checkout fingerprints fail the check. Later stages and CLI capture use the
+copies, preserving the original Cargo metadata. Another build cannot replace
+the selected executable between compilation and execution. Keep concurrent
+development builds in their own stable Cargo target slots to avoid lock waits
+and source-fingerprint conflicts; the warm release target remains reusable.
+
 The crypto and P2P gates check authentication deadlines, puzzle cancellation,
 memory ownership during in-flight work, exact solution verification and validator
 dial/retry ownership. Dial plus preauth bounds outbound authentication and standby
@@ -37,6 +67,14 @@ Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
 transactions require their autonomous reservations, and actual reservation
 conflicts still defer ordinary work. A regression in any of these paths stops
 preparation before the Linux release build.
+
+QueuePlan admission authenticates immutable certificate bytes before opening a
+State view or acquiring the publication fence. Fresh history, committee, route,
+incarnation, registry and application checks remain under the coherent view.
+The regression observes the real decoder and fails if signature authentication
+holds the publication lock or repeats during classification, first persistence
+or exact replay. Companion cases retain historical authority, future-frontier,
+conflicting certificate and bounded one-ahead publication behavior.
 
 Finalization regressions keep a recipient permanently backpressured and require
 the exact durable output handoff to release its retained work. Foreign finality

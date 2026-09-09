@@ -655,7 +655,7 @@ function accountEd25519PublicKey(accountId, chainDiscriminant) {
       error,
     );
   }
-  const controller = address._controller;
+  const controller = address.controllerInfo();
   if (
     !controller ||
     controller.tag !== 0 ||

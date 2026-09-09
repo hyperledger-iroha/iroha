@@ -232,7 +232,7 @@ function authorityDetails(authority, expectedDiscriminant) {
   if (parsed.address.toI105(Number(expectedDiscriminant)) !== literal) {
     throw new TypeError("authority must use its exact canonical I105 literal");
   }
-  const controller = parsed.address._controller;
+  const controller = parsed.address.controllerInfo();
   if (
     !controller ||
     controller.tag !== 0 ||

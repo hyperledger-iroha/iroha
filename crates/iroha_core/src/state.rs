@@ -34964,12 +34964,15 @@ impl State {
                 "queue-plan admission controls exceed their count or byte bounds".to_owned(),
             ));
         }
+        // Validate the frontier even when the carrier has no admission controls.
+        // The private single-admission path repeats these inexpensive bounds so
+        // every caller preserves the same state-dependent validation contract.
         let committed_height = u64::try_from(state_view.height()).map_err(|_| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
                 "committed height does not fit QueuePlan admission validation".to_owned(),
             )
         })?;
-        let current_proposal_height = committed_height.checked_add(1).ok_or_else(|| {
+        committed_height.checked_add(1).ok_or_else(|| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
                 "current QueuePlan authority height overflows its proposal height".to_owned(),
             )
@@ -34997,93 +35000,102 @@ impl State {
                 ));
             }
             previous_registry_key = Some(admission.registry_key.clone());
-            let context = &admission.certificate.binding.admission_context;
-            if context.proposal_height > carrier_height {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "queue-plan admission proposal height is after its merge carrier".to_owned(),
-                ));
-            }
-            let exact_predecessor = if context.authority_height == 0 {
-                None
-            } else {
-                usize::try_from(context.authority_height)
-                    .ok()
-                    .and_then(|height| height.checked_sub(1))
-                    .and_then(|index| state_view.block_hashes().get(index).copied())
-            };
-            if exact_predecessor != context.predecessor_block_hash {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "queue-plan admission predecessor is absent or differs from canonical history"
-                        .to_owned(),
-                ));
-            }
-            // WSV does not retain immutable historical committee snapshots for
-            // QueuePlan admission. A delayed certificate may nevertheless be
-            // carried after a height-only advance when every signed source
-            // identity still equals the exact current source. Under the static
-            // `f` adversary assumed by the committee protocol, its `f + 1`
-            // availability quorum then still contains a current honest signer.
-            // Any roster, route, or incarnation drift fails closed below.
-            let source_proposal_height = if context.authority_height < committed_height {
-                current_proposal_height
-            } else {
-                context.proposal_height
-            };
-            for route in &context.route_incarnations {
-                let active = active_lanes.iter().find(|binding| {
-                    binding.lane_id == route.leg.route.lane_id
-                        && binding.dataspace_id == route.leg.route.dataspace_id
-                });
-                let Some(active) = active else {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission names a route outside the merge active-lane set"
-                            .to_owned(),
-                    ));
-                };
-                if active.incarnation != route.lane_incarnation
-                    || context.proposal_height < active.activation_height
-                {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission route incarnation is stale or not yet active"
-                            .to_owned(),
-                    ));
-                }
-                let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
-                    state_view,
-                    route.leg.route,
-                    source_proposal_height,
-                );
-                if authority.as_ref().ok() != Some(&route.validator_set) {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission validator set is not authoritative at the required source proposal height"
-                            .to_owned(),
-                    ));
-                }
-            }
+            Self::validate_authenticated_queue_plan_admission_for_carrier_in_view(
+                state_view,
+                &admission,
+                active_lanes,
+                carrier_height,
+            )?;
             validated.push(admission);
         }
         Ok(validated)
     }
+    // The admission is authenticated locally before this private helper is called.
+    // Historical membership and live route authority still belong to this exact view.
+    fn validate_authenticated_queue_plan_admission_for_carrier_in_view(
+        state_view: &impl StateReadOnly,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+        active_lanes: &[MergeLaneBinding],
+        carrier_height: u64,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let committed_height = u64::try_from(state_view.height()).map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "committed height does not fit QueuePlan admission validation".to_owned(),
+            )
+        })?;
+        let current_proposal_height = committed_height.checked_add(1).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "current QueuePlan authority height overflows its proposal height".to_owned(),
+            )
+        })?;
+        let context = &admission.certificate.binding.admission_context;
+        if context.proposal_height > carrier_height {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "queue-plan admission proposal height is after its merge carrier".to_owned(),
+            ));
+        }
+        let exact_predecessor = if context.authority_height == 0 {
+            None
+        } else {
+            usize::try_from(context.authority_height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .and_then(|index| state_view.block_hashes().get(index).copied())
+        };
+        if exact_predecessor != context.predecessor_block_hash {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "queue-plan admission predecessor is absent or differs from canonical history"
+                    .to_owned(),
+            ));
+        }
+        // WSV does not retain immutable historical committee snapshots for
+        // QueuePlan admission. A delayed certificate may nevertheless be
+        // carried after a height-only advance when every signed source
+        // identity still equals the exact current source. Under the static
+        // `f` adversary assumed by the committee protocol, its `f + 1`
+        // availability quorum then still contains a current honest signer.
+        // Any roster, route, or incarnation drift fails closed below.
+        let source_proposal_height = if context.authority_height < committed_height {
+            current_proposal_height
+        } else {
+            context.proposal_height
+        };
+        for route in &context.route_incarnations {
+            let active = active_lanes.iter().find(|binding| {
+                binding.lane_id == route.leg.route.lane_id
+                    && binding.dataspace_id == route.leg.route.dataspace_id
+            });
+            let Some(active) = active else {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "queue-plan admission names a route outside the merge active-lane set"
+                        .to_owned(),
+                ));
+            };
+            if active.incarnation != route.lane_incarnation
+                || context.proposal_height < active.activation_height
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "queue-plan admission route incarnation is stale or not yet active".to_owned(),
+                ));
+            }
+            let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                state_view,
+                route.leg.route,
+                source_proposal_height,
+            );
+            if authority.as_ref().ok() != Some(&route.validator_set) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "queue-plan admission validator set is not authoritative at the required source proposal height"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
     fn pending_queue_plan_admission_registry_lookup_in_view(
         state_view: &impl StateReadOnlyWithTransactions,
-        bytes: &[u8],
-    ) -> Result<
-        (
-            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
-            QueuePlanAdmissionRegistryMatch,
-        ),
-        MergeLedgerCommitError,
-    > {
-        let admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                state_view.network_id(),
-                bytes,
-            )
-            .map_err(|error| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                    "pending queue-plan admission certificate is invalid: {error}"
-                ))
-            })?;
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+    ) -> Result<QueuePlanAdmissionRegistryMatch, MergeLedgerCommitError> {
         let lookup = Self::queue_plan_admission_registry_match_in_view(
             state_view,
             admission.registry_key.entrypoint_hash.clone(),
@@ -35091,9 +35103,24 @@ impl State {
         )
         .map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?;
         if lookup == QueuePlanAdmissionRegistryMatch::Exact {
-            Self::queue_plan_admission_application_state(state_view, &admission)?;
+            Self::queue_plan_admission_application_state(state_view, admission)?;
         }
-        Ok((admission, lookup))
+        Ok(lookup)
+    }
+    fn authenticate_pending_queue_plan_admission(
+        &self,
+        bytes: &[u8],
+    ) -> Result<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1, MergeLedgerCommitError>
+    {
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+            &self.network_id,
+            bytes,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "pending queue-plan admission certificate is invalid: {error}"
+            ))
+        })
     }
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
@@ -35106,8 +35133,11 @@ impl State {
         ),
         MergeLedgerCommitError,
     > {
+        let admission = self.authenticate_pending_queue_plan_admission(bytes)?;
         let state_view = self.view();
-        Self::pending_queue_plan_admission_registry_lookup_in_view(&state_view, bytes)
+        let lookup =
+            Self::pending_queue_plan_admission_registry_lookup_in_view(&state_view, &admission)?;
+        Ok((admission, lookup))
     }
     /// Classify one durable pending QueuePlan certificate against canonical
     /// WSV, history, and the complete current lane lifecycle.
@@ -35127,26 +35157,26 @@ impl State {
         ),
         MergeLedgerCommitError,
     > {
+        let admission = self.authenticate_pending_queue_plan_admission(bytes)?;
         let state_view = self.view();
-        Self::classify_pending_queue_plan_admission_in_view(&state_view, bytes, carrier_height)
+        let disposition = Self::classify_pending_queue_plan_admission_in_view(
+            &state_view,
+            &admission,
+            carrier_height,
+        )?;
+        Ok((admission, disposition))
     }
     fn classify_pending_queue_plan_admission_in_view(
         state_view: &StateView<'_>,
-        bytes: &[u8],
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
         carrier_height: u64,
-    ) -> Result<
-        (
-            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
-            PendingQueuePlanAdmissionDisposition,
-        ),
-        MergeLedgerCommitError,
-    > {
-        let (admission, registry_match) =
-            Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?;
+    ) -> Result<PendingQueuePlanAdmissionDisposition, MergeLedgerCommitError> {
+        let registry_match =
+            Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, admission)?;
         let disposition =
             match registry_match {
                 QueuePlanAdmissionRegistryMatch::Exact => {
-                    match Self::queue_plan_admission_application_state(state_view, &admission)? {
+                    match Self::queue_plan_admission_application_state(state_view, admission)? {
                         QueuePlanAdmissionApplicationState::PendingStale => {
                             PendingQueuePlanAdmissionDisposition::Stale
                         }
@@ -35193,7 +35223,6 @@ impl State {
                             Ok(_) | Err(_) => PendingQueuePlanAdmissionDisposition::Stale,
                         }
                     } else {
-                        let encoded = vec![bytes.to_vec()];
                         let active_lanes = Self::queue_plan_active_lane_bindings_from_snapshot(
                             state_view.nexus(),
                             &state_view.lane_incarnations,
@@ -35210,9 +35239,9 @@ impl State {
                                     .to_owned(),
                             )
                             })?;
-                        if Self::validate_queue_plan_admissions_for_carrier_in_view(
+                        if Self::validate_authenticated_queue_plan_admission_for_carrier_in_view(
                             state_view,
-                            &encoded,
+                            admission,
                             &active_lanes,
                             carrier_height.max(current_proposal_height),
                         )
@@ -35239,10 +35268,14 @@ impl State {
                     }
                 }
             };
-        Ok((admission, disposition))
+        Ok(disposition)
     }
     /// Classify and retain one QueuePlan certificate under the block-finality fence.
     ///
+    /// Immutable certificate bytes and signatures are authenticated before opening a State view
+    /// or taking the publication fence. Only canonical history, route authority, registry and
+    /// application state are rechecked under each fresh view; frontier retries reuse the same
+    /// authenticated certificate without extending the lock with repeated signature verification.
     /// State publication is excluded while classification runs, and Kura checks its exact durable
     /// height while holding the same canonical-chain lock used by block publication. Admission
     /// therefore either linearizes before the next irreversible block write or observes frontier
@@ -35264,15 +35297,7 @@ impl State {
 
         let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();
         let incoming_hash = Hash::new(bytes);
-        let incoming = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-            &self.network_id,
-            bytes,
-        )
-        .map_err(|error| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "pending queue-plan admission certificate is invalid: {error}"
-            ))
-        })?;
+        let incoming = self.authenticate_pending_queue_plan_admission(bytes)?;
 
         // Preserve the exact-hash idempotent fast path. Otherwise authenticate
         // the bounded inventory before taking the block-publication fence; only
@@ -35310,7 +35335,7 @@ impl State {
                         duplicate_same_binding.push(hash);
                     }
                 } else {
-                    conflicting_bindings.push((hash, existing_bytes));
+                    conflicting_bindings.push((hash, existing));
                 }
             }
         }
@@ -35329,9 +35354,10 @@ impl State {
                 )
             })?;
             let state_view = self.view();
-            let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(
+            let admission = incoming.clone();
+            let disposition = Self::classify_pending_queue_plan_admission_in_view(
                 &state_view,
-                bytes,
+                &admission,
                 carrier_height,
             )?;
             match disposition {
@@ -35363,13 +35389,12 @@ impl State {
                     })
             } else {
                 let mut retire = duplicate_same_binding.clone();
-                for (hash, existing_bytes) in &conflicting_bindings {
-                    let (existing, existing_disposition) =
-                        Self::classify_pending_queue_plan_admission_in_view(
-                            &state_view,
-                            existing_bytes,
-                            carrier_height,
-                        )?;
+                for (hash, existing) in &conflicting_bindings {
+                    let existing_disposition = Self::classify_pending_queue_plan_admission_in_view(
+                        &state_view,
+                        existing,
+                        carrier_height,
+                    )?;
                     debug_assert_eq!(existing.registry_key, admission.registry_key);
                     if matches!(
                         existing_disposition,

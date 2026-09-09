@@ -448,7 +448,7 @@ function accountInfo(value, context, expectedDiscriminant) {
   if (canonical !== literal) {
     fail(INVALID_ACCOUNT, `${context} must use its exact canonical I105 form`);
   }
-  const controller = parsed.address._controller;
+  const controller = parsed.address.controllerInfo();
   if (
     !controller ||
     controller.tag !== 0 ||
@@ -2323,6 +2323,7 @@ function validateTransactionPayloadEnvelope(
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @param {string | null} expectedAuthority
+ * @param {"ordinary" | "queue_plan_synced"} expectedAdmissionIntent
  * @returns {{
  *   networkId: Buffer,
  *   creationTimeMs: bigint,
@@ -2334,8 +2335,17 @@ function validateTransactionPayloadEnvelope(
  */
 export function inspectCanonicalTransactionPayloadBindings(
   payloadBytes,
-  expectedAuthority = null,
+  expectedAuthority,
+  expectedAdmissionIntent,
 ) {
+  const expectedAdmissionTag = expectedAdmissionIntent === "ordinary"
+    ? TRANSACTION_ADMISSION_ORDINARY_TAG
+    : expectedAdmissionIntent === "queue_plan_synced"
+      ? TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG
+      : null;
+  if (expectedAdmissionTag === null) {
+    fail(UNSUPPORTED_PAYLOAD, "transaction payload requires one explicit expected admission intent");
+  }
   const payload = bytes(payloadBytes, "transaction payload", {
     maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
   });
@@ -2379,7 +2389,7 @@ export function inspectCanonicalTransactionPayloadBindings(
   const feePaymentArchive = reader.readField("feePayment");
   validateTransactionAdmissionIntentArchive(
     reader.readField("admissionIntent"),
-    TRANSACTION_ADMISSION_ORDINARY_TAG,
+    expectedAdmissionTag,
     "transaction payload.admissionIntent",
   );
   const metadataArchive = reader.readField("metadata");

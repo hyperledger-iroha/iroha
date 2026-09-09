@@ -6128,14 +6128,15 @@ public sealed record class ToriiContractCallRequest
     [JsonPropertyName("authority")]
     public string Authority { get; init; } = string.Empty;
 
-    [JsonPropertyName("private_key")]
-    public string? PrivateKey { get; init; }
-
     [JsonPropertyName("public_key_hex")]
     public string? PublicKeyHex { get; init; }
 
     [JsonPropertyName("signature_b64")]
     public string? SignatureBase64 { get; init; }
+
+    /// <summary>Exact retained canonical transaction payload authorized by the detached signature.</summary>
+    [JsonPropertyName("transaction_payload_b64")]
+    public string? TransactionPayloadBase64 { get; init; }
 
     [JsonPropertyName("contract_address")]
     public string? ContractAddress { get; init; }

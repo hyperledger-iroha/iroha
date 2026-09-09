@@ -2200,10 +2200,18 @@ test(
       return;
     }
     request.feePayment = feePayment;
+    assert.ok(isPlainObject(CONTRACT_CALL_OPTIONS.draftIntent),
+      "contract coverage requires caller-trusted executable, metadata, and resolved target draftIntent");
+    request.draftIntent = CONTRACT_CALL_OPTIONS.draftIntent;
+    for (const key of ["metadata", "creationTimeMs", "transactionTtlMs"]) {
+      if (Object.hasOwn(CONTRACT_CALL_OPTIONS, key)) request[key] = CONTRACT_CALL_OPTIONS[key];
+    }
 
     const client = new ToriiClient(BASE_URL, {
       authToken: AUTH_TOKEN,
       apiToken: API_TOKEN,
+      localSigningContext: new LocalSigningContext(NETWORK_ID),
+      canonicalRequestAuth: { accountId: authority, privateKey: decodePrivateKeyHex(PRIVATE_KEY_HEX) },
     });
 
     let response;

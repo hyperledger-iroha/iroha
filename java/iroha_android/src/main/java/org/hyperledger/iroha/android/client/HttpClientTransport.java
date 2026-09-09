@@ -1080,7 +1080,8 @@ public final class HttpClientTransport implements IrohaClient {
       final String contractAlias,
       final String entrypoint,
       final Object payload,
-      final ContractCallDraftIntent draftIntent) {
+      final ContractCallDraftIntent draftIntent,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
     final Map<String, Object> requestPayload =
         buildContractCallDraftPayload(
             authority,
@@ -1089,10 +1090,15 @@ public final class HttpClientTransport implements IrohaClient {
             contractAlias,
             entrypoint,
             payload);
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    if (!FeeQuoteResponse.sameFeeQuoteAccountIdentity(authority, canonicalAuth.accountId())) {
+      throw new IllegalArgumentException(
+          "canonicalAuth.accountId must identify the contract call authority");
+    }
     validateContractCallDraftIntent(requestPayload, draftIntent);
     final NetworkId expectedNetworkId = config.requireLocalSigningContext().networkId();
     final byte[] body = encodeJsonBody(requestPayload);
-    final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
+    final TransportRequest request = buildVpnRequest("POST", "/v1/contracts/call", body, canonicalAuth);
     return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call draft")
         .thenApply(
             response ->
@@ -3873,7 +3879,8 @@ public final class HttpClientTransport implements IrohaClient {
         decodeUnsignedDraftPayload(
             response.transactionPayloadB64(),
             response.signingMessageB64(),
-            "contract call draft");
+            "contract call draft",
+            TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
     final TransactionPayload expected =
         TransactionPayload.builder()
             .setNetworkId(expectedNetworkId)
@@ -3881,7 +3888,7 @@ public final class HttpClientTransport implements IrohaClient {
             .setCreationTimeMs(response.creationTimeMs())
             .setExecutable(Executable.contractCall(draftIntent.invocation()))
             .setFeePayment(responseFee)
-            .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setMetadata(draftIntent.metadata())
             .buildDecodedForCodec();
     if (!sameTransactionPayload(decoded, expected)) {
@@ -4044,7 +4051,8 @@ public final class HttpClientTransport implements IrohaClient {
         decodeUnsignedDraftPayload(
             response.transactionPayloadB64(),
             response.signingMessageB64(),
-            "multisig response");
+            "multisig response",
+            TransactionAdmissionIntent.ORDINARY);
     if (!response.feePayment().equals(decoded.feePayment())) {
       throw new IllegalStateException(
           "multisig response fee_payment does not match the transaction payload");
@@ -4125,7 +4133,8 @@ public final class HttpClientTransport implements IrohaClient {
   private static TransactionPayload decodeUnsignedDraftPayload(
       final String transactionPayloadB64,
       final String signingMessageB64,
-      final String context) {
+      final String context,
+      final TransactionAdmissionIntent expectedAdmissionIntent) {
     final byte[] transactionPayload;
     final byte[] signingMessage;
     try {
@@ -4150,7 +4159,7 @@ public final class HttpClientTransport implements IrohaClient {
     }
     try {
       return NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
-          transactionPayload, TransactionAdmissionIntent.ORDINARY);
+          transactionPayload, expectedAdmissionIntent);
     } catch (final Exception ex) {
       throw new IllegalStateException(
           context + ".transaction_payload_b64 must contain one canonical TransactionPayload",

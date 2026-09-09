@@ -58,6 +58,7 @@ object ContractJsonParser {
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
             context = "contract call response",
+            expectedAdmissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
         )
         check(
             response.submitted ||
@@ -142,6 +143,7 @@ object ContractJsonParser {
             transactionPayloadB64 = response.transactionPayloadB64,
             signingMessageB64 = response.signingMessageB64,
             context = "multisig response",
+            expectedAdmissionIntent = TransactionAdmissionIntent.ORDINARY,
         )
         return response
     }
@@ -469,6 +471,7 @@ object ContractJsonParser {
         transactionPayloadB64: String?,
         signingMessageB64: String?,
         context: String,
+        expectedAdmissionIntent: TransactionAdmissionIntent,
     ) {
         if (submitted) {
             check(txHashHex != null && transactionPayloadB64 == null && signingMessageB64 == null) {
@@ -484,7 +487,7 @@ object ContractJsonParser {
         val decodedPayload = try {
             NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
                 transactionPayload,
-                TransactionAdmissionIntent.ORDINARY,
+                expectedAdmissionIntent,
             )
         } catch (ex: Exception) {
             throw IllegalStateException(

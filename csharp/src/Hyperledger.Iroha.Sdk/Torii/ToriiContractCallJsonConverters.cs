@@ -132,10 +132,11 @@ internal static class ToriiContractCallJson
         {
             if (response.TransactionHashHex is null
                 || response.TransactionPayloadBase64 is not null
-                || response.SigningMessageBase64 is not null)
+                || response.SigningMessageBase64 is not null
+                || response.PipelineStatus is not null)
             {
                 throw new JsonException(
-                    $"{context} submitted response must contain only the final transaction hash.");
+                    $"{context} submitted response must contain only the final transaction hash and null pipeline_status.");
             }
         }
         else

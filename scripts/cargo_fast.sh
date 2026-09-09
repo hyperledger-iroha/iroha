@@ -8,7 +8,7 @@ set -euo pipefail
 #   - Cargo must be available on PATH.
 #   - `sccache` is optional; enabled automatically when found unless disabled.
 #   - A fast linker (`mold`/`lld`/`zld`) is optional and must be requested.
-#   - Python 3 checks explicit target paths without modifying their caches.
+#   - Python 3 and Cargo metadata check effective output paths without modifying caches.
 #
 # Safe defaults:
 #   - Only auto linker selection may fall back when an accelerator is unavailable.
@@ -25,7 +25,8 @@ Usage: scripts/cargo_fast.sh [options] -- <cargo args...>
 Runs `cargo` with optional accelerators when available:
   - Enables `sccache` when found (unless --no-sccache is used)
   - Reuses Cargo targets through named, repository-local target slots
-  - Rejects explicit targets owned by an ancestor or neighbouring Cargo source tree
+  - Rejects foreign-source targets and authenticated release lanes before a build
+  - Resolves config-selected target/build directories using offline Cargo metadata
 
 Options:
   --target-dir DIR        Set CARGO_TARGET_DIR=DIR
@@ -254,55 +255,15 @@ if [[ -n "${target_dir}" ]]; then
 	export CARGO_TARGET_DIR="${target_dir}"
 fi
 
-# Cargo's own --target-dir takes precedence over the environment. Check its
-# effective explicit path as well as wrapper options and inherited selections.
-# Stop at the separator so a test/program argument is never interpreted here.
-target_owner_path="${CARGO_TARGET_DIR:-}"
-target_owner_manifest="${REPO_ROOT}/Cargo.toml"
-expect_cargo_target_value=false
-expect_cargo_manifest_value=false
-for cargo_arg in "${cargo_args[@]}"; do
-	if [[ "${cargo_arg}" == "--" ]]; then
-		break
-	fi
-	if [[ "${expect_cargo_target_value}" == true ]]; then
-		target_owner_path="${cargo_arg}"
-		expect_cargo_target_value=false
-		continue
-	fi
-	if [[ "${expect_cargo_manifest_value}" == true ]]; then
-		target_owner_manifest="${cargo_arg}"
-		expect_cargo_manifest_value=false
-		continue
-	fi
-	case "${cargo_arg}" in
-	--target-dir)
-		expect_cargo_target_value=true
-		;;
-	--target-dir=*)
-		target_owner_path="${cargo_arg#--target-dir=}"
-		;;
-	--manifest-path)
-		expect_cargo_manifest_value=true
-		;;
-	--manifest-path=*)
-		target_owner_manifest="${cargo_arg#--manifest-path=}"
-		;;
-	-C | -C?*)
-		echo "error: cargo-fast does not accept Cargo -C; invoke the selected source tree's wrapper" >&2
-		exit 1
-		;;
-	esac
-done
-if [[ -n "${target_owner_path}" ]]; then
-	if ! command -v python3 >/dev/null 2>&1; then
-		echo "error: python3 is required to check explicit Cargo target ownership" >&2
-		exit 1
-	fi
-	python3 "${SCRIPT_DIR}/check_cargo_target_owner.py" \
-		--source-root="${REPO_ROOT}" --target-dir="${target_owner_path}" \
-		--manifest-path="${target_owner_manifest}"
+# Resolve the final artifact and intermediate paths through Cargo itself. This
+# read-only guard includes default targets, inherited configuration and repeated
+# --config overrides before any build or accelerator probe can begin.
+if ! command -v python3 >/dev/null 2>&1; then
+	echo "error: python3 is required to check Cargo target ownership" >&2
+	exit 1
 fi
+python3 "${SCRIPT_DIR}/check_cargo_target_owner.py" \
+	--source-root="${REPO_ROOT}" -- "${cargo_args[@]}"
 
 if [[ "${jobs_set}" == true ]]; then
 	case "${jobs}" in

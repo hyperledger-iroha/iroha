@@ -1227,6 +1227,7 @@ class HttpClientTransport private constructor(
         entrypoint: String,
         payload: Any? = null,
         draftIntent: ContractCallDraftIntent,
+        canonicalAuth: ToriiCanonicalRequestAuth,
     ): CompletableFuture<ContractCallResponse> {
         val signingContext = config.requireLocalSigningContext()
         val requestPayload = buildContractCallDraftPayload(
@@ -1238,10 +1239,13 @@ class HttpClientTransport private constructor(
             payload = payload,
         )
         requireCanonicalI105Address(requestPayload.getValue("authority") as String, "authority")
+        require(sameFeeQuoteAccountIdentity(authority, canonicalAuth.accountId)) {
+            "canonicalAuth.accountId must identify the contract call authority"
+        }
         validateContractCallDraftIntent(draftIntent, requestPayload, payload != null)
         val body = encodeJsonBody(requestPayload)
         return fetchJson(
-            buildJsonPostRequest("/v1/contracts/call", body),
+            buildVpnRequest("POST", "/v1/contracts/call", body, canonicalAuth),
             ContractJsonParser::parseCallResponse,
             "contract call draft",
         ).thenApply { response ->
@@ -2954,7 +2958,7 @@ class HttpClientTransport private constructor(
             }
             val decoded = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
                 transactionBytes,
-                TransactionAdmissionIntent.ORDINARY,
+                TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             )
             check(decoded.networkId == expectedNetworkId) {
                 "contract call transaction payload changed the configured network"
@@ -2994,7 +2998,7 @@ class HttpClientTransport private constructor(
             check(
                 decoded.timeToLiveMs == DEFAULT_TRANSACTION_TTL_MS &&
                     decoded.nonce == null &&
-                    decoded.admissionIntent == TransactionAdmissionIntent.ORDINARY &&
+                    decoded.admissionIntent == TransactionAdmissionIntent.QUEUE_PLAN_SYNCED &&
                     decoded.attachments == null,
             ) {
                 "contract call transaction payload changed default lifetime, nonce, admission, or attachments"

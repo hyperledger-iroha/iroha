@@ -965,7 +965,12 @@ class HttpClientTransportTest {
     @Test
     fun prepareContractCallPostsSecretFreeSelectorPayloadAndParsesDraft() {
         val networkId = TestNetworkIds.fromSeed(7L)
-        val authority = testAccountId(0x17)
+        val contractKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val encodedPublicKey = contractKey.public.encoded
+        val authority = AccountAddress.fromAccount(
+            encodedPublicKey.copyOfRange(encodedPublicKey.size - 32, encodedPublicKey.size),
+            "ed25519",
+        ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
         val contractAddress =
             "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw"
         val codeHash = ByteArray(32) { 0x44 }.also { it[it.lastIndex] = 0x45 }
@@ -997,6 +1002,7 @@ class HttpClientTransportTest {
             AccountAddress.DEFAULT_I105_DISCRIMINANT,
         ).encodeTransaction(
             TransactionPayload(
+                admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
                 networkId = networkId,
                 authority = authority,
                 creationTimeMs = creationTimeMs,
@@ -1059,6 +1065,12 @@ class HttpClientTransportTest {
             entrypoint = "contribute",
             payload = contractPayload,
             draftIntent = ContractCallDraftIntent(invocation, metadata),
+            canonicalAuth = ToriiCanonicalRequestAuth(
+                authority,
+                RequestSigner.ed25519(contractKey.private),
+                1_700_000_000_030L,
+                "contract-prepare-auth",
+            ),
         ).join()
 
         assertTrue(response.ok)
@@ -1078,12 +1090,30 @@ class HttpClientTransportTest {
 
         val request = executor.lastRequest
         assertNotNull(request)
+        assertCanonicalSignature(
+            request, contractKey.public, 1_700_000_000_030L, "contract-prepare-auth", networkId,
+        )
+        assertTrue(request.headers.containsKey(CanonicalRequestSigner.HEADER_ACCOUNT))
         assertEquals("POST", request.method)
         assertEquals("https://torii.example/api/v1/contracts/call", request.uri.toString())
         @Suppress("UNCHECKED_CAST")
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals(authority, payload["authority"])
         assertFalse(payload.containsKey("private_key"))
+        assertFalse(payload.containsKey("transaction_payload_b64"))
+        val dispatched = executor.requestCount
+        assertFailsWith<IllegalArgumentException> {
+            transport.prepareContractCall(
+                authority = authority,
+                feePayment = testFeePayment(5_000L),
+                contractAlias = "router::universal",
+                entrypoint = "contribute",
+                payload = contractPayload,
+                draftIntent = ContractCallDraftIntent(invocation, metadata),
+                canonicalAuth = applicationAuth(testAccountId(0x18)),
+            )
+        }
+        assertEquals(dispatched, executor.requestCount, "foreign HTTP authority must fail before dispatch")
         assertEquals("router::universal", payload["contract_alias"])
         assertFalse(payload.containsKey("contract_address"))
         assertEquals("contribute", payload["entrypoint"])
@@ -1113,6 +1143,7 @@ class HttpClientTransportTest {
         )
         val feePayment = testFeePayment(5_000L)
         val base = TransactionPayload(
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             networkId = networkId,
             authority = authority,
             creationTimeMs = 123_456L,
@@ -1137,7 +1168,7 @@ class HttpClientTransportTest {
             base.copy(metadata = mapOf("attacker" to JsonValue.bool(true))),
             base.copy(timeToLiveMs = 99_999L),
             base.copy(nonce = 7L),
-            base.copy(admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED),
+            base.copy(admissionIntent = TransactionAdmissionIntent.ORDINARY),
             base.copy(attachments = listOf(attachment)),
             base.copy(feePayment = testFeePayment(5_001L)),
         )
@@ -1161,6 +1192,7 @@ class HttpClientTransportTest {
                     contractAddress = contractAddress,
                     entrypoint = "ping",
                     draftIntent = ContractCallDraftIntent(invocation, metadata),
+                    canonicalAuth = applicationAuth(authority),
                 ).join()
             }
             assertNotNull(error.cause)
@@ -1180,6 +1212,7 @@ class HttpClientTransportTest {
         val invocation = ContractInvocation(contractAddress, codeHash, "ping")
         val intent = ContractCallDraftIntent(invocation, emptyMap())
         val payload = TransactionPayload(
+            admissionIntent = TransactionAdmissionIntent.QUEUE_PLAN_SYNCED,
             networkId = networkId,
             authority = authority,
             creationTimeMs = 654_321L,
@@ -1297,6 +1330,7 @@ class HttpClientTransportTest {
                     contractAlias = "router::universal",
                     entrypoint = "ping",
                     draftIntent = intent,
+                    canonicalAuth = applicationAuth(authority),
                 ).join()
             }
             assertNotNull(error.cause)
@@ -1323,6 +1357,7 @@ class HttpClientTransportTest {
                 contractAddress = contractAddress,
                 entrypoint = "ping",
                 draftIntent = intent,
+                canonicalAuth = applicationAuth(authority),
             ).join()
         }
 
@@ -1341,6 +1376,7 @@ class HttpClientTransportTest {
                 contractAddress = otherAddress,
                 entrypoint = "ping",
                 draftIntent = intent,
+                canonicalAuth = applicationAuth(authority),
             )
         }
         assertEquals(0, preflightExecutor.requestCount)
@@ -1394,6 +1430,7 @@ class HttpClientTransportTest {
                 entrypoint = string(boundary, "entrypoint"),
                 payload = boundaryPayload,
                 draftIntent = ContractCallDraftIntent(trustedInvocation, emptyMap()),
+                canonicalAuth = applicationAuth(string(boundary, "authority")),
             ).join()
         }
 
@@ -1444,6 +1481,7 @@ class HttpClientTransportTest {
                     entrypoint = string(boundary, "entrypoint"),
                     payload = payload,
                     draftIntent = ContractCallDraftIntent(invocation, emptyMap()),
+                    canonicalAuth = applicationAuth(string(boundary, "authority")),
                 ).join()
             }
             val sent = JsonParser.parse(readBody(executor.lastRequest)) as Map<*, *>
@@ -4850,11 +4888,12 @@ class HttpClientTransportTest {
         publicKey: java.security.PublicKey,
         timestampMs: Long,
         nonce: String,
+        networkId: NetworkId = verifyingKeyNetworkId,
     ) {
         val encodedSignature = assertNotNull(request.headers[CanonicalRequestSigner.HEADER_SIGNATURE]?.first())
         val signature = Base64.getDecoder().decode(encodedSignature)
         val message = CanonicalRequestSigner.canonicalRequestSignatureMessage(
-            verifyingKeyNetworkId,
+            networkId,
             request.method,
             request.uri,
             request.body,

@@ -489,16 +489,15 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         hex::encode(verified.abi_hash.as_ref()),
     )
 }
-/// Build JSON string for contract call request body.
+/// Build an unsigned public contract-call prepare request.
+/// Signing keys stay with the caller; detached submission signs the exact returned payload.
 pub fn contract_call_request_json(
     account: &AccountId,
-    private_key: &ExposedPrivateKey,
     contract_address: &str,
     options: ContractCallOptions<'_>,
 ) -> String {
     let mut entries = vec![
         crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("contract_address", contract_address),
     ];
     entries.push(crate::json_entry("entrypoint", options.entrypoint));

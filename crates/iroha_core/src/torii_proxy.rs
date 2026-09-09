@@ -613,6 +613,13 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v1(
     network_id: &NetworkId,
     bytes: &[u8],
 ) -> Result<ValidatedQueuePlanAdmissionCertificateV1, String> {
+    #[cfg(test)]
+    QUEUE_PLAN_AUTHENTICATION_OBSERVER.with(|observer| {
+        let callback = observer.borrow().clone();
+        if let Some(callback) = callback {
+            callback();
+        }
+    });
     let max_bytes = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
     if bytes.is_empty() || bytes.len() > max_bytes {
         return Err("QueuePlan admission certificate is empty or oversized".to_owned());
@@ -634,6 +641,33 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v1(
         certificate,
         QueuePlanAdmissionCertificateStrengthV1::Quorum,
     )
+}
+
+#[cfg(test)]
+thread_local! {
+    static QUEUE_PLAN_AUTHENTICATION_OBSERVER:
+        std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Observe real certificate authentication calls on this test thread.
+#[cfg(test)]
+pub(crate) fn observe_queue_plan_authentication_for_test<T>(
+    observer: impl Fn() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<std::rc::Rc<dyn Fn()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            QUEUE_PLAN_AUTHENTICATION_OBSERVER.with(|observer| {
+                observer.replace(self.0.take());
+            });
+        }
+    }
+    let _restore = Restore(
+        QUEUE_PLAN_AUTHENTICATION_OBSERVER
+            .with(|current| current.replace(Some(std::rc::Rc::new(observer)))),
+    );
+    action()
 }
 
 /// Stable lane/dataspace assignment determined at ingress.

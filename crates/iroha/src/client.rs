@@ -11890,6 +11890,7 @@ mod evidence_http_tests {
         );
         builder.set_creation_time(Duration::from_millis(123));
         let builder = builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .with_metadata(intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 intent.invocation.clone(),
@@ -12380,9 +12381,11 @@ mod evidence_http_tests {
         let mut builder =
             TransactionBuilder::new(client.network_id, authority.clone(), fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(123));
-        let builder = builder.with_executable(
-            iroha_data_model::transaction::Executable::ContractCall(intent.invocation.clone()),
-        );
+        let builder = builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                intent.invocation.clone(),
+            ));
         let prepared_response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&prepared_contract_call_response(&intent, &builder))
@@ -12473,6 +12476,14 @@ mod evidence_http_tests {
                 Some(private_key.is_some())
             );
             if private_key.is_some() {
+                assert_eq!(
+                    expected_signed.admission_intent(),
+                    TransactionAdmissionIntent::QueuePlanSynced
+                );
+                assert!(
+                    response.get("pipeline_status").is_some_and(Value::is_null),
+                    "admission is not observed queue state"
+                );
                 assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
                 assert_eq!(snapshots[1].body.as_slice(), expected_wire.as_bytes());
                 assert_eq!(
@@ -12584,6 +12595,49 @@ mod evidence_http_tests {
     #[test]
     fn post_contract_call_simulate_authenticates_exact_body_with_fresh_client_headers() {
         assert_contract_read_only_request_authentication(true);
+    }
+
+    #[test]
+    fn post_contract_call_rejects_ordinary_draft_before_signing_or_submission() {
+        let client = client_with_base_url(base_url());
+        let (address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let ordinary = builder.with_admission_intent(TransactionAdmissionIntent::Ordinary);
+        let response_value = prepared_contract_call_response(&intent, &ordinary);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_value).expect("response"),
+        );
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let result = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_contract_call_json_for_test(
+                &client.account,
+                Some(client.key_pair.private_key()),
+                Some(&address),
+                None,
+                "ping",
+                None,
+                None,
+                Some(123),
+                None,
+                &fee_payment,
+                &intent,
+            )
+        });
+        let error = result.expect_err("Ordinary public draft must fail before signing or dispatch");
+        assert!(
+            format!("{error:#}").contains("must use QueuePlanSynced admission"),
+            "{error:#}"
+        );
+        let requests = snapshots.lock().expect("captured requests");
+        assert_eq!(
+            requests.len(),
+            1,
+            "no transaction submission after rejecting prepare"
+        );
+        assert_eq!(requests[0].url.path(), "/v1/contracts/call");
     }
 
     #[test]
@@ -22361,10 +22415,10 @@ impl AccountClient {
             fee_payment,
         )?;
         if builder.payload().admission_intent()
-            != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+            != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
         {
             return Err(eyre!(
-                "contract call transaction payload must use Ordinary admission"
+                "contract call transaction payload must use QueuePlanSynced admission"
             ));
         }
         let mut expected_builder =
@@ -22374,6 +22428,7 @@ impl AccountClient {
             expected_builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
         }
         let expected_builder = expected_builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .with_metadata(draft_intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 draft_intent.invocation.clone(),
@@ -22409,20 +22464,10 @@ impl AccountClient {
                 "entrypoint_hash_hex".to_owned(),
                 entrypoint_hash_hex.clone().into(),
             );
-            response_object.insert(
-                "pipeline_status".to_owned(),
-                norito::json::to_value(&PipelineTransactionStatusResponse::new(
-                    tx_hash_hex.clone(),
-                    iroha_torii_shared::PipelineTransactionStatus {
-                        kind: "Queued".to_owned(),
-                        block_height: None,
-                    },
-                    "local".to_owned(),
-                    "queue".to_owned(),
-                ))?,
-            );
-            response_object.remove("transaction_payload_b64");
-            response_object.remove("signing_message_b64");
+            // Successful QueuePlan submission is not an observation of local queue state.
+            response_object.insert("pipeline_status".to_owned(), JsonValue::Null);
+            response_object.insert("transaction_payload_b64".to_owned(), JsonValue::Null);
+            response_object.insert("signing_message_b64".to_owned(), JsonValue::Null);
             if let Some(receipt) = response_object
                 .get_mut("operation_receipt")
                 .and_then(norito::json::Value::as_object_mut)

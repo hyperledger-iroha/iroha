@@ -7233,7 +7233,7 @@ function decodeExecuteTriggerPayload(payload) {
 function encodeAccountIdValue(value, context) {
   const literal = normalizeAccountId(value, context);
   const address = AccountAddress.fromI105(literal);
-  const controller = address._controller;
+  const controller = address.controllerInfo();
   if (!controller || typeof controller.tag !== JS_TYPE_NUMBER) {
     rejectError(`${context} could not resolve account controller information`);
   }

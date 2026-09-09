@@ -1219,7 +1219,7 @@ pub use routing::{
     SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
     ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk,
-    handle_post_asset_transfer, handle_post_contract_alias_set, handle_post_contract_call,
+    handle_post_asset_transfer, handle_post_contract_alias_set,
     handle_post_contract_call_batch_prepare, handle_post_contract_call_simulate,
     handle_post_contract_view, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
@@ -37634,21 +37634,42 @@ async fn handler_post_contract_call(
         "call",
     )
     .await?;
-    match crate::routing::handle_post_contract_call(
+    let crate::routing::PreparedContractCallRequest {
+        mut response,
+        transaction,
+    } = crate::routing::prepare_contract_call_request(
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
-        request,
+        request.0,
     )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("call"));
-            Err(err)
+    .inspect_err(|_| {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("call"));
+    })?;
+    if let Some(transaction) = transaction {
+        let tx_hash_hex = hex::encode(transaction.hash().as_ref());
+        let entrypoint_hash_hex = hex::encode(transaction.hash_as_entrypoint().as_ref());
+        let admitted = submit_signed_transaction_for_ingress_strict_durable(
+            app.clone(),
+            headers,
+            None,
+            transaction,
+        )
+        .await?;
+        if admitted.status() != StatusCode::ACCEPTED {
+            return Ok(admitted);
         }
+        // A certified acceptance proves admission. It does not prove local queue presence or Applied.
+        response.submitted = true;
+        response.tx_hash_hex = Some(tx_hash_hex.clone());
+        response.entrypoint_hash_hex = Some(entrypoint_hash_hex.clone());
+        response.transaction_payload_b64 = None;
+        response.signing_message_b64 = None;
+        response.operation_receipt.status = "submitted".to_owned();
+        response.operation_receipt.tx_hash_hex = Some(tx_hash_hex);
+        response.operation_receipt.entrypoint_hash_hex = Some(entrypoint_hash_hex);
     }
+    Ok(utils::respond_with_format(response, ResponseFormat::Json))
 }
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_batch_prepare(

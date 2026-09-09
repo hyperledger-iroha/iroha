@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-08.
+Last updated: 2026-09-09.
 
 This is the outstanding-outcome view for Iroha 3's first release. Component owners
 below are code responsibilities, not invented individual assignments. Local
@@ -15,14 +15,14 @@ migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
 
-Taira rollout is blocked by failed four-validator startup. Qualify the bounded
-authentication/cancellation and durable finalization handoff fixes, then prove
-public transaction application on all four validators, canaries, restart proof,
-public cutover and application connectivity. Reuse stable build lanes and verify
-closed-attempt reclamation through the maintained retry path. Run shared lifecycle
-source assertions before Cargo, qualify consistent Nexus descriptor defaults
-and complete the combined native gate without relaxing the four-validator
-or release checks.
+Taira rollout is blocked by public QueuePlan application after successful
+four-validator startup and genesis. Complete the source-first audit of admission,
+publication fencing and public contract producer/SDK/route/fixture contracts,
+then qualify those fixes in one native batch before Linux compilation. Prove
+exact application on all four validators, reset canaries, restart persistence,
+public cutover and application connectivity. Keep concurrent development in
+separate stable Cargo lanes and execute immutable copies of selected artifacts.
+Retain shared lifecycle and production configuration gates before Core compilation.
 
 ## Architecture and build ownership
 

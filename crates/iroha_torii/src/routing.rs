@@ -17554,21 +17554,24 @@ mod asset_transfer_request_tests {
         assert_eq!(queue.active_len(), 0);
     }
 }
-/// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
-#[iroha_futures::telemetry_future]
-async fn submit_contract_call_request(
+/// Exact public contract preparation awaiting optional certified submission.
+#[derive(Debug)]
+pub(crate) struct PreparedContractCallRequest {
+    pub(crate) response: ContractCallResponseDto,
+    pub(crate) transaction: Option<iroha_data_model::transaction::SignedTransaction>,
+}
+/// Resolve, quote and verify one contract call without admitting it locally.
+pub(crate) fn prepare_contract_call_request(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     req: ContractCallDto,
-    endpoint: &'static str,
-    expected_kind: Option<manifest::EntryPointKind>,
-) -> Result<ContractCallResponseDto> {
+) -> Result<PreparedContractCallRequest> {
     use iroha_data_model::prelude as dm;
     let ContractCallDto {
         authority,
         public_key_hex,
         signature_b64,
+        transaction_payload_b64,
         contract_address,
         contract_alias,
         entrypoint,
@@ -17578,6 +17581,21 @@ async fn submit_contract_call_request(
         transaction_ttl_ms,
         fee_payment,
     } = req;
+    let detached_submit = public_key_hex.is_some()
+        || signature_b64.is_some()
+        || transaction_payload_b64.is_some();
+    if detached_submit
+        && (public_key_hex.is_none() || signature_b64.is_none() || transaction_payload_b64.is_none())
+    {
+        return Err(conversion_error(
+            "contract call submission requires public_key_hex, signature_b64, and transaction_payload_b64 together".to_owned(),
+        ));
+    }
+    if detached_submit && creation_time_ms.is_none() {
+        return Err(conversion_error(
+            "contract call submission requires the prepared creation_time_ms".to_owned(),
+        ));
+    }
     fee_payment
         .validate()
         .map_err(|err| conversion_error(format!("invalid fee_payment: {err}")))?;
@@ -17612,7 +17630,7 @@ async fn submit_contract_call_request(
     }
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor =
-        ensure_contract_call_entrypoint(&manifest, resolved_entrypoint, expected_kind)?;
+        ensure_contract_call_entrypoint(&manifest, resolved_entrypoint, None)?;
     {
         let world = state.world_view();
         iroha_core::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
@@ -17658,64 +17676,46 @@ async fn submit_contract_call_request(
         arguments,
     };
     let builder = builder
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
         .with_executable(dm::Executable::ContractCall(executable));
-    let builder =
-        quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), endpoint)?;
+    let builder = if let Some(encoded) = transaction_payload_b64.as_deref() {
+        let (payload, canonical_bytes) = decode_app_api_transaction_payload_b64(encoded)?;
+        if &payload != builder.payload() || canonical_bytes != builder.encode_payload() {
+            return Err(conversion_error(
+                "prepared contract call payload does not match the exact requested invocation, metadata, fee payment, and QueuePlanSynced admission".to_owned(),
+            ));
+        }
+        // Keep the retained signed fee limits and payload bytes; admission validates them live.
+        dm::TransactionBuilder::from_payload(payload)
+            .map_err(|error| app_api_transaction_signing_error("/v1/contracts/call", error))?
+    } else {
+        quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), "/v1/contracts/call")?
+    };
     let fee_payment = builder.payload().fee_payment.clone();
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
-    if public_key_hex.is_some() || signature_b64.is_some() {
+    let transaction = if public_key_hex.is_some() || signature_b64.is_some() {
         let signature = decode_app_api_detached_authority_signature(
             public_key_hex.as_deref(),
             signature_b64.as_deref(),
             &authority,
             "public_key_hex does not match authority",
         )?;
-        let tx = builder.build_with_signature(signature);
+        let tx = builder.clone().build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
                 "contract call detached signature verification failed: {err}"
             ))
         })?;
-        let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
-        handle_transaction_with_metrics(queue, state, tx, telemetry, endpoint).await?;
-        return Ok(ContractCallResponseDto {
-            ok: true,
-            submitted: true,
-            dataspace: dataspace.clone(),
-            contract_address: Some(contract_address.clone()),
-            code_hash_hex: code_hash_hex.clone(),
-            abi_hash_hex: abi_hash_hex.clone(),
-            creation_time_ms,
-            transaction_ttl_ms,
-            tx_hash_hex: Some(tx_hash_hex.clone()),
-            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
-            entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
-            transaction_payload_b64: None,
-            signing_message_b64: None,
-            entrypoint: response_entrypoint.clone(),
-            operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
-                status: "submitted",
-                dataspace: &dataspace,
-                contract_alias: contract_alias.as_ref(),
-                contract_address: &contract_address,
-                code_hash_hex: &code_hash_hex,
-                abi_hash_hex: &abi_hash_hex,
-                tx_hash_hex: Some(tx_hash_hex),
-                entrypoint: response_entrypoint.clone(),
-                entrypoint_hash_hex: Some(entrypoint_hash_hex),
-                gas_limit,
-                fee_payment: fee_payment.clone(),
-                payload_digest_hex: &payload_digest_hex,
-            }),
-        });
-    }
+        Some(tx)
+    } else {
+        None
+    };
     let draft = app_api_transaction_draft(&builder);
-    Ok(ContractCallResponseDto {
+    let response = ContractCallResponseDto {
         ok: true,
         submitted: false,
         dataspace: dataspace.clone(),
@@ -17744,7 +17744,8 @@ async fn submit_contract_call_request(
             fee_payment,
             payload_digest_hex: &payload_digest_hex,
         }),
-    })
+    };
+    Ok(PreparedContractCallRequest { response, transaction })
 }
 fn queued_pipeline_status_response(
     tx_hash_hex: String,
@@ -17926,7 +17927,7 @@ fn validate_sccp_taira_transfer_recipient(payload: &SccpPayloadV1) -> Result<()>
     }
     Ok(())
 }
-fn decode_sccp_transaction_payload_b64(
+fn decode_app_api_transaction_payload_b64(
     encoded: &str,
 ) -> Result<(
     iroha_data_model::transaction::signed::TransactionPayload,
@@ -18065,7 +18066,7 @@ fn build_exact_sccp_signed_transaction(
     signature_b64: &str,
     context: &str,
 ) -> Result<SignedTransaction> {
-    let (payload, payload_bytes) = decode_sccp_transaction_payload_b64(transaction_payload_b64)?;
+    let (payload, payload_bytes) = decode_app_api_transaction_payload_b64(transaction_payload_b64)?;
     let builder = exact_sccp_transaction_builder(
         state.network_id_ref(),
         authority,
@@ -18300,19 +18301,6 @@ pub async fn handle_post_asset_transfer(
     )
     .await?;
     pretty_json_response(&response)
-}
-/// POST /v1/contracts/call — submit a public contract call transaction and
-/// return the queued execution receipt metadata.
-pub async fn handle_post_contract_call(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<ContractCallDto>,
-) -> Result<impl IntoResponse> {
-    let response =
-        submit_contract_call_request(queue, state, telemetry, req, "/v1/contracts/call", None)
-            .await?;
-    Ok(infallible_pretty_json_response(&response, "{}"))
 }
 /// POST /v1/contracts/call/batch/prepare — resolve and ABI-bind one exact ordered batch.
 pub fn handle_post_contract_call_batch_prepare(
@@ -25054,11 +25042,11 @@ mod multisig_selector_tests {
             &authority_keypair,
             &contract_address,
         );
-        let response = handle_post_contract_call(
+        let response = prepare_contract_call_request(
             build_queue(),
             state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(ContractCallDto {
+            ContractCallDto {
+                transaction_payload_b64: None,
                 authority: authority.clone(),
                 public_key_hex: None,
                 signature_b64: None,
@@ -25073,11 +25061,13 @@ mod multisig_selector_tests {
                     Vec::new(),
                     std::num::NonZeroU64::new(10_000),
                 ),
-            }),
+            },
         )
-        .await
         .expect("contract address target should prepare");
-        let payload = decode_json_response(response.into_response()).await;
+        assert!(response.transaction.is_none(), "prepare does not submit");
+        let payload = decode_json_response(
+            infallible_pretty_json_response(&response.response, "{}"),
+        ).await;
         assert_eq!(payload["ok"].as_bool(), Some(true));
         assert_eq!(payload["submitted"].as_bool(), Some(false));
         assert_eq!(payload["dataspace"].as_str(), Some("universal"));
@@ -25090,15 +25080,190 @@ mod multisig_selector_tests {
             Some(contract_address.as_ref())
         );
         assert_exact_unsigned_transaction_draft(&payload);
+        let draft = base64::engine::general_purpose::STANDARD.decode(
+            payload["transaction_payload_b64"].as_str().expect("canonical draft"),
+        ).expect("decode payload");
+        let builder = dm::TransactionBuilder::decode_payload(&draft).expect("decode transaction");
+        assert_eq!(builder.payload().admission_intent(),
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+    }
+    fn public_contract_call_fixture() -> (Arc<State>, Arc<Queue>, KeyPair, ContractCallDto) {
+        let key = checked_multisig_selector_keypair(0x6c, "derive public contract-call key");
+        let authority = dm::AccountId::new(key.public_key().clone());
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = build_state(World::with([], [account], []));
+        let address = derived_universal_contract_address(&authority, 2);
+        install_contract_instance(state.as_ref(), &authority, &key, &address);
+        let request = ContractCallDto {
+            authority,
+            public_key_hex: None,
+            signature_b64: None,
+            transaction_payload_b64: None,
+            contract_address: Some(address),
+            contract_alias: None,
+            entrypoint: "main".to_owned(),
+            payload: None,
+            metadata: Metadata::default(),
+            creation_time_ms: Some(current_time_millis()),
+            transaction_ttl_ms: Some(60_000),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(), NonZeroU64::new(10_000),
+            ),
+        };
+        (state, build_queue(), key, request)
+    }
+    fn detached_public_contract_call(
+        state: &Arc<State>, queue: &Arc<Queue>, key: &KeyPair, request: &ContractCallDto,
+    ) -> (ContractCallDto, dm::TransactionBuilder) {
+        let prepared = prepare_contract_call_request(queue.clone(), state.clone(), request.clone())
+            .expect("prepare exact public contract call");
+        let encoded = prepared.response.transaction_payload_b64.expect("prepared bytes");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&encoded).expect("base64");
+        let builder = dm::TransactionBuilder::decode_payload(&bytes).expect("payload");
+        let signature = Signature::try_new(key.private_key(), &builder.payload_hash_bytes())
+            .expect("sign exact prepared payload");
+        let mut request = request.clone();
+        request.fee_payment = builder.payload().fee_payment.clone();
+        request.public_key_hex = Some(hex::encode(key.public_key().to_bytes().1));
+        request.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        request.transaction_payload_b64 = Some(encoded);
+        (request, builder)
+    }
+    routing_test! { sync contract_call_detached_submission_retains_exact_queue_plan_payload
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
+        let prepared = prepare_contract_call_request(queue.clone(), state, request)
+            .expect("verify exact retained submission");
+        let transaction = prepared.transaction.expect("detached transaction");
+        transaction.verify_signature().expect("retained signature verifies");
+        assert_eq!(transaction, builder.clone().try_sign(key.private_key()).expect("exact expected signature"));
+        assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+        assert!(!prepared.response.submitted, "preparation cannot claim public admission");
+        assert!(prepared.response.pipeline_status.is_none());
+        assert_eq!(prepared.response.operation_receipt.fee_payment.as_ref(), Some(&builder.payload().fee_payment));
+        assert_eq!(queue.active_len(), 0, "verification never enters the Ordinary queue");
+    }
+    routing_test! { sync contract_call_detached_submission_preserves_retained_fee_limits_without_requote
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (mut request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
+        let retained_fee = dm::FeePaymentIntent::authority(
+            vec![dm::FeeChargeLimit::new(
+                dm::FeeChargeKind::PipelineGas, test_asset_definition_id(), dm::Quantity::from(100_u32),
+            )],
+            NonZeroU64::new(10_000),
+        );
+        retained_fee.validate().expect("canonical retained fee intent");
+        assert_ne!(builder.payload().fee_payment, retained_fee, "fixture quote differs from retained limits");
+        let builder = builder.with_fee_payment_intent(retained_fee.clone());
+        let signature = Signature::try_new(key.private_key(), &builder.payload_hash_bytes()).expect("sign retained fee limits");
+        request.fee_payment = retained_fee.clone();
+        request.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()));
+        request.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        let prepared = prepare_contract_call_request(queue.clone(), state, request).expect("signed fees are validated unchanged");
+        assert_eq!(prepared.transaction.expect("exact transaction"), builder.try_sign(key.private_key()).expect("expected signed payload"));
+        assert_eq!(prepared.response.operation_receipt.fee_payment, Some(retained_fee));
+        assert_eq!(queue.active_len(), 0, "live fee admissibility remains the public ingress owner's work");
+    }
+    routing_test! { sync contract_call_detached_submission_rejects_changed_or_noncanonical_payload
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (exact, builder) = detached_public_contract_call(&state, &queue, &key, &request);
+        let ordinary = builder.clone().with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+        );
+        let signature = Signature::try_new(key.private_key(), &ordinary.payload_hash_bytes()).expect("sign other intent");
+        let mut changed = exact.clone();
+        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(ordinary.encode_payload()));
+        changed.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        let error = prepare_contract_call_request(queue.clone(), state.clone(), changed)
+            .expect_err("even a valid Ordinary signature cannot enter the public contract surface");
+        assert!(expect_conversion(error).contains("exact requested invocation"));
+        let mut bytes = builder.encode_payload();
+        bytes.push(0);
+        let mut noncanonical = exact.clone();
+        noncanonical.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
+        assert!(prepare_contract_call_request(queue.clone(), state.clone(), noncanonical).is_err(), "trailing payload bytes must fail");
+        let mut replaced_signature = exact;
+        replaced_signature.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        let error = prepare_contract_call_request(queue.clone(), state, replaced_signature)
+            .expect_err("a signature over another intent cannot authenticate retained QP bytes");
+        assert!(expect_conversion(error).contains("detached signature verification failed"));
+        assert_eq!(queue.active_len(), 0);
+    }
+    routing_test! { async contract_call_detached_handler_requires_certified_public_admission
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (request, _) = detached_public_contract_call(&state, &queue, &key, &request);
+        let mut app = crate::mk_app_state_for_tests();
+        let inner = Arc::get_mut(&mut app).expect("unique fixture AppState");
+        inner.state = state;
+        inner.queue = queue.clone();
+        let response = crate::handler_post_contract_call(
+            axum::extract::State(app),
+            axum::http::HeaderMap::new(),
+            axum::extract::ConnectInfo("127.0.0.1:3030".parse().expect("remote")),
+            NoritoJson(request),
+        ).await.unwrap_or_else(axum::response::IntoResponse::into_response);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = response.into_body().collect().await.expect("response body").to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope = norito::decode_from_bytes(&bytes).expect("public error envelope");
+        #[cfg(feature = "connect")]
+        assert_eq!(error.code(), "route_unavailable");
+        #[cfg(not(feature = "connect"))]
+        assert_eq!(error.code(), "queue_plan_synced_transport_unavailable");
+        assert_eq!(queue.active_len(), 0, "no local enqueue can mask absent public admission authority");
+    }
+    routing_test! { sync contract_call_detached_submission_requires_complete_retained_envelope
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (exact, _) = detached_public_contract_call(&state, &queue, &key, &request);
+        for present in 1..7 {
+            let mut incomplete = exact.clone();
+            if present & 1 == 0 { incomplete.public_key_hex = None; }
+            if present & 2 == 0 { incomplete.signature_b64 = None; }
+            if present & 4 == 0 { incomplete.transaction_payload_b64 = None; }
+            let error = prepare_contract_call_request(queue.clone(), state.clone(), incomplete)
+                .expect_err("every partial detached envelope fails before preparation");
+            assert!(expect_conversion(error).contains("together"));
+        }
+        let mut missing_time = exact;
+        missing_time.creation_time_ms = None;
+        let error = prepare_contract_call_request(queue.clone(), state, missing_time)
+            .expect_err("detached submit cannot invent a signing timestamp");
+        assert!(expect_conversion(error).contains("prepared creation_time_ms"));
+        assert_eq!(queue.active_len(), 0);
+    }
+    routing_test! { sync contract_call_prepare_serializes_complete_canonical_response
+        let (state, queue, _, mut request) = public_contract_call_fixture();
+        request.transaction_ttl_ms = None;
+        let prepared = prepare_contract_call_request(queue, state, request).expect("prepare");
+        let encoded = prepared.response.transaction_payload_b64.as_ref().expect("exact payload");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).expect("base64");
+        let builder = dm::TransactionBuilder::decode_payload(&bytes).expect("canonical payload");
+        assert_eq!(builder.payload().time_to_live(),
+            Some(iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE),
+            "an omitted TTL selects the canonical default; it never creates an unbounded transaction");
+        let value = norito::json::to_value(&prepared.response).expect("actual response serializer");
+        let root_fields = ["ok", "submitted", "dataspace", "contract_address", "code_hash_hex", "abi_hash_hex", "creation_time_ms", "transaction_ttl_ms", "tx_hash_hex", "pipeline_status", "entrypoint_hash_hex", "transaction_payload_b64", "signing_message_b64", "entrypoint", "operation_receipt"];
+        let object = value.as_object().expect("response object");
+        assert_eq!(object.len(), root_fields.len());
+        for field in root_fields { assert!(object.contains_key(field), "missing root field {field}"); }
+        for field in ["transaction_ttl_ms", "tx_hash_hex", "pipeline_status", "entrypoint_hash_hex"] {
+            assert!(object.get(field).is_some_and(norito::json::Value::is_null), "explicit root null {field}");
+        }
+        let receipt_fields = ["operation_kind", "status", "transport", "dataspace", "contract_alias", "contract_address", "code_hash_hex", "abi_hash_hex", "tx_hash_hex", "entrypoint", "entrypoint_hash_hex", "gas_limit", "gas_used", "fee_payment", "payload_digest_hex"];
+        let receipt = value["operation_receipt"].as_object().expect("receipt object");
+        assert_eq!(receipt.len(), receipt_fields.len());
+        for field in receipt_fields { assert!(receipt.contains_key(field), "missing receipt field {field}"); }
+        for field in ["contract_alias", "tx_hash_hex", "entrypoint_hash_hex", "gas_used"] {
+            assert!(receipt.get(field).is_some_and(norito::json::Value::is_null), "explicit receipt null {field}");
+        }
     }
     routing_test! { async contract_call_rejects_missing_target
         let authority =
             checked_multisig_selector_account_id(0x6a, "derive missing-target authority key");
-        let result = handle_post_contract_call(
+        let result = prepare_contract_call_request(
             build_queue(),
             build_state(World::default()),
-            MaybeTelemetry::disabled(),
-            NoritoJson(ContractCallDto {
+            ContractCallDto {
+                transaction_payload_b64: None,
                 authority,
                 public_key_hex: None,
                 signature_b64: None,
@@ -25113,9 +25278,8 @@ mod multisig_selector_tests {
                     Vec::new(),
                     std::num::NonZeroU64::new(10_000),
                 ),
-            }),
-        )
-        .await;
+            },
+        );
         let err = match result {
             Ok(_) => panic!("missing canonical contract target must fail"),
             Err(err) => err,
@@ -25128,11 +25292,11 @@ mod multisig_selector_tests {
             0x6b,
             "derive missing-contract-alias authority key",
         );
-        let result = handle_post_contract_call(
+        let result = prepare_contract_call_request(
             build_queue(),
             build_state(World::default()),
-            MaybeTelemetry::disabled(),
-            NoritoJson(ContractCallDto {
+            ContractCallDto {
+                transaction_payload_b64: None,
                 authority,
                 public_key_hex: None,
                 signature_b64: None,
@@ -25147,9 +25311,8 @@ mod multisig_selector_tests {
                     Vec::new(),
                     std::num::NonZeroU64::new(10_000),
                 ),
-            }),
-        )
-        .await;
+            },
+        );
         let err = match result {
             Ok(_) => panic!("missing contract alias must fail"),
             Err(err) => err,
@@ -30338,6 +30501,10 @@ pub struct ContractCallDto {
     /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
+    /// Exact canonical payload returned by preparation; required with both detached signature fields.
+    /// Torii validates and submits these bytes without rebuilding or re-quoting a signed envelope.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
     /// Optional canonical contract address.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -30527,51 +30694,41 @@ pub struct OperationReceiptDto {
     pub dataspace: String,
     /// Optional contract alias used for the operation.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_alias: Option<String>,
     /// Optional canonical contract address.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<String>,
     /// Optional code hash of the deployed or invoked artifact.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
     /// Optional ABI hash of the deployed or invoked artifact.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub abi_hash_hex: Option<String>,
     /// Optional submitted transaction hash.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
     /// Optional contract entrypoint for calls.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
     /// Optional transaction entrypoint hash.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint_hash_hex: Option<String>,
     /// Optional gas limit attached to the operation.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_limit: Option<u64>,
     /// Optional gas actually consumed when available.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_used: Option<u64>,
     /// Exact signature-bound fee payment used by this transaction.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
     /// Public digest of the normalized operation payload or artifact bytes.
     pub payload_digest_hex: String,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Response payload returned after enqueuing a contract call transaction.
+/// Canonical preparation or certified-admission response for a contract call transaction.
 pub struct ContractCallResponseDto {
-    /// Whether queuing succeeded.
+    /// Whether preparation or certified admission succeeded.
     pub ok: bool,
     /// Whether Torii submitted the transaction to the pipeline.
     pub submitted: bool,
@@ -30588,14 +30745,12 @@ pub struct ContractCallResponseDto {
     pub creation_time_ms: u64,
     /// Optional transaction time-to-live in milliseconds embedded in the payload.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub transaction_ttl_ms: Option<u64>,
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
     /// Pipeline status envelope for the submitted transaction, when available.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Hex-encoded transaction entrypoint hash used by committed transaction queries.
     #[norito(default)]

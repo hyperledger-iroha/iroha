@@ -17,10 +17,14 @@ accept no live configuration, credentials, SSH, deployment or signing inputs.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -307,6 +311,46 @@ CORE_STAGES += (("durable output capacity and strict handoff", (
     "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
 )),)
 
+CLIENT_STAGES = (("public contract SDK envelope", (
+    "client::evidence_http_tests::post_contract_call_accepts_only_the_caller_trusted_draft_intent",
+    "client::evidence_http_tests::post_contract_call_authenticates_bound_account_and_rejects_foreign_authority",
+    "client::evidence_http_tests::post_contract_call_rejects_ordinary_draft_before_signing_or_submission",
+    "client::evidence_http_tests::post_contract_call_rejects_substituted_operation_receipt",
+    "client::evidence_http_tests::post_contract_call_rejects_omitted_operation_receipt_fields",
+    "client::evidence_http_tests::post_contract_call_rejects_unsupported_response_root_fields",
+    "client::evidence_http_tests::post_contract_call_rejects_omitted_response_root_fields",
+)),)
+
+TORII_UNIT_STAGES = (("public contract retained payload and certified ingress", (
+    "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
+    "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
+    "routing::multisig_selector_tests::contract_call_detached_submission_rejects_changed_or_noncanonical_payload",
+    "routing::multisig_selector_tests::contract_call_detached_handler_requires_certified_public_admission",
+    "routing::multisig_selector_tests::contract_call_detached_submission_requires_complete_retained_envelope",
+    "routing::multisig_selector_tests::contract_call_prepare_serializes_complete_canonical_response",
+    "openapi::tests::public_contract_call_schema_matches_exact_queue_plan_handoff",
+    "openapi::tests::checked_openapi_assets_match_package_authority",
+)),)
+
+TORII_STAGES += (("public contract HTTP preparation and strict admission", (
+    "contracts_call_integration::contracts_call_prepares_exact_payload_and_requires_certified_admission",
+)),)
+
+CORE_STAGES += (("authenticated admission and coherent State publication", (
+    "state::tests::pending_queue_plan_authentication_does_not_hold_the_publication_fence",
+    "state::tests::pending_queue_plan_admission_accepts_unchanged_source_after_height_only_advance",
+    "state::tests::pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives",
+    "state::tests::pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarnation",
+    "state::tests::pending_queue_plan_admission_checks_historical_native_amx_participant_sources",
+    "state::tests::pending_queue_plan_persistence_serializes_alternate_quorum_subsets",
+    "state::tests::pending_queue_plan_persistence_yields_to_one_ahead_state_publication",
+    "state::tests::pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew",
+    "state::tests::pending_queue_plan_old_carrier_retains_only_valid_current_sources",
+    "state::tests::pending_queue_plan_admission_defers_obsolete_carrier_without_rejecting_current_source",
+    "state::tests::queue_plan_conflict_requires_pending_or_applied_owner_evidence",
+    "state::tests::queue_plan_carrier_validation_uses_one_generation_coherent_state_view",
+)),)
+
 PROOF_STAGES = (("canonical proof resource bounds", (
     "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
     "proof::tests::raw_fixture_verifier_preserves_explicit_admission_limits",
@@ -319,11 +363,14 @@ PROOF_FLOW_STAGES = (("default proof production and verification", (
     "resource_profile::public_transfer_default_profile_accepts_sixteen_rows",
 )),)
 
+CONFIG_STAGES = (("production configuration schema", (
+    "lane_descriptor_collection_defaults_match_config_defaults",
+    "lane_descriptor_collection_defaults_reject_malformed_values",
+    "taira_profile_nexus_collections_deserialize_without_runtime_inputs",
+    "nexus_routing_and_governance_collection_defaults_match_config_defaults",
+)),)
+
 TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
-    "config::tests::lane_descriptor_collection_defaults_match_config_defaults",
-    "config::tests::lane_descriptor_collection_defaults_reject_malformed_values",
-    "config::tests::taira_profile_nexus_collections_deserialize_without_runtime_inputs",
-    "config::tests::nexus_routing_and_governance_collection_defaults_match_config_defaults",
     "config::tests::base_config_applies_bounded_storage_caps",
     "config::tests::base_config_preserves_caller_storage_budget_and_smaller_component_cap",
     "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
@@ -338,10 +385,13 @@ NETWORK_STAGES = (("four-validator multi-route transaction commit", (
 NETWORK_FIXTURE_FREE_BYTES = 8 * 1024**3
 
 HARNESS_TARGETS = {
+    "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
     "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
     "crypto": ("native puzzle cryptography", "iroha_crypto", "lib", ["-p", "iroha_crypto", "--lib"]),
     "p2p": ("native peer transport", "iroha_p2p", "lib", ["-p", "iroha_p2p", "--lib"]),
     "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
+    "client": ("native Rust SDK", "iroha", "lib", ["-p", "iroha", "--lib"]),
+    "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
     "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
@@ -357,9 +407,9 @@ class CheckError(Exception):
 def selected_regression_count() -> int:
     """Return the complete native census shared by execution and result capture."""
     return sum(len(names)
-               for stages in (STAGES, CRYPTO_STAGES, P2P_STAGES, CORE_STAGES,
+               for stages in (STAGES, CONFIG_STAGES, CRYPTO_STAGES, P2P_STAGES, CORE_STAGES,
                               TEST_NETWORK_STAGES, NETWORK_STAGES, PROOF_STAGES,
-                              PROOF_FLOW_STAGES, TORII_STAGES)
+                              PROOF_FLOW_STAGES, TORII_STAGES, CLIENT_STAGES, TORII_UNIT_STAGES)
                for _, names in stages)
 
 
@@ -412,7 +462,7 @@ def show_build_diagnostic(line: str) -> None:
 def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (),
                     harness: str = "cli") -> str:
     command = compile_command(root, env, harness=harness)
-    return _build_harnesses(command, env, (harness,), lock_fds)[harness]
+    return _build_harnesses(root, command, env, (harness,), lock_fds)[harness]
 
 
 def compile_library_harnesses(root: Path, env: dict[str, str], *,
@@ -432,15 +482,16 @@ def compile_library_harnesses(root: Path, env: dict[str, str], *,
             raise CheckError("native library batch requires explicit library packages")
         selection.extend(arguments[:-1])
     command = _compile_command(root, env, [*selection, "--lib"])
-    return _build_harnesses(command, env, harnesses, lock_fds)
+    return _build_harnesses(root, command, env, harnesses, lock_fds)
 
 
-def _build_harnesses(command: list[str], env: dict[str, str],
+def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
                      harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> dict[str, str]:
     label = "; ".join(HARNESS_TARGETS[harness][0] for harness in harnesses)
     print(f"[taira-check] build {label} test harness", flush=True)
     started = time.monotonic()
     artifacts: dict[str, set[str]] = {harness: set() for harness in harnesses}
+    records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
@@ -450,6 +501,11 @@ def _build_harnesses(command: list[str], env: dict[str, str],
                 artifact = test_artifact(line, harness=harness)
                 if artifact is not None:
                     artifacts[harness].add(artifact)
+                    record = native_artifact_record(json.loads(line))
+                    if (harness in records and records[harness]["executable"] == artifact
+                            and records[harness] != record):
+                        raise CheckError("native harness has conflicting Cargo metadata")
+                    records[harness] = record
         code = child.wait()
     elapsed = time.monotonic() - started
     if code:
@@ -462,7 +518,142 @@ def _build_harnesses(command: list[str], env: dict[str, str],
     if len(set(result.values())) != len(result):
         raise CheckError("native build reused one executable for distinct test harnesses")
     print(f"[taira-check] {label} build passed in {elapsed:.1f}s", flush=True)
-    return result
+    return isolate_native_artifacts(root, env, records)
+
+
+NATIVE_ARTIFACT_MAX_BYTES = 4 * 1024**3
+
+
+def native_artifact_record(event: dict[str, object]) -> dict[str, object]:
+    """Retain Cargo metadata independently from the immutable execution path."""
+    return {"name": event["target"]["name"], "executable": event["executable"],
+            "profile": event["profile"], "manifest_path": event.get("manifest_path")}
+
+
+@contextlib.contextmanager
+def native_artifact_guard(root: Path, target: Path, env: dict[str, str]):
+    """Lock actual Cargo outputs only after Cargo exits, through source validation and copy."""
+    if root.is_relative_to(target):
+        from taira_cargo_cache import local_package_names, source_fingerprints
+        # Metadata has no artifact authority and must run before acquiring Cargo's locks.
+        packages = local_package_names(root, env)
+        with source_fingerprints(root, target, "aarch64-unknown-linux-gnu", packages, repair=False):
+            yield
+        return
+    # Mutable development checks cannot claim captured-source fingerprint authority.
+    # They still execute private copies and exclude Cargo writers while copying.
+    profile = target / "debug"
+    if profile.resolve(strict=True) != profile:
+        raise CheckError("native Cargo profile must not traverse symlinks")
+    fd = os.open(profile / ".cargo-lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or info.st_mode & 0o022):
+            raise CheckError("unsafe native Cargo profile lock")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def isolate_native_artifacts(root: Path, env: dict[str, str],
+                             records: dict[str, dict[str, object]]) -> dict[str, str]:
+    """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
+    from release_artifact_contract import ReleaseArtifactError, stable_hash_path, stable_open_relative
+    target = Path(env["CARGO_TARGET_DIR"])
+    try:
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha"} for key in records):
+            raise CheckError("native artifact isolation requires known nonempty selections")
+        for directory in (root, target):
+            info = directory.stat()
+            if (not directory.is_absolute() or directory.resolve(strict=True) != directory
+                    or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o022):
+                raise CheckError("native artifact source and target must be direct owner-held directories")
+        paths = {}
+        for selection, record in records.items():
+            package = {"iroha3d": "irohad", "iroha": "iroha_cli"}.get(selection)
+            if package is None:
+                package = HARNESS_TARGETS[selection][3][1]
+            if record["manifest_path"] != str(root / "crates" / package / "Cargo.toml"):
+                raise CheckError("native Cargo artifact manifest differs from the selected source")
+            path = Path(record["executable"])
+            if (not path.is_absolute() or path.resolve(strict=True) != path
+                    or not path.is_relative_to(target / "debug")):
+                raise CheckError("native Cargo artifact must be a direct path below the selected debug target")
+            paths[selection] = path
+        with native_artifact_guard(root, target, env):
+            identities = {}
+            for selection, path in paths.items():
+                info = path.lstat()
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or not info.st_mode & stat.S_IXUSR or info.st_mode & 0o022
+                        or info.st_nlink != 1 or not 0 < info.st_size <= NATIVE_ARTIFACT_MAX_BYTES):
+                    raise CheckError("native Cargo artifact must be a bounded owner-held executable without hardlinks")
+                identities[selection] = stable_hash_path(path, max_size=NATIVE_ARTIFACT_MAX_BYTES)
+            required = sum(info.size for info in identities.values()) + NETWORK_FIXTURE_FREE_BYTES
+            if shutil.disk_usage(target).free < required:
+                raise CheckError("native artifact copies would consume the required working-space reserve")
+            output = Path(tempfile.mkdtemp(prefix="taira-native-artifacts-", dir=target))
+            copied, observations, published = {}, [], {}
+            for selection, path in paths.items():
+                expected = identities[selection]
+                destination = output / selection
+                digest, size = hashlib.sha256(), 0
+                with stable_open_relative(target, str(path.relative_to(target)), expected=expected) as source:
+                    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                    try:
+                        while block := os.read(source, 1024 * 1024):
+                            size += len(block)
+                            if size > expected.size:
+                                raise CheckError("native artifact grew during descriptor copy")
+                            digest.update(block)
+                            view = memoryview(block)
+                            while view:
+                                written = os.write(fd, view)
+                                if written <= 0:
+                                    raise CheckError("native artifact copy made no progress")
+                                view = view[written:]
+                        if size != expected.size or digest.hexdigest() != expected.sha256:
+                            raise CheckError("native artifact changed during descriptor copy")
+                        os.fchmod(fd, 0o500)
+                        os.fsync(fd)
+                        opened, named = os.fstat(fd), destination.lstat()
+                        if ((opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+                                or opened.st_size != expected.size or named.st_size != expected.size
+                                or named.st_uid != os.geteuid() or named.st_nlink != 1
+                                or stat.S_IMODE(named.st_mode) != 0o500):
+                            raise CheckError("native artifact destination changed during copy")
+                        published[destination] = (named.st_dev, named.st_ino, named.st_size,
+                            named.st_mode, named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns)
+                    finally:
+                        os.close(fd)
+                copied[selection] = str(destination)
+                observations.append({"selection": selection, "path": str(destination),
+                    "sha256": expected.sha256, "size": expected.size, "cargo_artifact": records[selection]})
+            for destination, expected_identity in published.items():
+                named = destination.lstat()
+                if expected_identity != (named.st_dev, named.st_ino, named.st_size, named.st_mode,
+                        named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns):
+                    raise CheckError("native artifact destination changed before publication")
+            directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fchmod(directory_fd, 0o500)
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            parent_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+        # Publish observations only when the complete batch is frozen and the locks released.
+        for observation in observations:
+            print("[taira-check] isolated native artifact " + json.dumps(observation, sort_keys=True), flush=True)
+        return copied
+    except (OSError, ValueError, ReleaseArtifactError, subprocess.SubprocessError) as error:
+        raise CheckError(f"native artifact isolation failed: {error}") from error
 
 
 def require_tests(listing: str, stages=None) -> None:
@@ -523,6 +714,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     print("[taira-check] build native network binaries", flush=True)
     started = time.monotonic()
     artifacts: dict[str, str] = {}
+    records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
@@ -542,16 +734,25 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                     and isinstance(executable, str) and executable):
                 if name in artifacts and artifacts[name] != executable:
                     raise CheckError("native network binary has conflicting Cargo artifacts")
+                record = native_artifact_record(event)
+                if name in records and records[name] != record:
+                    raise CheckError("native network binary has conflicting Cargo metadata")
                 artifacts[name] = executable
-                print("[taira-check] native network artifact " + json.dumps({
-                    "name": name, "executable": executable, "profile": event["profile"],
-                    "manifest_path": event.get("manifest_path"),
-                }, sort_keys=True), flush=True)
+                records[name] = record
+                print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
         code = child.wait()
     if code or set(artifacts) != {"iroha3d", "iroha"}:
         raise CheckError(f"native network build did not produce both executable artifacts (exit {code})")
     print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
-    return artifacts
+    return isolate_native_artifacts(root, env, records)
+
+
+def run_config_checks(root: Path, fixture_root: Path, env: dict[str, str],
+                      lock_fds: tuple[int, ...]) -> None:
+    """Reject schema failures before compiling the Core and network harnesses."""
+    if CONFIG_STAGES:
+        harness = compile_harness(root, env, lock_fds=lock_fds, harness="config")
+        run_stages(harness, fixture_root, env, CONFIG_STAGES, lock_fds)
 
 
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
@@ -662,22 +863,27 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
         require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
+    run_config_checks(root, fixture_root, env, lock_fds)
     # Resolve the shared library graph once. Keep logical regression order and
     # stop before daemon startup if any selected library stage fails.
     library_stages = tuple((name, stages) for name, stages in (
         ("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES), ("core", CORE_STAGES),
-        ("test-network", TEST_NETWORK_STAGES)) if stages)
+        ("test-network", TEST_NETWORK_STAGES),
+        ("client", CLIENT_STAGES), ("torii-unit", TORII_UNIT_STAGES)) if stages)
     if library_stages:
         libraries = compile_library_harnesses(root, env, lock_fds=lock_fds,
                                              harnesses=tuple(name for name, _ in library_stages))
         for name, stages in library_stages:
             run_stages(libraries[name], fixture_root, env, stages, lock_fds)
+    if TORII_STAGES:
+        contracts = compile_harness(root, env, lock_fds=lock_fds, harness="torii")
+        run_stages(contracts, fixture_root, env, TORII_STAGES, lock_fds)
     if NETWORK_STAGES:
         run_network_checks(root, fixture_root, env, lock_fds)
     harness = compile_harness(root, env, lock_fds=lock_fds)
     run_stages(harness, fixture_root, env, STAGES, lock_fds)
     for name, stages in (("proof", PROOF_STAGES),
-                         ("proof-flows", PROOF_FLOW_STAGES), ("torii", TORII_STAGES)):
+                         ("proof-flows", PROOF_FLOW_STAGES)):
         if stages:
             selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
             run_stages(selected_harness, fixture_root, env, stages, lock_fds)

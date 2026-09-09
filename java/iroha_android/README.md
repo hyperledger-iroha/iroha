@@ -1120,6 +1120,12 @@ paths use an exact root-relative ASCII wire spelling of at most 64 KiB, and nonc
 1...256 visible ASCII bytes (`0x21...0x7e`, with no spaces).
 Raw `witness_base64` body authentication is not exposed; multisig writes must
 use a canonical signed transaction or a closed typed signed intent.
+`prepareContractCall` requires `ToriiCanonicalRequestAuth` for the same authority
+and a configured `LocalSigningContext`. It signs the exact prepare request once
+and accepts only a canonical `QueuePlanSynced` contract payload. Keep the returned
+payload bytes and quoted fee unchanged when signing and submitting through the
+transaction API; submission failures are reconciled by transaction hash.
+
 `prepareContractCall` accepts a draft receipt only when `payload_digest_hex` is
 the exact lowercase BLAKE3-256 digest of the canonical UTF-8 JSON request
 payload. An omitted payload hashes the empty byte sequence; noncanonical hex or
