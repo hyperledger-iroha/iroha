@@ -1284,6 +1284,8 @@ struct NativeParticipantControl {
 }
 type NativeParticipantControlMap = BTreeMap<(LaneId, DataSpaceId), NativeParticipantControl>;
 enum NativeParticipantControlPreparationError {
+    /// Authenticated predecessor publication is incomplete and can resume locally.
+    PendingPredecessor(BTreeSet<usize>),
     Unavailable(BTreeSet<usize>),
     Storage(V2LaneWorkError),
 }
@@ -3253,7 +3255,7 @@ pub(crate) struct V2LaneWorkAdapter {
         BTreeMap<PeerId, CertifiedMergeSidecarGenerationHintV1>,
     committed_lane_output_cursor: usize,
     admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64, Hash)>,
-    queue_plan_admission_handoff_retry_required: bool,
+    queue_plan_admission_handoff: QueuePlanAdmissionHandoffState,
     queue_plan_admission_handoff_cursor: usize,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
@@ -4000,7 +4002,7 @@ impl V2LaneWorkAdapter {
             obsolete_merge_sidecar_generation_hints: BTreeMap::new(),
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
-            queue_plan_admission_handoff_retry_required: false,
+            queue_plan_admission_handoff: QueuePlanAdmissionHandoffState::Unobserved,
             queue_plan_admission_handoff_cursor: 0,
             merge_entries: BTreeMap::new(),
             merge_claims: BTreeMap::new(),
@@ -4353,6 +4355,9 @@ impl V2LaneWorkAdapter {
             match self.prepare_native_participant_controls(&candidates, &lane_plan.proposals) {
                 Ok(controls) => controls,
                 Err(NativeParticipantControlPreparationError::Storage(error)) => return Err(error),
+                Err(NativeParticipantControlPreparationError::PendingPredecessor(_)) => {
+                    return Ok(AutonomousProducerBatchOutcome::Pending);
+                }
                 Err(NativeParticipantControlPreparationError::Unavailable(_)) => {
                     self.release_autonomous_reservation_batch(batch)?;
                     return Ok(AutonomousProducerBatchOutcome::Released);
@@ -11339,14 +11344,28 @@ impl V2LaneWorkAdapter {
         }
         Ok(preferred_holder)
     }
-    /// Take one exact entry hash whose durable installation permits validation
-    /// of all retained bodies referencing it to retry.
-    pub(crate) fn take_completed_merge_sidecar(&mut self) -> Option<HashOf<MergeLedgerEntry>> {
+    /// Borrow one durable-sidecar readiness notification until every exact
+    /// deferred Apply owner has entered the bounded worker queue.
+    pub(crate) fn completed_merge_sidecar(&self) -> Option<HashOf<MergeLedgerEntry>> {
+        let _permit = self.output_guard.acquire()?;
+        self.completed_merge_sidecars.iter().next().copied()
+    }
+    /// Retire the borrowed readiness notification after successful worker
+    /// admission. Backpressure must leave it available for the next turn.
+    pub(crate) fn acknowledge_completed_merge_sidecar(
+        &mut self,
+        entry_hash: HashOf<MergeLedgerEntry>,
+    ) -> Result<(), V2LaneWorkError> {
         let output_guard = Arc::clone(&self.output_guard);
-        let _permit = output_guard.acquire()?;
-        let hash = self.completed_merge_sidecars.iter().next().copied()?;
-        self.completed_merge_sidecars.remove(&hash);
-        Some(hash)
+        let _permit = output_guard.acquire().ok_or_else(|| {
+            V2LaneWorkError::Persistence("sidecar retry output is closed".to_owned())
+        })?;
+        if !self.completed_merge_sidecars.remove(&entry_hash) {
+            return Err(V2LaneWorkError::Persistence(
+                "admitted sidecar retry lost its readiness notification".to_owned(),
+            ));
+        }
+        Ok(())
     }
     /// Take one exact full-entry rejection to apply to every retained body
     /// referencing the same hash.
@@ -14641,13 +14660,8 @@ impl V2LaneWorkAdapter {
         true
     }
     fn purge_queued_merge_broadcasts(&mut self) {
-        self.effects.retain(|effect| {
-            !matches!(
-                effect,
-                V2LaneWorkEffect::BroadcastMerge(_)
-                    | V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
-            )
-        });
+        self.effects
+            .retain(|effect| !matches!(effect, V2LaneWorkEffect::BroadcastMerge(_)));
         self.effect_keys = self.effects.iter().map(lane_work_effect_key).collect();
     }
     fn retain_native_amx_for_global_view(
@@ -16890,6 +16904,7 @@ impl V2LaneWorkAdapter {
             }
         }
         let mut unavailable = BTreeSet::new();
+        let mut pending_predecessor = BTreeSet::new();
         let mut controls = BTreeMap::new();
         for ((lane_id, dataspace_id), mut members) in grouped {
             let route = RoutingDecision::new(lane_id, dataspace_id);
@@ -16931,7 +16946,7 @@ impl V2LaneWorkAdapter {
                     ))
                     .map_err(NativeParticipantControlPreparationError::Storage)?
                 else {
-                    unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                    pending_predecessor.extend(members.iter().map(|(index, _, _)| *index));
                     continue;
                 };
                 let Some(lane_block_height) = previous_height.checked_add(1) else {
@@ -17032,7 +17047,7 @@ impl V2LaneWorkAdapter {
                 crate::state::NativeAmxParticipantPredecessor::FirstControl => None,
                 crate::state::NativeAmxParticipantPredecessor::Applied(hash) => Some(hash),
                 crate::state::NativeAmxParticipantPredecessor::Pending => {
-                    unavailable.extend(members.iter().map(|(index, _, _)| *index));
+                    pending_predecessor.extend(members.iter().map(|(index, _, _)| *index));
                     continue;
                 }
             };
@@ -17061,12 +17076,14 @@ impl V2LaneWorkAdapter {
                 },
             );
         }
-        if unavailable.is_empty() {
-            Ok(controls)
-        } else {
+        if !unavailable.is_empty() {
             Err(NativeParticipantControlPreparationError::Unavailable(
                 unavailable,
             ))
+        } else if !pending_predecessor.is_empty() {
+            Err(NativeParticipantControlPreparationError::PendingPredecessor(pending_predecessor))
+        } else {
+            Ok(controls)
         }
     }
     fn prepare_native_receipt(
@@ -18439,7 +18456,6 @@ impl V2LaneWorkAdapter {
         &mut self,
         active_view: wire::View,
     ) -> Result<(), V2LaneWorkError> {
-        self.queue_plan_admission_handoff_retry_required = false;
         if !self.voting_enabled {
             self.merge_entries.clear();
             self.merge_claims.clear();
@@ -18726,9 +18742,8 @@ impl V2LaneWorkAdapter {
         &mut self,
         active_view: wire::View,
     ) -> Result<bool, V2LaneWorkError> {
-        self.queue_plan_admission_handoff_retry_required = false;
         let _ = self.reconcile_pending_queue_plan_admissions(active_view)?;
-        Ok(!self.queue_plan_admission_handoff_retry_required)
+        Ok(self.queue_plan_admission_handoff.is_enqueued())
     }
 
     fn accept_merge_signature(
@@ -19345,6 +19360,12 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
             let participant_controls = self
                 .prepare_native_participant_controls(candidates, &lane_plan.proposals)
                 .map_err(|error| match error {
+                    NativeParticipantControlPreparationError::PendingPredecessor(indices) => {
+                        CandidateWorkUnavailable::new(
+                            indices,
+                            "Native AMX participant predecessor is pending",
+                        )
+                    }
                     NativeParticipantControlPreparationError::Unavailable(indices) => {
                         CandidateWorkUnavailable::new(
                             indices,
@@ -20544,6 +20565,24 @@ pub(super) mod tests {
         Kura::new_temporary_with_configured_lane_catalog(&config, &lane_config, &configured_catalog)
             .expect("initialize isolated authenticated lane-work Kura")
     }
+    #[test]
+    fn completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged() {
+        let (mut adapter, _) = fixture_with_durable_parent(wire::ConsensusMode::Npos);
+        let entry = HashOf::<MergeLedgerEntry>::from_untyped_unchecked(Hash::new(
+            b"durable deferred sidecar",
+        ));
+        adapter.completed_merge_sidecars.insert(entry);
+        for _ in 0..3 {
+            assert_eq!(adapter.completed_merge_sidecar(), Some(entry));
+            assert!(!adapter.output_guard.restart_required());
+        }
+        adapter
+            .acknowledge_completed_merge_sidecar(entry)
+            .expect("acknowledge admitted retry");
+        assert_eq!(adapter.completed_merge_sidecar(), None);
+        assert!(adapter.acknowledge_completed_merge_sidecar(entry).is_err());
+    }
+
     fn fixture_with_durable_parent(mode: wire::ConsensusMode) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         fixture_at_height_inner(mode, 9, true)
     }

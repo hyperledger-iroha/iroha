@@ -16,7 +16,17 @@ hash and ledger time remain the anchor for state and lease observations. These
 contract tests use real route and ledger code with disposable inputs; they do
 not replace the deployed four-validator consensus and public application checks.
 
-The Core gate exercises the real candidate provider with multiple routable lanes.
+The first gate compiles the dependency-free production consensus FSM directly
+with the selected Rust compiler. It lists and runs every reducer test without
+Cargo, rejecting missing, ignored, duplicated or failed cases. The four-reducer
+traces exercise reordered messages, duplicates, loss and recovery, including
+durable append before acknowledgement; they simulate authenticated I/O and do
+not replace cryptographic or network execution.
+
+The Core gate then exercises bounded worker backpressure, durable-sidecar retry
+ownership, QueuePlan handoff across view changes and inventory changes, and
+participant predecessor recovery with the exact reservation retained. It also
+exercises the real candidate provider with multiple routable lanes.
 Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
 transactions require their autonomous reservations, and actual reservation
 conflicts still defer ordinary work. A regression in any of these paths stops
@@ -30,13 +40,16 @@ the same canonical geometry. The CLI confirmation gate follows a queued hash
 through its exact Applied wire proof, retaining ambiguous expiry as pending and
 rejecting malformed or failed status responses without resubmission.
 
-The final native gate launches four validators from the freshly emitted native
+The next gate launches four validators from the freshly emitted native
 `iroha3d` binary using the same three-route fixture as the consensus integration
 suite. It requires one exact ordinary transaction to reach Applied on every
 validator. Cargo emits both node and client paths explicitly; fallback builds and
 sandbox skips are disabled. The focused `taira_consensus_contracts` harness avoids
 compiling the full consensus suite, and keeps private fixture logs in the warm
-target for failure diagnosis.
+target for failure diagnosis. Test ports use lifetime-held OS leases in an
+owner-private host runtime directory. A reserved but unbound port remains
+exclusive; process exit releases its lease without writing into the source
+tree or deleting shared lock files.
 
 For a testnet attempt stuck on an unresolved canary before edge staging,
 `iroha taira public-reset abandon` takes the original signed inventory,
@@ -60,7 +73,7 @@ release compilation retains its original sanitized environment and release
 profile. Each feature graph keeps its own Cargo cache; no test features are
 added or removed to force reuse. The first incremental run populates those
 caches, so a speed improvement must be measured on subsequent focused changes.
-The four-validator runtime check runs first, so source-staging or consensus
+The FSM and focused Core regressions precede the four-validator runtime check, so source-staging or consensus
 failures stop before compiling the independent contract harnesses. Its log
 records the actual Cargo-selected native binary paths and profiles separately
 from the later Linux release artifacts.

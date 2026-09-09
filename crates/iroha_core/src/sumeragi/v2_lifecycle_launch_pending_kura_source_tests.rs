@@ -251,7 +251,7 @@ fn apply_terminal_settlement_fails_closed_if_runtime_reopens() {
     let terminal_tail = source_region(
         source,
         "let terminal_planning_fenced =",
-        "if !terminal_planning_fenced\n            && pending_queue_plan_admission_dirty.swap",
+        "if !terminal_planning_fenced {",
     );
 
     assert_source_tokens_in_order(

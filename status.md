@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-08.
+Last updated: 2026-09-09.
 
 Iroha 3 is under active first-release implementation and qualification. The release is not qualified. Signed source checkpoints do not establish runtime readiness. This page records current findings and bounded local evidence; it is not a substitute for the release gates in [the roadmap](roadmap.md).
 
@@ -8,9 +8,9 @@ The previous dirty working copies are preserved in the [dated historical archive
 
 ## Current implementation and local evidence
 
-The latest Taira rollout failed before public cutover: daemon startup treated the QEMU executable as a directory during minimal-root attestation, so Torii never bound. A service stop during initialization also left a live nested QEMU outside its systemd unit cgroup. The exact orphan was stopped through a pidfd and native rollback completed with all four validators stopped. The directory/file fix and exact daemon-pidfd/cgroup watchdog are written. Host topology confirms bubblewrap’s retained PID1 reaper and QEMU share the private root and namespaces; compiled startup and supervisor-death validation remain pending. Prior standalone host probes did not exercise the complete daemon attestation path. No live finality, workload canary or application rollout is qualified.
+The current Taira rollout remains unqualified. The deployed candidate stalled at genesis with ordinary transactions queued; the source fixes ordinary multi-route candidate starvation and proof bounds. The native network gate then exposed source-writing fixture staging and port allocation before peers started. Fixtures now use Cargo OUT_DIR, and test ports use runtime OS leases. No public finality or application rollout is established.
 
-Candidate convergence, canaries and restart proofs precede public cutover. The preceding CLI gate passed 81 tests; that evidence predates the current runtime edits. The [previous Taira checkpoint](docs/history/2026-09-08/taira-release78-checkpoint.md) retains its exact source-era results.
+A code-first consensus review found three scheduling ownership defects: worker backpressure closed admission during deferred Apply retry; a view change or unrelated merge cleanup could strand a QueuePlan handoff; and pending Native participant evidence could terminally suppress an owned reservation. The current source retains exact retry owners and uses an explicit handoff state machine. Its dependency-free production reducer suite passed 205 tests, including four-reducer loss/reordering/restart traces, and the release runner's 82 Python/fixture checks passed. Integrated Rust regressions and the real four-validator Applied test remain required before cross-compilation and deployment.
 
 [Executable build identity](docs/build_identity.md) removes revision stamping from shared Core, Torii and telemetry libraries. The earlier controlled revision-only warm build completed in 25.073 seconds with six shared production/test artifacts cached. Diagnostic and release commands now use separate persistent Cargo targets and the same isolated registry paths; 61 helper tests and 65 CI workflow tests pass. The [retry command](docs/source/taira_retry.md) reclaims closed public payload copies before fresh deployment-capacity admission, reuses unchanged binaries, and accepts recovered native rollback history only at the completed boundary. Its 51 focused tests pass. These are scoped local checks; no new full-build timing or live release qualification is claimed.
 

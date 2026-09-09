@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -220,7 +221,24 @@ TORII_STAGES = (("routed onboarding and faucet contracts", (
     "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
 )),)
 
-CORE_STAGES = (("multi-route ordinary transaction progress", (
+CORE_STAGES = (("consensus scheduling and multi-route progress", (
+    "sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery",
+    "sumeragi::v2_worker::tests::deferred_apply_retry_full_queue_preserves_output_and_exact_task",
+    "sumeragi::v2_worker::tests::deferred_apply_retry_disconnected_or_conflicting_queue_fails_closed",
+    "sumeragi::v2_lane_work::tests::completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged",
+    "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reservations_until_participant_predecessor_repair",
+    "sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes",
+    "sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently",
+    "sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup",
     "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
     "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
     "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
@@ -422,6 +440,49 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
     run_stages(harness, fixture_root, network_env, NETWORK_STAGES, lock_fds)
 
 
+def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+    """Run every production reducer test without Cargo or adapter dependencies."""
+    compiler = env.get("RUSTC")
+    if not compiler or not Path(compiler).is_absolute():
+        raise CheckError("pure FSM checks require the coordinated pinned RUSTC")
+    target = Path(env["CARGO_TARGET_DIR"])
+    output = target / "taira-consensus-fsm-check"
+    output.mkdir(mode=0o700, exist_ok=True)
+    if output.is_symlink() or not output.is_dir():
+        raise CheckError("pure FSM output must be a direct directory in the existing target")
+    executable = output / "sumeragi-core-tests"
+    if executable.is_symlink():
+        raise CheckError("pure FSM executable cannot be a symlink")
+    started = time.monotonic()
+    print("[taira-check] start pure consensus FSM (exact production reducer)", flush=True)
+    common = dict(cwd="/", env=env, stdin=subprocess.DEVNULL, text=True,
+                  capture_output=True, check=False, pass_fds=lock_fds, timeout=120)
+    compiled = subprocess.run([compiler, "--edition=2024", "--test",
+        str(root / "crates/iroha_sumeragi_core/src/lib.rs"), "-o", str(executable)], **common)
+    if compiled.returncode:
+        sys.stderr.write(compiled.stdout + compiled.stderr)
+        raise CheckError(f"pure FSM compilation failed (exit {compiled.returncode})")
+    listing = subprocess.run([str(executable), "--list", "--format", "terse"], **common)
+    lines = listing.stdout.splitlines()
+    names = [line.removesuffix(": test") for line in lines if line.endswith(": test")]
+    if (listing.returncode or not names or len(names) != len(set(names))
+            or len(names) != len(lines) or any(not name for name in names)):
+        raise CheckError("pure FSM test census is missing, duplicated, or malformed")
+    result = subprocess.run([str(executable), "--color", "never", "--test-threads=6"], **common)
+    passed = [line.removeprefix("test ").removesuffix(" ... ok")
+              for line in result.stdout.splitlines()
+              if line.startswith("test ") and line.endswith(" ... ok")]
+    summaries = re.findall(
+        r"^test result: ok\. (\d+) passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in [^\n]+$",
+        result.stdout, re.MULTILINE)
+    if (result.returncode or len(passed) != len(names) or set(passed) != set(names)
+            or summaries != [str(len(names))]):
+        sys.stderr.write(result.stdout + result.stderr)
+        raise CheckError("pure FSM suite did not execute every listed test successfully without skips")
+    print(f"[taira-check] pure FSM PASS: {len(names)} listed, {len(passed)} passed, 0 ignored "
+          f"in {time.monotonic() - started:.1f}s", flush=True)
+
+
 def run_checks(root: Path, *, environment: dict[str, str] | None = None,
                source_commit: str | None = None, lock_fds: tuple[int, ...] = ()) -> None:
     if sys.platform not in {"darwin", "linux"}:
@@ -438,13 +499,17 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     env["IROHA_GIT_COMMIT_HASH"] = head
     print(f"[taira-check] source {head}; {root}", flush=True)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
-    # Exercise the composed runtime before the independent contract harnesses:
-    # source staging and consensus defects must not wait behind their full builds.
+    run_pure_fsm_checks(root, env, lock_fds)
+    # Fail on focused scheduling regressions before building the full node and
+    # network harness; exercise the composed runtime before unrelated contracts.
+    if CORE_STAGES:
+        core = compile_harness(root, env, lock_fds=lock_fds, harness="core")
+        run_stages(core, fixture_root, env, CORE_STAGES, lock_fds)
     if NETWORK_STAGES:
         run_network_checks(root, fixture_root, env, lock_fds)
     harness = compile_harness(root, env, lock_fds=lock_fds)
     run_stages(harness, fixture_root, env, STAGES, lock_fds)
-    for name, stages in (("core", CORE_STAGES), ("proof", PROOF_STAGES),
+    for name, stages in (("proof", PROOF_STAGES),
                          ("proof-flows", PROOF_FLOW_STAGES), ("torii", TORII_STAGES)):
         if stages:
             selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)

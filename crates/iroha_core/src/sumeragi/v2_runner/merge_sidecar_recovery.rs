@@ -46,8 +46,16 @@ fn drive_merge_sidecar_recovery(
             }
         }
     }
-    while let Some(entry_hash) = lane_work.take_completed_merge_sidecar() {
-        let _ = executor.retry_deferred_merge_sidecar(entry_hash, services)?;
+    while let Some(entry_hash) = lane_work.completed_merge_sidecar() {
+        if executor
+            .retry_deferred_merge_sidecar(entry_hash, services)?
+            .is_none()
+        {
+            // Keep the exact notification and Apply owner. Another scheduler
+            // turn can admit them after worker capacity becomes available.
+            break;
+        }
+        lane_work.acknowledge_completed_merge_sidecar(entry_hash)?;
     }
     while let Some(rejected) = lane_work.take_rejected_merge_sidecar() {
         let _ = executor.reject_deferred_merge_sidecar(

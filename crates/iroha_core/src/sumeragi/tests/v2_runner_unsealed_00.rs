@@ -711,7 +711,7 @@ fn terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite
 
     assert!(
         run_inner.contains(
-            "if !terminal_planning_fenced\n            && pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)"
+            "if !terminal_planning_fenced {\n            let active_view = activated.with_runner_runtime("
         ),
         "terminal finalization must not enqueue unrelated QueuePlan handoff output"
     );

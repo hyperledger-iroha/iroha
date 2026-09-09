@@ -548,6 +548,9 @@ fn native_apply_candidate_body(
             Err(NativeParticipantControlPreparationError::Storage(error)) => {
                 panic!("Native control storage failed: {error}")
             }
+            Err(NativeParticipantControlPreparationError::PendingPredecessor(indices)) => {
+                panic!("Native control predecessor unexpectedly pending: {indices:?}")
+            }
             Err(NativeParticipantControlPreparationError::Unavailable(indices)) => {
                 panic!("Native controls unexpectedly unavailable: {indices:?}")
             }
@@ -3109,4 +3112,188 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn autonomous_producer_retains_reservations_until_participant_predecessor_repair() {
+    #[derive(Clone)]
+    struct NativeRetryRouter(RoutingPlan);
+    impl crate::queue::LaneRouter for NativeRetryRouter {
+        fn try_route(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+        ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+            Ok(self.0.coordinator_route())
+        }
+        fn try_route_plan(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+        ) -> Result<RoutingPlan, crate::queue::RoutingResolveError> {
+            Ok(self.0.clone())
+        }
+        fn try_route_plan_with_view(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+            _: &crate::state::StateView<'_>,
+        ) -> Result<RoutingPlan, crate::queue::RoutingResolveError> {
+            Ok(self.0.clone())
+        }
+        fn try_route_plan_without_state(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+        ) -> Result<Option<RoutingPlan>, crate::queue::RoutingResolveError> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    let (mut previous_adapter, keys, participant_lane, participant_dataspace, previous) =
+        native_coordinator_after_applied_participant_fixture();
+    let parent_height = NonZeroUsize::new(previous_adapter.state.committed_height()).unwrap();
+    let parent = previous_adapter.kura.get_block(parent_height).unwrap();
+    complete_applied_ordinary_lane_sessions(&mut previous_adapter, &keys, &parent);
+    let route = previous.routing_plan.coordinator_route();
+    let slot = plan_autonomous_lane_reservation_slot(
+        previous_adapter.state.as_ref(),
+        previous_adapter.kura.as_ref(),
+        &previous_adapter.context,
+        route.lane_id,
+        route.dataspace_id,
+    )
+    .expect("coordinator predecessor is fully applied before participant interruption");
+    let key = keys
+        .iter()
+        .find(|key| key.public_key() == slot.author.public_key())
+        .unwrap()
+        .clone();
+    let state = Arc::clone(&previous_adapter.state);
+    let kura = Arc::clone(&previous_adapter.kura);
+    let context = previous_adapter.context.clone();
+    let limits = previous_adapter.limits;
+    drop(previous_adapter);
+    let mut adapter = V2LaneWorkAdapter::new_with_output_guard(
+        context,
+        slot.author.clone(),
+        key,
+        true,
+        state,
+        kura,
+        limits,
+        None,
+        None,
+        ConsensusOutputGuard::isolated(),
+    )
+    .expect("open the exact autonomous producer after predecessor application");
+    let queue = Arc::new(Queue::test_with_router_for_routes(
+        iroha_config::parameters::actual::Queue::default(),
+        &iroha_primitives::time::TimeSource::new_system(),
+        Arc::new(NativeRetryRouter(previous.routing_plan.clone())),
+        &[
+            (route.lane_id, route.dataspace_id),
+            (participant_lane, participant_dataspace),
+        ],
+    ));
+    queue.install_lane_manifests(&adapter.state.lane_manifests.read().clone());
+    queue.install_test_router_metadata_for_nexus(&adapter.state.nexus_snapshot());
+    let journals = tempfile::tempdir().unwrap();
+    queue
+        .install_lane_reservation_journal(&journals.path().join("reservations.norito"), 1024 * 1024)
+        .unwrap();
+    queue
+        .install_plan_journal(&journals.path().join("plans.norito"), 1024 * 1024, true)
+        .unwrap();
+    queue.replay_plan_journal(adapter.state.as_ref()).unwrap();
+    adapter
+        .install_lane_drain_queue(Arc::clone(&queue))
+        .unwrap();
+    enqueue_autonomous_test_transactions(&adapter, &queue, route.lane_id, route.dataspace_id, 1);
+    let reservations = queue
+        .reserve_transactions_for_lane_bounded(
+            adapter.state.as_ref(),
+            slot.selection_authorization().unwrap(),
+            LaneQueueReservationSelectionLimits {
+                max_transactions: NonZeroUsize::new(1).unwrap(),
+                max_scan: NonZeroUsize::new(1).unwrap(),
+                max_encoded_bytes: NonZeroU64::new(u64::MAX).unwrap(),
+                max_gas: NonZeroU64::new(u64::MAX).unwrap(),
+            },
+            &BTreeSet::new(),
+            LaneQueueReservationRoutingMode::AnyCoordinatorPlan,
+        )
+        .unwrap();
+    assert_eq!(reservations.len(), 1);
+    assert!(matches!(
+        reservations[0].routing_plan(),
+        RoutingPlan::NativeAmx(_)
+    ));
+    let owned = queue.live_lane_reservations();
+    adapter.pending_autonomous_reservation_batches.insert(
+        (route.lane_id, route.dataspace_id),
+        PendingAutonomousReservationBatch {
+            slot,
+            reservations,
+            envelope_byte_limit: 4 * 1024 * 1024,
+        },
+    );
+    let active_view = (0..2 * adapter
+        .state
+        .consensus_lane_routes_at_height(adapter.context.height)
+        .len() as u64)
+        .find(|view| {
+            adapter.autonomous_native_coordinator_for_view(*view)
+                == Some((route.lane_id, route.dataspace_id))
+        })
+        .expect("the deterministic Native coordinator rotation selects this route");
+    let receipt_path = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(participant_lane)
+        .unwrap()
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts")
+        .join("native_amx_receipt_v1_00000000000000000001.norito");
+    let receipt = std::fs::read(&receipt_path).unwrap();
+    std::fs::remove_file(&receipt_path).unwrap();
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(active_view, autonomous_test_candidate_limits(1, 1))
+        .unwrap();
+    assert_eq!(queue.live_lane_reservations(), owned);
+    assert!(
+        adapter
+            .pending_autonomous_reservation_batches
+            .contains_key(&(route.lane_id, route.dataspace_id))
+    );
+    assert!(
+        !adapter
+            .autonomous_production_attempted_routes
+            .contains(&(route.lane_id, route.dataspace_id))
+    );
+    assert!(
+        adapter.native_requests.is_empty(),
+        "no participant request precedes its exact predecessor"
+    );
+    assert!(!adapter.output_guard.restart_required());
+
+    std::fs::write(&receipt_path, receipt).unwrap();
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(active_view, autonomous_test_candidate_limits(1, 1))
+        .unwrap();
+    assert_eq!(queue.live_lane_reservations(), owned);
+    assert!(
+        adapter
+            .pending_autonomous_reservation_batches
+            .contains_key(&(route.lane_id, route.dataspace_id))
+    );
+    assert!(
+        !adapter.native_requests.is_empty(),
+        "the retained batch resumes actual Native request production after repair"
+    );
+    assert!(
+        !adapter
+            .autonomous_production_attempted_routes
+            .contains(&(route.lane_id, route.dataspace_id))
+    );
+    assert!(!adapter.output_guard.restart_required());
 }

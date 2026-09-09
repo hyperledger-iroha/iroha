@@ -1439,9 +1439,7 @@ fn run_lifecycle_active_height(
             return Err(V2RunnerError::RestartRequired);
         }
 
-        if !terminal_planning_fenced
-            && pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)
-        {
+        if !terminal_planning_fenced {
             let active_view = activated.with_runner_runtime(
                 &mut active_runner,
                 |_owner, executor, _services, _local_proposal| {
@@ -1450,8 +1448,12 @@ fn run_lifecycle_active_height(
                         .map(|directive| directive.tag().view())
                 },
             )?;
-            if !lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)? {
-                pending_queue_plan_admission_dirty.store(true, Ordering::Release);
+            if pending_queue_plan_admission_dirty.swap(false, Ordering::AcqRel)
+                || lane_work.queue_plan_admission_handoffs_need_refresh(active_view)?
+            {
+                // Pending capacity and a changed view are explicit handoff
+                // states. A coalesced arrival is only an inventory wakeup.
+                lane_work.refresh_pending_queue_plan_admission_handoffs(active_view)?;
             }
         }
 

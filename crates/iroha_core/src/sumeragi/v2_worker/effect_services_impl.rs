@@ -633,6 +633,32 @@ impl V2EffectServices for ProductionV2Services {
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error> {
         self.enqueue_fail_stop_io(V2IoCommand::Apply(task))
     }
+    fn try_enqueue_apply(&mut self, task: ApplyTask) -> Result<bool, Self::Error> {
+        let output_guard = Arc::clone(&self.output_guard);
+        let operation = output_guard
+            .begin_fail_stop_operation()
+            .ok_or_else(|| "Sumeragi v2 consensus requires process restart".to_owned())?;
+        let admitted = match self.io()?.try_enqueue(V2IoCommand::Apply(task)) {
+            Ok(()) => true,
+            Err(V2IoTrySendError::Full(_)) => false,
+            Err(V2IoTrySendError::Disconnected(_)) => {
+                return Err("Sumeragi v2 I/O worker is disconnected".to_owned());
+            }
+            Err(V2IoTrySendError::ConflictingWorkId { work_id, .. }) => {
+                return Err(format!(
+                    "Sumeragi v2 I/O work {} was reused by a conflicting command",
+                    work_id.get()
+                ));
+            }
+            Err(V2IoTrySendError::UnreservedLifecycleDecisionApply { .. }) => {
+                return Err("generic Apply retry changed its worker command kind".to_owned());
+            }
+        };
+        // Full is a scheduling condition before any publication, not failure
+        // of a durable operation. The executor retains the exact retry owner.
+        operation.complete();
+        Ok(admitted)
+    }
     fn entered_view(
         &mut self,
         tag: EventTag,

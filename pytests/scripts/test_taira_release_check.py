@@ -6,6 +6,7 @@ import io
 import json
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -20,6 +21,11 @@ SPEC.loader.exec_module(gate)
 
 
 class EarlyReleaseCheckTests(unittest.TestCase):
+    def setUp(self):
+        mock = patch.object(gate, "run_pure_fsm_checks")
+        self.pure_fsm = mock.start()
+        self.addCleanup(mock.stop)
+
     def test_command_reuses_native_cargo_lane_and_does_not_run_full_suite(self):
         self.assertEqual(gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}), [
             "/fixed/cargo", "--config", "/repo/.cargo/config.toml", "test",
@@ -193,14 +199,14 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_failed_core_progress_stops_before_torii_or_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         output = io.StringIO()
-        with patch.object(gate, "compile_harness", side_effect=["/warm/cli", "/warm/core"]) as compile, \
+        with patch.object(gate, "compile_harness", return_value="/warm/core") as compile, \
              patch.object(gate, "run_network_checks") as network, \
-             patch.object(gate, "run_stages", side_effect=[None, gate.CheckError("ordinary transaction stalled")]) as run, \
+             patch.object(gate, "run_stages", side_effect=gate.CheckError("ordinary transaction stalled")) as run, \
              contextlib.redirect_stdout(output):
             with self.assertRaisesRegex(gate.CheckError, "ordinary transaction stalled"):
                 gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
-        self.assertEqual(compile.call_count, 2)
-        network.assert_called_once()
+        self.assertEqual(compile.call_count, 1)
+        network.assert_not_called()
         self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harness": "core"})
         self.assertEqual(run.call_args.args[3], gate.CORE_STAGES)
         self.assertEqual(run.call_args.args[4], (77,))
@@ -209,12 +215,15 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_network_failure_stops_before_independent_harness_builds(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         with patch.object(gate, "run_network_checks", side_effect=gate.CheckError("consensus stalled")) as network, \
-             patch.object(gate, "compile_harness") as compile, contextlib.redirect_stdout(io.StringIO()):
+             patch.object(gate, "compile_harness", return_value="/warm/core") as compile, \
+             patch.object(gate, "run_stages") as stages, contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(gate.CheckError, "consensus stalled"):
                 gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
         network.assert_called_once_with(Path("/frozen"), Path("/warm"),
             env | {"VERGEN_GIT_SHA": "a" * 40, "IROHA_GIT_COMMIT_HASH": "a" * 40}, (77,))
-        compile.assert_not_called()
+        compile.assert_called_once()
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harness": "core"})
+        stages.assert_called_once()
 
     def test_unisolated_low_level_check_is_rejected_before_git_or_cargo(self):
         with patch.object(gate.subprocess, "check_output") as git, patch.object(gate, "compile_harness") as compile:
@@ -260,6 +269,86 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(selected["TEST_NETWORK_TMP_DIR"], "/warm/private-fixture")
         self.assertEqual(run.call_args.args[3:], (gate.NETWORK_STAGES, (77, 88)))
         self.assertEqual(fixture.call_args.kwargs["dir"], Path("/warm"))
+
+
+class PureFsmGateTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.target = Path(self.directory.name).resolve()
+        self.env = {"RUSTC": "/pinned/rustc", "CARGO_TARGET_DIR": str(self.target)}
+
+    @staticmethod
+    def results(output=None, code=0):
+        return [subprocess.CompletedProcess([], 0, "", ""),
+                subprocess.CompletedProcess([], 0, "one: test\ntwo: test\n", ""),
+                subprocess.CompletedProcess([], code, output if output is not None else
+                    "test two ... ok\ntest one ... ok\n\ntest result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s\n", "")]
+
+    def test_exact_production_source_all_tests_and_lock_custody(self):
+        output = io.StringIO()
+        with patch.object(gate.subprocess, "run", side_effect=self.results()) as run, contextlib.redirect_stdout(output):
+            gate.run_pure_fsm_checks(Path("/frozen"), self.env, (77, 88))
+        executable = str(self.target / "taira-consensus-fsm-check/sumeragi-core-tests")
+        self.assertEqual(run.call_args_list[0].args[0], ["/pinned/rustc", "--edition=2024", "--test",
+            "/frozen/crates/iroha_sumeragi_core/src/lib.rs", "-o", executable])
+        self.assertEqual(run.call_args_list[1].args[0], [executable, "--list", "--format", "terse"])
+        self.assertEqual(run.call_args_list[2].args[0], [executable, "--color", "never", "--test-threads=6"])
+        for call in run.call_args_list:
+            self.assertEqual(call.kwargs["pass_fds"], (77, 88))
+            self.assertEqual(call.kwargs["env"], self.env)
+            self.assertEqual(call.kwargs["cwd"], "/")
+        self.assertIn("pure FSM PASS: 2 listed, 2 passed, 0 ignored", output.getvalue())
+        self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_empty_duplicate_or_malformed_census_never_executes_suite(self):
+        for listing in ("", "one: test\none: test\n", "one: test\nother: benchmark\n"):
+            results = self.results(); results[1] = subprocess.CompletedProcess([], 0, listing, "")
+            with patch.object(gate.subprocess, "run", side_effect=results) as run, contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, "census"):
+                    gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+            self.assertEqual(run.call_count, 2)
+
+    def test_partial_ignored_substituted_duplicate_and_failed_results_rejected(self):
+        good = self.results()[-1].stdout
+        cases = [(good.replace("test two ... ok\n", ""), 0),
+                 (good.replace("test two ... ok", "test other ... ok"), 0),
+                 (good + "test one ... ok\n", 0),
+                 (good.replace("2 passed; 0 failed; 0 ignored", "1 passed; 0 failed; 1 ignored"), 0),
+                 (good, 101)]
+        for text, code in cases:
+            with patch.object(gate.subprocess, "run", side_effect=self.results(text, code)), \
+                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, "without skips"):
+                    gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+
+    def test_compiler_failure_never_runs_stale_output(self):
+        with patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", "compile failure")) as run, \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            with self.assertRaisesRegex(gate.CheckError, "compilation failed"):
+                gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+        self.assertEqual(run.call_count, 1)
+
+    def test_fsm_failure_precedes_any_native_network_or_cargo_build(self):
+        env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
+        with patch.object(gate, "run_pure_fsm_checks", side_effect=gate.CheckError("FSM failed")) as fsm, \
+             patch.object(gate, "run_network_checks") as network, patch.object(gate, "compile_harness") as compile, \
+             contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(gate.CheckError, "FSM failed"):
+                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+        fsm.assert_called_once()
+        self.assertEqual(fsm.call_args.args[2], (77,))
+        network.assert_not_called(); compile.assert_not_called()
+
+    def test_unpinned_compiler_and_symlink_output_rejected_before_compilation(self):
+        with patch.object(gate.subprocess, "run") as run:
+            for compiler in ("rustc", ""):
+                with self.assertRaisesRegex(gate.CheckError, "pinned RUSTC"):
+                    gate.run_pure_fsm_checks(Path("/frozen"), self.env | {"RUSTC": compiler}, ())
+            (self.target / "taira-consensus-fsm-check").symlink_to(self.target, target_is_directory=True)
+            with self.assertRaisesRegex(gate.CheckError, "direct directory"):
+                gate.run_pure_fsm_checks(Path("/frozen"), self.env, ())
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

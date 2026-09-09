@@ -5721,7 +5721,6 @@ dependencies = [
  "toml 0.9.12+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
- "unique_port",
  "url",
 ]
 
@@ -11713,15 +11712,6 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
-
-[[package]]
-name = "unique_port"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3f903132efabcb4242e0bbf16aedb2c3867526e42126b6ed3cb1b0bc4577708"
-dependencies = [
- "once_cell",
-]
 
 [[package]]
 name = "universal-hash"
