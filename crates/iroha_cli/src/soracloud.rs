@@ -105,7 +105,6 @@ use iroha::{
         },
         transaction::{
             Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
-            TransactionBuilder,
         },
     },
 };
@@ -16477,11 +16476,6 @@ fn prepare_built_sorafs_manifest_registration(
             binding.metadata(operation)?,
         ))
         .wrap_err("failed to build exact SoraFS pin-registration payload")?;
-    let payload = TransactionBuilder::from_payload(payload)
-        .wrap_err("failed to reconstruct exact SoraFS pin-registration payload")?
-        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
-        .into_payload()
-        .wrap_err("failed to finalize exact SoraFS pin-registration payload")?;
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact SoraFS pin-registration payload")?;
@@ -19082,6 +19076,11 @@ impl PreparedSoracloudTransactionV1 {
         if actual_hash != self.tx_hash_hex {
             return Err(eyre!(
                 "prepared Soracloud transaction hash does not match its exact wire bytes"
+            ));
+        }
+        if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+            return Err(eyre!(
+                "prepared Soracloud public submission requires signature-bound QueuePlanSynced admission"
             ));
         }
         if transaction.fee_payment_intent() != &self.fee_payment {
@@ -29366,6 +29365,43 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         assert_eq!(prepared.fee_payment, requested);
         assert_eq!(prepared.fee_quote.intent, requested);
         assert_eq!(prepared.fee_payment.sponsor_program(), Some((&sponsor, 7)));
+        let transaction = prepared
+            .decode_and_validate()
+            .expect("prepared public pin transaction");
+        assert_eq!(
+            transaction.admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "every prepared pin is submitted through the public transaction API"
+        );
+        let requests = server.requests();
+        let quote_request = requests
+            .iter()
+            .find(|request| request.path == iroha_torii_shared::uri::FEES_QUOTE)
+            .expect("exact pin fee-quote request");
+        let quoted: FeeQuoteWireRequest =
+            json::from_slice(&quote_request.body).expect("decode pin fee-quote request");
+        assert_eq!(
+            quoted.payload.admission_intent,
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "the public admission intent must already be bound during fee quoting"
+        );
+        let ordinary_transaction =
+            iroha::data_model::transaction::TransactionBuilder::from_payload(
+                transaction.payload().clone(),
+            )
+            .expect("reconstruct exact pin payload")
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+            .try_sign(config.key_pair.private_key())
+            .expect("sign genuinely Ordinary pin payload");
+        let mut ordinary = prepared.clone();
+        ordinary.wire = ordinary_transaction
+            .encode_wire_v1()
+            .expect("encode Ordinary pin transaction");
+        ordinary.tx_hash_hex = hex::encode(ordinary_transaction.hash().as_ref());
+        let error = submit_prepared_soracloud_transaction(&config, "://invalid", 1, &ordinary)
+            .expect_err("Ordinary prepared public submissions must fail before HTTP setup");
+        assert!(error.to_string().contains("QueuePlanSynced"));
+        assert_eq!(server.requests().len(), requests.len());
         assert!(prepared.tx_hash_hex.as_bytes().last().is_some_and(|byte| {
             matches!(byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
         }));

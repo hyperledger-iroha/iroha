@@ -1,4 +1,4 @@
-//! Mandatory four-validator Ordinary-transaction qualification with production NPoS/DA defaults.
+//! Mandatory four-validator public-transaction qualification with production NPoS/DA defaults.
 //! Requires a prebuilt native daemon; sandbox denials and missing peers always fail.
 use color_eyre::eyre::{self, Result, WrapErr, ensure, eyre};
 use futures::future::try_join_all;
@@ -17,7 +17,7 @@ use tokio::time::{Instant, sleep, timeout, timeout_at};
 mod multiroute;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<()> {
+async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()> {
     init_instruction_registry();
     for variable in ["TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA"] {
         let binary = std::env::var_os(variable)
@@ -33,7 +33,7 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
         tokio::task::spawn_blocking(|| {
             multiroute::network_builder()
                 .with_base_seed_if_unset(stringify!(
-                    four_peer_multiroute_ordinary_transaction_reaches_applied
+                    four_peer_multiroute_public_transaction_reaches_applied
                 ))
                 .build()
         }),
@@ -49,7 +49,6 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
         })
         .await
         .wrap_err("four-peer startup exceeded its deadline")??;
-    let result = timeout(Duration::from_secs(90), async {
         ensure!(network.peers().len() == 4, "the fixture must start all four validators");
         let initial = try_join_all(network.peers().iter().map(|peer| async move {
             let mut client = peer.client().client().clone();
@@ -59,16 +58,17 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
         let mut client = network.client().client().clone();
         client.transaction_status_timeout = Duration::from_secs(75);
-        client.torii_request_timeout = Duration::from_secs(5);
+        // Public QueuePlan certification uses the SDK's routed request budget.
+        client.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;
         let account = client.account_client()?;
-        // The SDK draft defaults to QueuePlanSynced. Explicit Ordinary admission is the
-        // contract under test: autonomous lanes must not starve the global work provider.
+        // Public Torii ingress requires signature-bound QueuePlanSynced admission.
+        // Internal Ordinary work has separate Core candidate-provider regressions.
         let mut payload = account.prepare_transaction(
             AccountTransactionDraft::new(
-                vec![InstructionBox::from(Log::new(Level::INFO, "strict Taira ordinary first transaction".to_owned()))],
+                vec![InstructionBox::from(Log::new(Level::INFO, "strict Taira public first transaction".to_owned()))],
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ).with_admission_intent(TransactionAdmissionIntent::Ordinary),
+            ).with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
         )?;
         let quote = account.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload }).await?;
         ensure!(payload.fee_payment.has_same_payer_and_gas_bound(&quote.intent), "fee quote changed the selected payer or gas bound");
@@ -76,13 +76,16 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
         let transaction = account.sign_transaction(payload)?;
         let expected_hash = transaction.hash();
         let submitted_hash = account.submit_transaction_and_wait(&transaction).await
-            .wrap_err("the exact Ordinary transaction did not reach state-resolved Applied")?;
+            .wrap_err("the exact public transaction did not reach state-resolved Applied")?;
         ensure!(submitted_hash == expected_hash, "submission returned a different signed transaction hash");
         let expected_hex = expected_hash
             .as_ref()
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
+        // The all-peer observation deadline starts after SDK reconciliation;
+        // it must not cancel a potentially durable public admission.
+        let result = timeout(Duration::from_secs(90), async {
         loop {
             let observations = try_join_all(network.peers().iter().map(|peer| async move {
                 let mut client = peer.client().client().clone();
@@ -107,15 +110,15 @@ async fn four_peer_multiroute_ordinary_transaction_reaches_applied() -> Result<(
             if all_applied {
                 let applied_height = observations[0].1.as_ref().unwrap().status.block_height;
                 ensure!(observations.iter().all(|(_, global, local)| global.as_ref().unwrap().status.block_height == applied_height && local.as_ref().unwrap().status.block_height == applied_height), "peers disagree on the exact transaction's applied height");
-                eprintln!("Taira four-peer Ordinary transaction Applied in local and global state: hash={expected_hex}, height={applied_height:?}, peer_heights={:?}", observations.iter().map(|(height, _, _)| *height).collect::<Vec<_>>());
+                eprintln!("Taira four-peer public transaction Applied in local and global state: hash={expected_hex}, height={applied_height:?}, peer_heights={:?}", observations.iter().map(|(height, _, _)| *height).collect::<Vec<_>>());
                 return Ok(());
             }
-            eprintln!("waiting for all four peers to apply exact Ordinary transaction {expected_hex}: {observations:?}");
+            eprintln!("waiting for all four peers to apply exact public transaction {expected_hex}: {observations:?}");
             sleep(Duration::from_millis(200)).await;
         }
     }).await;
         result.map_err(|_| {
-            eyre!("four-peer Ordinary transaction confirmation exceeded its fixed 90-second deadline")
+            eyre!("four-peer public transaction observation exceeded its fixed 90-second deadline")
         })?
     }
     .await;

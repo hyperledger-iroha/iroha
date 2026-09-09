@@ -96,6 +96,7 @@ STAGES = (
     ("generated stage through frozen consumer", (
         "soracloud::tests::taira_inrou_workspace_generator_emits_exact_private_deploy_layout",
         "soracloud::tests::taira_stage_reads_require_private_custody_for_prepared_and_frozen_files",
+        "soracloud::tests::prepared_inrou_pin_preserves_exact_sponsor_fee_identity",
     )),
     ("preseed receipt ordering", (
         "taira_public_reset::host::tests::preseed_receipt_targets_follow_receipt_order_for_reversed_stores",
@@ -261,7 +262,7 @@ PROOF_FLOW_STAGES = (("default proof production and verification", (
 )),)
 
 NETWORK_STAGES = (("four-validator multi-route transaction commit", (
-    "four_peer_multiroute_ordinary_transaction_reaches_applied",
+    "four_peer_multiroute_public_transaction_reaches_applied",
 )),)
 
 # Four peers use the shared test-network 1 GiB/node cap. Keep another 4 GiB

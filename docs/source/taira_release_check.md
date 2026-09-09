@@ -42,11 +42,17 @@ rejecting malformed or failed status responses without resubmission.
 
 The next gate launches four validators from the freshly emitted native
 `iroha3d` binary using the same three-route fixture as the consensus integration
-suite. It requires one exact ordinary transaction to reach state-resolved Applied
+suite. It submits a signature-bound `QueuePlanSynced` public transaction, as
+required by public Torii admission, and requires state-resolved Applied
 in both local and global status on every validator at the same committed height.
+The CLI gate also checks that prepared Inrou pin operations preserve sponsored
+fees and the public QueuePlanSynced intent through signing and replay validation.
+Dedicated service-owned Ordinary admission remains a separate contract.
 Global status can query other peers, so only the additional local observation
 establishes each validator's own application. Peer clients ignore ambient client
 identity and endpoint overrides; status observations have five-second requests.
+Public submission retains the SDK's routed request budget and reconciles its
+original hash before the separate 90-second all-peer observation phase.
 Cargo emits both node and client paths explicitly; fallback builds and
 sandbox skips are disabled. The focused `taira_consensus_contracts` harness avoids
 compiling the full consensus suite, and keeps private fixture logs in the warm

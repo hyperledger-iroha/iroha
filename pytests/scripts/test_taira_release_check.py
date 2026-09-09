@@ -223,9 +223,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         output = io.StringIO()
         with patch.object(gate, "compile_harness", return_value="/warm/core") as compile, \
              patch.object(gate, "run_network_checks") as network, \
-             patch.object(gate, "run_stages", side_effect=gate.CheckError("ordinary transaction stalled")) as run, \
+             patch.object(gate, "run_stages", side_effect=gate.CheckError("public transaction stalled")) as run, \
              contextlib.redirect_stdout(output):
-            with self.assertRaisesRegex(gate.CheckError, "ordinary transaction stalled"):
+            with self.assertRaisesRegex(gate.CheckError, "public transaction stalled"):
                 gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)
         network.assert_not_called()
