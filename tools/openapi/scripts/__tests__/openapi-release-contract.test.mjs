@@ -552,7 +552,7 @@ test('OpenAPI owner commands stage out of tree through the compliant wrapper', a
   assert.match(readme, /must provide both/);
   assert.match(
     bundleEntry[0],
-    /IROHA_OPENAPI_STAGE:\?set an existing absolute private \/private\/tmp <run>\/artifacts\/<stage>/,
+    /IROHA_OPENAPI_STAGE:\?set an existing empty absolute private \/private\/tmp <run>\/artifacts\/<stage>/,
   );
   assert.match(
     bundleEntry[0],

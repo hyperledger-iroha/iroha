@@ -465,23 +465,30 @@ def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...
     return _build_harnesses(root, command, env, (harness,), lock_fds)[harness]
 
 
-def compile_library_harnesses(root: Path, env: dict[str, str], *,
-                              harnesses: tuple[str, ...],
-                              lock_fds: tuple[int, ...] = ()) -> dict[str, str]:
-    """Unify selected library dependencies once, retaining every default feature."""
+def compile_test_harnesses(root: Path, env: dict[str, str], *,
+                          harnesses: tuple[str, ...],
+                          lock_fds: tuple[int, ...] = ()) -> dict[str, str]:
+    """Build selected library and integration harnesses with one feature graph."""
     if not harnesses or len(harnesses) != len(set(harnesses)):
-        raise CheckError("native library batch requires distinct harness selections")
-    selection: list[str] = []
+        raise CheckError("native test batch requires distinct harness selections")
+    packages: list[str] = []
+    targets: list[str] = []
     for harness in harnesses:
         target = HARNESS_TARGETS.get(harness)
         if target is None:
             raise CheckError("invalid native regression harness selection")
-        _, _, kind, arguments = target
-        if (kind != "lib" or len(arguments) != 3
-                or arguments[0] != "-p" or arguments[-1] != "--lib"):
-            raise CheckError("native library batch requires explicit library packages")
-        selection.extend(arguments[:-1])
-    command = _compile_command(root, env, [*selection, "--lib"])
+        _, name, kind, arguments = target
+        if kind == "lib" and len(arguments) == 3 and arguments == ["-p", arguments[1], "--lib"]:
+            if "--lib" not in targets:
+                targets.append("--lib")
+        elif kind == "test" and len(arguments) == 4 and arguments == ["-p", arguments[1], "--test", name]:
+            targets.extend(["--test", name])
+        else:
+            raise CheckError("native test batch requires explicit library or integration targets")
+        if arguments[1] not in packages:
+            packages.append(arguments[1])
+    selection = [argument for package in packages for argument in ("-p", package)]
+    command = _compile_command(root, env, [*selection, *targets])
     return _build_harnesses(root, command, env, harnesses, lock_fds)
 
 
@@ -755,9 +762,9 @@ def run_config_checks(root: Path, fixture_root: Path, env: dict[str, str],
         run_stages(harness, fixture_root, env, CONFIG_STAGES, lock_fds)
 
 
-def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
+                       *, harness: str) -> None:
     binaries = compile_network_binaries(root, env, lock_fds)
-    harness = compile_harness(root, env, lock_fds=lock_fds, harness="network")
     require_network_fixture_capacity(fixture_root)
     # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
     directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
@@ -864,22 +871,24 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
     run_config_checks(root, fixture_root, env, lock_fds)
-    # Resolve the shared library graph once. Keep logical regression order and
-    # stop before daemon startup if any selected library stage fails.
-    library_stages = tuple((name, stages) for name, stages in (
+    # Build all early library/HTTP checks and the network harness in one graph.
+    # Adding named test targets from these same packages preserves default and
+    # dev-dependency feature unification. Node/CLI binaries wait for early checks.
+    early_stages = tuple((name, stages) for name, stages in (
         ("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES), ("core", CORE_STAGES),
         ("test-network", TEST_NETWORK_STAGES),
-        ("client", CLIENT_STAGES), ("torii-unit", TORII_UNIT_STAGES)) if stages)
-    if library_stages:
-        libraries = compile_library_harnesses(root, env, lock_fds=lock_fds,
-                                             harnesses=tuple(name for name, _ in library_stages))
-        for name, stages in library_stages:
-            run_stages(libraries[name], fixture_root, env, stages, lock_fds)
-    if TORII_STAGES:
-        contracts = compile_harness(root, env, lock_fds=lock_fds, harness="torii")
-        run_stages(contracts, fixture_root, env, TORII_STAGES, lock_fds)
+        ("client", CLIENT_STAGES), ("torii-unit", TORII_UNIT_STAGES),
+        ("torii", TORII_STAGES)) if stages)
+    selections = tuple(name for name, _ in early_stages)
     if NETWORK_STAGES:
-        run_network_checks(root, fixture_root, env, lock_fds)
+        selections += ("network",)
+    if selections:
+        harnesses = compile_test_harnesses(root, env, lock_fds=lock_fds,
+                                          harnesses=selections)
+        for name, stages in early_stages:
+            run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+        if NETWORK_STAGES:
+            run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
     harness = compile_harness(root, env, lock_fds=lock_fds)
     run_stages(harness, fixture_root, env, STAGES, lock_fds)
     for name, stages in (("proof", PROOF_STAGES),

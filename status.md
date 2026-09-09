@@ -8,40 +8,11 @@ The previous dirty working copies are preserved in the [dated historical archive
 
 ## Current implementation and local evidence
 
-The current Taira rollout remains unqualified. The latest native run connected
-all four validators and applied genesis on each, then failed to observe the exact
-public QueuePlan transaction as Applied within its admission deadline. It passed
-205 dependency-free FSM tests, six shared lifecycle source checks, six crypto,
-17 P2P, 49 Core and seven configuration/fixture regressions. Native node/CLI and
-network harness builds completed; later CLI, proof and Torii gates were not
-reached. No new Linux artifact or public rollout is qualified by that run.
+The current Taira rollout remains unqualified. The latest native preparation passed 205 dependency-free FSM tests, six shared lifecycle checks, four configuration checks, six crypto, 17 P2P, 61 Core, three validator-fixture, seven Rust SDK and eight Torii unit regressions. Its Torii HTTP fixture build then failed on a removed MIME constant and an owned transaction passed to a borrowed API; both fixture calls are corrected. HTTP execution, four-validator application, later CLI/proof gates and Linux preparation remain pending. An earlier run connected all four validators and applied genesis but did not observe the exact public QueuePlan transaction as Applied before its deadline.
 
-Source-first integration review found repeated certificate authentication under
-the State publication fence, including a retained log of a 1.9-second StateView.
-The maintained fix authenticates immutable bytes once before the fence and retains
-fresh history, committee, route, incarnation and application checks under the
-coherent view. Review also found public contract drafts and SDK consumers using
-Ordinary intent despite strict QueuePlan public admission, detached submissions
-reconstructing signed payloads, and response serializers omitting required null
-fields. The runtime, Rust SDK, Torii fixtures, threshold escrow and JavaScript,
-Python, Swift, Kotlin/Java and C# consumers are corrected together. The C# request
-no longer exposes a private-key JSON field. The Rust changes have not yet passed
-execution checks. JavaScript focused tests pass 92 cases; Kotlin/JVM tests pass
-24, including a Java caller and real request signatures. C# passes 291 focused
-cases with the existing ABI-23 native bridge. Seven offline OpenAPI tests pass;
-all three spec copies now agree, while real generator metadata replay remains
-pending compilation. Three isolated Python
-checks pass; full Python HTTP and Swift runtime validation need their missing
-ABI-23 native artifacts.
+Source-first integration review found repeated certificate authentication under the State publication fence. The corrected path authenticates immutable bytes once before the fence and retains fresh history, committee, route, incarnation and application checks under the coherent view; its focused Core checks now pass. Public contract drafts, detached payload retention, explicit response nulls and Rust SDK execution also pass their focused native checks. JavaScript passes 92 focused cases, Kotlin/JVM passes 24 including a Java caller and real request signatures, and C# passes 291 with the existing ABI-23 bridge. Three isolated Python checks pass; full Python HTTP and Swift runtime validation still need missing ABI-23 native artifacts.
 
-The maintained release runner now tests production configuration defaults before
-the Core build and copies native artifacts under Cargo profile locks before
-execution, so concurrent builds cannot replace a selected binary. The runner and
-release helper selection passed 112 Python tests and 84 subtests. Cargo wrapper
-and linker guards passed 102 tests. The next candidate must pass the full selected native
-suite, exact public application on all four peers, Linux preparation, reset and
-restart canaries, public health and application connectivity. No readiness claim
-is inferred from source review or a signed checkpoint.
+The unsigned OpenAPI metadata generator now reads the clean authored authority through Node without rebuilding Rust. It checks all three specification copies, records actual source provenance and states that runtime projection was not executed. Its tooling passes 154 Node and 77 Python tests; native Torii schema checks pass separately. Actual metadata publication remains pending the clean tooling checkpoint. The native runner now builds library, HTTP and consensus test harnesses with one shared package/feature graph; separate graph resolution had repeated expensive dependency compilation. The maintained runner and release helper checks pass 113 tests and 85 subtests. Production configuration checks still run first, and selected executables remain immutable under Cargo profile locks. The next candidate must pass exact public application on all four peers, Linux preparation, reset and restart canaries, public health and application connectivity.
 
 [Executable build identity](docs/build_identity.md) removes revision stamping from shared Core, Torii and telemetry libraries. The earlier controlled revision-only warm build completed in 25.073 seconds with six shared production/test artifacts cached. Diagnostic and release commands now use separate persistent Cargo targets and the same isolated registry paths; 61 helper tests and 65 CI workflow tests pass. The [retry command](docs/source/taira_retry.md) reclaims closed public payload copies before fresh deployment-capacity admission, reuses unchanged binaries, and accepts recovered native rollback history only at the completed boundary. Its 51 focused tests pass. These are scoped local checks; no new full-build timing or live release qualification is claimed.
 

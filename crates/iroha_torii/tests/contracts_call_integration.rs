@@ -567,7 +567,7 @@ async fn prepare_contract_execution(
                 .method("POST")
                 .uri("/v1/contracts/call")
                 .header(http::header::CONTENT_TYPE, "application/json")
-                .header(http::header::ACCEPT, iroha_torii_shared::NORITO_MIME_TYPE)
+                .header(http::header::ACCEPT, "application/x-norito")
                 .body(axum::body::Body::from(
                     json::to_json(&request).expect("detached request JSON"),
                 ))
@@ -612,7 +612,6 @@ fn execute_prepared_contract_in_test_overlay(
     prepared: &PreparedContractExecution,
     execution_height: u64,
 ) {
-    use iroha_core::state::StateReadOnly as _;
     let original_hash = prepared.transaction.hash();
     prepared
         .transaction
@@ -634,7 +633,9 @@ fn execute_prepared_contract_in_test_overlay(
     let mut block = state.block(header);
     let mut cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let (entrypoint, result) = block.validate_transaction(
-        iroha_core::tx::AcceptedTransaction::new_unchecked(prepared.transaction.clone()),
+        iroha_core::tx::AcceptedTransaction::new_unchecked(std::borrow::Cow::Borrowed(
+            &prepared.transaction,
+        )),
         &mut cache,
     );
     assert_eq!(entrypoint, prepared.transaction.hash_as_entrypoint());
