@@ -102,6 +102,17 @@ enum AuthenticatedGenesisStoreReplayDispositionV1 {
     Retry(RuntimeEffectOwnership),
 }
 
+/// Physical lifecycle ownership of a durable Validate retry fingerprint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DurableValidateRetryLifecycleStateV1 {
+    /// One move-only admission has not acquired its registry ordinal yet.
+    PendingAdmission,
+    /// One registry row owns execution and completion.
+    Bound(u128),
+    /// The exact row durably ended without a successor; no executable owner remains.
+    ResolvedNoSuccessor,
+}
+
 /// Inert runtime fingerprint for one replay-authorized Validate after its
 /// move-only admission owner transfers into the lifecycle registry.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -112,7 +123,7 @@ enum DurableValidateRetrySealV1 {
         effect: AdapterEffect,
         ownership: RuntimeEffectOwnership,
         store_terminal: Option<DurableStoreTerminalRetrySealV1>,
-        lifecycle_ordinal: Option<u128>,
+        lifecycle_state: DurableValidateRetryLifecycleStateV1,
     },
     /// Cold recovery retains a registry-authenticated inert owner. The `Arc`
     /// permits transactional executor snapshots without making the move-only
@@ -120,7 +131,7 @@ enum DurableValidateRetrySealV1 {
     Recovered {
         owner: Arc<RecoveredDurableValidateRetryOwnerV1>,
         frontier: RecoveredDurableValidateRetryFrontierV1,
-        lifecycle_ordinal: Option<u128>,
+        lifecycle_state: DurableValidateRetryLifecycleStateV1,
     },
 }
 
@@ -148,60 +159,72 @@ impl DurableValidateRetrySealV1 {
             effect: effect.clone(),
             ownership: ownership.clone(),
             store_terminal,
-            lifecycle_ordinal: None,
+            lifecycle_state: DurableValidateRetryLifecycleStateV1::PendingAdmission,
         })
+    }
+
+    /// Inspect whether this fingerprint owns pending admission, a live row, or only a terminal.
+    const fn lifecycle_state(&self) -> DurableValidateRetryLifecycleStateV1 {
+        match self {
+            Self::Live {
+                lifecycle_state, ..
+            }
+            | Self::Recovered {
+                lifecycle_state, ..
+            } => *lifecycle_state,
+        }
     }
 
     /// Return the exact logical row still owned by this retry authority.
     const fn lifecycle_ordinal(&self) -> Option<u128> {
-        match self {
-            Self::Live {
-                lifecycle_ordinal, ..
-            }
-            | Self::Recovered {
-                lifecycle_ordinal, ..
-            } => *lifecycle_ordinal,
+        match self.lifecycle_state() {
+            DurableValidateRetryLifecycleStateV1::Bound(ordinal) => Some(ordinal),
+            DurableValidateRetryLifecycleStateV1::PendingAdmission
+            | DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor => None,
         }
     }
 
-    /// Bind a just-committed or recovered registry row without permitting a
-    /// retry to switch logical ownership.
+    /// Bind only a pending admission or the unchanged live row.
     fn bind_lifecycle_ordinal(&mut self, ordinal: u128) -> Result<(), String> {
         if ordinal == 0 {
             return Err("durable Validate retry received a zero lifecycle ordinal".to_owned());
         }
-        let lifecycle_ordinal = match self {
+        let state = match self {
             Self::Live {
-                lifecycle_ordinal, ..
+                lifecycle_state, ..
             }
             | Self::Recovered {
-                lifecycle_ordinal, ..
-            } => lifecycle_ordinal,
+                lifecycle_state, ..
+            } => lifecycle_state,
         };
-        match *lifecycle_ordinal {
-            Some(existing) if existing != ordinal => {
-                Err("durable Validate retry changed its exact lifecycle ordinal".to_owned())
-            }
-            Some(_) => Ok(()),
-            None => {
-                *lifecycle_ordinal = Some(ordinal);
+        match *state {
+            DurableValidateRetryLifecycleStateV1::PendingAdmission => {
+                *state = DurableValidateRetryLifecycleStateV1::Bound(ordinal);
                 Ok(())
             }
+            DurableValidateRetryLifecycleStateV1::Bound(existing) if existing == ordinal => Ok(()),
+            DurableValidateRetryLifecycleStateV1::Bound(_) => {
+                Err("durable Validate retry changed its exact lifecycle ordinal".to_owned())
+            }
+            DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor => Err(
+                "resolved durable Validate cannot bind another row without fresh admission"
+                    .to_owned(),
+            ),
         }
     }
 
     /// Convert the exact resolved row into an inert retransmit tombstone.
     fn release_lifecycle_ordinal(&mut self, ordinal: u128) -> Result<(), String> {
-        if self.lifecycle_ordinal() != Some(ordinal) {
+        if self.lifecycle_state() != DurableValidateRetryLifecycleStateV1::Bound(ordinal) {
             return Err("resolved durable Validate changed its exact lifecycle ordinal".to_owned());
         }
         match self {
             Self::Live {
-                lifecycle_ordinal, ..
+                lifecycle_state, ..
             }
             | Self::Recovered {
-                lifecycle_ordinal, ..
-            } => *lifecycle_ordinal = None,
+                lifecycle_state, ..
+            } => *lifecycle_state = DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor,
         }
         Ok(())
     }
@@ -216,7 +239,7 @@ impl DurableValidateRetrySealV1 {
                 effect: incumbent_effect,
                 ownership: incumbent_ownership,
                 store_terminal,
-                lifecycle_ordinal,
+                lifecycle_state,
             } => {
                 let (
                     AdapterEffect::ValidateBody {
@@ -263,7 +286,7 @@ impl DurableValidateRetrySealV1 {
                         effect: effect.clone(),
                         ownership: ownership.clone(),
                         store_terminal: store_terminal.clone(),
-                        lifecycle_ordinal: *lifecycle_ordinal,
+                        lifecycle_state: *lifecycle_state,
                     },
                     ownership,
                 })
@@ -271,7 +294,7 @@ impl DurableValidateRetrySealV1 {
             Self::Recovered {
                 owner,
                 frontier,
-                lifecycle_ordinal,
+                lifecycle_state,
             } => {
                 let (frontier, ownership) =
                     owner.exactly_matches_retry(frontier, effect, incoming)?;
@@ -279,7 +302,7 @@ impl DurableValidateRetrySealV1 {
                     seal: Self::Recovered {
                         owner: Arc::clone(owner),
                         frontier,
-                        lifecycle_ordinal: *lifecycle_ordinal,
+                        lifecycle_state: *lifecycle_state,
                     },
                     ownership,
                 })
@@ -287,72 +310,61 @@ impl DurableValidateRetrySealV1 {
         }
     }
 
-    /// Return whether a resolved ordinary Validate tombstone must yield to
-    /// one exact newer-view protected-Prepare admission.
+    /// A terminal with no successor cannot service a currently authorized body stage.
     ///
-    /// An ordinal-bound seal still has a concrete registry row which can
-    /// absorb authority refinement. Once that row has terminalized, however,
-    /// its ordinal-free tombstone owns neither service work nor a completion
-    /// carrier. It therefore cannot satisfy a later protected view's first
-    /// Prepare-authorized `ValidationCompleted` transition. This predicate is
-    /// deliberately closed over the live ordinary-to-Prepare upgrade; cold
-    /// owners, published direct-lifecycle markers, Commit upgrades, and
-    /// same/stale retries keep their existing stutter policy.
-    fn is_unbound_live_ordinary_to_prepare_upgrade(
+    /// Pending admission and bound rows retain execution ownership. A resolved
+    /// fingerprint may yield only to the exact current protected Prepare or
+    /// durable Decision carried by the incoming occurrence. Inspecting that
+    /// occurrence rather than its stronger adopted projection keeps stale
+    /// ordinary/Prepare retries from impersonating Commit authority. The normal
+    /// dispatch corridor still authenticates the complete QC and durable body.
+    fn permits_resolved_readmission(
         &self,
-        projected: &DurableValidateRetryProjectionV1,
-    ) -> bool {
-        let (
-            Self::Live {
-                effect: incumbent_effect,
-                ownership: incumbent_ownership,
-                lifecycle_ordinal: None,
-                ..
-            },
-            Self::Live {
-                effect: projected_effect,
-                ownership: projected_ownership,
-                lifecycle_ordinal: None,
-                ..
-            },
-        ) = (self, &projected.seal)
-        else {
-            return false;
-        };
-        let (
-            AdapterEffect::ValidateBody {
-                tag: incumbent_tag, ..
-            },
-            AdapterEffect::ValidateBody {
-                tag: projected_tag, ..
-            },
-        ) = (incumbent_effect, projected_effect)
-        else {
-            return false;
-        };
-        if !projected_tag.strictly_advances(*incumbent_tag) {
-            return false;
+        effect: &AdapterEffect,
+        incoming: &RuntimeEffectOwnership,
+        frontier: RuntimeReconciliationFrontier,
+    ) -> Result<bool, String> {
+        if self.lifecycle_state() != DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor {
+            return Ok(false);
         }
-        let Some(incumbent_statement) = incumbent_ownership
-            .exact_pending_adapter_effect_binding(incumbent_effect)
-            .ok()
-            .and_then(|pending| pending.candidate_statement())
+        let AdapterEffect::ValidateBody {
+            tag,
+            round,
+            subject,
+        } = effect
         else {
-            return false;
+            return Err("resolved Validate retry changed its effect kind".to_owned());
         };
-        let Some(projected_statement) = projected_ownership
-            .exact_pending_adapter_effect_binding(projected_effect)
-            .ok()
-            .and_then(|pending| pending.candidate_statement())
-        else {
-            return false;
-        };
-        incumbent_statement.phase().is_none()
-            && incumbent_statement.execution_commitment().is_none()
-            && projected_statement.phase() == Some(wire::GlobalPhase::Prepare)
-            && projected_statement.execution_commitment().is_some()
-            && incumbent_statement.body_stage_authority_relation_to(projected_statement)
-                == Some(RuntimeFetchAuthorityRelation::Upgrade)
+        if frontier.tag != Some(*tag) {
+            return Ok(false);
+        }
+        let binding = incoming
+            .exact_pending_adapter_effect_binding(effect)
+            .map_err(|_| "resolved Validate retry lost its exact incoming binding".to_owned())?;
+        let statement = binding.candidate_statement().ok_or_else(|| {
+            "resolved Validate retry omitted its incoming candidate statement".to_owned()
+        })?;
+        if statement.context_id() != round.context_id
+            || statement.proposal_round() != *round
+            || statement.subject() != Some(*subject)
+        {
+            return Err("resolved Validate retry changed its incoming body coordinates".to_owned());
+        }
+        Ok(match statement.phase() {
+            None => false,
+            Some(wire::GlobalPhase::Prepare) => {
+                frontier.decision.is_none()
+                    && frontier.lock_is_authoritative
+                    && frontier.locked_body == Some((*round, *subject))
+                    && statement.execution_commitment().is_some()
+            }
+            Some(wire::GlobalPhase::Commit) => frontier.decision.is_some_and(|decision| {
+                statement.round() == decision.0
+                    && statement.proposal_round() == decision.1
+                    && statement.subject() == Some(decision.2)
+                    && statement.execution_commitment() == Some(decision.3)
+            }),
+        })
     }
 
     /// Project one late durable Store carrier through the inert predecessor
@@ -388,14 +400,14 @@ impl DurableValidateRetrySealV1 {
             Self::Recovered {
                 owner,
                 frontier,
-                lifecycle_ordinal,
+                lifecycle_state,
             } => frontier
                 .project_commitment_ceiling(commitment)
                 .map(|frontier| {
                     Some(Self::Recovered {
                         owner: Arc::clone(owner),
                         frontier,
-                        lifecycle_ordinal: *lifecycle_ordinal,
+                        lifecycle_state: *lifecycle_state,
                     })
                 })
                 .map_err(str::to_owned),
@@ -451,7 +463,9 @@ impl<R: EffectRuntime> PreparedRecoveredDurableValidateRetryInstallV1<'_, R> {
                                 "cold Validate retry owner omitted its initial frontier".to_owned(),
                             )
                         })?,
-                        lifecycle_ordinal: Some(owner.lifecycle_ordinal()),
+                        lifecycle_state: DurableValidateRetryLifecycleStateV1::Bound(
+                            owner.lifecycle_ordinal(),
+                        ),
                         owner: Arc::new(owner),
                     },
                 )
@@ -1136,31 +1150,19 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
     }
 
     /// Return whether a resolved direct-lifecycle marker must redispatch one
-    /// exact newer-tag Commit refinement into normal Validate admission.
+    /// exact Commit authority refinement into normal Validate admission.
     ///
-    /// Same/stale retries remain inert. The strict authority and tag advance
-    /// ensure that a marker already projected to the Decision cannot repeatedly
-    /// mint replacement lifecycle rows.
+    /// Projection already rejects tag regression. Authority can strengthen in
+    /// the same tag after a Prepare retry, so only its strict Upgrade relation
+    /// distinguishes a new Decision from an already-projected duplicate.
     fn is_unbound_exact_decision_upgrade(
         &self,
         projected: &Self,
         decision: DurableDecision,
         validated_receipt: &ValidatedBodyReceipt,
     ) -> bool {
-        let (
-            AdapterEffect::ValidateBody {
-                tag: incumbent_tag, ..
-            },
-            AdapterEffect::ValidateBody {
-                tag: projected_tag, ..
-            },
-        ) = (&self.latest_effect, &projected.latest_effect)
-        else {
-            return false;
-        };
         !self.owns_live_lifecycle_row()
             && !projected.owns_live_lifecycle_row()
-            && projected_tag.strictly_advances(*incumbent_tag)
             && self.durable_receipt == projected.durable_receipt
             && self.store_terminal == projected.store_terminal
             && self
@@ -1332,7 +1334,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .is_some_and(|entry| entry.key() == *key)
             })
             && self.durable_validate_retry_seals.iter().all(|(key, seal)| {
-                seal.lifecycle_ordinal().is_none()
+                seal.lifecycle_state() == DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor
                     && self
                         .protected_decision
                         .is_some_and(|(_, round, subject, _)| *key == (round, subject))

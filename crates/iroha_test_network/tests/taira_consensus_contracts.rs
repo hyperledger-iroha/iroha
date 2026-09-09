@@ -51,15 +51,17 @@ async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()>
         .wrap_err("four-peer startup exceeded its deadline")??;
         ensure!(network.peers().len() == 4, "the fixture must start all four validators");
         let initial = try_join_all(network.peers().iter().map(|peer| async move {
-            let mut client = peer.client().client().clone();
-            client.torii_request_timeout = Duration::from_secs(5);
-            read_on_dedicated_thread(move || client.get_status()).await
+            let mut builder = peer.client().client().to_builder();
+            builder.torii_request_timeout = Duration::from_secs(5);
+            let client = builder.build()?;
+            client.status().get().await.map_err(eyre::Report::from)
         })).await?;
         ensure!(initial.iter().all(|status| status.blocks >= 1), "all peers must apply genesis");
-        let mut client = network.client().client().clone();
-        client.transaction_status_timeout = Duration::from_secs(75);
+        let mut builder = network.client().client().to_builder();
+        builder.transaction_status_timeout = Duration::from_secs(75);
         // Public QueuePlan certification uses the SDK's routed request budget.
-        client.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;
+        builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;
+        let client = builder.build()?;
         let account = client.account_client()?;
         // Public Torii ingress requires signature-bound QueuePlanSynced admission.
         // Internal Ordinary work has separate Core candidate-provider regressions.
@@ -88,13 +90,15 @@ async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()>
         let result = timeout(Duration::from_secs(90), async {
         loop {
             let observations = try_join_all(network.peers().iter().map(|peer| async move {
-                let mut client = peer.client().client().clone();
-                client.torii_request_timeout = Duration::from_secs(5);
+                let mut builder = peer.client().client().to_builder();
+                builder.torii_request_timeout = Duration::from_secs(5);
+                let client = builder.build()?;
                 let global = client.fetch_transaction_status_response_global(expected_hash).await?;
                 // Global lookups may fan out to another validator. Prove this
                 // peer's own committed state before counting it as applied.
-                let (status, local) = read_on_dedicated_thread(move || {
-                    Ok((client.get_status()?, client.get_transaction_status_response_local(expected_hash)?))
+                let status = client.status().get().await?;
+                let local = read_on_dedicated_thread(move || {
+                    client.get_transaction_status_response_local(expected_hash)
                 }).await?;
                 Ok::<_, eyre::Report>((status.blocks, global, local))
             })).await?;

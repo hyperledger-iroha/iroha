@@ -2056,10 +2056,13 @@ fn assert_missing_replay_validate_fails_closed_without_body_mutation(
     executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership));
     let before = executor.body_ownership_projection();
     let result = executor.consume_effects(vec![effect], services);
-    assert!(matches!(
-        &result,
-        Err(EffectExecutorError::Contract(reason)) if reason.contains(expected_reason)
-    ), "expected {expected_reason:?}, got {result:?}");
+    assert!(
+        matches!(
+            &result,
+            Err(EffectExecutorError::Contract(reason)) if reason.contains(expected_reason)
+        ),
+        "expected {expected_reason:?}, got {result:?}"
+    );
     assert_eq!(executor.body_ownership_projection(), before);
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert!(executor.durable_validate_retry_seals.is_empty());
@@ -2242,7 +2245,7 @@ fn protected_prepare_readmission_replaces_terminal_live_validate_tombstone() {
     let DurableValidateRetrySealV1::Live {
         effect: retained_effect,
         ownership: retained_ownership,
-        lifecycle_ordinal,
+        lifecycle_state,
         ..
     } = &executor.durable_validate_retry_seals[&key]
     else {
@@ -2250,7 +2253,10 @@ fn protected_prepare_readmission_replaces_terminal_live_validate_tombstone() {
     };
     assert_eq!(retained_effect, &validate);
     assert_eq!(retained_ownership, &ownership);
-    assert_eq!(*lifecycle_ordinal, None);
+    assert_eq!(
+        *lifecycle_state,
+        DurableValidateRetryLifecycleStateV1::PendingAdmission
+    );
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
     assert!(executor.pending_applications.is_empty());
     assert!(executor.live_lifecycle_decision_apply.is_none());
@@ -2544,7 +2550,9 @@ fn install_bound_validate_retry_authority_for_cleanup(
                             effect,
                             ownership,
                             store_terminal: None,
-                            lifecycle_ordinal: Some(lifecycle_ordinal),
+                            lifecycle_state: DurableValidateRetryLifecycleStateV1::Bound(
+                                lifecycle_ordinal
+                            ),
                         },
                     )
                     .is_none()
@@ -2570,7 +2578,9 @@ fn install_bound_validate_retry_authority_for_cleanup(
                         DurableValidateRetrySealV1::Recovered {
                             owner: Arc::new(owner),
                             frontier,
-                            lifecycle_ordinal: Some(lifecycle_ordinal),
+                            lifecycle_state: DurableValidateRetryLifecycleStateV1::Bound(
+                                lifecycle_ordinal
+                            ),
                         },
                     )
                     .is_none()
@@ -2610,6 +2620,401 @@ fn bound_validate_retry_ordinal_for_cleanup(
             .get(&key)
             .and_then(|marker| marker.lifecycle_ordinal),
     }
+}
+
+// Exercise the executable owner transition separately from immutable retry identity.
+fn refined_validate_retry_fixture(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    fixture: &Fixture,
+    kind: BoundValidateRetryAuthorityKind,
+    phase: Option<wire::GlobalPhase>,
+) -> (wire::ConsensusRound, wire::BlockSubject) {
+    let (key, _) = install_exact_recovered_body_without_lifecycle_replay(executor, fixture);
+    install_bound_validate_retry_authority_for_cleanup(executor, fixture, key, kind, 41_000);
+    if let Some(phase) = phase {
+        let effect = AdapterEffect::ValidateBody {
+            tag: tag(0),
+            round: key.0,
+            subject: key.1,
+        };
+        let ownership =
+            recovered_validate_retry_ownership(fixture, &effect, Some(fixture.qc(phase)), 41_010);
+        executor
+            .retain_effect_batch(vec![effect], vec![ownership])
+            .expect("refine the still-bound physical Validate owner");
+        assert!(executor.retained_effect_batch.is_none());
+    }
+    key
+}
+
+fn current_protected_validate_retry_fixture(
+    executor: &mut V2EffectExecutor<FakeRuntime>,
+    fixture: &Fixture,
+    phase: wire::GlobalPhase,
+    active_view: wire::View,
+) -> (AdapterEffect, RuntimeEffectOwnership) {
+    let certificate = fixture.qc(phase);
+    let key = (certificate.proposal_round, certificate.subject);
+    let current_tag = tag(active_view);
+    executor.runtime.round_tag = Some(current_tag);
+    executor.reconciled_tag = Some(current_tag);
+    match phase {
+        wire::GlobalPhase::Prepare => {
+            executor.protected_lock = Some(key);
+            executor.runtime.locked_body = Some(key);
+        }
+        wire::GlobalPhase::Commit => {
+            let decision = (
+                certificate.round,
+                certificate.proposal_round,
+                certificate.subject,
+                certificate.execution_commitment,
+            );
+            executor.protected_decision = Some(decision);
+            executor.runtime.decided_body = Some(decision);
+        }
+    }
+    let effect = AdapterEffect::ValidateBody {
+        tag: current_tag,
+        round: key.0,
+        subject: key.1,
+    };
+    let ownership =
+        recovered_validate_retry_ownership(fixture, &effect, Some(certificate.clone()), 41_020);
+    executor.runtime.durable_body_authority_certificate = Some(certificate);
+    (effect, ownership)
+}
+
+#[test]
+fn resolved_validate_retry_readmits_current_authority_once() {
+    let fixture = Fixture::new();
+    for kind in [
+        BoundValidateRetryAuthorityKind::Live,
+        BoundValidateRetryAuthorityKind::Recovered,
+    ] {
+        for (prior, incoming) in [
+            (None, wire::GlobalPhase::Prepare),
+            (Some(wire::GlobalPhase::Prepare), wire::GlobalPhase::Prepare),
+            (None, wire::GlobalPhase::Commit),
+            (Some(wire::GlobalPhase::Prepare), wire::GlobalPhase::Commit),
+            (Some(wire::GlobalPhase::Commit), wire::GlobalPhase::Commit),
+        ] {
+            for active_view in [0, 1] {
+                let mut executor = fixture.executor(EffectQueueConfig::default());
+                let mut services = fixture.services();
+                let key = refined_validate_retry_fixture(&mut executor, &fixture, kind, prior);
+                assert!(
+                    executor
+                        .release_validate_retry_lifecycle_ordinal(key, 41_000)
+                        .expect("resolve the exact old row without a successor")
+                );
+                assert_eq!(
+                    executor.durable_validate_retry_seals[&key].lifecycle_state(),
+                    DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor
+                );
+                let durable = executor.durable_bodies[&key].clone();
+                let (effect, ownership) = current_protected_validate_retry_fixture(
+                    &mut executor,
+                    &fixture,
+                    incoming,
+                    active_view,
+                );
+                executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership.clone()));
+                assert_eq!(
+                    executor
+                        .consume_effects(vec![effect.clone()], &mut services)
+                        .expect("resolved retry must enter normal protected-body admission"),
+                    1,
+                    "kind={kind:?} prior={prior:?} incoming={incoming:?} view={active_view}"
+                );
+                assert_eq!(executor.pending_durable_validate_admissions.len(), 1);
+                assert!(
+                    executor.pending_durable_validate_admissions[&key]
+                        .exactly_matches_retry(&effect, &ownership)
+                );
+                assert!(matches!(
+                    &executor.durable_validate_retry_seals[&key],
+                    DurableValidateRetrySealV1::Live {
+                        lifecycle_state: DurableValidateRetryLifecycleStateV1::PendingAdmission,
+                        store_terminal: Some(_),
+                        ..
+                    }
+                ));
+                let pending_seal = executor.durable_validate_retry_seals[&key].clone();
+                executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership.clone()));
+                assert_eq!(
+                    executor
+                        .consume_effects(vec![effect], &mut services)
+                        .expect("an unchanged retry cannot duplicate pending admission"),
+                    0
+                );
+                assert_eq!(executor.pending_durable_validate_admissions.len(), 1);
+                assert_eq!(executor.durable_validate_retry_seals[&key], pending_seal);
+                assert_eq!(executor.durable_bodies[&key], durable);
+                assert!(executor.validated_bodies.is_empty());
+                assert!(executor.pending_applications.is_empty());
+                assert!(executor.live_lifecycle_decision_apply.is_none());
+                assert!(services.fetch_tasks.is_empty());
+                assert!(services.store_tasks.is_empty());
+                assert!(services.apply_tasks.is_empty());
+                assert!(!executor.output_guard.restart_required());
+            }
+        }
+    }
+}
+
+#[test]
+fn active_validate_retry_owners_preserve_single_admission() {
+    let fixture = Fixture::new();
+    for kind in [
+        BoundValidateRetryAuthorityKind::Live,
+        BoundValidateRetryAuthorityKind::Recovered,
+    ] {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let mut services = fixture.services();
+        let key = refined_validate_retry_fixture(&mut executor, &fixture, kind, None);
+        let (effect, ownership) = current_protected_validate_retry_fixture(
+            &mut executor,
+            &fixture,
+            wire::GlobalPhase::Commit,
+            0,
+        );
+        executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership));
+        assert_eq!(
+            executor
+                .consume_effects(vec![effect], &mut services)
+                .expect("a bound row remains the sole validation owner"),
+            0
+        );
+        assert_eq!(
+            executor.durable_validate_retry_seals[&key].lifecycle_state(),
+            DurableValidateRetryLifecycleStateV1::Bound(41_000)
+        );
+        assert!(executor.pending_durable_validate_admissions.is_empty());
+        assert!(services.apply_tasks.is_empty());
+        assert!(!executor.output_guard.restart_required());
+    }
+
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+    let (prepare, prepare_owner) = current_protected_validate_retry_fixture(
+        &mut executor,
+        &fixture,
+        wire::GlobalPhase::Prepare,
+        0,
+    );
+    executor.runtime.exact_effect_ownership = Some((prepare.clone(), prepare_owner.clone()));
+    assert_eq!(
+        executor
+            .consume_effects(vec![prepare.clone()], &mut services)
+            .expect("create the actual pending admission"),
+        1
+    );
+    let (commit, commit_owner) = current_protected_validate_retry_fixture(
+        &mut executor,
+        &fixture,
+        wire::GlobalPhase::Commit,
+        0,
+    );
+    executor.runtime.exact_effect_ownership = Some((commit.clone(), commit_owner));
+    assert_eq!(
+        executor
+            .consume_effects(vec![commit], &mut services)
+            .expect("Commit refinement cannot replace an unbound pending owner"),
+        0
+    );
+    assert_eq!(executor.pending_durable_validate_admissions.len(), 1);
+    assert!(
+        executor.pending_durable_validate_admissions[&key]
+            .exactly_matches_retry(&prepare, &prepare_owner)
+    );
+    assert_eq!(
+        executor.durable_validate_retry_seals[&key].lifecycle_state(),
+        DurableValidateRetryLifecycleStateV1::PendingAdmission
+    );
+    assert!(services.apply_tasks.is_empty());
+    assert!(!executor.output_guard.restart_required());
+}
+
+#[test]
+fn resolved_validate_retry_rejects_stale_and_conflicting_authority() {
+    let fixture = Fixture::new();
+    for kind in [
+        BoundValidateRetryAuthorityKind::Live,
+        BoundValidateRetryAuthorityKind::Recovered,
+    ] {
+        let mut executor = fixture.executor(EffectQueueConfig::default());
+        let key = refined_validate_retry_fixture(
+            &mut executor,
+            &fixture,
+            kind,
+            Some(wire::GlobalPhase::Commit),
+        );
+        assert!(
+            executor
+                .release_validate_retry_lifecycle_ordinal(key, 41_000)
+                .expect("resolve the previous Commit validation owner")
+        );
+        let (effect, _) = current_protected_validate_retry_fixture(
+            &mut executor,
+            &fixture,
+            wire::GlobalPhase::Commit,
+            1,
+        );
+        for phase in [None, Some(wire::GlobalPhase::Prepare)] {
+            let stale = recovered_validate_retry_ownership(
+                &fixture,
+                &effect,
+                phase.map(|phase| fixture.qc(phase)),
+                41_030,
+            );
+            executor
+                .retain_effect_batch(vec![effect.clone()], vec![stale])
+                .expect("weaker incoming authority cannot reopen a resolved Commit");
+            assert!(executor.retained_effect_batch.is_none());
+            assert!(executor.pending_durable_validate_admissions.is_empty());
+            assert_eq!(
+                executor.durable_validate_retry_seals[&key].lifecycle_state(),
+                DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor
+            );
+        }
+        let before = executor.durable_validate_retry_seals[&key].clone();
+        let old_effect = AdapterEffect::ValidateBody {
+            tag: tag(0),
+            round: key.0,
+            subject: key.1,
+        };
+        let old_owner = recovered_validate_retry_ownership(
+            &fixture,
+            &old_effect,
+            Some(fixture.qc(wire::GlobalPhase::Commit)),
+            41_031,
+        );
+        assert!(
+            executor
+                .retain_effect_batch(vec![old_effect], vec![old_owner])
+                .is_err()
+        );
+        assert_eq!(executor.durable_validate_retry_seals[&key], before);
+        let mut conflict = fixture.qc(wire::GlobalPhase::Commit);
+        conflict.execution_commitment.post_state_root =
+            Hash::new(b"foreign resolved Validate execution");
+        let conflict_owner =
+            recovered_validate_retry_ownership(&fixture, &effect, Some(conflict), 41_032);
+        assert!(
+            executor
+                .retain_effect_batch(vec![effect.clone()], vec![conflict_owner])
+                .is_err()
+        );
+        assert_eq!(executor.durable_validate_retry_seals[&key], before);
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(executor.pending_durable_validate_admissions.is_empty());
+        assert!(!executor.output_guard.restart_required());
+
+        // Construct a real parked candidate, then inject the contradictory
+        // resolved fingerprint to model a corrupt ownership census. Admission
+        // must reject the overlap before adopting either candidate's lineage.
+        let resolved = executor
+            .durable_validate_retry_seals
+            .remove(&key)
+            .expect("retain the exact resolved fingerprint for the overlap fixture");
+        let current_owner = recovered_validate_retry_ownership(
+            &fixture,
+            &effect,
+            Some(fixture.qc(wire::GlobalPhase::Commit)),
+            41_033,
+        );
+        executor
+            .retain_effect_batch(vec![effect.clone()], vec![current_owner.clone()])
+            .expect("retain the actual pre-admission Validate candidate");
+        executor
+            .park_retained_effect_batch()
+            .expect("park the actual preterminal Validate owner");
+        assert!(
+            executor
+                .durable_validate_retry_seals
+                .insert(key, resolved.clone())
+                .is_none()
+        );
+        let projection_before = executor.body_ownership_projection();
+        let parked_before = executor
+            .parked_effect_batch
+            .as_ref()
+            .expect("the preterminal candidate remains parked")
+            .effects
+            .front()
+            .expect("one parked Validate")
+            .ownership
+            .clone();
+        assert!(
+            executor
+                .retain_effect_batch(vec![effect], vec![current_owner])
+                .is_err()
+        );
+        assert_eq!(executor.durable_validate_retry_seals[&key], resolved);
+        assert_eq!(executor.body_ownership_projection(), projection_before);
+        assert_eq!(
+            executor
+                .parked_effect_batch
+                .as_ref()
+                .unwrap()
+                .effects
+                .front()
+                .unwrap()
+                .ownership,
+            parked_before
+        );
+        assert!(executor.retained_effect_batch.is_none());
+        assert!(executor.pending_durable_validate_admissions.is_empty());
+        assert!(executor.pending_applications.is_empty());
+        assert!(!executor.output_guard.restart_required());
+    }
+}
+
+#[test]
+fn validate_retry_lifecycle_transitions_require_exact_owner() {
+    let fixture = Fixture::new();
+    let mut executor = fixture.executor(EffectQueueConfig::default());
+    let mut services = fixture.services();
+    let (key, _) = install_exact_recovered_body_without_lifecycle_replay(&mut executor, &fixture);
+    let (effect, ownership) = current_protected_validate_retry_fixture(
+        &mut executor,
+        &fixture,
+        wire::GlobalPhase::Prepare,
+        0,
+    );
+    executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership));
+    executor
+        .consume_effects(vec![effect], &mut services)
+        .expect("create an actual pending admission for transition checks");
+    let mut seal = executor.durable_validate_retry_seals[&key].clone();
+    let pending = seal.clone();
+    assert!(seal.bind_lifecycle_ordinal(0).is_err());
+    assert!(seal.release_lifecycle_ordinal(41_040).is_err());
+    assert_eq!(seal, pending);
+    seal.bind_lifecycle_ordinal(41_040)
+        .expect("pending admission binds once");
+    let bound = seal.clone();
+    seal.bind_lifecycle_ordinal(41_040)
+        .expect("exact row rebinding is idempotent");
+    assert!(seal.bind_lifecycle_ordinal(41_041).is_err());
+    assert!(seal.release_lifecycle_ordinal(41_041).is_err());
+    assert_eq!(seal, bound);
+    seal.release_lifecycle_ordinal(41_040)
+        .expect("only the exact row may resolve");
+    let resolved = seal.clone();
+    assert!(seal.bind_lifecycle_ordinal(41_040).is_err());
+    assert!(seal.release_lifecycle_ordinal(41_040).is_err());
+    assert_eq!(seal, resolved);
+    assert_eq!(
+        seal.lifecycle_state(),
+        DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor
+    );
+    assert_eq!(
+        executor.durable_validate_retry_seals[&key], pending,
+        "transition checks cannot consume the retained real admission"
+    );
 }
 
 #[test]
@@ -3722,7 +4127,10 @@ fn durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate
             .collect::<Vec<_>>(),
         vec![key]
     );
-    assert!(executor.durable_validate_retry_seals_are_finalization_inert());
+    assert!(
+        !executor.durable_validate_retry_seals_are_finalization_inert(),
+        "pending lifecycle admission still owns executable validation work"
+    );
     assert!(!executor.status().fail_closed);
     assert!(services.closed.is_empty());
 }
@@ -4343,11 +4751,21 @@ fn terminal_published_validate_retry_requires_live_wal_apply_admission() {
     // admitted cuts; a fixture must not add the source to the same Decision
     // later without an adapter transition.
     for has_live_wal_source in [false, true] {
-        assert_terminal_validate_admitted_decision_cut(has_live_wal_source);
+        assert_terminal_validate_admitted_decision_cut(has_live_wal_source, false);
     }
 }
 
-fn assert_terminal_validate_admitted_decision_cut(has_live_wal_source: bool) {
+#[test]
+fn terminal_published_validate_same_tag_commit_upgrade_after_prepare_retry_is_admitted() {
+    for has_live_wal_source in [false, true] {
+        assert_terminal_validate_admitted_decision_cut(has_live_wal_source, true);
+    }
+}
+
+fn assert_terminal_validate_admitted_decision_cut(
+    has_live_wal_source: bool,
+    prepare_retry_advances_tag_first: bool,
+) {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
     let mut services = fixture.services();
@@ -4444,6 +4862,77 @@ fn assert_terminal_validate_admitted_decision_cut(has_live_wal_source: bool) {
     assert_eq!(executor.validated_bodies.get(&key), Some(&validated));
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert_eq!(executor.pending_work(), 0);
+    if prepare_retry_advances_tag_first {
+        // A terminal Prepare marker may already have observed this current
+        // tag before the matching CommitQC arrives. Authority must advance
+        // independently of EventTag; the released row owns no completion.
+        let mut prepare_retry_fetch = initial_fetch.clone();
+        let AdapterEffect::FetchBody { tag, .. } = &mut prepare_retry_fetch else {
+            unreachable!("the fixture retains its exact Prepare Fetch");
+        };
+        *tag = current_tag;
+        let prepare_retry = AdapterEffect::ValidateBody {
+            tag: current_tag,
+            round: fixture.manifest.round,
+            subject: fixture.manifest.subject,
+        };
+        let prepare_retry_ownership =
+            bound_test_effect_ownership(&prepare_retry_fetch, current_tag, 9_029)
+                .rebind_as_inherited_adapter_effect(&prepare_retry)
+                .expect("bind the current-tag Prepare retransmit");
+        executor
+            .retain_effect_batch(vec![prepare_retry.clone()], vec![prepare_retry_ownership])
+            .expect("the terminal Prepare retransmit advances only its observed tag");
+        let marker = executor.published_lifecycle_validate_retry_markers[&key].clone();
+        assert_eq!(marker.latest_effect, prepare_retry);
+        assert_eq!(
+            marker.latest_statement.phase(),
+            Some(wire::GlobalPhase::Prepare)
+        );
+        assert!(executor.retained_effect_batch.is_none());
+        assert_eq!(executor.pending_work(), 0);
+        assert!(
+            executor
+                .retain_effect_batch(
+                    vec![initial_validate.clone()],
+                    vec![initial_validate_ownership.clone()]
+                )
+                .is_err(),
+            "a regressing tag cannot replace the current terminal marker"
+        );
+        assert_eq!(
+            executor.published_lifecycle_validate_retry_markers[&key],
+            marker
+        );
+
+        let mut conflicting_commit = fixture.qc(wire::GlobalPhase::Commit);
+        conflicting_commit.execution_commitment.post_state_root =
+            Hash::new(b"conflicting terminal Commit execution");
+        let conflicting_fetch = AdapterEffect::FetchBody {
+            tag: current_tag,
+            round: conflicting_commit.proposal_round,
+            subject: conflicting_commit.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: certified_sources(&fixture, &conflicting_commit),
+            certificate: Some(conflicting_commit),
+        };
+        let conflicting_ownership =
+            bound_test_effect_ownership(&conflicting_fetch, current_tag, 9_030)
+                .rebind_as_inherited_adapter_effect(&prepare_retry)
+                .expect("bind a structurally valid conflicting Commit carrier");
+        assert!(
+            executor
+                .retain_effect_batch(vec![prepare_retry], vec![conflicting_ownership])
+                .is_err(),
+            "a different execution commitment cannot replace terminal authority"
+        );
+        assert_eq!(
+            executor.published_lifecycle_validate_retry_markers[&key],
+            marker
+        );
+        assert!(executor.retained_effect_batch.is_none());
+        assert_eq!(executor.pending_work(), 0);
+    }
     let terminal_marker = executor.published_lifecycle_validate_retry_markers[&key].clone();
 
     let commit = fixture.qc(wire::GlobalPhase::Commit);

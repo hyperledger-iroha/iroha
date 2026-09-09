@@ -2784,6 +2784,7 @@ region|pending_source|runtime|begin|-|end|-
 region|binding|runtime|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryBindingV1|before|/// Mint the unique pending owner of one exact payload-free live-WAL continuation.
 region|frontier|runtime|after|pub(in crate::sumeragi) struct RecoveredDurableValidateRetryFrontierV1|before|impl RecoveredDurableValidateRetryBindingV1
 region|frontier_impl|runtime|after|impl RecoveredDurableValidateRetryFrontierV1|before|impl RecoveredDurableValidateRetryBindingV1
+region|seal_state|effects|after|enum DurableValidateRetryLifecycleStateV1|before|/// Inert runtime fingerprint
 region|seal|effects|after|enum DurableValidateRetrySealV1|before|struct DurableValidateRetryProjectionV1
 region|seal_projection|effects|after|impl DurableValidateRetrySealV1|before|impl<R: EffectRuntime> V2EffectExecutor<R>
 region|install|effects|after|pub(in crate::sumeragi) struct PreparedRecoveredDurableValidateRetryInstallV1|before|impl<R: EffectRuntime> V2EffectExecutor<R>
@@ -2924,18 +2925,30 @@ required|frontier_impl|expected != commitment|later durable-fact join accepted a
 required|frontier_impl|let mut projected = self.clone();|later durable-fact join mutated the current recovered seal during preflight
 required|frontier_impl|projected.authority_ceiling_commitment = Some(commitment);|later durable-fact join stopped latching an empty ceiling or preserving an equal ceiling
 required|frontier_impl|Ok(projected)|later durable-fact join stopped returning a separately commit-able replacement frontier
+required|seal_state|PendingAdmission,|Validate retry state lost pending admission ownership
+required|seal_state|Bound(u128),|Validate retry state lost exact registry ownership
+required|seal_state|ResolvedNoSuccessor,|Validate retry state lost resolved terminal ownership
 required|seal|Live {|Validate retry seal lost the distinct live lineage
 required|seal|Recovered {|Validate retry seal lost the distinct recovered lineage
 required|seal|owner:|recovered retry seal lost its immutable storage-authenticated owner
 required|seal|frontier:|recovered retry seal lost its persistent monotonic authority frontier
-required|seal|lifecycle_ordinal: Option<u128>|Validate retry seal stopped distinguishing a live registry row from an inert tombstone
+required|seal|lifecycle_state: DurableValidateRetryLifecycleStateV1|Validate retry seal stopped distinguishing pending admission, a bound row, and resolved terminal
 forbidden|seal|Recovered(Arc<RecoveredDurableValidateRetryOwnerV1>)|recovered retry seal retained the immutable-startup tuple which permits effect or authority rollback
 required|seal_projection|Some(Self::Live {|normal admission stopped minting only the live retry lineage
-required|seal_projection|lifecycle_ordinal: None|fresh pre-admission Validate retry seal incorrectly claimed a committed registry row
+required|seal_projection|lifecycle_state: DurableValidateRetryLifecycleStateV1::PendingAdmission|fresh Validate retry seal stopped identifying its pending admission owner
 required|seal_projection|fn lifecycle_ordinal(|Validate retry seal lost its exact live-row observation
 required|seal_projection|fn bind_lifecycle_ordinal(|Validate retry settlement lost its one-way exact row bind
 required|seal_projection|fn release_lifecycle_ordinal(|Validate retry resolution lost its exact row release
-required|seal_projection|existing != ordinal|Validate retry authority accepted logical-row substitution
+required|seal_projection|DurableValidateRetryLifecycleStateV1::Bound(existing) if existing == ordinal => Ok(())|Validate retry bind stopped accepting only the unchanged bound row
+required|seal_projection|DurableValidateRetryLifecycleStateV1::Bound(_) =>|Validate retry bind stopped rejecting logical-row substitution
+required|seal_projection|resolved durable Validate cannot bind another row without fresh admission|resolved Validate regained direct row resurrection
+required|seal_projection|self.lifecycle_state() != DurableValidateRetryLifecycleStateV1::Bound(ordinal)|Validate retry release lost its exact bound-row check
+required|seal_projection|DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor|Validate retry release lost its explicit resolved terminal state
+required|seal_projection|fn permits_resolved_readmission(|resolved Validate lost its exact protected-authority transition
+required|seal_projection|frontier.tag != Some(*tag)|resolved Validate readmission accepted a noncurrent incoming tag
+required|seal_projection|.exact_pending_adapter_effect_binding(effect)|resolved Validate stopped authenticating the incoming occurrence before readmission
+required|seal_projection|frontier.locked_body == Some((*round, *subject))|resolved Validate Prepare admission lost its exact protected body
+required|seal_projection|statement.execution_commitment() == Some(decision.3)|resolved Validate Commit admission lost its exact Decision commitment
 required|seal_projection|Self::Recovered {|retry projection stopped distinguishing recovered ownership
 required|seal_projection|frontier|recovered retry projection stopped consulting its retained authority and EventTag frontier
 required|seal_projection|exactly_matches_retry|recovered retry projection stopped proving its exact cold owner
@@ -2950,7 +2963,8 @@ forbidden|seal_projection|owner: Arc::new(incoming|recovered retry projection pe
 required|install|owner.exactly_matches_validated_marker(key, validated)|cold owner installation stopped rechecking the marker-derived authority ceiling
 required|install|frontier: owner.initial_retry_frontier()|cold owner installation stopped sealing the marker-derived commitment and startup statement into its retry frontier
 required|install|DurableValidateRetrySealV1::Recovered {|cold owner installation lost its lineage-tagged persistent retry frontier
-required|install|lifecycle_ordinal: Some(owner.lifecycle_ordinal())|cold owner installation stopped retaining its exact live registry row
+required|install|lifecycle_state: DurableValidateRetryLifecycleStateV1::Bound(|cold owner installation stopped retaining a bound registry state
+required|install|owner.lifecycle_ordinal()|cold owner installation lost its exact live registry ordinal
 required|install|owner: Arc::new(owner)|cold owner installation lost its immutable storage-authenticated owner
 forbidden|install|DurableValidateRetrySealV1::Recovered(Arc::new(owner))|cold owner installation retained immutable startup authority and accepted later conflicting refinements
 required|runtime_decision|self.driver.replayed_decision_key()|cold launch stopped reading the runtime's exact replayed Decision

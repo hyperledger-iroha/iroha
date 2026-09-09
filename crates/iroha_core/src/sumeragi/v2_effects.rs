@@ -7353,6 +7353,22 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
                 _ => None,
             };
+            if preterminal_body_stage_incumbent.is_some()
+                && let AdapterEffect::ValidateBody { round, subject, .. } = effect
+                && retained_validate_retry_seals
+                    .get(&(*round, *subject))
+                    .is_some_and(|seal| {
+                        seal.lifecycle_state()
+                            == DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor
+                    })
+            {
+                // A resolved row has no active physical stage. Reject overlap
+                // before adoption so a stronger incumbent cannot change the
+                // incoming authority used to qualify resolved readmission.
+                return Err(EffectExecutorError::Contract(
+                    "resolved Validate retained an active body-stage lineage".to_owned(),
+                ));
+            }
             if let Some(incumbent) = preterminal_body_stage_incumbent {
                 if stored_replay_adopted && incumbent.owner() != evidence.owner() {
                     return Err(EffectExecutorError::Contract(
@@ -7540,7 +7556,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 // operation while its row is live or a same/stale retry merely
                 // rediscovers its terminal marker. One closed exception exists:
                 // an ordinal-free older marker plus the exact cached successful
-                // receipt may redispatch a strictly newer Commit refinement so
+                // receipt may redispatch an exact Commit authority refinement so
                 // normal lifecycle admission can mint the missing Apply child.
                 let projected = marker
                     .project_retry(effect, evidence)
@@ -7611,21 +7627,24 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .project_retry(effect, evidence)
                     .map_err(EffectExecutorError::Contract)?;
                 let key = (*round, *subject);
-                let readmit_protected_prepare = frontier.decision.is_none()
-                    && frontier.lock_is_authoritative
-                    && frontier.locked_body == Some(key)
-                    && seal.is_unbound_live_ordinary_to_prepare_upgrade(&projected);
-                if readmit_protected_prepare {
-                    // The old row is terminal and cannot emit the newer
-                    // view's ValidationCompleted callback. Retire only this
-                    // volatile tombstone; the current reducer owner falls
-                    // through to the ordinary protected-lock reseed below.
+                let readmit_resolved = seal
+                    .permits_resolved_readmission(effect, evidence, frontier)
+                    .map_err(EffectExecutorError::Contract)?;
+                if readmit_resolved {
+                    if self.pending_durable_validate_admissions.contains_key(&key) {
+                        return Err(EffectExecutorError::Contract(
+                            "resolved Validate retained a pending admission owner".to_owned(),
+                        ));
+                    }
+                    // A resolved row owns neither service work nor a completion.
+                    // Retire only its inert fingerprint; the incoming exact
+                    // protected authority enters normal durable-body admission.
                     let removed = retained_validate_retry_seals.remove(&key);
                     debug_assert_eq!(removed, Some(seal));
                 } else {
-                    // A live row, cold owner, or same/stale/Commit retry still
-                    // owns the sole physical Validate lifecycle and therefore
-                    // coalesces without redispatch.
+                    // Pending and bound rows retain the sole executable owner.
+                    // Unprotected or stale occurrences cannot reopen a resolved
+                    // terminal and remain inert after exact projection.
                     #[cfg(test)]
                     {
                         recovered_validate_retry_trace_root =

@@ -314,6 +314,29 @@ CORE_STAGES += (("durable output capacity and strict handoff", (
     "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
 )),)
 
+CORE_STAGES += (("resolved validation and exact application ownership", (
+    "sumeragi::v2_effects::tests::resolved_validate_retry_readmits_current_authority_once",
+    "sumeragi::v2_effects::tests::active_validate_retry_owners_preserve_single_admission",
+    "sumeragi::v2_effects::tests::resolved_validate_retry_rejects_stale_and_conflicting_authority",
+    "sumeragi::v2_effects::tests::validate_retry_lifecycle_transitions_require_exact_owner",
+    "sumeragi::v2_effects::tests::terminal_published_validate_same_tag_commit_upgrade_after_prepare_retry_is_admitted",
+    "sumeragi::v2_effects::tests::terminal_published_validate_retry_requires_live_wal_apply_admission",
+    "sumeragi::v2_effects::tests::protected_prepare_validate_reseeds_missing_replay_from_exact_recovered_body",
+    "sumeragi::v2_effects::tests::protected_prepare_readmission_replaces_terminal_live_validate_tombstone",
+    "sumeragi::v2_effects::tests::protected_prepare_readmission_rolls_back_with_a_malformed_later_effect",
+    "sumeragi::v2_effects::tests::admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay_reuse",
+    "sumeragi::v2_effects::tests::cold_active_rejection_denies_local_adoption_without_live_pipeline_owner",
+    "sumeragi::v2_effects::tests::recovered_apply_releases_only_its_authenticated_validate_retry_predecessor",
+    "sumeragi::v2_effects::tests::decision_cleanup_defers_live_validate_authority_retirement_until_exact_resolution",
+    "sumeragi::v2_effects::tests::durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate",
+    "sumeragi::v2_effects::tests::protected_commit_validate_reseeds_missing_replay_without_applying",
+    "sumeragi::v2_effects::tests::missing_replay_commit_rejects_foreign_decision_and_commitment",
+    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission",
+    "sumeragi::v2_lane_work::tests::durable_merge_refresh_retains_journal_across_real_parent_publication",
+    "sumeragi::v2_lane_work::tests::merge_signing_fence_refuses_private_key_after_parent_publication",
+    "sumeragi::v2_lane_work::tests::autonomous_fixture_binds_final_lane_context_before_opening_signing_guards",
+)),)
+
 CLIENT_STAGES = (("public contract SDK envelope", (
     "client::evidence_http_tests::post_contract_call_accepts_only_the_caller_trusted_draft_intent",
     "client::evidence_http_tests::post_contract_call_authenticates_bound_account_and_rejects_foreign_authority",
