@@ -1,6 +1,6 @@
 //! Regression tests for string length-prefix decoding.
 use norito::{
-    NoritoDeserialize,
+    DeserializePayload,
     core::{self, DecodeFlagsGuard, header_flags, reset_decode_state},
 };
 #[test]
@@ -51,12 +51,12 @@ fn archived_string_requires_bounded_payload_context() {
     }
     let archived = core::archived_from_slice::<String>(&payload).expect("archived string");
     let _flags = DecodeFlagsGuard::enter(0);
-    let error = <String as NoritoDeserialize>::try_deserialize(archived.archived())
+    let error = <String as DeserializePayload>::try_deserialize(archived.archived())
         .expect_err("an archived address alone must not authorize pointer reads");
     assert!(matches!(error, core::Error::MissingPayloadContext));
     let _payload = core::PayloadCtxGuard::enter(archived.bytes());
-    let decoded =
-        <String as NoritoDeserialize>::try_deserialize(archived.archived()).expect("decode string");
+    let decoded = <String as DeserializePayload>::try_deserialize(archived.archived())
+        .expect("decode string");
     assert_eq!(decoded.as_bytes(), s.as_bytes());
     reset_decode_state();
 }

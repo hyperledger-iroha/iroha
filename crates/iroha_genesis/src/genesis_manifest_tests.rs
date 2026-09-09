@@ -948,6 +948,11 @@ fn topology_entries_parse_with_pop_hex() {
         "consensus_mode".to_string(),
         norito::json::Value::String("Permissioned".into()),
     );
+    manifest_fields.insert(
+        "wire_protocol_version".to_string(),
+        norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
+            .expect("serialize wire protocol version"),
+    );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
@@ -1015,6 +1020,11 @@ fn topology_entries_allow_missing_pop_hex() {
         "consensus_mode".to_string(),
         norito::json::Value::String("Permissioned".into()),
     );
+    manifest_fields.insert(
+        "wire_protocol_version".to_string(),
+        norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
+            .expect("serialize wire protocol version"),
+    );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
         "kagemusha_mint_finality".to_string(),
@@ -1060,6 +1070,11 @@ fn topology_entries_reject_peer_value() {
     manifest_fields.insert(
         "consensus_mode".to_string(),
         norito::json::Value::String("Permissioned".into()),
+    );
+    manifest_fields.insert(
+        "wire_protocol_version".to_string(),
+        norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
+            .expect("serialize wire protocol version"),
     );
     manifest_fields.insert("sumeragi_v2".to_string(), manifest_v2_context_value());
     manifest_fields.insert(
@@ -1458,6 +1473,7 @@ fn crypto_manifest_accepts_valid_sm_configuration() {
     let crypto = ManifestCrypto {
         default_hash: "sm3-256".to_owned(),
         allowed_signing: vec![Algorithm::Ed25519, Algorithm::Sm2],
+        allowed_curve_ids: vec![CurveId::ED25519.as_u8(), CurveId::SM2.as_u8()],
         ..ManifestCrypto::default()
     };
     let manifest = GenesisBuilder::new_without_executor(

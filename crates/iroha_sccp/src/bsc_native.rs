@@ -93,7 +93,9 @@ pub const BSC_NATIVE_MAX_FINALITY_HEADERS: usize =
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeValidatorV1")]
 pub struct BscNativeValidatorV1 {
     /// Canonical 20-byte execution-layer consensus address.
     #[norito(with = "crate::json_utils::bytes_hex")]
@@ -112,7 +114,9 @@ pub struct BscNativeValidatorV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeRecentProposerV1")]
 pub struct BscNativeRecentProposerV1 {
     /// Block number at which the proposer signed.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -132,7 +136,9 @@ pub struct BscNativeRecentProposerV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeJustificationV1")]
 pub struct BscNativeJustificationV1 {
     /// Finalized source block number.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -161,7 +167,9 @@ pub struct BscNativeJustificationV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeVoteContextV1")]
 pub struct BscNativeVoteContextV1 {
     /// Target block number.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -182,7 +190,9 @@ pub struct BscNativeVoteContextV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativePendingEpochV1")]
 pub struct BscNativePendingEpochV1 {
     /// Epoch checkpoint block number.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -205,7 +215,9 @@ pub struct BscNativePendingEpochV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeParliaAnchorV1")]
 pub struct BscNativeParliaAnchorV1 {
     /// Anchor schema version; the first release accepts exactly `1`.
     pub version: u8,
@@ -249,7 +261,9 @@ pub struct BscNativeParliaAnchorV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeFinalityProofV1")]
 pub struct BscNativeFinalityProofV1 {
     /// Proof schema version; the first release accepts exactly `1`.
     pub version: u8,
@@ -292,7 +306,9 @@ pub struct BscNativeFinalityWorkEstimateV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeReceiptProofV1")]
 pub struct BscNativeReceiptProofV1 {
     /// Zero-based receipt/transaction index in the block trie.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -314,7 +330,9 @@ pub struct BscNativeReceiptProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeEmitterStateProofV1")]
 pub struct BscNativeEmitterStateProofV1 {
     /// Ordered state-trie nodes proving the emitter account.
     #[norito(with = "crate::json_utils::vec_bytes_hex")]
@@ -330,7 +348,9 @@ pub struct BscNativeEmitterStateProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::bsc_native::BscNativeSourceProofV1")]
 pub struct BscNativeSourceProofV1 {
     /// Native Parlia finality continuation.
     pub finality: BscNativeFinalityProofV1,

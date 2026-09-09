@@ -7,7 +7,7 @@ use iroha_data_model::{
     nft::NftId,
     smart_contract::manifest::{AccessSetHints, ContractManifest},
 };
-use ivm::{PointerType, validate_tlv_bytes};
+use ivm_abi::pointer_abi::{PointerType, validate_tlv_bytes};
 use norito::{
     codec::{Decode, Encode},
     decode_from_bytes, to_bytes,
@@ -48,7 +48,7 @@ fn manifest_pointer_roundtrip() {
         entrypoints: None,
         states: None,
         kotoba: None,
-        error_codes: None,
+        error_types: None,
         provenance: None,
     };
     let payload = to_bytes(&manifest).expect("encode manifest");

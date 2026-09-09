@@ -45,6 +45,7 @@ impl ZkCurveId {
 /// the one canonical V1 parameter set for this `(curve_id, n)` pair.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[norito(decode_from_slice)]
 pub struct IpaParams {
     /// Reserved for format evolution; set to 1.
     pub version: u16,
@@ -76,6 +77,7 @@ impl IpaParams {
 /// IPA inner-product proof (encoded form for transport).
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[norito(decode_from_slice)]
 pub struct IpaProofData {
     /// Reserved for format evolution; set to 1.
     pub version: u16,
@@ -111,6 +113,7 @@ impl IpaProofData {
 /// Public inputs and commitment for a single-point polynomial opening.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[norito(decode_from_slice)]
 pub struct PolyOpenPublic {
     /// Reserved for format evolution; set to 1.
     pub version: u16,
@@ -155,46 +158,14 @@ impl PolyOpenPublic {
         norito::codec::decode_exact_from_slice(bytes)
     }
 }
-fn decode_from_slice_checked<T>(bytes: &[u8]) -> Result<(T, usize), norito::core::Error>
-where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
-{
-    let flags = norito::core::default_encode_flags();
-    let _flags = norito::core::DecodeFlagsGuard::enter(flags);
-    let value = norito::core::decode_archived_field::<T>(bytes)?;
-    // `DecodeFromSlice` must report the canonical prefix it consumed rather
-    // than treating arbitrary trailing bytes as part of the value. Re-encoding
-    // also rejects alternate byte representations before the exact-slice
-    // boundary compares `used` with the caller-provided length.
-    let mut canonical = Vec::new();
-    norito::core::serialize_to_buffer(&value, &mut canonical)?;
-    if bytes.get(..canonical.len()) != Some(canonical.as_slice()) {
-        return Err(norito::Error::NonCanonicalEncoding);
-    }
-    let used = canonical.len();
-    Ok((value, used))
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for IpaParams {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        decode_from_slice_checked(bytes)
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for PolyOpenPublic {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        decode_from_slice_checked(bytes)
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for IpaProofData {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        decode_from_slice_checked(bytes)
-    }
-}
 /// Norito envelope holding all inputs for verifying a Halo2 IPA polynomial opening.
 ///
 /// This is intended for use as the outer payload inside an IVM TLV of type
 /// `NoritoBytes`. Nested fields use the stable wire types from this crate.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_zkp_halo2::norito_types::OpenVerifyEnvelope")]
 pub struct OpenVerifyEnvelope {
     /// Selector for the canonical transparent IPA parameters.
     pub params: IpaParams,
@@ -225,3 +196,6 @@ impl OpenVerifyEnvelope {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

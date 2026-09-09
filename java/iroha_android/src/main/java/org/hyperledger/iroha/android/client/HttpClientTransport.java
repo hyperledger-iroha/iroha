@@ -51,7 +51,7 @@ import org.hyperledger.iroha.android.alias.AccountFaucetPreparedVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingPreparedVerifier;
 import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
 import org.hyperledger.iroha.android.alias.PreparedTransactionSubmitResponseV1;
-import org.hyperledger.iroha.android.alias.TairaPublicResetMutationBindingV1;
+import org.hyperledger.iroha.android.alias.PreparedOperationBindingV1;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
 import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -1596,14 +1596,14 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<AccountOnboardingPrepareResponseV1> prepareSponsoredAccountOnboarding(
       final AccountOnboardingPlanRequestV1 requestBody,
       final AccountOnboardingPlanReceiptV1 receipt,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final FeePaymentIntent feePayment,
       final String onboardingToken,
       final String expectedAuthority,
       final NetworkId expectedNetworkId) {
     AccountOnboardingReceiptVerifier.requireValidForRequest(
         requestBody, receipt, expectedNetworkId, expectedAuthority);
-    if (!TairaPublicResetMutationBindingV1.ONBOARDING.equals(binding.kind())) {
+    if (!PreparedOperationBindingV1.ONBOARDING.equals(binding.kind())) {
       throw new IllegalArgumentException("onboarding prepare requires an onboarding binding");
     }
     if (binding.executionExpiresAtUnixMs() <= System.currentTimeMillis()) {
@@ -1650,7 +1650,7 @@ public final class HttpClientTransport implements IrohaClient {
           final AccountOnboardingProofRequiredPrepareResponseV1 proofRequired,
           final AccountOnboardingPlanRequestV1 requestBody,
           final AccountOnboardingPlanReceiptV1 receipt,
-          final TairaPublicResetMutationBindingV1 binding,
+          final PreparedOperationBindingV1 binding,
           final String expectedAuthority,
           final NetworkId expectedNetworkId,
           final ToriiCanonicalRequestAuth canonicalAuth) {
@@ -1717,7 +1717,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<AccountFaucetPreparedTransactionV1>
       prepareAccountFaucetTransaction(
           final AccountFaucetClaimV1 claim,
-          final TairaPublicResetMutationBindingV1 binding,
+          final PreparedOperationBindingV1 binding,
           final FeePaymentIntent feePayment,
           final AccountFaucetPolicyV1 policy,
           final NetworkId expectedNetworkId) {
@@ -1725,7 +1725,7 @@ public final class HttpClientTransport implements IrohaClient {
     Objects.requireNonNull(feePayment, "feePayment");
     Objects.requireNonNull(policy, "policy");
     Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
-    if (!TairaPublicResetMutationBindingV1.FAUCET.equals(
+    if (!PreparedOperationBindingV1.FAUCET.equals(
         Objects.requireNonNull(binding, "binding").kind())) {
       throw new IllegalArgumentException("faucet prepare requires a faucet binding");
     }

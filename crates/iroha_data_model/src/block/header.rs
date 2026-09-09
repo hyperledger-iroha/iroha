@@ -34,10 +34,8 @@ mod model {
         Decode,
         Encode,
         IntoSchema,
-    )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[norito(deny_unknown_fields)]
@@ -97,11 +95,21 @@ mod model {
         pub execution_context_hash: Option<HashOf<BlockExecutionContextBundle>>,
     }
     /// The validator index and its corresponding signature on the block header.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, CopyGetters, Getters, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        CopyGetters,
+        Getters,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::block::header::model::BlockSignature")]
     pub struct BlockSignature {
         /// Validator index in the network topology.
         #[getset(get_copy = "pub")]
@@ -112,7 +120,29 @@ mod model {
     }
 }
 pub use self::model::{BlockHeader, BlockSignature};
-/// Internal wire helper with a stable Norito tuple layout used by codecs and tests.
+/// Payload-only tuple adapters for block headers and signatures.
+///
+/// Framed messages use the public [`BlockHeader`] and [`BlockSignature`] codecs.
+///
+/// Tuple adapters do not define independent message frames.
+///
+/// ```compile_fail
+/// use iroha_data_model::block::header::wire::BlockHeaderWire;
+/// fn require_frame<T: norito::NoritoSerialize>() {}
+/// require_frame::<BlockHeaderWire>();
+/// ```
+///
+/// ```compile_fail
+/// use iroha_data_model::block::header::wire::ConfidentialFeatureDigestWire;
+/// fn require_frame<T: norito::NoritoSerialize>() {}
+/// require_frame::<ConfidentialFeatureDigestWire>();
+/// ```
+///
+/// ```compile_fail
+/// use iroha_data_model::block::header::wire::BlockSignatureWire;
+/// fn require_frame<T: norito::NoritoSerialize>() {}
+/// require_frame::<BlockSignatureWire>();
+/// ```
 pub mod wire {
     use super::*;
     use norito::core as ncore;
@@ -146,7 +176,6 @@ pub mod wire {
         /// Optional confidential feature digest committed in the header.
         pub Option<ConfidentialFeatureDigestWire>,
     );
-    impl ncore::NoritoSerialize for BlockHeaderWire {}
     impl ncore::SerializePayload for BlockHeaderWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let tuple = (
@@ -242,7 +271,7 @@ pub mod wire {
             ) as ncore::SerializePayload>::encoded_len_exact(&tuple)
         }
     }
-    impl<'de> ncore::NoritoDeserialize<'de> for BlockHeaderWire {
+    impl<'de> ncore::DeserializePayload<'de> for BlockHeaderWire {
         #[allow(clippy::many_single_char_names, clippy::type_complexity)]
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
             let tuple: (
@@ -277,7 +306,7 @@ pub mod wire {
                     Option<[u8; 32]>,
                     Option<ConfidentialFeatureDigestWire>,
                 ),
-            ) as ncore::NoritoDeserialize>::deserialize(archived.cast());
+            ) as ncore::DeserializePayload>::deserialize(archived.cast());
             let (h, p, m, r, proof_hash, t, v, d, pins, extensions) = tuple;
             let (npos_effects, exec_ctx, sccp_root, f) = extensions;
             Self(
@@ -313,7 +342,6 @@ pub mod wire {
         Option<u32>,
         Option<[u8; 32]>,
     );
-    impl ncore::NoritoSerialize for ConfidentialFeatureDigestWire {}
     impl ncore::SerializePayload for ConfidentialFeatureDigestWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <ConfidentialFeatureDigestTuple as ncore::SerializePayload>::serialize(
@@ -332,17 +360,17 @@ pub mod wire {
             ))
         }
     }
-    impl<'de> ncore::NoritoDeserialize<'de> for ConfidentialFeatureDigestWire {
+    impl<'de> ncore::DeserializePayload<'de> for ConfidentialFeatureDigestWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
             let (vk, poseidon, pedersen, rules, policy): ConfidentialFeatureDigestTuple =
-                <ConfidentialFeatureDigestTuple as ncore::NoritoDeserialize>::deserialize(
+                <ConfidentialFeatureDigestTuple as ncore::DeserializePayload>::deserialize(
                     archived.cast(),
                 );
             Self(vk, poseidon, pedersen, rules, policy)
         }
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
             let (vk, poseidon, pedersen, rules, policy) =
-                <ConfidentialFeatureDigestTuple as ncore::NoritoDeserialize>::try_deserialize(
+                <ConfidentialFeatureDigestTuple as ncore::DeserializePayload>::try_deserialize(
                     archived.cast(),
                 )?;
             Ok(Self(vk, poseidon, pedersen, rules, policy))
@@ -403,7 +431,6 @@ pub mod wire {
             ncore::seq_len_prefix_len(self.payload.len()).checked_add(self.payload.len())
         }
     }
-    impl ncore::NoritoSerialize for BlockSignatureWireRef<'_> {}
     impl ncore::SerializePayload for BlockSignatureWireRef<'_> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             let flags = Self::tuple_flags();
@@ -445,7 +472,6 @@ pub mod wire {
                 .checked_add(payload_wire_len)
         }
     }
-    impl ncore::NoritoSerialize for BlockSignatureWire {}
     impl ncore::SerializePayload for BlockSignatureWire {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             ncore::SerializePayload::serialize(&BlockSignatureWireRef::new(self.0, &self.1), writer)
@@ -457,15 +483,15 @@ pub mod wire {
             ncore::SerializePayload::encoded_len_exact(&BlockSignatureWireRef::new(self.0, &self.1))
         }
     }
-    impl<'de> ncore::NoritoDeserialize<'de> for BlockSignatureWire {
+    impl<'de> ncore::DeserializePayload<'de> for BlockSignatureWire {
         fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
             let (index, payload): (u64, Vec<u8>) =
-                <(u64, Vec<u8>) as ncore::NoritoDeserialize>::deserialize(archived.cast());
+                <(u64, Vec<u8>) as ncore::DeserializePayload>::deserialize(archived.cast());
             Self(index, payload)
         }
         fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
             let (index, payload) =
-                <(u64, Vec<u8>) as ncore::NoritoDeserialize>::try_deserialize(archived.cast())?;
+                <(u64, Vec<u8>) as ncore::DeserializePayload>::try_deserialize(archived.cast())?;
             Ok(Self(index, payload))
         }
     }
@@ -671,7 +697,7 @@ impl BlockSignature {
         Self { index, signature }
     }
 }
-impl ncore::NoritoSerialize for BlockSignature {}
+
 impl ncore::SerializePayload for BlockSignature {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::SerializePayload::serialize(
@@ -692,7 +718,8 @@ impl ncore::SerializePayload for BlockSignature {
         ))
     }
 }
-impl<'de> ncore::NoritoDeserialize<'de> for BlockSignature {
+
+impl<'de> ncore::DeserializePayload<'de> for BlockSignature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("BlockSignature decode")
     }
@@ -787,9 +814,9 @@ mod tests {
         let encoded = norito::to_bytes(&block_signature).expect("encode block signature");
         let payload = &encoded[norito::core::Header::SIZE..];
         let archived_sig = norito::from_bytes::<BlockSignature>(&encoded).expect("archived sig");
-        let decoded_sig = norito::core::NoritoDeserialize::deserialize(archived_sig);
+        let decoded_sig = norito::core::DeserializePayload::deserialize(archived_sig);
         assert_eq!(decoded_sig, block_signature);
-        let decoded_try = norito::core::NoritoDeserialize::try_deserialize(archived_sig)
+        let decoded_try = norito::core::DeserializePayload::try_deserialize(archived_sig)
             .expect("try_deserialize BlockSignature");
         assert_eq!(decoded_try, block_signature);
         let decoded_adaptive =
@@ -818,7 +845,7 @@ mod tests {
         let archived =
             norito::from_bytes::<BlockSignature>(&encoded).expect("archive block signature");
         let err =
-            <BlockSignature as norito::core::NoritoDeserialize<'_>>::try_deserialize(archived)
+            <BlockSignature as norito::core::DeserializePayload<'_>>::try_deserialize(archived)
                 .expect_err("all-zero block signature payload must fail closed");
         match err {
             norito::core::Error::Message(message) => {
@@ -848,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "json")]
+
     fn block_header_json_requires_every_nullable_commitment_slot() {
         let header = BlockHeader::new(nonzero!(3_u64), None, None, None, 0, 0);
         let nullable_fields = [
@@ -931,9 +958,9 @@ mod tests {
         // Header-framed bytes and decode via the Norito archive for inspection
         let header_bytes = norito::to_bytes(&bs).expect("encode block signature");
         let archived_sig = norito::from_bytes::<BlockSignature>(&header_bytes).expect("from_bytes");
-        let decoded_hdr = norito::core::NoritoDeserialize::deserialize(archived_sig);
+        let decoded_hdr = norito::core::DeserializePayload::deserialize(archived_sig);
         let decoded_try =
-            norito::core::NoritoDeserialize::try_deserialize(archived_sig).expect("fallible");
+            norito::core::DeserializePayload::try_deserialize(archived_sig).expect("fallible");
         eprintln!("BS bare len={} hdr len={}", bare.len(), header_bytes.len());
         eprintln!("bare[0..32] = {}", hex_prefix(&bare, 32));
         eprintln!("hdr[0..32]  = {}", hex_prefix(&header_bytes, 32));
@@ -980,7 +1007,7 @@ mod tests {
             .expect("archived signature vector");
         let _payload_guard = norito::core::PayloadCtxGuard::enter(archived.bytes());
         let decoded =
-            <Vec<BlockSignature> as norito::core::NoritoDeserialize<'_>>::try_deserialize(
+            <Vec<BlockSignature> as norito::core::DeserializePayload<'_>>::try_deserialize(
                 archived.as_ref(),
             )
             .expect("decode packed Vec<BlockSignature>");

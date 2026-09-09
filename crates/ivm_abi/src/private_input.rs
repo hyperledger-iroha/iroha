@@ -43,7 +43,8 @@ pub const PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1: [u8; 48] = [
     0x0c, 0xba, 0x9e, 0x5f, 0x64, 0x8b, 0xdf, 0xd7, 0x44, 0x0d, 0xd7, 0xd9, 0xef, 0xb6, 0x2e, 0x26,
 ];
 /// Exact numeric payload kind carried by a private-input record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Encode, Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::private_input::PrivateInputKindV1")]
 pub enum PrivateInputKindV1 {
     /// Kotodama `int` encoded as `IntValueV1`.
     #[codec(index = 0)]
@@ -91,8 +92,11 @@ impl PrivateInputKindV1 {
 /// mantissa and not JSON.  Constructing this Rust value does not validate
 /// untrusted bytes; the VM host always performs bounded canonical validation
 /// after gas has been debited.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kotodama.PrivateInputRecordV1")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "ivm_abi::private_input::PrivateInputRecordV1",
+    frame = "iroha.kotodama.PrivateInputRecordV1"
+)]
 pub struct PrivateInputRecordV1 {
     /// Nominal numeric payload kind.
     pub kind: PrivateInputKindV1,
@@ -139,8 +143,21 @@ mod tests {
     #[test]
     fn private_input_record_uses_its_nominal_v1_schema() {
         assert_eq!(
-            <PrivateInputRecordV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<PrivateInputRecordV1>(),
             norito::core::schema_hash_for_name(PRIVATE_INPUT_RECORD_NAME_V1)
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::PrivateInputKindV1>(
+            "ivm_abi::private_input::PrivateInputKindV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::PrivateInputRecordV1>(
+            "ivm_abi::private_input::PrivateInputRecordV1",
         );
     }
 }

@@ -23,8 +23,6 @@ where
         captured["deserialize_hash"].as_str().unwrap(),
         hex::encode(hash)
     );
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), hash);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), hash);
 }
 
 pub(crate) fn record<T>(specimen: &str, value: &T) -> json::Value
@@ -35,21 +33,16 @@ where
     let decoded: T = norito::decode_canonical(&frame).expect("decode fixture frame");
     assert_eq!(&decoded, value, "{specimen}");
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
-    assert_eq!(frame[6..22], <T as NoritoSerialize>::schema_hash());
-    assert_eq!(
-        <T as NoritoSerialize>::schema_hash(),
-        <T as NoritoDeserialize>::schema_hash(),
-        "{specimen} codec directions"
-    );
+    assert_eq!(frame[6..22], norito::schema::identity::frame_hash::<T>());
     assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
     let mut wrong_domain = frame.clone();
     wrong_domain[6] ^= 1;
     assert!(norito::decode_canonical::<T>(&wrong_domain).is_err());
     norito::json!({
         "specimen": specimen,
-        "nominal_name": (std::any::type_name::<T>()),
-        "serialize_hash": (hex::encode(<T as NoritoSerialize>::schema_hash())),
-        "deserialize_hash": (hex::encode(<T as NoritoDeserialize>::schema_hash())),
+        "nominal_name": (T::nominal_name()),
+        "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
+        "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "canonical_frame_hex": (hex::encode(&frame)),
         "canonical_payload_hex": (hex::encode(&frame[norito::core::Header::SIZE..])),
     })
@@ -209,18 +202,11 @@ fn current_records() -> Vec<json::Value> {
 
 #[test]
 fn publication_wire_frames_match_pre_extraction_goldens() {
-    let mut expected: Vec<json::Value> = json::from_str(include_str!(
+    let expected: Vec<json::Value> = json::from_str(include_str!(
         "../../tests/fixtures/musubi_publication_frames.json"
     ))
     .expect("publication frame fixtures");
-    let mut actual = current_records();
-    // Compiler names describe the captured source locations. Explicit identities and every
-    // frame, payload and transcript below must survive a physical module/crate move unchanged.
-    for rows in [&mut expected, &mut actual] {
-        for row in rows {
-            row.as_object_mut().unwrap().remove("nominal_name");
-        }
-    }
+    let actual = current_records();
     assert_eq!(actual, expected);
 }
 

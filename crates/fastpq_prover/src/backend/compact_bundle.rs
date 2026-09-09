@@ -64,8 +64,11 @@ impl Default for BundleLimits {
 }
 
 /// Canonical carrier only; decoding it does not validate any contained proof.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::OrdinaryTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::BundleWire",
+    frame = "fastpq_prover::compact_v1::OrdinaryTransferBundleV1"
+)]
 pub(super) struct BundleWire {
     /// Exact bundle format version.
     pub(super) version: u16,
@@ -79,8 +82,11 @@ pub(super) struct BundleWire {
 ///
 /// Although its structural fields match the ordinary carrier, the nominal
 /// schema differs. Re-encoding a carrier cannot retag child segment identities.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::AxtTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::AxtBundleWire",
+    frame = "fastpq_prover::compact_v1::AxtTransferBundleV1"
+)]
 pub(super) struct AxtBundleWire {
     /// Exact bundle format version.
     pub(super) version: u16,
@@ -422,7 +428,6 @@ fn decode_axt_wire_with_policy(
 }
 
 /// Serialize a bounded carrier; this helper does not verify its child frames.
-#[cfg(test)]
 pub(super) fn encode_wire(
     wire: &BundleWire,
     expected_count: usize,
@@ -436,7 +441,6 @@ pub(super) fn encode_wire(
 }
 
 /// Encode a bounded nominal AXT carrier without verifying its child frames.
-#[cfg(test)]
 pub(super) fn encode_axt_wire(
     wire: &AxtBundleWire,
     expected_count: usize,
@@ -571,7 +575,6 @@ fn preflight_count_for(count: usize, limits: BundleLimits, verifier: SharedVerif
     check_limit("max_bundle_queries", queries, limits.max_total_queries)
 }
 
-#[cfg(test)]
 fn preflight_wire(wire: &BundleWire, expected_count: usize, limits: BundleLimits) -> Result<()> {
     preflight_wire_parts(
         wire.version,
@@ -582,7 +585,6 @@ fn preflight_wire(wire: &BundleWire, expected_count: usize, limits: BundleLimits
     )
 }
 
-#[cfg(test)]
 fn preflight_wire_parts(
     version: u16,
     intermediate_roots: &[[u8; 32]],
@@ -1428,8 +1430,8 @@ mod tests {
     fn final_bundle_headers_are_nominal_and_reject_every_retired_carrier() {
         macro_rules! retired_carrier {
             ($name:ident,$schema:literal) => {
-                #[derive(NoritoSerialize)]
-                #[norito(schema_name=$schema)]
+                #[derive(NoritoSerialize, norito::NoritoSchema)]
+                #[norito_schema(name = $schema)]
                 struct $name {
                     version: u16,
                     intermediate_roots: Vec<[u8; 32]>,

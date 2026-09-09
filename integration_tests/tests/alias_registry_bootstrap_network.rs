@@ -193,8 +193,7 @@ async fn read<T: Send + 'static>(
 }
 
 async fn height(client: &Client) -> Result<u64> {
-    let client = client.clone();
-    read(move || Ok(client.client().get_status()?.blocks)).await
+    Ok(client.client().status().get().await?.blocks)
 }
 
 async fn lane_lifecycle_status(client: &Client) -> Result<LaneLifecycleStatusV1> {
@@ -234,7 +233,7 @@ async fn observe_catalog_expansion(
     // prove this deliberately lane-free catalog addition.
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join("v1/sns/names/account-alias/catalog-probe@mibank.bpng")?;
     let mut response = reqwest::Client::builder()
         .timeout(Duration::from_secs(20))

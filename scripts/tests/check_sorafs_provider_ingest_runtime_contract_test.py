@@ -485,7 +485,41 @@ def test_provider_ingest_uses_one_canonical_owned_completion_codec() -> None:
         "store_completion_transaction",
         "ProviderIngestOutbox::open",
         "validate_header_flags",
+        "norito::schema::identity::frame_hash::<Box<StoredCompletionDeliveryV1>>()",
     ):
         assert contract in tests, f"missing canonical completion contract: {contract}"
     assert "pub type FinalizedProviderIngestRuntimeResultV1<" in node_lib
     assert ") -> FinalizedProviderIngestRuntimeResultV1<" in node_lib
+
+
+@pytest.mark.parametrize(
+    "contract",
+    (
+        "owned_box_allocation_bytes::<StoredCompletionDeliveryV1>()",
+        "TotalAllocationExceeded",
+        "norito::schema::identity::frame_hash::<Box<StoredCompletionDeliveryV1>>()",
+    ),
+)
+def test_canonical_completion_guard_rejects_missing_allocation_or_frame_ownership(
+    monkeypatch: pytest.MonkeyPatch, contract: str
+) -> None:
+    """Reject disconnected owned-allocation and current-schema regression evidence."""
+    test_provider_ingest_uses_one_canonical_owned_completion_codec()
+    completion_path = (
+        NODE_OUTBOX.parent / "provider_ingest_outbox" / "tests" / "canonical_completion.rs"
+    )
+    original_read = _read
+    original = original_read(completion_path)
+    assert original.count(contract) == 1
+    mutated = original.replace(contract, "REMOVED_CODEC_CONTRACT", 1)
+    assert mutated != original
+    monkeypatch.setitem(
+        globals(),
+        "_read",
+        lambda path: mutated if path == completion_path else original_read(path),
+    )
+    with pytest.raises(
+        AssertionError,
+        match=re.escape(f"missing canonical completion contract: {contract}"),
+    ):
+        test_provider_ingest_uses_one_canonical_owned_completion_codec()

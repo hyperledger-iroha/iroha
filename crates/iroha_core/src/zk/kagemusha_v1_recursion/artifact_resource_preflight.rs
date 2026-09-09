@@ -1,4 +1,4 @@
-//! Early compact-V1 proving-key and Processed verifier-key resource prediction for fixed Pasta circuits.
+//! Early structured-V1 proving-key and Processed verifier-key resource prediction for fixed Pasta circuits.
 //!
 //! Consuming Kagemusha helper key generation chooses compressed or direct selector encoding from
 //! exact synthesized profiles, checking both unchanged key limits before polynomial expansion.
@@ -23,13 +23,13 @@ use iroha_data_model::kagemusha::{
 
 use super::{KagemushaArtifactGenerationErrorV1, KagemushaPastaParityV1};
 
-const PASTA_COMPACT_SCALAR_BYTES: u64 = 32;
+const PASTA_PROCESSED_SCALAR_BYTES: u64 = 32;
 const PASTA_PROCESSED_POINT_BYTES: u64 = 32;
 const VERIFYING_KEY_HEADER_BYTES: u64 = 1 + 4 + 1 + 4;
 const POLYNOMIAL_LENGTH_BYTES: u64 = 4;
 const POLYNOMIAL_VECTOR_LENGTH_BYTES: u64 = 4;
 const PROVING_KEY_MASK_POLYNOMIALS: u64 = 3;
-const COMPACT_PROVING_KEY_HEADER_BYTES: u64 = 16 + 32 + 8;
+const STRUCTURED_PROVING_KEY_HEADER_BYTES: u64 = 16 + 32 + 8;
 const PROVING_KEY_POLYNOMIAL_VECTORS: u64 = 2;
 // At k=16, 1,024 advice columns already require at least 4 GiB for just two 32-byte
 // domain-sized field buffers, before assigned values, FFT/MSM scratch, fixed columns, or keys.
@@ -45,12 +45,12 @@ const KAGEMUSHA_HELPER_ADVICE_COLUMN_MAX_V1: u64 = 1_024;
 /// proving while the claim arithmetization is being compacted.  This type does not relax the
 /// advice-column ceiling and is intentionally not exposed outside the recursion generator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct KagemushaCompactKeyLimitsV1 {
+pub(super) struct KagemushaKeyLimitsV1 {
     pub(super) proving_key_maximum: u64,
     pub(super) verifying_key_maximum: u64,
 }
 
-impl KagemushaCompactKeyLimitsV1 {
+impl KagemushaKeyLimitsV1 {
     pub(super) const fn release() -> Self {
         Self {
             proving_key_maximum: KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
@@ -72,9 +72,9 @@ impl KagemushaCompactKeyLimitsV1 {
     }
 }
 
-/// Column inventory and exact compact-PK/Processed-VK byte prediction for one Pasta circuit.
+/// Column inventory and explicitly classified structured-PK/Processed-VK prediction.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct KagemushaCompactKeyResourceProfileV1 {
+pub(super) struct KagemushaKeyResourceProfileV1 {
     /// Advice columns configured by the circuit.
     pub(super) advice_columns: u64,
     /// Instance columns configured by the circuit.
@@ -93,25 +93,53 @@ pub(super) struct KagemushaCompactKeyResourceProfileV1 {
     pub(super) selector_bitmap_bytes: u64,
     /// Whether the prediction uses compressed selector serialization.
     pub(super) compress_selectors: bool,
-    /// Exact predicted Processed verifier-key bytes.
+    /// Whether these byte counts are configure-only bounds or synthesized exact values.
+    pub(super) prediction: KeyResourcePredictionV1,
+    /// Predicted Processed verifier-key bytes, with precision given by `prediction`.
     pub(super) verifying_key_bytes: u64,
-    /// Exact predicted compact-V1 proving-key bytes, including its curve/frame header.
+    /// Predicted structured-V1 proving-key bytes, including its curve/frame header.
     pub(super) proving_key_bytes: u64,
+}
+
+/// Precision of a resource prediction; a configure-only pass never proves exact feasibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum KeyResourcePredictionV1 {
+    /// Optimistic configure-only bound, used only to reject impossible layouts.
+    ConfiguredLowerBound,
+    /// Conservative configure-only upper bound for the borrowed test guard.
+    #[cfg(test)]
+    ConfiguredUpperBound,
+    /// Exact synthesized selector strategy and fixed-column mode inventory.
+    SynthesizedExact,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FixedColumnPayloadV1 {
+    LowerBound,
+    #[cfg(test)]
+    UpperBound,
+    Exact {
+        constant: usize,
+        binary: usize,
+        raw: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ResourcePredictionErrorV1 {
-    UnsupportedCompactEncodingWidth,
+    UnsupportedEncodingWidth,
     DomainExponentDoesNotFitU32,
     PolynomialDomainDoesNotFitU32,
     ColumnCountDoesNotFitU32,
     ArithmeticOverflow,
+    FixedModeCountMismatch,
+    PermutationCellsDoNotFitU32,
 }
 
 impl core::fmt::Display for ResourcePredictionErrorV1 {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         formatter.write_str(match self {
-            Self::UnsupportedCompactEncodingWidth => {
+            Self::UnsupportedEncodingWidth => {
                 "Pasta resource prediction requires 32-byte processed scalars and points"
             }
             Self::DomainExponentDoesNotFitU32 => "domain exponent does not fit u32",
@@ -119,7 +147,13 @@ impl core::fmt::Display for ResourcePredictionErrorV1 {
                 "polynomial domain length does not fit the serialized u32 prefix"
             }
             Self::ColumnCountDoesNotFitU32 => "column count does not fit the serialized u32 prefix",
-            Self::ArithmeticOverflow => "compact key byte prediction overflowed u64",
+            Self::ArithmeticOverflow => "structured key byte prediction overflowed u64",
+            Self::FixedModeCountMismatch => {
+                "fixed mode counts do not match the selected column inventory"
+            }
+            Self::PermutationCellsDoNotFitU32 => {
+                "structured permutation cell count exceeds the u32 codec bound"
+            }
         })
     }
 }
@@ -131,15 +165,15 @@ fn checked_count(value: usize) -> Result<u64, ResourcePredictionErrorV1> {
 }
 
 #[cfg(test)]
-fn predict_compact_key_resources_v1(
+fn predict_key_resources_v1(
     k: usize,
     advice_columns: usize,
     instance_columns: usize,
     configured_fixed_columns: usize,
     selector_columns: usize,
     permutation_columns: usize,
-) -> Result<KagemushaCompactKeyResourceProfileV1, ResourcePredictionErrorV1> {
-    predict_compact_key_resources_with_selectors_v1(
+) -> Result<KagemushaKeyResourceProfileV1, ResourcePredictionErrorV1> {
+    predict_key_resources_with_selectors_v1(
         k,
         advice_columns,
         instance_columns,
@@ -152,7 +186,7 @@ fn predict_compact_key_resources_v1(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn predict_compact_key_resources_with_selectors_v1(
+fn predict_key_resources_with_selectors_v1(
     k: usize,
     advice_columns: usize,
     instance_columns: usize,
@@ -161,7 +195,32 @@ fn predict_compact_key_resources_with_selectors_v1(
     materialized_selector_columns: usize,
     permutation_columns: usize,
     compress_selectors: bool,
-) -> Result<KagemushaCompactKeyResourceProfileV1, ResourcePredictionErrorV1> {
+) -> Result<KagemushaKeyResourceProfileV1, ResourcePredictionErrorV1> {
+    predict_key_resources_with_modes_v1(
+        k,
+        advice_columns,
+        instance_columns,
+        configured_fixed_columns,
+        selector_columns,
+        materialized_selector_columns,
+        permutation_columns,
+        compress_selectors,
+        FixedColumnPayloadV1::LowerBound,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn predict_key_resources_with_modes_v1(
+    k: usize,
+    advice_columns: usize,
+    instance_columns: usize,
+    configured_fixed_columns: usize,
+    selector_columns: usize,
+    materialized_selector_columns: usize,
+    permutation_columns: usize,
+    compress_selectors: bool,
+    fixed_payload: FixedColumnPayloadV1,
+) -> Result<KagemushaKeyResourceProfileV1, ResourcePredictionErrorV1> {
     let k = u32::try_from(k).map_err(|_| ResourcePredictionErrorV1::DomainExponentDoesNotFitU32)?;
     let domain_rows = 1_u64
         .checked_shl(k)
@@ -184,7 +243,7 @@ fn predict_compact_key_resources_with_selectors_v1(
     }
 
     let polynomial_bytes = domain_rows
-        .checked_mul(PASTA_COMPACT_SCALAR_BYTES)
+        .checked_mul(PASTA_PROCESSED_SCALAR_BYTES)
         .and_then(|bytes| bytes.checked_add(POLYNOMIAL_LENGTH_BYTES))
         .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
     let selector_bitmap_bytes = if compress_selectors {
@@ -200,24 +259,85 @@ fn predict_compact_key_resources_with_selectors_v1(
         .and_then(|bytes| bytes.checked_add(VERIFYING_KEY_HEADER_BYTES))
         .and_then(|bytes| bytes.checked_add(selector_bitmap_bytes))
         .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
-    // Compact V1 retains each fixed/permutation polynomial once in Lagrange basis;
-    // the checked reader reconstructs coefficient bases without changing the VK encoding.
-    let proving_key_polynomials = serialized_fixed_columns
-        .checked_add(permutation_columns)
-        .and_then(|columns| columns.checked_add(PROVING_KEY_MASK_POLYNOMIALS))
+    let permutation_cells = domain_rows
+        .checked_mul(permutation_columns)
         .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
-    let proving_key_bytes = proving_key_polynomials
+    if permutation_cells > u64::from(u32::MAX) {
+        return Err(ResourcePredictionErrorV1::PermutationCellsDoNotFitU32);
+    }
+    let (fixed_bytes, prediction) = match fixed_payload {
+        FixedColumnPayloadV1::LowerBound => {
+            // At tiny domains a nonconstant binary payload can be smaller than a constant
+            // scalar. Constant priority does not justify treating 32 bytes as a lower bound.
+            let payload = PASTA_PROCESSED_SCALAR_BYTES.min(domain_rows.div_ceil(8));
+            let bytes = serialized_fixed_columns
+                .checked_mul(1 + payload)
+                .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
+            (bytes, KeyResourcePredictionV1::ConfiguredLowerBound)
+        }
+        #[cfg(test)]
+        FixedColumnPayloadV1::UpperBound => {
+            let payload = domain_rows
+                .checked_mul(PASTA_PROCESSED_SCALAR_BYTES)
+                .and_then(|bytes| bytes.checked_add(1))
+                .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
+            let bytes = serialized_fixed_columns
+                .checked_mul(payload)
+                .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
+            (bytes, KeyResourcePredictionV1::ConfiguredUpperBound)
+        }
+        FixedColumnPayloadV1::Exact {
+            constant,
+            binary,
+            raw,
+        } => {
+            let constant = checked_count(constant)?;
+            let binary = checked_count(binary)?;
+            let raw = checked_count(raw)?;
+            if constant
+                .checked_add(binary)
+                .and_then(|n| n.checked_add(raw))
+                .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?
+                != serialized_fixed_columns
+            {
+                return Err(ResourcePredictionErrorV1::FixedModeCountMismatch);
+            }
+            let bytes = constant
+                .checked_mul(1 + PASTA_PROCESSED_SCALAR_BYTES)
+                .and_then(|bytes| {
+                    binary
+                        .checked_mul(1 + domain_rows.div_ceil(8))
+                        .and_then(|binary_bytes| bytes.checked_add(binary_bytes))
+                })
+                .and_then(|bytes| {
+                    domain_rows
+                        .checked_mul(PASTA_PROCESSED_SCALAR_BYTES)
+                        .and_then(|payload| payload.checked_add(1))
+                        .and_then(|payload| raw.checked_mul(payload))
+                        .and_then(|raw_bytes| bytes.checked_add(raw_bytes))
+                })
+                .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
+            (bytes, KeyResourcePredictionV1::SynthesizedExact)
+        }
+    };
+    let proving_key_bytes = PROVING_KEY_MASK_POLYNOMIALS
         .checked_mul(polynomial_bytes)
+        .and_then(|bytes| bytes.checked_add(fixed_bytes))
+        .and_then(|bytes| {
+            permutation_cells
+                .checked_mul(4)
+                .and_then(|sigma_bytes| bytes.checked_add(sigma_bytes))
+        })
         .and_then(|bytes| {
             PROVING_KEY_POLYNOMIAL_VECTORS
                 .checked_mul(POLYNOMIAL_VECTOR_LENGTH_BYTES)
                 .and_then(|headers| bytes.checked_add(headers))
         })
         .and_then(|bytes| bytes.checked_add(verifying_key_bytes))
-        .and_then(|bytes| bytes.checked_add(COMPACT_PROVING_KEY_HEADER_BYTES))
+        .and_then(|bytes| bytes.checked_add(STRUCTURED_PROVING_KEY_HEADER_BYTES))
         .ok_or(ResourcePredictionErrorV1::ArithmeticOverflow)?;
 
-    Ok(KagemushaCompactKeyResourceProfileV1 {
+    Ok(KagemushaKeyResourceProfileV1 {
         advice_columns,
         instance_columns,
         configured_fixed_columns,
@@ -227,6 +347,7 @@ fn predict_compact_key_resources_with_selectors_v1(
         permutation_columns,
         selector_bitmap_bytes,
         compress_selectors,
+        prediction,
         verifying_key_bytes,
         proving_key_bytes,
     })
@@ -237,7 +358,7 @@ fn configured_compressed_key_resources_v1<C, ConcreteCircuit>(
     k: usize,
     circuit: &ConcreteCircuit,
     minimum: bool,
-) -> Result<KagemushaCompactKeyResourceProfileV1, ResourcePredictionErrorV1>
+) -> Result<KagemushaKeyResourceProfileV1, ResourcePredictionErrorV1>
 where
     C: CurveAffine,
     ConcreteCircuit: Circuit<C::Scalar>,
@@ -245,7 +366,7 @@ where
     if C::Scalar::default().to_repr().as_ref().len() != 32
         || C::default().to_bytes().as_ref().len() != 32
     {
-        return Err(ResourcePredictionErrorV1::UnsupportedCompactEncodingWidth);
+        return Err(ResourcePredictionErrorV1::UnsupportedEncodingWidth);
     }
     let mut constraint_system = ConstraintSystem::<C::Scalar>::default();
     let _ = ConcreteCircuit::configure_with_params(&mut constraint_system, circuit.params());
@@ -256,7 +377,7 @@ where
         // materialization, independent of synthesized activations.
         constraint_system.num_selectors()
     };
-    predict_compact_key_resources_with_selectors_v1(
+    predict_key_resources_with_modes_v1(
         k,
         constraint_system.num_advice_columns(),
         constraint_system.num_instance_columns(),
@@ -265,6 +386,11 @@ where
         materialized_selector_columns,
         constraint_system.permutation().get_columns().len(),
         true,
+        if minimum {
+            FixedColumnPayloadV1::LowerBound
+        } else {
+            FixedColumnPayloadV1::UpperBound
+        },
     )
 }
 
@@ -272,7 +398,7 @@ where
 fn configured_minimum_compressed_key_resources_for_params_v1<C, ConcreteCircuit>(
     k: usize,
     circuit_params: ConcreteCircuit::Params,
-) -> Result<KagemushaCompactKeyResourceProfileV1, ResourcePredictionErrorV1>
+) -> Result<KagemushaKeyResourceProfileV1, ResourcePredictionErrorV1>
 where
     C: CurveAffine,
     ConcreteCircuit: Circuit<C::Scalar>,
@@ -284,7 +410,7 @@ where
 fn configured_key_encoding_profiles_for_params_v1<C, ConcreteCircuit>(
     k: usize,
     circuit_params: ConcreteCircuit::Params,
-) -> Result<[KagemushaCompactKeyResourceProfileV1; 2], ResourcePredictionErrorV1>
+) -> Result<[KagemushaKeyResourceProfileV1; 2], ResourcePredictionErrorV1>
 where
     C: CurveAffine,
     ConcreteCircuit: Circuit<C::Scalar>,
@@ -292,11 +418,11 @@ where
     if C::Scalar::default().to_repr().as_ref().len() != 32
         || C::default().to_bytes().as_ref().len() != 32
     {
-        return Err(ResourcePredictionErrorV1::UnsupportedCompactEncodingWidth);
+        return Err(ResourcePredictionErrorV1::UnsupportedEncodingWidth);
     }
     let mut constraint_system = ConstraintSystem::<C::Scalar>::default();
     let _ = ConcreteCircuit::configure_with_params(&mut constraint_system, circuit_params);
-    let compressed = predict_compact_key_resources_with_selectors_v1(
+    let compressed = predict_key_resources_with_selectors_v1(
         k,
         constraint_system.num_advice_columns(),
         constraint_system.num_instance_columns(),
@@ -306,7 +432,7 @@ where
         constraint_system.permutation().get_columns().len(),
         true,
     )?;
-    let direct = predict_compact_key_resources_with_selectors_v1(
+    let direct = predict_key_resources_with_selectors_v1(
         k,
         constraint_system.num_advice_columns(),
         constraint_system.num_instance_columns(),
@@ -319,20 +445,20 @@ where
     Ok([compressed, direct])
 }
 
-fn exact_compact_key_resources_v1<C: CurveAffine>(
+fn exact_key_resources_v1<C: CurveAffine>(
     profile: KeygenCircuitResourceProfile,
-) -> Result<KagemushaCompactKeyResourceProfileV1, ResourcePredictionErrorV1> {
+) -> Result<KagemushaKeyResourceProfileV1, ResourcePredictionErrorV1> {
     if C::Scalar::default().to_repr().as_ref().len() != 32
         || C::default().to_bytes().as_ref().len() != 32
     {
-        return Err(ResourcePredictionErrorV1::UnsupportedCompactEncodingWidth);
+        return Err(ResourcePredictionErrorV1::UnsupportedEncodingWidth);
     }
     if !profile.domain_rows.is_power_of_two() {
         return Err(ResourcePredictionErrorV1::PolynomialDomainDoesNotFitU32);
     }
     let k = usize::try_from(profile.domain_rows.ilog2())
         .map_err(|_| ResourcePredictionErrorV1::DomainExponentDoesNotFitU32)?;
-    predict_compact_key_resources_with_selectors_v1(
+    predict_key_resources_with_modes_v1(
         k,
         profile.advice_columns,
         profile.instance_columns,
@@ -341,16 +467,21 @@ fn exact_compact_key_resources_v1<C: CurveAffine>(
         profile.materialized_selector_columns,
         profile.permutation_columns,
         profile.compress_selectors,
+        FixedColumnPayloadV1::Exact {
+            constant: profile.constant_fixed_columns,
+            binary: profile.binary_fixed_columns,
+            raw: profile.raw_fixed_columns,
+        },
     )
 }
 
 fn enforce_helper_key_limits_v1(
     parity: KagemushaPastaParityV1,
     kind: &'static str,
-    profile: KagemushaCompactKeyResourceProfileV1,
+    profile: KagemushaKeyResourceProfileV1,
     proving_key_maximum: u64,
     verifying_key_maximum: u64,
-) -> Result<KagemushaCompactKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1> {
+) -> Result<KagemushaKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1> {
     if profile.advice_columns > KAGEMUSHA_HELPER_ADVICE_COLUMN_MAX_V1 {
         return Err(KagemushaArtifactGenerationErrorV1::CircuitBuild(format!(
             "{kind} configures {} advice columns, exceeding the hard pre-synthesis maximum of {KAGEMUSHA_HELPER_ADVICE_COLUMN_MAX_V1}",
@@ -392,20 +523,20 @@ pub(super) fn preflight_helper_key_resources_v1<C, ConcreteCircuit>(
     circuit: &ConcreteCircuit,
     parity: KagemushaPastaParityV1,
     kind: &'static str,
-) -> Result<KagemushaCompactKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1>
+) -> Result<KagemushaKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1>
 where
     C: CurveAffine,
     ConcreteCircuit: Circuit<C::Scalar>,
 {
     let k = usize::try_from(params.k()).map_err(|_| {
         KagemushaArtifactGenerationErrorV1::CircuitBuild(format!(
-            "{kind} compact-key resource prediction failed: domain exponent does not fit usize"
+            "{kind} structured-key resource prediction failed: domain exponent does not fit usize"
         ))
     })?;
     let profile = configured_compressed_key_resources_v1::<C, ConcreteCircuit>(k, circuit, false)
         .map_err(|error| {
         KagemushaArtifactGenerationErrorV1::CircuitBuild(format!(
-            "{kind} compact-key resource prediction failed: {error}"
+            "{kind} structured-key resource prediction failed: {error}"
         ))
     })?;
     enforce_helper_key_limits_v1(
@@ -423,11 +554,11 @@ where
 /// on an exact tie. A PK-feasible encoding and a different VK-feasible encoding do not combine
 /// into a feasible choice. If neither fits, return the first concrete rejection in that order.
 fn choose_helper_key_encoding_v1(
-    mut profiles: [KagemushaCompactKeyResourceProfileV1; 2],
+    mut profiles: [KagemushaKeyResourceProfileV1; 2],
     parity: KagemushaPastaParityV1,
     kind: &'static str,
-    limits: KagemushaCompactKeyLimitsV1,
-) -> Result<KagemushaCompactKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1> {
+    limits: KagemushaKeyLimitsV1,
+) -> Result<KagemushaKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1> {
     profiles.sort_by_key(|profile| {
         (
             profile.proving_key_bytes,
@@ -456,15 +587,15 @@ fn choose_synthesized_helper_key_encoding_v1<C: CurveAffine>(
     profiles: KeygenSelectorProfiles,
     parity: KagemushaPastaParityV1,
     kind: &'static str,
-    limits: KagemushaCompactKeyLimitsV1,
-) -> Result<(bool, KagemushaCompactKeyResourceProfileV1), KagemushaArtifactGenerationErrorV1> {
-    let predicted = [profiles.compressed, profiles.direct].map(exact_compact_key_resources_v1::<C>);
+    limits: KagemushaKeyLimitsV1,
+) -> Result<(bool, KagemushaKeyResourceProfileV1), KagemushaArtifactGenerationErrorV1> {
+    let predicted = [profiles.compressed, profiles.direct].map(exact_key_resources_v1::<C>);
     let [compressed, direct] = predicted;
     let profiles = compressed
         .and_then(|compressed| direct.map(|direct| [compressed, direct]))
         .map_err(|error| {
             KagemushaArtifactGenerationErrorV1::CircuitBuild(format!(
-                "{kind} exact compact-key resource prediction failed: {error}"
+                "{kind} exact structured-key resource prediction failed: {error}"
             ))
         })?;
     let selected = choose_helper_key_encoding_v1(profiles, parity, kind, limits)?;
@@ -484,7 +615,7 @@ pub(super) fn preflight_helper_key_configuration_v1<C, ConcreteCircuit>(
     circuit_params: ConcreteCircuit::Params,
     parity: KagemushaPastaParityV1,
     kind: &'static str,
-) -> Result<KagemushaCompactKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1>
+) -> Result<KagemushaKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1>
 where
     C: CurveAffine,
     ConcreteCircuit: Circuit<C::Scalar>,
@@ -494,7 +625,7 @@ where
         circuit_params,
         parity,
         kind,
-        KagemushaCompactKeyLimitsV1::release(),
+        KagemushaKeyLimitsV1::release(),
     )
 }
 
@@ -508,8 +639,8 @@ pub(super) fn preflight_key_configuration_with_limits_v1<C, ConcreteCircuit>(
     circuit_params: ConcreteCircuit::Params,
     parity: KagemushaPastaParityV1,
     kind: &'static str,
-    limits: KagemushaCompactKeyLimitsV1,
-) -> Result<KagemushaCompactKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1>
+    limits: KagemushaKeyLimitsV1,
+) -> Result<KagemushaKeyResourceProfileV1, KagemushaArtifactGenerationErrorV1>
 where
     C: CurveAffine,
     ConcreteCircuit: Circuit<C::Scalar>,
@@ -518,7 +649,7 @@ where
         configured_key_encoding_profiles_for_params_v1::<C, ConcreteCircuit>(k, circuit_params)
             .map_err(|error| {
                 KagemushaArtifactGenerationErrorV1::CircuitBuild(format!(
-                    "{kind} compact-key resource prediction failed: {error}"
+                    "{kind} structured-key resource prediction failed: {error}"
                 ))
             })?;
     choose_helper_key_encoding_v1(profiles, parity, kind, limits)
@@ -573,7 +704,7 @@ where
         parity,
         resource_kind,
         key_kind,
-        KagemushaCompactKeyLimitsV1::release(),
+        KagemushaKeyLimitsV1::release(),
     )
 }
 
@@ -586,7 +717,7 @@ pub(super) fn keygen_vk_with_key_resource_limits_consuming_v1<C, ConcreteCircuit
     parity: KagemushaPastaParityV1,
     resource_kind: &'static str,
     key_kind: &'static str,
-    limits: KagemushaCompactKeyLimitsV1,
+    limits: KagemushaKeyLimitsV1,
 ) -> Result<VerifyingKey<C>, KagemushaArtifactGenerationErrorV1>
 where
     C: CurveAffine,
@@ -595,7 +726,7 @@ where
 {
     let k = usize::try_from(params.k()).map_err(|_| {
         KagemushaArtifactGenerationErrorV1::CircuitBuild(format!(
-            "{resource_kind} compact-key resource prediction failed: domain exponent does not fit usize"
+            "{resource_kind} structured-key resource prediction failed: domain exponent does not fit usize"
         ))
     })?;
     preflight_key_configuration_with_limits_v1::<C, ConcreteCircuit>(
@@ -646,7 +777,7 @@ where
         parity,
         resource_kind,
         key_kind,
-        KagemushaCompactKeyLimitsV1::release(),
+        KagemushaKeyLimitsV1::release(),
     )
 }
 
@@ -659,7 +790,7 @@ pub(super) fn keygen_pk_with_key_resource_limits_consuming_v1<C, ConcreteCircuit
     parity: KagemushaPastaParityV1,
     resource_kind: &'static str,
     key_kind: &'static str,
-    limits: KagemushaCompactKeyLimitsV1,
+    limits: KagemushaKeyLimitsV1,
 ) -> Result<ProvingKey<C>, KagemushaArtifactGenerationErrorV1>
 where
     C: CurveAffine,
@@ -668,7 +799,7 @@ where
 {
     let k = usize::try_from(params.k()).map_err(|_| {
         KagemushaArtifactGenerationErrorV1::CircuitBuild(format!(
-            "{resource_kind} compact-key resource prediction failed: domain exponent does not fit usize"
+            "{resource_kind} structured-key resource prediction failed: domain exponent does not fit usize"
         ))
     })?;
     preflight_key_configuration_with_limits_v1::<C, ConcreteCircuit>(
@@ -742,14 +873,14 @@ mod tests {
     };
 
     #[derive(Clone, Default)]
-    struct SmallCompactKeyCircuit<F>(PhantomData<F>);
+    struct SmallStructuredKeyCircuit<F>(PhantomData<F>);
 
-    struct DropTrackedSmallCompactKeyCircuit<F> {
+    struct DropTrackedSmallStructuredKeyCircuit<F> {
         owner_dropped: Option<Arc<AtomicBool>>,
         marker: PhantomData<F>,
     }
 
-    impl<F> Drop for DropTrackedSmallCompactKeyCircuit<F> {
+    impl<F> Drop for DropTrackedSmallStructuredKeyCircuit<F> {
         fn drop(&mut self) {
             if let Some(dropped) = self.owner_dropped.as_ref() {
                 dropped.store(true, Ordering::SeqCst);
@@ -758,12 +889,12 @@ mod tests {
     }
 
     #[derive(Clone)]
-    struct OverLimitCompactKeyCircuit<F> {
+    struct OverLimitStructuredKeyCircuit<F> {
         synthesized: Arc<AtomicBool>,
         marker: PhantomData<F>,
     }
 
-    impl<F: PrimeField> Circuit<F> for OverLimitCompactKeyCircuit<F> {
+    impl<F: PrimeField> Circuit<F> for OverLimitStructuredKeyCircuit<F> {
         type Config = ();
         type FloorPlanner = SimpleFloorPlanner;
         type Params = ();
@@ -786,7 +917,7 @@ mod tests {
         }
     }
 
-    impl<F: PrimeField> Circuit<F> for SmallCompactKeyCircuit<F> {
+    impl<F: PrimeField> Circuit<F> for SmallStructuredKeyCircuit<F> {
         type Config = (
             Column<Advice>,
             Column<Instance>,
@@ -810,12 +941,12 @@ mod tests {
             meta.enable_constant(fixed);
             let first_selector = meta.selector();
             let second_selector = meta.selector();
-            meta.create_gate("small compact-key first gate", |meta| {
+            meta.create_gate("small structured-key first gate", |meta| {
                 let enabled = meta.query_selector(first_selector);
                 let value = meta.query_advice(advice, Rotation::cur());
                 vec![enabled * value]
             });
-            meta.create_gate("small compact-key second gate", |meta| {
+            meta.create_gate("small structured-key second gate", |meta| {
                 let enabled = meta.query_selector(second_selector);
                 let value = meta.query_advice(advice, Rotation::cur());
                 vec![enabled * value]
@@ -829,7 +960,7 @@ mod tests {
             mut layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
             let cell = layouter.assign_region(
-                || "small compact-key row",
+                || "small structured-key row",
                 |mut region| {
                     first_selector.enable(&mut region, 0)?;
                     second_selector.enable(&mut region, 1)?;
@@ -845,8 +976,8 @@ mod tests {
         }
     }
 
-    impl<F: PrimeField> Circuit<F> for DropTrackedSmallCompactKeyCircuit<F> {
-        type Config = <SmallCompactKeyCircuit<F> as Circuit<F>>::Config;
+    impl<F: PrimeField> Circuit<F> for DropTrackedSmallStructuredKeyCircuit<F> {
+        type Config = <SmallStructuredKeyCircuit<F> as Circuit<F>>::Config;
         type FloorPlanner = SimpleFloorPlanner;
         type Params = ();
 
@@ -858,7 +989,7 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            SmallCompactKeyCircuit::<F>::configure(meta)
+            SmallStructuredKeyCircuit::<F>::configure(meta)
         }
 
         fn synthesize(
@@ -866,18 +997,18 @@ mod tests {
             config: Self::Config,
             layouter: impl Layouter<F>,
         ) -> Result<(), Error> {
-            SmallCompactKeyCircuit::<F>::default().synthesize(config, layouter)
+            SmallStructuredKeyCircuit::<F>::default().synthesize(config, layouter)
         }
     }
 
     #[test]
     fn arithmetic_and_serialized_domain_bounds_fail_closed() {
         assert_eq!(
-            predict_compact_key_resources_v1(32, 0, 0, 0, 0, 0),
+            predict_key_resources_v1(32, 0, 0, 0, 0, 0),
             Err(ResourcePredictionErrorV1::PolynomialDomainDoesNotFitU32)
         );
         assert_eq!(
-            predict_compact_key_resources_v1(
+            predict_key_resources_v1(
                 31,
                 0,
                 0,
@@ -885,11 +1016,29 @@ mod tests {
                 0,
                 usize::try_from(u32::MAX).expect("u32 fits usize"),
             ),
-            Err(ResourcePredictionErrorV1::ArithmeticOverflow)
+            Err(ResourcePredictionErrorV1::PermutationCellsDoNotFitU32)
+        );
+        assert_eq!(
+            predict_key_resources_with_modes_v1(
+                31,
+                0,
+                0,
+                u32::MAX as usize,
+                0,
+                0,
+                0,
+                false,
+                FixedColumnPayloadV1::Exact {
+                    constant: 0,
+                    binary: 0,
+                    raw: u32::MAX as usize
+                },
+            ),
+            Err(ResourcePredictionErrorV1::ArithmeticOverflow),
         );
         if usize::BITS > 32 {
             assert_eq!(
-                predict_compact_key_resources_v1(
+                predict_key_resources_v1(
                     6,
                     0,
                     0,
@@ -904,8 +1053,7 @@ mod tests {
 
     #[test]
     fn helper_limits_accept_the_boundary_and_reject_each_excess() {
-        let profile =
-            predict_compact_key_resources_v1(6, 1, 1, 1, 1, 2).expect("small resource profile");
+        let profile = predict_key_resources_v1(6, 1, 1, 1, 1, 2).expect("small resource profile");
         assert_eq!(
             enforce_helper_key_limits_v1(
                 KagemushaPastaParityV1::Eq,
@@ -935,7 +1083,7 @@ mod tests {
 
     #[test]
     fn helper_limits_reject_advice_width_before_key_size_can_hide_it() {
-        let profile = predict_compact_key_resources_v1(
+        let profile = predict_key_resources_v1(
             16,
             usize::try_from(KAGEMUSHA_HELPER_ADVICE_COLUMN_MAX_V1 + 1)
                 .expect("advice limit fits usize"),
@@ -961,14 +1109,14 @@ mod tests {
 
     #[test]
     fn compressed_prediction_accounts_for_exact_original_selector_bitmaps() {
-        let profile = predict_compact_key_resources_with_selectors_v1(6, 1, 1, 1, 3, 1, 2, true)
+        let profile = predict_key_resources_with_selectors_v1(6, 1, 1, 1, 3, 1, 2, true)
             .expect("compressed resource profile");
         assert!(profile.compress_selectors);
         assert_eq!(profile.materialized_selector_columns, 1);
         assert_eq!(profile.serialized_fixed_columns, 2);
         assert_eq!(profile.selector_bitmap_bytes, 3 * (64 / 8));
         assert_eq!(profile.verifying_key_bytes, 162);
-        assert_eq!(profile.proving_key_bytes, 14_590);
+        assert_eq!(profile.proving_key_bytes, 6_912);
     }
 
     #[test]
@@ -976,7 +1124,7 @@ mod tests {
         macro_rules! check_parity {
             ($curve:ty, $scalar:ty, $parity:expr) => {{
                 let synthesized = Arc::new(AtomicBool::new(false));
-                let circuit = OverLimitCompactKeyCircuit::<$scalar> {
+                let circuit = OverLimitStructuredKeyCircuit::<$scalar> {
                     synthesized: Arc::clone(&synthesized),
                     marker: PhantomData,
                 };
@@ -1041,7 +1189,7 @@ mod tests {
         assert_eq!(eq.serialized_fixed_columns, 1);
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 16_777_482);
+        assert_eq!(eq.proving_key_bytes, 7_340_311);
         for (parity, profile) in [
             (KagemushaPastaParityV1::Eq, eq),
             (KagemushaPastaParityV1::Ep, ep),
@@ -1127,7 +1275,7 @@ mod tests {
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.serialized_fixed_columns, 1);
         assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 16_777_482);
+        assert_eq!(eq.proving_key_bytes, 7_340_311);
         for (parity, profile) in [
             (KagemushaPastaParityV1::Eq, eq),
             (KagemushaPastaParityV1::Ep, ep),
@@ -1177,7 +1325,7 @@ mod tests {
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 16_777_482);
+        assert_eq!(eq.proving_key_bytes, 7_340_311);
         assert!(eq.verifying_key_bytes <= KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1);
         assert!(eq.proving_key_bytes <= KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1);
         for (parity, profile) in [
@@ -1198,7 +1346,7 @@ mod tests {
     #[test]
     fn mint_hash_claim_dense_fixed_rlc_and_native_poseidon_auxiliary_geometry_is_frozen() {
         // The native Poseidon queue adds seven advice, five fixed, and one shared BUS copy
-        // column to the existing dense/RLC machines. This compact-key auxiliary floor fits the
+        // column to the existing dense/RLC machines. This structured-key auxiliary lower bound fits the
         // release PK cap; the minimum legal Base test also checks the independent dense advice floor.
         let params = BaseCircuitParams {
             k: 16,
@@ -1229,7 +1377,7 @@ mod tests {
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.verifying_key_bytes, 458);
-        assert_eq!(eq.proving_key_bytes, 35_652_174);
+        assert_eq!(eq.proving_key_bytes, 7_340_896);
         macro_rules! check_preflight {
             ($curve:ty, $field:ty, $circuit:ty, $parity:expr) => {{
                 let mut configured = ConstraintSystem::<$field>::default();
@@ -1253,7 +1401,7 @@ mod tests {
                         params.clone(),
                         $parity,
                         "claim native Poseidon auxiliary guarded floor",
-                        KagemushaCompactKeyLimitsV1::guarded_real_proof(),
+                        KagemushaKeyLimitsV1::guarded_real_proof(),
                     )
                     .expect("existing guarded envelope permits full-graph measurement"),
                     eq
@@ -1275,7 +1423,8 @@ mod tests {
     }
 
     #[test]
-    fn mint_hash_claim_minimum_legal_base_compact_key_fits_but_dense_advice_exceeds_mobile_rss() {
+    fn mint_hash_claim_minimum_legal_base_structured_bound_fits_but_dense_advice_exceeds_mobile_rss()
+     {
         // The claim always has native arithmetic, range checks, constants, and three public
         // columns. Configure only one gate and one lookup request as a strict lower bound.
         // Base's one-gate optimization reuses its gate advice for the lookup, so counting a
@@ -1306,13 +1455,13 @@ mod tests {
         assert_eq!(eq.materialized_selector_columns, 2);
         assert_eq!(eq.serialized_fixed_columns, 13);
         assert_eq!(eq.permutation_columns, 9);
-        assert_eq!(eq.proving_key_bytes, 52_446_062);
+        assert_eq!(eq.proving_key_bytes, 8_668_355);
         assert_eq!(eq.verifying_key_bytes, 17_098);
         assert!(eq.proving_key_bytes <= KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1);
         assert!(eq.verifying_key_bytes <= KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1);
 
         // Artifact feasibility is independent of dense prover storage. One in-memory advice
-        // basis alone needs 192 MiB at this strict configuration floor; the compact codec
+        // basis alone needs 192 MiB at this strict configuration floor; the structured codec
         // reconstructs the unchanged resident key and does not establish mobile RSS readiness.
         let dense_advice_bytes = eq.advice_columns * (1_u64 << 16) * 32;
         assert_eq!(dense_advice_bytes, 192 * 1024 * 1024);
@@ -1320,9 +1469,14 @@ mod tests {
 
         // Keep the independent fixed/copy inventory accounting visible even without selectors.
         // This counterfactual is only a size cross-check, not a different allowed Claim circuit.
-        let without_any_selectors =
-            56_u64 + 10 + 32 * (11 + 9) + 8 + (11 + 9 + 3) * (32 * (1 << 16) + 4);
-        assert_eq!(without_any_selectors, 48_235_302);
+        let without_any_selectors = 56_u64
+            + 10
+            + 32 * (11 + 9)
+            + 3 * (32 * (1 << 16) + 4)
+            + 8
+            + 4 * (1 << 16) * 9
+            + 11 * (1 + 32);
+        assert_eq!(without_any_selectors, 8_651_841);
         assert!(without_any_selectors < eq.proving_key_bytes);
         for (parity, profile) in [
             (KagemushaPastaParityV1::Eq, eq),
@@ -1336,10 +1490,10 @@ mod tests {
                     KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1,
                     KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1,
                 )
-                .expect("compact artifact floor fits both unchanged release caps"),
+                .expect("structured artifact lower bound fits both unchanged release caps"),
                 profile,
             );
-            let diagnostic_limits = KagemushaCompactKeyLimitsV1::guarded_real_proof();
+            let diagnostic_limits = KagemushaKeyLimitsV1::guarded_real_proof();
             enforce_helper_key_limits_v1(
                 parity,
                 "diagnostic mint-hash claim minimum legal Base",
@@ -1380,7 +1534,7 @@ mod tests {
         assert_eq!(eq.permutation_columns, 4);
         assert_eq!(eq.selector_bitmap_bytes, 0);
         assert_eq!(eq.verifying_key_bytes, 170);
-        assert_eq!(eq.proving_key_bytes, 16_777_482);
+        assert_eq!(eq.proving_key_bytes, 7_340_311);
         assert_eq!(KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1, 64 * 1024 * 1024);
         assert_eq!(KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1, 64 * 1024);
         assert!(eq.proving_key_bytes <= KAGEMUSHA_HELPER_PROVING_KEY_MAX_BYTES_V1);
@@ -1401,7 +1555,7 @@ mod tests {
                 // even before selector materialization; the same release caps must reject it.
                 let oversized = BaseCircuitParams {
                     k: 16,
-                    num_advice_per_phase: vec![32],
+                    num_advice_per_phase: vec![256],
                     num_fixed: 1,
                     num_lookup_advice_per_phase: vec![1],
                     lookup_bits: Some(15),
@@ -1445,11 +1599,11 @@ mod tests {
     }
 
     #[test]
-    fn small_k6_prediction_matches_real_compact_keys_in_both_parities() {
+    fn small_k6_prediction_matches_real_structured_keys_in_both_parities() {
         macro_rules! check_parity {
             ($curve:ty, $scalar:ty, $parity:expr) => {{
                 let params = ParamsIPA::<$curve>::new(6);
-                let circuit = SmallCompactKeyCircuit::<$scalar>::default();
+                let circuit = SmallStructuredKeyCircuit::<$scalar>::default();
                 let upper_bound =
                     configured_compressed_key_resources_v1::<$curve, _>(6, &circuit, false)
                         .expect("small compressed resource upper bound");
@@ -1459,7 +1613,7 @@ mod tests {
                 assert_eq!(
                     preflight_helper_key_configuration_v1::<
                         $curve,
-                        SmallCompactKeyCircuit<$scalar>,
+                        SmallStructuredKeyCircuit<$scalar>,
                     >(6, (), $parity, "small test auxiliary configuration",),
                     Ok(lower_bound),
                     "parameter-only preflight must match the actual small circuit configuration"
@@ -1485,7 +1639,14 @@ mod tests {
                     &params,
                     circuit,
                     true,
-                    |_circuit, synthesized| exact_compact_key_resources_v1::<$curve>(synthesized),
+                    |_circuit, synthesized| {
+                        // The untouched configured fixed column is constant zero, even though
+                        // zero is also binary. Disjoint compressed roots 1/2 make the selector RAW.
+                        assert_eq!(synthesized.constant_fixed_columns, 1);
+                        assert_eq!(synthesized.binary_fixed_columns, 0);
+                        assert_eq!(synthesized.raw_fixed_columns, 1);
+                        exact_key_resources_v1::<$curve>(synthesized)
+                    },
                 )
                 .expect("small PK and exact synthesized resource profile");
                 assert_eq!(
@@ -1502,6 +1663,36 @@ mod tests {
                 assert!(lower_bound.proving_key_bytes <= profile.proving_key_bytes);
                 assert!(profile.proving_key_bytes < upper_bound.proving_key_bytes);
                 assert!(profile.compress_selectors);
+                assert_eq!(
+                    profile.prediction,
+                    KeyResourcePredictionV1::SynthesizedExact
+                );
+                assert_eq!(
+                    (profile.proving_key_bytes, profile.verifying_key_bytes),
+                    (9_256, 186)
+                );
+                assert_eq!(
+                    upper_bound.prediction,
+                    KeyResourcePredictionV1::ConfiguredUpperBound
+                );
+                assert_eq!(
+                    lower_bound.prediction,
+                    KeyResourcePredictionV1::ConfiguredLowerBound
+                );
+                assert_eq!(
+                    (
+                        lower_bound.proving_key_bytes,
+                        lower_bound.verifying_key_bytes
+                    ),
+                    (7_192, 186)
+                );
+                assert_eq!(
+                    (
+                        upper_bound.proving_key_bytes,
+                        upper_bound.verifying_key_bytes
+                    ),
+                    (13_353, 218)
+                );
                 assert_eq!(profile.selector_columns, 2);
                 assert_eq!(profile.materialized_selector_columns, 1);
                 assert_eq!(profile.selector_bitmap_bytes, 16);
@@ -1514,31 +1705,65 @@ mod tests {
                 let processed_reference = proving_key.to_bytes(SerdeFormat::Processed);
                 let mut proving_key_bytes = Vec::new();
                 proving_key
-                    .write_compact_v1(&mut proving_key_bytes)
-                    .expect("write actual compact PK");
+                    .write_structured_v1(&mut proving_key_bytes)
+                    .expect("write actual structured PK");
                 assert_eq!(proving_key_bytes.len() as u64, profile.proving_key_bytes);
                 assert_eq!(
-                    proving_key.compact_v1_bytes_length().expect("compact PK length"),
+                    proving_key
+                        .structured_v1_bytes_length()
+                        .expect("structured PK length"),
                     profile.proving_key_bytes,
                 );
                 let mut input = proving_key_bytes.as_slice();
-                let restored = ProvingKey::<$curve>::read_compact_v1_checked::<
-                    _, SmallCompactKeyCircuit<$scalar>,
+                let restored = ProvingKey::<$curve>::read_structured_v1_checked::<
+                    _,
+                    SmallStructuredKeyCircuit<$scalar>,
                 >(&mut input, 6, profile.proving_key_bytes, ())
-                .expect("compressed-selector compact PK roundtrip");
+                .expect("compressed-selector structured PK roundtrip");
                 assert!(input.is_empty());
-                assert_eq!(restored.to_bytes(SerdeFormat::Processed), processed_reference);
+                assert_eq!(
+                    restored.to_bytes(SerdeFormat::Processed),
+                    processed_reference
+                );
                 let mut reencoded = Vec::new();
-                restored.write_compact_v1(&mut reencoded).unwrap();
+                restored.write_structured_v1(&mut reencoded).unwrap();
                 assert_eq!(reencoded, proving_key_bytes);
-                assert!(ProvingKey::<$curve>::read_compact_v1_checked::<
-                    _, SmallCompactKeyCircuit<$scalar>,
-                >(&mut processed_reference.as_slice(), 6, processed_reference.len() as u64, ())
-                .is_err(), "the compact reader must reject the superseded Processed PK frame");
-                assert!(ProvingKey::<$curve>::read_compact_v1_checked::<
-                    _, SmallCompactKeyCircuit<$scalar>,
-                >(&mut &proving_key_bytes[..proving_key_bytes.len() - 1], 6, profile.proving_key_bytes, ())
-                .is_err(), "the exact compact frame must reject truncation");
+                assert!(
+                    ProvingKey::<$curve>::read_structured_v1_checked::<
+                        _,
+                        SmallStructuredKeyCircuit<$scalar>,
+                    >(
+                        &mut processed_reference.as_slice(),
+                        6,
+                        processed_reference.len() as u64,
+                        ()
+                    )
+                    .is_err(),
+                    "the structured reader must reject the superseded Processed PK frame"
+                );
+                assert!(
+                    ProvingKey::<$curve>::read_structured_v1_checked::<
+                        _,
+                        SmallStructuredKeyCircuit<$scalar>,
+                    >(
+                        &mut &proving_key_bytes[..proving_key_bytes.len() - 1],
+                        6,
+                        profile.proving_key_bytes,
+                        ()
+                    )
+                    .is_err(),
+                    "the exact structured frame must reject truncation"
+                );
+                let mut old_magic = proving_key_bytes.clone();
+                old_magic[..16].copy_from_slice(b"Halo2CompactPK1\0");
+                assert!(
+                    ProvingKey::<$curve>::read_structured_v1_checked::<
+                        _,
+                        SmallStructuredKeyCircuit<$scalar>,
+                    >(&mut old_magic.as_slice(), 6, profile.proving_key_bytes, ())
+                    .is_err(),
+                    "the current reader must reject the former compact codec identifier"
+                );
             }};
         }
         check_parity!(EqAffine, Fp, KagemushaPastaParityV1::Eq);
@@ -1550,19 +1775,19 @@ mod tests {
         macro_rules! check_parity {
             ($curve:ty, $scalar:ty, $parity:expr) => {{
                 let params = ParamsIPA::<$curve>::new(6);
-                let reference = SmallCompactKeyCircuit::<$scalar>::default();
-                let reference_pk = halo2_proofs::plonk::keygen_pk2(&params, &reference, true)
-                    .expect("reference compressed PK");
+                let reference = SmallStructuredKeyCircuit::<$scalar>::default();
+                let reference_pk = halo2_proofs::plonk::keygen_pk2(&params, &reference, false)
+                    .expect("reference direct PK");
                 let owner_dropped = Arc::new(AtomicBool::new(false));
                 let consuming_pk = keygen_pk_with_helper_resource_preflight_consuming_v1(
                     &params,
-                    DropTrackedSmallCompactKeyCircuit::<$scalar> {
+                    DropTrackedSmallStructuredKeyCircuit::<$scalar> {
                         owner_dropped: Some(Arc::clone(&owner_dropped)),
                         marker: PhantomData,
                     },
                     $parity,
-                    "small compressed consuming test circuit",
-                    "small compressed consuming test proving key",
+                    "small direct consuming test circuit",
+                    "small direct consuming test proving key",
                 )
                 .expect("consuming combined PK");
                 assert!(
@@ -1574,15 +1799,15 @@ mod tests {
                     reference_pk.to_bytes(SerdeFormat::Processed),
                     "consuming keygen must preserve canonical key semantics"
                 );
-                let mut reference_compact = Vec::new();
+                let mut reference_structured = Vec::new();
                 reference_pk
-                    .write_compact_v1(&mut reference_compact)
+                    .write_structured_v1(&mut reference_structured)
                     .unwrap();
-                let mut consuming_compact = Vec::new();
+                let mut consuming_structured = Vec::new();
                 consuming_pk
-                    .write_compact_v1_consuming(&mut consuming_compact)
+                    .write_structured_v1_consuming(&mut consuming_structured)
                     .unwrap();
-                assert_eq!(consuming_compact, reference_compact);
+                assert_eq!(consuming_structured, reference_structured);
             }};
         }
         check_parity!(EqAffine, Fp, KagemushaPastaParityV1::Eq);
@@ -1595,7 +1820,7 @@ mod tests {
     }
 
     impl<F: PrimeField, const OVERLAP: bool> Circuit<F> for SelectorEncodingCircuit<F, OVERLAP> {
-        type Config = <SmallCompactKeyCircuit<F> as Circuit<F>>::Config;
+        type Config = <SmallStructuredKeyCircuit<F> as Circuit<F>>::Config;
         type FloorPlanner = SimpleFloorPlanner;
         type Params = ();
 
@@ -1604,7 +1829,7 @@ mod tests {
         }
 
         fn configure(meta: &mut ConstraintSystem<F>) -> Self::Config {
-            SmallCompactKeyCircuit::<F>::configure(meta)
+            SmallStructuredKeyCircuit::<F>::configure(meta)
         }
 
         fn synthesize(
@@ -1760,11 +1985,24 @@ mod tests {
                 .unwrap();
                 assert_eq!(configured[0].materialized_selector_columns, 2);
                 assert_eq!(configured[1].materialized_selector_columns, 6);
-                let limits = KagemushaCompactKeyLimitsV1 {
-                    proving_key_maximum: configured[0].proving_key_bytes,
-                    verifying_key_maximum: configured[0].verifying_key_bytes,
+                let params = ParamsIPA::<$curve>::new(6);
+                let circuit = MixedDegreeSelectorCircuit::<$field>::default();
+                let (_, exact) = keygen_pk2_consuming_with_profile(
+                    &params,
+                    circuit.clone(),
+                    true,
+                    |_circuit, profile| exact_key_resources_v1::<$curve>(profile),
+                )
+                .expect("actual mixed-degree fixed modes");
+                assert_eq!(exact.prediction, KeyResourcePredictionV1::SynthesizedExact);
+                assert_eq!(exact.proving_key_bytes, 10_440);
+                assert_eq!(exact.verifying_key_bytes, 122);
+                assert!(configured[0].proving_key_bytes < exact.proving_key_bytes);
+                let limits = KagemushaKeyLimitsV1 {
+                    proving_key_maximum: exact.proving_key_bytes,
+                    verifying_key_maximum: exact.verifying_key_bytes,
                 };
-                let inactive_profile = predict_compact_key_resources_with_selectors_v1(
+                let inactive_profile = predict_key_resources_with_selectors_v1(
                     6,
                     meta.num_advice_columns(),
                     meta.num_instance_columns(),
@@ -1795,8 +2033,6 @@ mod tests {
                     .unwrap(),
                     configured[0]
                 );
-                let params = ParamsIPA::<$curve>::new(6);
-                let circuit = MixedDegreeSelectorCircuit::<$field>::default();
                 let pk = keygen_pk_with_key_resource_limits_consuming_v1(
                     &params,
                     circuit.clone(),
@@ -1816,8 +2052,8 @@ mod tests {
                 )
                 .unwrap();
                 assert_eq!(
-                    pk.compact_v1_bytes_length()
-                        .expect("exact compact PK length"),
+                    pk.structured_v1_bytes_length()
+                        .expect("exact structured PK length"),
                     limits.proving_key_maximum
                 );
                 let vk_bytes = vk.to_bytes(SerdeFormat::Processed);
@@ -1832,30 +2068,70 @@ mod tests {
 
     #[test]
     fn adaptive_key_encoding_checks_both_limits_and_stable_ties() {
-        // Thirty-two selectors compressed pairwise save sixteen fixed polynomials, but at k16
-        // their bitmaps exceed the VK limit. Direct compact PK encoding exceeds the PK limit.
-        let compressed =
-            predict_compact_key_resources_with_selectors_v1(16, 1, 1, 1, 32, 16, 2, true).unwrap();
-        let direct =
-            predict_compact_key_resources_with_selectors_v1(16, 1, 1, 1, 32, 32, 2, false).unwrap();
-        let release = KagemushaCompactKeyLimitsV1::release();
-        assert!(compressed.proving_key_bytes < release.proving_key_maximum);
-        assert!(compressed.verifying_key_bytes > release.verifying_key_maximum);
-        assert!(direct.proving_key_bytes > release.proving_key_maximum);
-        assert!(direct.verifying_key_bytes < release.verifying_key_maximum);
+        // At k8, pairwise constant selector columns save 16 bytes overall while their
+        // retained bitmaps add 512 VK bytes. These synthetic test limits conflict;
+        // the unchanged production release limits are tested independently.
+        let compressed = predict_key_resources_with_modes_v1(
+            8,
+            1,
+            1,
+            1,
+            32,
+            16,
+            2,
+            true,
+            FixedColumnPayloadV1::Exact {
+                constant: 17,
+                binary: 0,
+                raw: 0,
+            },
+        )
+        .unwrap();
+        let direct = predict_key_resources_with_modes_v1(
+            8,
+            1,
+            1,
+            1,
+            32,
+            32,
+            2,
+            false,
+            FixedColumnPayloadV1::Exact {
+                constant: 33,
+                binary: 0,
+                raw: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (compressed.proving_key_bytes, compressed.verifying_key_bytes),
+            (28_903, 1_642)
+        );
+        assert_eq!(
+            (direct.proving_key_bytes, direct.verifying_key_bytes),
+            (28_919, 1_130)
+        );
+        let conflicting = KagemushaKeyLimitsV1 {
+            proving_key_maximum: 28_903,
+            verifying_key_maximum: 1_130,
+        };
+        assert!(compressed.proving_key_bytes <= conflicting.proving_key_maximum);
+        assert!(compressed.verifying_key_bytes > conflicting.verifying_key_maximum);
+        assert!(direct.proving_key_bytes > conflicting.proving_key_maximum);
+        assert!(direct.verifying_key_bytes <= conflicting.verifying_key_maximum);
         for parity in [KagemushaPastaParityV1::Eq, KagemushaPastaParityV1::Ep] {
             assert!(
                 choose_helper_key_encoding_v1(
                     [compressed, direct],
                     parity,
                     "conflicting encoding limits",
-                    release,
+                    conflicting,
                 )
                 .is_err()
             );
             // Each alternative is selected when it alone fits both exact boundaries.
             for expected in [compressed, direct] {
-                let limits = KagemushaCompactKeyLimitsV1 {
+                let limits = KagemushaKeyLimitsV1 {
                     proving_key_maximum: expected.proving_key_bytes,
                     verifying_key_maximum: expected.verifying_key_bytes,
                 };
@@ -1870,11 +2146,11 @@ mod tests {
                     expected
                 );
                 for rejected in [
-                    KagemushaCompactKeyLimitsV1 {
+                    KagemushaKeyLimitsV1 {
                         proving_key_maximum: limits.proving_key_maximum - 1,
                         ..limits
                     },
-                    KagemushaCompactKeyLimitsV1 {
+                    KagemushaKeyLimitsV1 {
                         verifying_key_maximum: limits.verifying_key_maximum - 1,
                         ..limits
                     },
@@ -1891,16 +2167,15 @@ mod tests {
                 }
             }
             let compressed =
-                predict_compact_key_resources_with_selectors_v1(6, 1, 1, 1, 0, 0, 2, true).unwrap();
+                predict_key_resources_with_selectors_v1(6, 1, 1, 1, 0, 0, 2, true).unwrap();
             let direct =
-                predict_compact_key_resources_with_selectors_v1(6, 1, 1, 1, 0, 0, 2, false)
-                    .unwrap();
+                predict_key_resources_with_selectors_v1(6, 1, 1, 1, 0, 0, 2, false).unwrap();
             assert_eq!(
                 choose_helper_key_encoding_v1(
                     [direct, compressed],
                     parity,
                     "stable no-selector tie",
-                    release,
+                    KagemushaKeyLimitsV1::release(),
                 )
                 .unwrap(),
                 compressed
@@ -1917,7 +2192,7 @@ mod tests {
                     SelectorEncodingCircuit<$field, true>,
                 >(9, ())
                 .unwrap();
-                let limits = KagemushaCompactKeyLimitsV1 {
+                let limits = KagemushaKeyLimitsV1 {
                     proving_key_maximum: profiles[1].proving_key_bytes,
                     verifying_key_maximum: profiles[1].verifying_key_bytes,
                 };
@@ -1959,17 +2234,28 @@ mod tests {
                             profiles,
                             $parity,
                             "exact adaptive small key",
-                            KagemushaCompactKeyLimitsV1::release(),
+                            KagemushaKeyLimitsV1::release(),
                         )
                     },
                 )
                 .expect("adaptive combined key from one synthesis");
                 assert_eq!(syntheses.load(Ordering::SeqCst), 1);
-                assert_eq!(profile.compress_selectors, !$overlap);
+                assert!(
+                    !profile.compress_selectors,
+                    "binary direct selectors beat raw compressed roots or redundant bitmaps"
+                );
+                assert_eq!(
+                    profile.prediction,
+                    KeyResourcePredictionV1::SynthesizedExact
+                );
+                assert_eq!(
+                    (profile.proving_key_bytes, profile.verifying_key_bytes),
+                    (7_241, 202)
+                );
                 let processed_reference = pk.to_bytes(SerdeFormat::Processed);
                 let mut pk_bytes = Vec::new();
-                pk.write_compact_v1(&mut pk_bytes)
-                    .expect("actual compact PK bytes");
+                pk.write_structured_v1(&mut pk_bytes)
+                    .expect("actual structured PK bytes");
                 let vk_bytes = pk.get_vk().to_bytes(SerdeFormat::Processed);
                 assert_eq!(pk_bytes.len() as u64, profile.proving_key_bytes);
                 assert_eq!(vk_bytes.len() as u64, profile.verifying_key_bytes);
@@ -1982,7 +2268,7 @@ mod tests {
                             profiles,
                             $parity,
                             "exact adaptive small VK",
-                            KagemushaCompactKeyLimitsV1::release(),
+                            KagemushaKeyLimitsV1::release(),
                         )
                     },
                 )
@@ -2011,9 +2297,11 @@ mod tests {
                     generated.to_bytes(SerdeFormat::Processed),
                     processed_reference
                 );
-                let mut generated_compact = Vec::new();
-                generated.write_compact_v1(&mut generated_compact).unwrap();
-                assert_eq!(generated_compact, pk_bytes);
+                let mut generated_structured = Vec::new();
+                generated
+                    .write_structured_v1(&mut generated_structured)
+                    .unwrap();
+                assert_eq!(generated_structured, pk_bytes);
                 let rebuilt = keygen_vk_with_helper_resource_preflight_consuming_v1(
                     &params,
                     circuit.clone(),
@@ -2024,7 +2312,7 @@ mod tests {
                 .unwrap();
                 assert_eq!(rebuilt.to_bytes(SerdeFormat::Processed), vk_bytes);
                 let mut input = pk_bytes.as_slice();
-                let restored_pk = ProvingKey::<$curve>::read_compact_v1_checked::<
+                let restored_pk = ProvingKey::<$curve>::read_structured_v1_checked::<
                     _,
                     SelectorEncodingCircuit<$field, $overlap>,
                 >(&mut input, 6, profile.proving_key_bytes, ())
@@ -2034,9 +2322,11 @@ mod tests {
                     restored_pk.to_bytes(SerdeFormat::Processed),
                     processed_reference
                 );
-                let mut restored_compact = Vec::new();
-                restored_pk.write_compact_v1(&mut restored_compact).unwrap();
-                assert_eq!(restored_compact, pk_bytes);
+                let mut restored_structured = Vec::new();
+                restored_pk
+                    .write_structured_v1(&mut restored_structured)
+                    .unwrap();
+                assert_eq!(restored_structured, pk_bytes);
                 let mut input = vk_bytes.as_slice();
                 let restored_vk = VerifyingKey::<$curve>::read_checked::<
                     _,
@@ -2117,7 +2407,7 @@ mod tests {
                     SelectorEncodingCircuit<$field, true>,
                 >(6, ())
                 .unwrap();
-                let limits = KagemushaCompactKeyLimitsV1 {
+                let limits = KagemushaKeyLimitsV1 {
                     proving_key_maximum: profiles[0].proving_key_bytes,
                     verifying_key_maximum: KAGEMUSHA_VERIFYING_KEY_MAX_BYTES_V1,
                 };
@@ -2167,13 +2457,33 @@ mod tests {
         check!(EpAffine, Fq, KagemushaPastaParityV1::Ep);
     }
     #[test]
-    fn adaptive_phase12_compact_geometry_exceeds_release_and_512mib_but_fits_guarded_envelope() {
-        let compressed =
-            predict_compact_key_resources_with_selectors_v1(16, 234, 3, 6, 118, 118, 133, true)
-                .unwrap();
-        let direct =
-            predict_compact_key_resources_with_selectors_v1(16, 234, 3, 6, 118, 118, 133, false)
-                .unwrap();
+    fn historical_phase12_compact_geometry_exceeds_release_and_512mib_but_fits_guarded_envelope() {
+        // Historical compact arithmetic only: these values are not structured predictions.
+        // Keep the old evidence without manufacturing current synthesized fixed modes.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        struct HistoricalCompactGeometry {
+            serialized_fixed_columns: u64,
+            permutation_columns: u64,
+            selector_bitmap_bytes: u64,
+            verifying_key_bytes: u64,
+            proving_key_bytes: u64,
+        }
+        let geometry = |compressed: bool| {
+            let n = 1_u64 << 16;
+            let fixed = 124;
+            let permutation = 133;
+            let bitmaps = if compressed { 118 * n.div_ceil(8) } else { 0 };
+            let vk = 10 + 32 * (fixed + permutation) + bitmaps;
+            HistoricalCompactGeometry {
+                serialized_fixed_columns: fixed,
+                permutation_columns: permutation,
+                selector_bitmap_bytes: bitmaps,
+                verifying_key_bytes: vk,
+                proving_key_bytes: 56 + vk + 8 + (fixed + permutation + 3) * (32 * n + 4),
+            }
+        };
+        let compressed = geometry(true);
+        let direct = geometry(false);
         assert_eq!(
             compressed.serialized_fixed_columns,
             direct.serialized_fixed_columns
@@ -2190,35 +2500,308 @@ mod tests {
             966_656
         );
         for parity in [KagemushaPastaParityV1::Eq, KagemushaPastaParityV1::Ep] {
-            let diagnostic = KagemushaCompactKeyLimitsV1::guarded_real_proof();
+            let diagnostic = KagemushaKeyLimitsV1::guarded_real_proof();
+            let fits = |profile: HistoricalCompactGeometry, limits: KagemushaKeyLimitsV1| {
+                profile.proving_key_bytes <= limits.proving_key_maximum
+                    && profile.verifying_key_bytes <= limits.verifying_key_maximum
+            };
             for limits in [
-                KagemushaCompactKeyLimitsV1::release(),
-                KagemushaCompactKeyLimitsV1 {
+                KagemushaKeyLimitsV1::release(),
+                KagemushaKeyLimitsV1 {
                     proving_key_maximum: 512 * 1024 * 1024,
                     ..diagnostic
                 },
             ] {
                 assert!(
-                    choose_helper_key_encoding_v1(
-                        [compressed, direct],
-                        parity,
-                        "actual phase12 claim geometry",
-                        limits,
-                    )
-                    .is_err(),
-                    "the compact full Claim PK still exceeds release and 512 MiB envelopes"
+                    ![compressed, direct]
+                        .into_iter()
+                        .any(|profile| fits(profile, limits)),
+                    "{parity:?}: historical compact Claim exceeds release and 512 MiB envelopes"
                 );
             }
+            let selected = [compressed, direct]
+                .into_iter()
+                .filter(|profile| fits(*profile, diagnostic))
+                .min_by_key(|profile| (profile.proving_key_bytes, profile.verifying_key_bytes));
             assert_eq!(
-                choose_helper_key_encoding_v1(
-                    [compressed, direct],
-                    parity,
-                    "guarded actual phase12 claim geometry",
-                    diagnostic,
-                )
-                .expect("compact direct encoding fits the existing 1 GiB diagnostic envelope"),
-                direct,
+                selected,
+                Some(direct),
+                "{parity:?}: historical compact direct fits the guarded 1 GiB envelope"
             );
         }
+    }
+
+    #[test]
+    fn structured_phase12_bounds_require_actual_fixed_modes_before_release_admission() {
+        let lower = [true, false].map(|compressed| {
+            predict_key_resources_with_selectors_v1(16, 234, 3, 6, 118, 118, 133, compressed)
+                .unwrap()
+        });
+        assert_eq!(
+            (lower[0].proving_key_bytes, lower[0].verifying_key_bytes),
+            (42_135_666, 974_890)
+        );
+        assert_eq!(
+            (lower[1].proving_key_bytes, lower[1].verifying_key_bytes),
+            (41_169_010, 8_234)
+        );
+        let upper = [true, false].map(|compressed| {
+            predict_key_resources_with_modes_v1(
+                16,
+                234,
+                3,
+                6,
+                118,
+                118,
+                133,
+                compressed,
+                FixedColumnPayloadV1::UpperBound,
+            )
+            .unwrap()
+        });
+        assert_eq!(upper[0].proving_key_bytes, 302_178_546);
+        assert_eq!(upper[1].proving_key_bytes, 301_211_890);
+        for index in 0..2 {
+            assert_eq!(
+                lower[index].prediction,
+                KeyResourcePredictionV1::ConfiguredLowerBound
+            );
+            assert_eq!(
+                upper[index].prediction,
+                KeyResourcePredictionV1::ConfiguredUpperBound
+            );
+            assert!(lower[index].proving_key_bytes < upper[index].proving_key_bytes);
+        }
+        for parity in [KagemushaPastaParityV1::Eq, KagemushaPastaParityV1::Ep] {
+            assert_eq!(
+                choose_helper_key_encoding_v1(
+                    lower,
+                    parity,
+                    "phase12 optimistic structured bound",
+                    KagemushaKeyLimitsV1::release()
+                )
+                .unwrap(),
+                lower[1]
+            );
+            assert!(
+                choose_helper_key_encoding_v1(
+                    upper,
+                    parity,
+                    "phase12 conservative structured bound",
+                    KagemushaKeyLimitsV1::release()
+                )
+                .is_err()
+            );
+        }
+        // No actual full Claim C/B/R inventory is asserted by this geometry-only test.
+    }
+
+    #[test]
+    fn structured_fixed_payload_modes_validate_partition_and_tiny_domain_bounds() {
+        for k in [1, 3, 6, 8, 9] {
+            let n = 1_u64 << k;
+            let lower = predict_key_resources_with_modes_v1(
+                k,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                false,
+                FixedColumnPayloadV1::LowerBound,
+            )
+            .unwrap();
+            let constant = predict_key_resources_with_modes_v1(
+                k,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                false,
+                FixedColumnPayloadV1::Exact {
+                    constant: 1,
+                    binary: 0,
+                    raw: 0,
+                },
+            )
+            .unwrap();
+            let binary = predict_key_resources_with_modes_v1(
+                k,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                false,
+                FixedColumnPayloadV1::Exact {
+                    constant: 0,
+                    binary: 1,
+                    raw: 0,
+                },
+            )
+            .unwrap();
+            let raw = predict_key_resources_with_modes_v1(
+                k,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                false,
+                FixedColumnPayloadV1::Exact {
+                    constant: 0,
+                    binary: 0,
+                    raw: 1,
+                },
+            )
+            .unwrap();
+            let base = 56 + (10 + 32) + 3 * (32 * n + 4) + 8 + 1;
+            assert_eq!(constant.proving_key_bytes, base + 32);
+            assert_eq!(binary.proving_key_bytes, base + n.div_ceil(8));
+            assert_eq!(raw.proving_key_bytes, base + 32 * n);
+            assert_eq!(lower.proving_key_bytes, base + 32.min(n.div_ceil(8)));
+            assert!(lower.proving_key_bytes <= constant.proving_key_bytes);
+            assert!(lower.proving_key_bytes <= binary.proving_key_bytes);
+            assert!(lower.proving_key_bytes <= raw.proving_key_bytes);
+            assert_eq!(
+                constant.prediction,
+                KeyResourcePredictionV1::SynthesizedExact
+            );
+        }
+        // A one-row column is necessarily constant; the configure bound remains sound
+        // without pretending that a nonconstant binary or raw one-row column exists.
+        let singleton_lower = predict_key_resources_with_modes_v1(
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            false,
+            FixedColumnPayloadV1::LowerBound,
+        )
+        .unwrap();
+        let singleton_constant = predict_key_resources_with_modes_v1(
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            false,
+            FixedColumnPayloadV1::Exact {
+                constant: 1,
+                binary: 0,
+                raw: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            singleton_constant.proving_key_bytes - singleton_lower.proving_key_bytes,
+            31
+        );
+        // Constant priority is supplied by actual synthesized counts, checked in the real k6
+        // test above; byte minimization must never relabel constant zero as binary at tiny n.
+        for modes in [
+            FixedColumnPayloadV1::Exact {
+                constant: 0,
+                binary: 0,
+                raw: 0,
+            },
+            FixedColumnPayloadV1::Exact {
+                constant: 1,
+                binary: 1,
+                raw: 0,
+            },
+        ] {
+            assert_eq!(
+                predict_key_resources_with_modes_v1(6, 0, 0, 1, 0, 0, 0, false, modes),
+                Err(ResourcePredictionErrorV1::FixedModeCountMismatch)
+            );
+        }
+        if usize::BITS > 32 {
+            assert_eq!(
+                predict_key_resources_with_modes_v1(
+                    6,
+                    0,
+                    0,
+                    1,
+                    0,
+                    0,
+                    0,
+                    false,
+                    FixedColumnPayloadV1::Exact {
+                        constant: usize::try_from(u64::from(u32::MAX) + 1).expect("64-bit usize"),
+                        binary: 0,
+                        raw: 0
+                    }
+                ),
+                Err(ResourcePredictionErrorV1::ColumnCountDoesNotFitU32)
+            );
+        }
+    }
+
+    #[test]
+    fn structured_synthesized_domain_and_permutation_cell_bounds_fail_closed() {
+        let profile = KeygenCircuitResourceProfile {
+            domain_rows: 64,
+            advice_columns: 0,
+            instance_columns: 0,
+            configured_fixed_columns: 0,
+            selector_columns: 0,
+            materialized_selector_columns: 0,
+            constant_fixed_columns: 0,
+            binary_fixed_columns: 0,
+            raw_fixed_columns: 0,
+            permutation_columns: 0,
+            compress_selectors: false,
+        };
+        for n in [0, 3, 63] {
+            assert_eq!(
+                exact_key_resources_v1::<EqAffine>(KeygenCircuitResourceProfile {
+                    domain_rows: n,
+                    ..profile
+                }),
+                Err(ResourcePredictionErrorV1::PolynomialDomainDoesNotFitU32)
+            );
+            assert_eq!(
+                exact_key_resources_v1::<EpAffine>(KeygenCircuitResourceProfile {
+                    domain_rows: n,
+                    ..profile
+                }),
+                Err(ResourcePredictionErrorV1::PolynomialDomainDoesNotFitU32)
+            );
+        }
+        for permutation in [0, 1] {
+            assert!(
+                predict_key_resources_with_selectors_v1(31, 0, 0, 0, 0, 0, permutation, false)
+                    .is_ok()
+            );
+        }
+        assert_eq!(
+            predict_key_resources_with_selectors_v1(31, 0, 0, 0, 0, 0, 2, false),
+            Err(ResourcePredictionErrorV1::PermutationCellsDoNotFitU32)
+        );
+        assert_eq!(
+            exact_key_resources_v1::<EqAffine>(KeygenCircuitResourceProfile {
+                configured_fixed_columns: 1,
+                ..profile
+            }),
+            Err(ResourcePredictionErrorV1::FixedModeCountMismatch)
+        );
+        assert_eq!(
+            exact_key_resources_v1::<EpAffine>(KeygenCircuitResourceProfile {
+                configured_fixed_columns: 1,
+                ..profile
+            }),
+            Err(ResourcePredictionErrorV1::FixedModeCountMismatch)
+        );
     }
 }

@@ -1,21 +1,17 @@
 //! Torii client utilities used by MOCHI.
 //!
 //! The client focuses on generating canonical endpoints and providing async
-//! helpers for common HTTP and WebSocket interactions. UI layers can build on
-//! top by wiring retries, auth, and payload codecs.
+//! helpers for common HTTP interactions. Ledger streams use the account-bound
+//! Rust SDK; Mochi owns only summaries, fanout and local reconnect policy.
 use crate::compose::{InstructionPermission, SigningAuthority};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use futures::{SinkExt, future::join_all};
+use futures::future::join_all;
+use iroha::client::AccountClient;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     Identifiable,
     asset::{AssetDefinitionId, AssetId},
-    block::{
-        SignedBlock,
-        consensus::SumeragiDiagnosticsStatus,
-        consensus_v2::SumeragiV2Status,
-        stream::{BlockMessage, BlockSubscriptionRequest},
-    },
+    block::{SignedBlock, consensus::SumeragiDiagnosticsStatus, consensus_v2::SumeragiV2Status},
     events::{
         EventBox, EventFilterBox,
         data::{DataEvent, DataEventFilter, prelude::*, sorafs},
@@ -24,7 +20,6 @@ use iroha_data_model::{
             BlockEventFilter, MergeLedgerEventFilter, PipelineEventBox, TransactionEventFilter,
             WitnessEventFilter,
         },
-        stream::{EventMessage, EventSubscriptionRequest},
         time::{ExecutionTime, TimeEventFilter},
         trigger_completed::TriggerCompletedEventFilter,
     },
@@ -38,16 +33,12 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::status::Status as TelemetryStatus;
 use iroha_torii_shared::{
-    NORITO_V1_WEBSOCKET_SUBPROTOCOL, mcp as torii_mcp, route_catalog as torii_routes,
-    uri as torii_uri,
+    ErrorEnvelope, mcp as torii_mcp, route_catalog as torii_routes, uri as torii_uri,
 };
 use iroha_version::codec::EncodeVersioned;
 use norito::json;
 use rand::{TryRngCore as _, rngs::OsRng};
-use reqwest::{
-    Client, Response, StatusCode,
-    header::{HeaderMap, HeaderValue, SEC_WEBSOCKET_PROTOCOL},
-};
+use reqwest::{Client, Response, StatusCode, header::HeaderMap};
 use std::{
     convert::TryFrom,
     future::Future,
@@ -56,7 +47,6 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
-    net::TcpStream,
     runtime::Handle,
     sync::{
         Mutex,
@@ -67,10 +57,6 @@ use tokio::{
     time::{sleep, timeout},
 };
 use tokio_stream::StreamExt;
-use tokio_tungstenite::{
-    MaybeTlsStream, WebSocketStream, connect_async,
-    tungstenite::{Error as WebSocketError, Message, client::IntoClientRequest},
-};
 use url::Url;
 mod operator_auth;
 pub use operator_auth::OperatorSigningContext;
@@ -127,12 +113,9 @@ pub enum ToriiError {
         #[source]
         source: reqwest::header::InvalidHeaderValue,
     },
-    /// WebSocket negotiation failed.
-    #[error("websocket error: {0}")]
-    WebSocket(#[from] WebSocketError),
-    /// Constructed WebSocket request was invalid.
-    #[error("invalid websocket request: {0}")]
-    InvalidWebSocketRequest(String),
+    /// Structured failure from the canonical account SDK.
+    #[error("SDK error: {0}")]
+    Sdk(#[source] Arc<iroha::Error>),
     /// Norito decoding failed.
     #[error("norito decode error: {0}")]
     Decode(String),
@@ -166,10 +149,8 @@ pub enum ToriiErrorKind {
     ResponseResourceLimit,
     /// Torii responded with an unexpected status code.
     UnexpectedStatus,
-    /// WebSocket negotiation or framing failed.
-    WebSocket,
-    /// Constructed WebSocket request was invalid.
-    InvalidWebSocketRequest,
+    /// The canonical account SDK rejected or failed an operation.
+    Sdk,
     /// Norito payload decoding failed.
     Decode,
     /// Signed-query network, time, nonce, or signing context was unavailable.
@@ -284,15 +265,10 @@ impl ToriiError {
                 format!("Invalid HTTP header `{name}`"),
                 source.to_string(),
             ),
-            Self::WebSocket(err) => ToriiErrorInfo::with_detail(
-                ToriiErrorKind::WebSocket,
-                "WebSocket error while streaming from Torii",
+            Self::Sdk(err) => ToriiErrorInfo::with_detail(
+                ToriiErrorKind::Sdk,
+                "Account SDK operation failed",
                 err.to_string(),
-            ),
-            Self::InvalidWebSocketRequest(message) => ToriiErrorInfo::with_detail(
-                ToriiErrorKind::InvalidWebSocketRequest,
-                "Invalid WebSocket request",
-                message.clone(),
             ),
             Self::Decode(err) => ToriiErrorInfo::with_detail(
                 ToriiErrorKind::Decode,
@@ -351,20 +327,6 @@ impl ToriiError {
         }
     }
 }
-#[derive(Debug, Clone, norito::NoritoDeserialize, norito::NoritoSerialize)]
-struct ToriiErrorEnvelope {
-    code: String,
-    message: String,
-}
-impl ToriiErrorEnvelope {
-    fn summary(&self) -> String {
-        if self.code.is_empty() {
-            self.message.clone()
-        } else {
-            format!("{}: {}", self.code, self.message)
-        }
-    }
-}
 include!("torii/response_error_headers.rs");
 fn response_status_error(response: &reqwest::Response) -> ToriiError {
     if response.status() == StatusCode::TOO_MANY_REQUESTS {
@@ -379,19 +341,18 @@ fn response_status_error(response: &reqwest::Response) -> ToriiError {
         }
     }
 }
-fn websocket_connect_error(error: WebSocketError) -> ToriiError {
-    match error {
-        WebSocketError::Http(response) if response.status() == StatusCode::TOO_MANY_REQUESTS => {
-            ToriiError::RateLimited {
-                retry_after: retry_after_from_headers(response.headers()),
-            }
-        }
-        other => ToriiError::WebSocket(other),
+impl From<iroha::Error> for ToriiError {
+    fn from(error: iroha::Error) -> Self {
+        Self::Sdk(Arc::new(error))
     }
 }
 fn error_message_from_body(body: &[u8]) -> Option<String> {
-    if let Ok(envelope) = decode_norito::<ToriiErrorEnvelope>(body) {
-        return Some(envelope.summary());
+    if let Ok(envelope) = decode_norito::<ErrorEnvelope>(body) {
+        return Some(if envelope.code.is_empty() {
+            envelope.message
+        } else {
+            format!("{}: {}", envelope.code, envelope.message)
+        });
     }
     if let Ok(value) = norito::json::from_slice::<json::Value>(body)
         && let Some(message) = value
@@ -1096,20 +1057,6 @@ impl ToriiClientBuilder {
             status_state: Arc::new(Mutex::new(StatusState::default())),
         })
     }
-}
-/// WebSocket stream type alias used by Torii.
-pub type ToriiWebSocket = WebSocketStream<MaybeTlsStream<TcpStream>>;
-/// Simplified representation of frames received from a Torii WebSocket.
-#[derive(Debug, Clone)]
-pub enum WsFrame {
-    /// Binary payload (typically Norito-framed data).
-    Binary(Vec<u8>),
-    /// UTF-8 payload.
-    Text(String),
-    /// The remote closed the stream.
-    Closed,
-    /// The subscription reported an error.
-    Error(String),
 }
 /// Metrics derived from consecutive Torii status samples.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2201,7 +2148,7 @@ where
     norito::decode_from_bytes_with_limits(bytes, norito::canonical_decode_limits(bytes.len()))
         .map_err(|error| ToriiError::Decode(error.to_string()))
 }
-/// Minimal Torii client supporting REST calls and WebSocket subscriptions.
+/// Torii HTTP adapter supporting local supervisor workflows.
 #[derive(Clone, Debug)]
 pub struct ToriiClient {
     http_base: Url,
@@ -2249,6 +2196,16 @@ impl ToriiClient {
     /// Return the immutable genesis lineage configured for signed queries.
     pub fn network_id(&self) -> Option<NetworkId> {
         self.network_id
+    }
+    fn validate_stream_reader(&self, reader: &AccountClient) -> ToriiResult<()> {
+        if reader.endpoint() != &self.http_base
+            || *reader.network_id() != self.require_network_id()?
+        {
+            return Err(ToriiError::SignedQueryContext(
+                "stream reader must match the exact Torii endpoint and genesis network".to_owned(),
+            ));
+        }
+        Ok(())
     }
     fn require_network_id(&self) -> ToriiResult<NetworkId> {
         self.network_id.ok_or_else(|| {
@@ -2430,6 +2387,7 @@ impl ToriiClient {
     /// and observes its commitment with retries/backoff.
     pub async fn wait_for_readiness_smoke(
         &self,
+        reader: &AccountClient,
         mut plan: ReadinessSmokePlan,
     ) -> ToriiResult<ReadinessSmokeOutcome> {
         if plan.transactions.is_empty() {
@@ -2437,6 +2395,7 @@ impl ToriiClient {
                 "readiness smoke plan must include at least one transaction".to_owned(),
             ));
         }
+        self.validate_stream_reader(reader)?;
         self.wait_for_genesis_commit(plan.status_options).await?;
         plan.renew_generated_transactions_if_needed(unix_time_now())
             .map_err(|err| {
@@ -2452,7 +2411,7 @@ impl ToriiClient {
             let transaction_index = cursor.current_index();
             let transaction = &plan.transactions[transaction_index];
             match self
-                .submit_and_wait_for_commit(transaction, plan.commit_options)
+                .submit_and_wait_for_commit(reader, transaction, plan.commit_options)
                 .await
             {
                 Ok(commit) => {
@@ -2540,9 +2499,11 @@ impl ToriiClient {
     /// This helper is primarily intended for readiness smoke checks in local tooling.
     pub async fn submit_and_wait_for_commit(
         &self,
+        reader: &AccountClient,
         transaction: &SignedTransaction,
         options: SmokeCommitOptions,
     ) -> ToriiResult<SmokeCommitSnapshot> {
+        self.validate_stream_reader(reader)?;
         let tx_hash = transaction.hash();
         let tx_hash_str = encode_lower_hex(tx_hash.as_ref());
         let started = Instant::now();
@@ -2552,22 +2513,42 @@ impl ToriiClient {
         // readiness check. Torii may temporarily throttle WebSocket handshakes
         // while all peers start; keep the canonical HTTP status reconciliation
         // authoritative instead of failing an otherwise healthy localnet.
-        let block_stream =
-            match await_torii_before_deadline(deadline, &deadline_context, self.block_stream())
+        let block_stream = match await_torii_before_deadline(deadline, &deadline_context, async {
+            reader
+                .blocks()
+                .subscribe(NonZeroU64::MIN)
                 .await
+                .map(BlockStream::new)
+                .map_err(ToriiError::from)
+        })
+        .await
+        {
+            Ok(stream) => Some(stream),
+            Err(ToriiError::Sdk(error))
+                if matches!(error.as_ref(), iroha::Error::Http { status: 429, .. }) =>
             {
-                Ok(stream) => Some(stream),
-                Err(ToriiError::RateLimited { .. }) => None,
-                Err(error) => return Err(error),
-            };
-        let events_stream =
-            match await_torii_before_deadline(deadline, &deadline_context, self.events_stream())
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        let events_stream = match await_torii_before_deadline(deadline, &deadline_context, async {
+            reader
+                .events()
+                .subscribe(canonical_event_filters())
                 .await
+                .map(EventStream::new)
+                .map_err(ToriiError::from)
+        })
+        .await
+        {
+            Ok(stream) => Some(stream),
+            Err(ToriiError::Sdk(error))
+                if matches!(error.as_ref(), iroha::Error::Http { status: 429, .. }) =>
             {
-                Ok(stream) => Some(stream),
-                Err(ToriiError::RateLimited { .. }) => None,
-                Err(error) => return Err(error),
-            };
+                None
+            }
+            Err(error) => return Err(error),
+        };
         let mut block_rx = block_stream.as_ref().map(BlockStream::subscribe);
         let mut event_rx = events_stream.as_ref().map(EventStream::subscribe);
         let signed_bytes = transaction.encode_versioned();
@@ -2649,12 +2630,13 @@ impl ToriiClient {
                             }
                             Ok(BlockStreamEvent::DecodeError { error }) => {
                                 if !admission_outcome_unknown {
-                                    return Err(ToriiError::Decode(error.message));
+                                    return Err(error.source.map_or_else(|| ToriiError::Decode(error.message), ToriiError::Sdk));
                                 }
                             }
-                            Ok(BlockStreamEvent::Closed) => {}
+                            Ok(BlockStreamEvent::Closed) => { block_rx = None; }
                             Ok(BlockStreamEvent::Lagged { .. } | BlockStreamEvent::Text { .. }) => {}
-                            Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
+                            Err(RecvError::Lagged(_)) => {}
+                            Err(RecvError::Closed) => { block_rx = None; }
                         }
                     }
                     message = async {
@@ -2694,12 +2676,13 @@ impl ToriiClient {
                             }
                             Ok(EventStreamEvent::DecodeError { error }) => {
                                 if !admission_outcome_unknown {
-                                    return Err(ToriiError::Decode(error.message));
+                                    return Err(error.source.map_or_else(|| ToriiError::Decode(error.message), ToriiError::Sdk));
                                 }
                             }
-                            Ok(EventStreamEvent::Closed) => {}
+                            Ok(EventStreamEvent::Closed) => { event_rx = None; }
                             Ok(EventStreamEvent::Lagged { .. } | EventStreamEvent::Text { .. }) => {}
-                            Err(RecvError::Lagged(_)) | Err(RecvError::Closed) => {}
+                            Err(RecvError::Lagged(_)) => {}
+                            Err(RecvError::Closed) => { event_rx = None; }
                         }
                     }
                 }
@@ -2911,10 +2894,12 @@ impl ToriiClient {
     /// is never silently retried against a different topology.
     pub async fn apply_lane_lifecycle(
         &self,
+        reader: &AccountClient,
         network_id: NetworkId,
         signer: &SigningAuthority,
         plan: LaneLifecyclePlan,
     ) -> ToriiResult<SmokeCommitSnapshot> {
+        self.validate_stream_reader(reader)?;
         let configured_network_id = self.require_network_id()?;
         if network_id != configured_network_id {
             return Err(ToriiError::SignedQueryContext(format!(
@@ -2932,7 +2917,7 @@ impl ToriiClient {
         let transaction = build_lane_lifecycle_transaction(network_id, signer, &status, plan)?;
         let options = SmokeCommitOptions::default();
         let committed = self
-            .submit_and_wait_for_commit(&transaction, options)
+            .submit_and_wait_for_commit(reader, &transaction, options)
             .await?;
         // Block persistence precedes WSV publication. Do not report success to
         // storage-reset callers until the committed catalog and its fresh
@@ -3097,43 +3082,6 @@ impl ToriiClient {
         }
         Ok(page)
     }
-    /// Establish a canonical WebSocket connection to `/v1/blocks/stream`.
-    pub async fn connect_block_stream(&self) -> ToriiResult<ToriiWebSocket> {
-        self.connect_ws(self.block_stream_endpoint()?).await
-    }
-    /// Subscribe to blocks from height one on `/v1/blocks/stream`.
-    pub async fn subscribe_block_stream(&self) -> ToriiResult<WsSubscription> {
-        self.subscribe_block_stream_from(NonZeroU64::MIN).await
-    }
-    /// Subscribe to blocks from the requested one-indexed height.
-    pub async fn subscribe_block_stream_from(
-        &self,
-        height: NonZeroU64,
-    ) -> ToriiResult<WsSubscription> {
-        let request = BlockSubscriptionRequest::new(height);
-        let first_message =
-            norito::to_bytes(&request).expect("canonical block subscription request must encode");
-        self.subscribe_ws(self.block_stream_endpoint()?, first_message)
-            .await
-    }
-    /// Subscribe to all Explorer-facing event categories on `/v1/events/ws`.
-    pub async fn subscribe_events_stream(&self) -> ToriiResult<WsSubscription> {
-        let request = EventSubscriptionRequest::new(canonical_event_filters());
-        let first_message =
-            norito::to_bytes(&request).expect("canonical event subscription request must encode");
-        self.subscribe_ws(self.events_stream_endpoint()?, first_message)
-            .await
-    }
-    /// Subscribe to `/v1/blocks/stream` and publish decoded [`SignedBlock`] events.
-    pub async fn block_stream(&self) -> ToriiResult<BlockStream> {
-        let subscription = self.subscribe_block_stream().await?;
-        Ok(BlockStream::new(subscription))
-    }
-    /// Subscribe to `/v1/events/ws` and publish decoded [`EventBox`] events.
-    pub async fn events_stream(&self) -> ToriiResult<EventStream> {
-        let subscription = self.subscribe_events_stream().await?;
-        Ok(EventStream::new(subscription))
-    }
     fn http_endpoint(&self, path: &str) -> ToriiResult<Url> {
         self.http_base
             .join(path.trim_start_matches('/'))
@@ -3220,108 +3168,15 @@ impl ToriiClient {
         });
         self.post_mcp_json(url, "tools/list", None, &payload).await
     }
-    async fn connect_ws(&self, url: Url) -> ToriiResult<ToriiWebSocket> {
-        let mut request = url
-            .to_string()
-            .into_client_request()
-            .map_err(|err| ToriiError::InvalidWebSocketRequest(err.to_string()))?;
-        request.headers_mut().insert(
-            SEC_WEBSOCKET_PROTOCOL,
-            HeaderValue::from_static(NORITO_V1_WEBSOCKET_SUBPROTOCOL),
-        );
-        let (stream, response) = connect_async(request)
-            .await
-            .map_err(websocket_connect_error)?;
-        let selected_protocol = response
-            .headers()
-            .get(SEC_WEBSOCKET_PROTOCOL)
-            .and_then(|value| value.to_str().ok());
-        if selected_protocol != Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL) {
-            return Err(ToriiError::InvalidWebSocketRequest(format!(
-                "Torii WebSocket did not select required subprotocol `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`"
-            )));
-        }
-        Ok(stream)
-    }
-    async fn subscribe_ws(
-        &self,
-        endpoint: Url,
-        first_message: Vec<u8>,
-    ) -> ToriiResult<WsSubscription> {
-        let mut stream = self.connect_ws(endpoint).await?;
-        stream.send(Message::Binary(first_message.into())).await?;
-        let (sender, _receiver) = broadcast::channel(128);
-        let forwarder = sender.clone();
-        let handle: JoinHandle<()> = tokio::spawn(async move {
-            let mut closed_emitted = false;
-            while let Some(message) = stream.next().await {
-                match message {
-                    Ok(Message::Binary(data)) => {
-                        let _ = forwarder.send(WsFrame::Binary(data.to_vec()));
-                    }
-                    Ok(Message::Text(text)) => {
-                        let _ = forwarder.send(WsFrame::Error(format!(
-                            "Torii canonical Norito WebSocket sent an unexpected text frame: {text}"
-                        )));
-                        break;
-                    }
-                    Ok(Message::Close(_)) => {
-                        let _ = forwarder.send(WsFrame::Closed);
-                        closed_emitted = true;
-                        break;
-                    }
-                    Ok(Message::Frame(_)) | Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {}
-                    Err(err) => {
-                        let _ = forwarder.send(WsFrame::Error(err.to_string()));
-                        break;
-                    }
-                }
-            }
-            if !closed_emitted {
-                let _ = forwarder.send(WsFrame::Closed);
-            }
-        });
-        Ok(WsSubscription { sender, handle })
-    }
 }
+
 #[cfg(test)]
 include!("torii/commit_wait_test_support.rs");
-/// Broadcast-backed WebSocket subscription.
-#[derive(Debug)]
-pub struct WsSubscription {
-    /// Channel distributing frames to subscribers.
-    sender: broadcast::Sender<WsFrame>,
-    /// Join handle for the forwarding task.
-    handle: JoinHandle<()>,
-}
-impl WsSubscription {
-    /// Acquire a receiver that yields binary frames pushed by the subscription.
-    pub fn subscribe(&self) -> broadcast::Receiver<WsFrame> {
-        self.sender.subscribe()
-    }
-    /// Abort the underlying forwarding task.
-    pub fn abort(&self) {
-        if !self.handle.is_finished() {
-            self.handle.abort();
-        }
-    }
-    /// Check if the forwarding task has completed.
-    pub fn is_finished(&self) -> bool {
-        self.handle.is_finished()
-    }
-}
-impl Drop for WsSubscription {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
 /// Stage of decoding when a failure occurred.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BlockDecodeStage {
     /// Failed to parse the Norito frame.
     Frame,
-    /// Failed to decode the `SignedBlock` payload.
-    Block,
     /// Underlying WebSocket stream aborted.
     Stream,
 }
@@ -3331,16 +3186,19 @@ pub struct BlockStreamDecodeError {
     /// Stage where decoding failed.
     pub stage: BlockDecodeStage,
     /// Length of the raw frame that triggered the error, if known.
-    pub raw_len: usize,
+    pub raw_len: Option<usize>,
     /// Human-readable error description.
     pub message: String,
+    /// Structured SDK error when the failure originated from a subscription.
+    pub source: Option<Arc<iroha::Error>>,
 }
 impl BlockStreamDecodeError {
-    fn new(stage: BlockDecodeStage, raw_len: usize, message: impl Into<String>) -> Self {
+    fn new(stage: BlockDecodeStage, raw_len: Option<usize>, message: impl Into<String>) -> Self {
         Self {
             stage,
             raw_len,
             message: message.into(),
+            source: None,
         }
     }
 }
@@ -3409,7 +3267,7 @@ pub enum BlockStreamEvent {
         /// Length of the raw frame before decoding.
         raw_len: usize,
     },
-    /// Received UTF-8 payload on the block stream (includes reconnection notices with peer aliases).
+    /// Local lifecycle notice, including reconnection notices with peer aliases.
     Text { text: String },
     /// Decoding or transport error.
     DecodeError { error: BlockStreamDecodeError },
@@ -3418,113 +3276,7 @@ pub enum BlockStreamEvent {
     /// Stream closed cleanly.
     Closed,
 }
-/// High-level helper that consumes WebSocket frames and publishes decoded blocks.
-pub struct BlockStream {
-    subscription: WsSubscription,
-    sender: broadcast::Sender<BlockStreamEvent>,
-    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<BlockStreamEvent>>>,
-    decode_handle: JoinHandle<()>,
-}
-impl BlockStream {
-    fn new(subscription: WsSubscription) -> Self {
-        let mut receiver = subscription.subscribe();
-        let (sender, _) = broadcast::channel(128);
-        let initial_receiver = sender.subscribe();
-        let forwarder = sender.clone();
-        let decode_handle = tokio::spawn(async move {
-            loop {
-                match receiver.recv().await {
-                    Ok(WsFrame::Binary(frame)) => {
-                        let raw_len = frame.len();
-                        match norito::decode_from_bytes::<BlockMessage>(&frame) {
-                            Ok(message) => {
-                                let block: SignedBlock = message.into();
-                                let block = Arc::<SignedBlock>::new(block);
-                                let summary = BlockSummary::from_block(block.as_ref());
-                                let event = BlockStreamEvent::Block {
-                                    summary,
-                                    block,
-                                    raw_len,
-                                };
-                                let _ = forwarder.send(event);
-                            }
-                            Err(err) => {
-                                let _ = forwarder.send(BlockStreamEvent::DecodeError {
-                                    error: BlockStreamDecodeError::new(
-                                        BlockDecodeStage::Frame,
-                                        raw_len,
-                                        err.to_string(),
-                                    ),
-                                });
-                            }
-                        }
-                    }
-                    Ok(WsFrame::Text(text)) => {
-                        let truncated = if text.len() > 256 {
-                            format!("{}…", &text[..255])
-                        } else {
-                            text
-                        };
-                        let _ = forwarder.send(BlockStreamEvent::Text { text: truncated });
-                    }
-                    Ok(WsFrame::Error(message)) => {
-                        let _ = forwarder.send(BlockStreamEvent::DecodeError {
-                            error: BlockStreamDecodeError::new(
-                                BlockDecodeStage::Stream,
-                                0,
-                                message,
-                            ),
-                        });
-                        break;
-                    }
-                    Ok(WsFrame::Closed) => {
-                        let _ = forwarder.send(BlockStreamEvent::Closed);
-                        break;
-                    }
-                    Err(RecvError::Lagged(skipped)) => {
-                        let _ = forwarder.send(BlockStreamEvent::Lagged {
-                            skipped: lag_to_usize(skipped),
-                        });
-                    }
-                    Err(RecvError::Closed) => {
-                        let _ = forwarder.send(BlockStreamEvent::Closed);
-                        break;
-                    }
-                }
-            }
-        });
-        Self {
-            subscription,
-            sender,
-            initial_receiver: std::sync::Mutex::new(Some(initial_receiver)),
-            decode_handle,
-        }
-    }
-    /// Acquire a receiver for decoded block events.
-    pub fn subscribe(&self) -> broadcast::Receiver<BlockStreamEvent> {
-        self.initial_receiver
-            .lock()
-            .expect("block stream receiver lock poisoned")
-            .take()
-            .unwrap_or_else(|| self.sender.subscribe())
-    }
-    /// Abort both the raw WebSocket subscription and decoder task.
-    pub fn abort(&self) {
-        self.subscription.abort();
-        if !self.decode_handle.is_finished() {
-            self.decode_handle.abort();
-        }
-    }
-    /// Check whether the underlying tasks finished.
-    pub fn is_finished(&self) -> bool {
-        self.subscription.is_finished() && self.decode_handle.is_finished()
-    }
-}
-impl Drop for BlockStream {
-    fn drop(&mut self) {
-        self.abort();
-    }
-}
+include!("torii/block_stream_runtime.rs");
 /// Categories of events emitted by Torii.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EventCategory {
@@ -3971,8 +3723,6 @@ fn sorafs_event_summary(event: &sorafs::SorafsGatewayEvent) -> (String, String) 
 pub enum EventDecodeStage {
     /// Failed to parse the Norito frame.
     Frame,
-    /// Failed to decode the `EventBox` payload.
-    Event,
     /// Underlying WebSocket stream aborted.
     Stream,
 }
@@ -3982,16 +3732,19 @@ pub struct EventStreamDecodeError {
     /// Stage where decoding failed.
     pub stage: EventDecodeStage,
     /// Length of the raw frame that triggered the error, if known.
-    pub raw_len: usize,
+    pub raw_len: Option<usize>,
     /// Human-readable error description.
     pub message: String,
+    /// Structured SDK error when the failure originated from a subscription.
+    pub source: Option<Arc<iroha::Error>>,
 }
 impl EventStreamDecodeError {
-    fn new(stage: EventDecodeStage, raw_len: usize, message: impl Into<String>) -> Self {
+    fn new(stage: EventDecodeStage, raw_len: Option<usize>, message: impl Into<String>) -> Self {
         Self {
             stage,
             raw_len,
             message: message.into(),
+            source: None,
         }
     }
 }
@@ -4007,7 +3760,7 @@ pub enum EventStreamEvent {
         /// Length of the raw frame before decoding.
         raw_len: usize,
     },
-    /// Received UTF-8 payload on the event stream.
+    /// Local lifecycle notice, including reconnection notices with peer aliases.
     Text { text: String },
     /// Decoding or transport error.
     DecodeError { error: EventStreamDecodeError },
@@ -4015,13 +3768,6 @@ pub enum EventStreamEvent {
     Lagged { skipped: usize },
     /// Stream closed cleanly.
     Closed,
-}
-/// High-level helper that consumes WebSocket frames and publishes decoded events.
-pub struct EventStream {
-    subscription: WsSubscription,
-    sender: broadcast::Sender<EventStreamEvent>,
-    initial_receiver: std::sync::Mutex<Option<broadcast::Receiver<EventStreamEvent>>>,
-    decode_handle: JoinHandle<()>,
 }
 include!("torii/event_stream_runtime.rs");
 include!("torii/managed_streams.rs");

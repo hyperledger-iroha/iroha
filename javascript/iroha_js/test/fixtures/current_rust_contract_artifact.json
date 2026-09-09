@@ -1,13 +1,13 @@
 {
   "fixture_version": 1,
   "source": "current_rust_contract_artifact.ko",
-  "artifact_base64": "SVZNAAEBAABAQg8AAAAAAAHq/k6nyKvkG2F1fFBvYHtzO06EjQ40jW5JXNB/+KmJQUNOVFLOAQAATlJUMAAAQnjEFBl9aNnLstrep0AjhwCmAQAAAAAAAN51SG//TzjmAhYVQnJvd3NlckFydGlmYWN0UGFyaXR5Gxprb3RvZGFtYV9sYW5nLzIuMC4wLXJjLjIuMCDq/k6nyKvkG2F1fFBvYHtzO06EjQ40jW5JXNB/+KmJQQgAAAAAAAAAAEQBQhcBAAAAAAAAAA4Nc3RhdGU6Y291bnRlchcBAAAAAAAAAA4Nc3RhdGU6Y291bnRlcggAAAAAAAAAAAgAAAAAAAAAAAgAAAAAAAAAANMBAgAAAAAAAABgCQhoYWppbWFyaQQCAAAACAAAAAAAAAAAAQABAAEAAQAIAAAAAAAAAAAXAQAAAAAAAAAODXN0YXRlOmNvdW50ZXIDAQEBCAAAAAAAAAAACAAAAAAAAAAACIgAAAAAAAAAaQQDcnVuBAAAAAAIAAAAAAAAAAABAAEAAQAeARwbQ2FuUnVuQnJvd3NlckFydGlmYWN0UGFyaXR5CAAAAAAAAAAACAAAAAAAAAAAAwEBAQgAAAAAAAAAAAgAAAAAAAAAAAiQAAAAAAAAABwBAAAAAAAAABMIB2NvdW50ZXIJAQAAAAAAAAAACAAAAAAAAAAATFRMQgQAAAADAAAARwEAADAAAAAAAAAAgwAAAAAAAADiAAAAAAAAADkBAAAAAAAAABEBAAAALE5SVDAAAAfAOUVzY7nh02u9Mdk97EoABAAAAAAAAABLnxseNYal9AAAAAAAa8m4+HrniN5Qmm+QNBMz3rG4qARqxIaNofmJGEdcwdcACQEAAAA4TlJUMAAA/FPT3zjztLu6tVFeZBaDEwAQAAAAAAAAAPnceOKhdm6eAAgAAAAAAAAAS1NWMQEABQBJMWgoDjhwbDda/HuSnQ/oVN/qvudieOFFM+rRPJ3DHQAJAQAAADBOUlQwAAD+bgPvxEkMH6RtgQDO74mdAAgAAAAAAAAAn1x8av1NeZACB2NvdW50ZXIMiMdP7Y3wywM3dMXup1JFLNdimZX/eSDJuvUAQdJk+QAGAQAAABdicm93c2VyIGFydGlmYWN0IHBhcml0eSzTqw9KC/TQLd+qtjCaSwnQ3MyDVeyWitq7d5QuC+edAAAAAAAASeAfHyAACR8xCBcfMRAYHzEAABw0GBwfMQEACjQYHwsgAQAMIDUAAWIACgkgAgAKNAAJCyDgAABgAAocIAALCiDgAABgAAoLIAAcCiBRAABgAB8JMAgfFzAQHxgwIB8fIAABAEjwHx8gABgfMQMAGDQAGAogAwAAYAAfGDAQHx8gAAEASN//AUYAAABJ9v8BRgAAAEk=",
-  "artifact_length": 1049,
-  "artifact_sha256": "4afa051824156e8d12456a168363ff958228b4ce3f623c6359eaf3d97094ea0d",
+  "artifact_base64": "SVZNAAEBAABAQg8AAAAAAAHbQlmqKEhpZ/LYeZtOZuG5GfTRhpDbLZTNlu+gXuhAo0NOVFJDAwAATlJUMAAAQnjEFBl9aNnLstrep0AjhwAbAwAAAAAAAF+lH0EIZnsZAhYVQnJvd3NlckFydGlmYWN0UGFyaXR5Gxprb3RvZGFtYV9sYW5nLzIuMC4wLXJjLjIuMCDbQlmqKEhpZ/LYeZtOZuG5GfTRhpDbLZTNlu+gXuhAowgAAAAAAAAAAEQBQhcBAAAAAAAAAA4Nc3RhdGU6Y291bnRlchcBAAAAAAAAAA4Nc3RhdGU6Y291bnRlcggAAAAAAAAAAAgAAAAAAAAAAAgAAAAAAAAAAPkBAgAAAAAAAABzCQhoYWppbWFyaQQCAAAACAAAAAAAAAAAAQAFAQMCKCkQAQ4NAQAAAAAAAAAEBgAAAAEACAAAAAAAAAAAFwEAAAAAAAAADg1zdGF0ZTpjb3VudGVyAwEBAQgAAAAAAAAAAAgAAAAAAAAAAAiYAAAAAAAAAHwEA3J1bgQAAAAACAAAAAAAAAAAAQAFAQMCKCkQAQ4NAQAAAAAAAAAEBgAAAB4BHBtDYW5SdW5Ccm93c2VyQXJ0aWZhY3RQYXJpdHkIAAAAAAAAAAAIAAAAAAAAAAADAQEBCAAAAAAAAAAACAAAAAAAAAAACKAAAAAAAAAAHAEAAAAAAAAAEwgHY291bnRlcgkBAAAAAAAAAADWAgIAAAAAAAAAThQTa290b2RhbWE6Okxpc3RFcnJvcjgCAAAAAAAAABcREEluZGV4T3V0T2ZCb3VuZHMEAQAAABcREENhcGFjaXR5RXhjZWVkZWQEAgAAAP0BFxZrb3RvZGFtYTo6TnVtZXJpY0Vycm9y4wEJAAAAAAAAABcREE1hbnRpc3NhT3ZlcmZsb3cEAQAAABQODVNjYWxlT3ZlcmZsb3cEAgAAABUPDkRpdmlzaW9uQnlaZXJvBAMAAAAXERBSZXBlYXRpbmdEZWNpbWFsBAQAAAAhGxpFeGFjdERpdmlzaW9uU2NhbGVPdmVyZmxvdwQFAAAAEw0MSW52YWxpZFNjYWxlBAYAAAAYEhFJbmV4YWN0Q29udmVyc2lvbgQHAAAAFxEQTmVnYXRpdmVRdWFudGl0eQQIAAAAGBIRUXVhbnRpdHlVbmRlcmZsb3cECQAAAExUTEIEAAAAAgAAAEcBAAAwAAAAAAAAAIMAAAAAAAAA4gAAAAAAAAA5AQAAAAAAAAARAQAAACxOUlQwAAAHwDlFc2O54dNrvTHZPexKAAQAAAAAAAAAS58bHjWGpfQAAAAAAGvJuPh654jeUJpvkDQTM96xuKgEasSGjaH5iRhHXMHXAAkBAAAAOE5SVDAAAPxT098487S7urVRXmQWgxMAEAAAAAAAAAD53HjioXZungAIAAAAAAAAAEtTVjEBAAUASTFoKA44cGw3Wvx7kp0P6FTf6r7nYnjhRTPq0Tydwx0ACQEAAAAwTlJUMAAA/m4D78RJDB+kbYEAzu+JnQAIAAAAAAAAAJ9cfGr9TXmQAgdjb3VudGVyDIjHT+2N8MsDN3TF7qdSRSzXYpmV/3kgybr1AEHSZPkABgEAAAAXYnJvd3NlciBhcnRpZmFjdCBwYXJpdHks06sPSgv00C3fqrYwmksJ0NzMg1Xslorau3eULgvnnQAAAAAASeAfHyAACR8xCBcfMRAYHzEAABw0GBwfMQEACjQYHwsgAQAMIDUAAWIACgkgAgAKNAAJCyDgAABgAAocIAALCiDgAABgAAoLIAAcCiBRAABgAAAWIAAWCiAAHwkwCB8XMBAfGDAgHx8gAAEASPAfHyAAGB8xAwAYNAAYCiADAABgAAAWIAAWCiAAHxgwEB8fIAABAEjb/wFGAAAASfT/AUYAAABJ",
+  "artifact_length": 1437,
+  "artifact_sha256": "6f420bcc858b85ccd95a313bbd3f10d9abc255cbd8342677fc17bb83bbc1e742",
   "manifest": {
     "seiyaku_name": "BrowserArtifactParity",
-    "code_hash": "hash:1FA2CCFE57122FF8EF8EF349EA8CB3D49C5A667265326BA05A8A894768BAA215#81C2",
-    "abi_hash": "hash:EAFE4EA7C8ABE41B61757C506F607B733B4E848D0E348D6E495CD07FF8A98941#961D",
+    "code_hash": "hash:68C9B1C38AED65A74087AF6AFA35087FDB5DA97F192FE21D26E3DCFB69E20BB3#48FD",
+    "abi_hash": "hash:DB4259AA28486967F2D8799B4E66E1B919F4D18690DB2D94CD96EFA05EE840A3#4407",
     "compiler_fingerprint": "kotodama_lang/2.0.0-rc.2.0",
     "features_bitmap": 0,
     "access_set_hints": {
@@ -29,8 +29,15 @@
         },
         "params": [],
         "argument_schema": null,
-        "return_type": null,
-        "return_schema": null,
+        "return_type": "()",
+        "return_schema": {
+          "nodes": [
+            {
+              "kind": "Unit",
+              "value": null
+            }
+          ]
+        },
         "permission": null,
         "read_keys": [],
         "write_keys": [
@@ -48,8 +55,15 @@
         },
         "params": [],
         "argument_schema": null,
-        "return_type": null,
-        "return_schema": null,
+        "return_type": "()",
+        "return_schema": {
+          "nodes": [
+            {
+              "kind": "Unit",
+              "value": null
+            }
+          ]
+        },
         "permission": "CanRunBrowserArtifactParity",
         "read_keys": [],
         "write_keys": [],
@@ -64,22 +78,77 @@
         "type_name": "int"
       }
     ],
-    "error_codes": null,
+    "error_types": [
+      {
+        "identity": "kotodama::ListError",
+        "variants": [
+          {
+            "name": "IndexOutOfBounds",
+            "code": 1
+          },
+          {
+            "name": "CapacityExceeded",
+            "code": 2
+          }
+        ]
+      },
+      {
+        "identity": "kotodama::NumericError",
+        "variants": [
+          {
+            "name": "MantissaOverflow",
+            "code": 1
+          },
+          {
+            "name": "ScaleOverflow",
+            "code": 2
+          },
+          {
+            "name": "DivisionByZero",
+            "code": 3
+          },
+          {
+            "name": "RepeatingDecimal",
+            "code": 4
+          },
+          {
+            "name": "ExactDivisionScaleOverflow",
+            "code": 5
+          },
+          {
+            "name": "InvalidScale",
+            "code": 6
+          },
+          {
+            "name": "InexactConversion",
+            "code": 7
+          },
+          {
+            "name": "NegativeQuantity",
+            "code": 8
+          },
+          {
+            "name": "QuantityUnderflow",
+            "code": 9
+          }
+        ]
+      }
+    ],
     "kotoba": null,
     "provenance": null
   },
   "artifact_semantics": {
-    "code_hash_hex": "1fa2ccfe57122ff8ef8ef349ea8cb3d49c5a667265326ba05a8a894768baa215",
-    "abi_hash_hex": "eafe4ea7c8abe41b61757c506f607b733b4e848d0e348d6e495cd07ff8a98941",
+    "code_hash_hex": "68c9b1c38aed65a74087af6afa35087fdb5da97f192fe21d26e3dcfb69e20bb3",
+    "abi_hash_hex": "db4259aa28486967f2d8799b4e66e1b919f4d18690db2d94cd96efa05ee840a3",
     "header_len": 49,
-    "code_offset": 897,
+    "code_offset": 1269,
     "entrypoint_count": 2
   },
   "source_provenance": {
     "scope": "semantic-worktree-source-closure-v2",
     "closure_algorithm": "sha256-framed-present-path-and-bytes-v2",
-    "closure_sha256": "4698834be0016068bf8b2bb23819a2e88c67c68b484e796d011255b6d3186507",
-    "file_count": 2352,
+    "closure_sha256": "c4003a7a5aa7458353fecd6cc48d84b12312401b045e16bb2b97477f2ea20423",
+    "file_count": 2514,
     "contract_source_git_blob": "9187a6b5eeda3306f9c8be4029168c473a49c42e",
     "artifact_generator_git_blob": "19b0412bac68b54d2c56aaef6c9c39164ab62168"
   }

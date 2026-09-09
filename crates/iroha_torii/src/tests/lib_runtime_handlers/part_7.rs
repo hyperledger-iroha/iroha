@@ -2255,16 +2255,19 @@ async fn proxy_soracloud_public_hosted_http_falls_back_to_remote_peer() {
         for spoofed in [false, true] {
             let request_id = tokio::time::timeout(Duration::from_secs(2), async {
                 loop {
-                    let pending = app_for_response.torii_proxy_pending.lock().await;
-                    if let Some((request_id, _peer_id)) =
-                        pending.keys().find(|(request_id, peer_id)| {
-                            *peer_id == remote_peer_for_response
-                                && prior_request_id.as_ref() != Some(request_id)
-                        })
-                    {
-                        break *request_id;
+                    let pending_request = {
+                        let pending = app_for_response.torii_proxy_pending.lock();
+                        pending
+                            .keys()
+                            .find(|(request_id, peer_id)| {
+                                *peer_id == remote_peer_for_response
+                                    && prior_request_id.as_ref() != Some(request_id)
+                            })
+                            .map(|(request_id, _)| *request_id)
+                    };
+                    if let Some(request_id) = pending_request {
+                        break request_id;
                     }
-                    drop(pending);
                     tokio::time::sleep(Duration::from_millis(10)).await;
                 }
             })

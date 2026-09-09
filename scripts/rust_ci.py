@@ -5,6 +5,12 @@ The classifier requires Python 3.9+ (and the pinned ``tomli`` on Python before
 3.11), a locked Cargo workspace, and Git when paths are not supplied
 explicitly. It never mutates tracked sources. Unknown, ambiguous, or deleted
 Rust ownership fails closed to every lane.
+
+Ordinary foundation-only changes retain affected library and local CLI checks;
+network tests and daemon owners require a mixed source change or ``ci/full``.
+Binary staging requires Cargo and uses separate target directories for shipping
+and consensus-message-control feature graphs. Qualified corridor runners own
+their source-bound bundles and never consume this downloaded PR artifact set.
 """
 
 from __future__ import annotations
@@ -39,11 +45,26 @@ sys.modules[_DOCS_SPEC.name] = KOTODAMA_DOCS
 _DOCS_SPEC.loader.exec_module(KOTODAMA_DOCS)
 DEFAULT_MANIFEST = ROOT / "ci" / "rust_lanes.toml"
 CHECK_NAMES = ("clippy", "build", "test", "doc")
-BINARY_PACKAGES = {
-    "iroha3d": "irohad",
-    "iroha": "iroha_cli",
-    "kagami": "iroha_kagami",
-    "koto": "ivm",
+
+
+@dataclass(frozen=True)
+class BinaryArtifact:
+    """One executable with an explicit Cargo owner and feature isolation boundary."""
+
+    package: str
+    binary: str
+    features: tuple[str, ...] = ()
+    target_group: str = "shipping"
+
+
+BINARY_ARTIFACTS = {
+    "iroha3d": BinaryArtifact("irohad", "iroha3d"),
+    "iroha": BinaryArtifact("iroha_cli", "iroha"),
+    "kagami": BinaryArtifact("iroha_kagami", "kagami"),
+    "koto": BinaryArtifact("ivm", "koto"),
+    "iroha3d_message_control": BinaryArtifact(
+        "irohad", "iroha3d", ("test-network-message-control",), "message-control"
+    ),
 }
 PACKAGE_NAME_CHARACTERS = frozenset(
     "-_0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -65,12 +86,13 @@ class WorkspacePackage:
 
 @dataclass(frozen=True)
 class BinaryConsumer:
-    """A non-Cargo check and the inputs that require its shipping binaries."""
+    """A routed check using downloaded binaries or its own qualified build protocol."""
 
     packages: tuple[str, ...]
     paths: tuple[str, ...]
     binaries: tuple[str, ...]
     kotodama_document_inventory: str | None = None
+    qualified_runner: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +106,7 @@ class LaneManifest:
     lane_patterns: dict[str, tuple[str, ...]]
     package_binaries: dict[str, tuple[str, ...]] = field(default_factory=dict)
     consumers: dict[str, BinaryConsumer] = field(default_factory=dict)
+    daemon_packages: tuple[str, ...] = ()
 
     @property
     def package_lane(self) -> dict[str, str]:
@@ -109,6 +132,9 @@ class Classification:
     package_binaries: dict[str, tuple[str, ...]] = field(default_factory=dict)
     consumers: dict[str, bool] = field(default_factory=dict)
     binaries: tuple[str, ...] = ()
+    foundation_only: bool = False
+    deferred_packages: tuple[str, ...] = ()
+    deferred_consumers: tuple[str, ...] = ()
 
     @property
     def has_rust(self) -> bool:
@@ -144,6 +170,9 @@ class Classification:
             "version": 2,
             "has_rust": self.has_rust,
             "full": self.full,
+            "foundation_only": self.foundation_only,
+            "deferred_packages": list(self.deferred_packages),
+            "deferred_consumers": list(self.deferred_consumers),
             "changed_paths": list(self.changed_paths),
             "changed_packages": list(self.changed_packages),
             "impacted_packages": list(self.impacted_packages),
@@ -260,6 +289,13 @@ def load_lane_manifest(path: Path = DEFAULT_MANIFEST) -> LaneManifest:
         raise ClassificationError(f"cannot load lane manifest {path}: {error}") from error
     if raw.get("version") != 1:
         raise ClassificationError("lane manifest version must be 1")
+    daemon_packages = raw.get("daemon_packages", [])
+    if (
+        not isinstance(daemon_packages, list)
+        or not all(isinstance(package, str) and package for package in daemon_packages)
+        or len(set(daemon_packages)) != len(daemon_packages)
+    ):
+        raise ClassificationError("daemon_packages must list unique package names")
     raw_lanes = raw.get("lanes")
     if not isinstance(raw_lanes, dict) or not raw_lanes:
         raise ClassificationError("lane manifest must define at least one lane")
@@ -310,7 +346,9 @@ def load_lane_manifest(path: Path = DEFAULT_MANIFEST) -> LaneManifest:
             or not isinstance(consumer, dict)
         ):
             raise ClassificationError(f"invalid binary consumer: {name!r}")
-        unknown = set(consumer) - {"packages", "paths", "binaries", "kotodama_document_inventory"}
+        unknown = set(consumer) - {
+            "packages", "paths", "binaries", "kotodama_document_inventory", "qualified_runner"
+        }
         if unknown:
             raise ClassificationError(f"consumers.{name} has unknown fields: {sorted(unknown)}")
         consumer_packages = consumer.get("packages", [])
@@ -325,11 +363,25 @@ def load_lane_manifest(path: Path = DEFAULT_MANIFEST) -> LaneManifest:
             or not inventory.endswith(".json")
         ):
             raise ClassificationError(f"consumers.{name}.kotodama_document_inventory must name a repository JSON path")
+        runner = consumer.get("qualified_runner")
+        if runner is not None and (
+            not isinstance(runner, str)
+            or _normalize_changed_path(runner) != runner
+            or not runner.startswith("ci/")
+            or not runner.endswith(".sh")
+        ):
+            raise ClassificationError(f"consumers.{name}.qualified_runner must name a repository ci shell runner")
+        binaries = _binary_names(
+            consumer.get("binaries"), f"consumers.{name}.binaries", allow_empty=runner is not None
+        )
+        if runner is not None and binaries:
+            raise ClassificationError(f"consumers.{name} cannot mix qualified and downloaded binary owners")
         consumers[name] = BinaryConsumer(
             packages=tuple(consumer_packages),
             paths=_patterns(consumer.get("paths", []), f"consumers.{name}.paths"),
-            binaries=_binary_names(consumer.get("binaries"), f"consumers.{name}.binaries"),
+            binaries=binaries,
             kotodama_document_inventory=inventory,
+            qualified_runner=runner,
         )
     return LaneManifest(
         lanes=lanes,
@@ -339,19 +391,20 @@ def load_lane_manifest(path: Path = DEFAULT_MANIFEST) -> LaneManifest:
         lane_patterns=lane_patterns,
         package_binaries=package_binaries,
         consumers=consumers,
+        daemon_packages=tuple(daemon_packages),
     )
 
 
-def _binary_names(raw: Any, field: str) -> tuple[str, ...]:
-    """Accept only explicit, unique shipping binary names."""
+def _binary_names(raw: Any, field: str, *, allow_empty: bool = False) -> tuple[str, ...]:
+    """Accept only explicit, unique artifact names and intentionally owned empty unions."""
 
     if (
         not isinstance(raw, (list, tuple))
-        or not raw
-        or not all(isinstance(name, str) and name in BINARY_PACKAGES for name in raw)
+        or (not raw and not allow_empty)
+        or not all(isinstance(name, str) and name in BINARY_ARTIFACTS for name in raw)
         or len(set(raw)) != len(raw)
     ):
-        raise ClassificationError(f"{field} must list unique shipping binaries")
+        raise ClassificationError(f"{field} must list unique binary artifacts")
     return tuple(sorted(raw))
 
 
@@ -389,10 +442,13 @@ def validate_manifest(
         errors.append(f"workspace packages missing from lanes: {missing}")
     if stale:
         errors.append(f"lane packages absent from workspace: {stale}")
-    binary_owners = set(manifest.package_binaries)
+    binary_owners = set(manifest.package_binaries).union(manifest.daemon_packages)
     for name, consumer in manifest.consumers.items():
         binary_owners.update(consumer.packages)
-        _binary_names(consumer.binaries, f"consumers.{name}.binaries")
+        _binary_names(
+            consumer.binaries, f"consumers.{name}.binaries",
+            allow_empty=consumer.qualified_runner is not None,
+        )
     for name, binaries in manifest.package_binaries.items():
         _binary_names(binaries, f"package_binaries.{name}")
     unknown_binary_owners = sorted(binary_owners - workspace_names)
@@ -507,9 +563,15 @@ def classify_paths(
     seed_packages: set[str] = set()
     full = False
     reasons: list[str] = []
-    for path in normalized_paths:
-        if _matches(path, manifest.generated_patterns):
-            continue
+    # Prose inside packages or consumer directories is still documentation.
+    # The executable document inventory below independently selects compiler
+    # inputs, including deleted fences, without selecting unrelated binaries.
+    source_paths = tuple(
+        path for path in normalized_paths
+        if not _matches(path, manifest.generated_patterns)
+        and PurePosixPath(path).suffix.lower() not in (".md", ".mdx")
+    )
+    for path in source_paths:
         owner = _owning_package(path, packages)
         if owner is not None:
             seed_packages.add(owner)
@@ -547,24 +609,39 @@ def classify_paths(
         seed_packages = set(packages)
     impacted = _closure(seed_packages, reverse)
     package_lane = manifest.package_lane
+    # Ordinary foundation-only changes retain every binary-free reverse
+    # dependant, while node-launching checks belong to the explicit full tier.
+    # A mixed source change or a direct consumer input still selects its checks.
+    foundation_only = not full and bool(seed_packages) and all(
+        package_lane[package] == "foundation" for package in seed_packages
+    )
+    deferred_packages = impacted.intersection(
+        set(manifest.package_binaries).union(manifest.daemon_packages)
+    ) if foundation_only else set()
+    selected_packages = impacted - deferred_packages
+    if foundation_only:
+        reasons.append(
+            "foundation-only source tier retains binary-free reverse dependants; "
+            "package-triggered network checks require ci/full or mixed source changes"
+        )
     lane_packages = {
         lane: tuple(
             sorted(
-                package for package in impacted if package_lane[package] == lane
+                package for package in selected_packages if package_lane[package] == lane
             )
         )
         for lane in manifest.lanes
-        if any(package_lane[package] == lane for package in impacted)
+        if any(package_lane[package] == lane for package in selected_packages)
     }
     package_binaries = {
         package: manifest.package_binaries[package]
-        for package in sorted(impacted)
+        for package in sorted(selected_packages)
         if package in manifest.package_binaries
     }
     consumers = {
-        name: full or bool(impacted.intersection(consumer.packages)) or any(
-            _matches(path, consumer.paths) for path in normalized_paths
-        )
+        name: full or (not foundation_only and bool(impacted.intersection(consumer.packages))) or any(
+            _matches(path, consumer.paths) for path in source_paths
+        ) or consumer.qualified_runner in source_paths
         for name, consumer in manifest.consumers.items()
     }
     for name, consumer in manifest.consumers.items():
@@ -601,6 +678,12 @@ def classify_paths(
         package_binaries=package_binaries,
         consumers=consumers,
         binaries=tuple(sorted(binaries)),
+        foundation_only=foundation_only,
+        deferred_packages=tuple(sorted(deferred_packages)),
+        deferred_consumers=tuple(sorted(
+            name for name, consumer in manifest.consumers.items()
+            if foundation_only and not consumers[name] and impacted.intersection(consumer.packages)
+        )),
     )
 
 
@@ -803,18 +886,34 @@ def _write_github_output(path: Path, result: Classification) -> None:
 def build_binaries(
     binaries: Sequence[str], output_dir: Path, *, root: Path = ROOT
 ) -> None:
-    """Build the selected shipping artifacts once and copy them for CI upload."""
+    """Build each selected feature group separately and stage only its exact artifacts."""
 
     selected = _binary_names(binaries, "binaries")
     if output_dir.exists():
         raise ClassificationError(f"binary staging directory already exists: {output_dir}")
-    command = ["cargo", "build", "--locked", "--release"]
-    for binary in selected:
-        command.extend(("-p", BINARY_PACKAGES[binary], "--bin", binary))
-    _run(command, cwd=root, capture_output=False)
+    groups: dict[str, list[str]] = defaultdict(list)
+    for name in selected:
+        groups[BINARY_ARTIFACTS[name].target_group].append(name)
+    target_root = root / "target" / "ci-binaries"
+    for group, names in sorted(groups.items()):
+        command = [
+            "cargo", "build", "--locked", "--release", "--target-dir", str(target_root / group)
+        ]
+        for name in names:
+            artifact = BINARY_ARTIFACTS[name]
+            command.extend(("-p", artifact.package, "--bin", artifact.binary))
+            if artifact.features:
+                command.extend(("--features", ",".join(
+                    f"{artifact.package}/{feature}" for feature in artifact.features
+                )))
+        _run(command, cwd=root, capture_output=False)
     output_dir.mkdir(parents=True, exist_ok=False)
-    for binary in selected:
-        shutil.copy2(root / "target" / "release" / binary, output_dir / binary)
+    for name in selected:
+        artifact = BINARY_ARTIFACTS[name]
+        shutil.copy2(
+            target_root / artifact.target_group / "release" / artifact.binary,
+            output_dir / name,
+        )
 
 
 def _parse_packages(raw: str) -> tuple[str, ...]:
@@ -932,10 +1031,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true", help="print commands without executing them"
     )
     binaries = subparsers.add_parser(
-        "build-binaries", help="build only the classifier's selected release binaries"
+        "build-binaries", help="build selected binaries with their declared feature isolation"
     )
     binaries.add_argument(
-        "--binaries", required=True, help="comma-separated shipping binary names"
+        "--binaries", required=True, help="comma-separated binary artifact names"
     )
     binaries.add_argument(
         "--output-dir", required=True, type=Path, help="new artifact staging directory"

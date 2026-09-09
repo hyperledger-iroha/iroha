@@ -39,7 +39,7 @@ macro_rules! signed_lifecycle_attempt_fixture {
         .expect(concat!($context, ": bind reservation group"));
         let $binding = AutonomousLifecycleAttemptBindingV1::from_payload(
             $height_context_id,
-            1,
+            $payload.origin_proposal.descriptor.lane_block_height,
             &$payload,
             $reservation_group,
             &$local_peer,

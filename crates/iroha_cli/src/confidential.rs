@@ -87,10 +87,19 @@ impl Run for GasCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             GasCommand::Get => {
-                let client = context.client_from_config();
-                let schedule = client
-                    .get_confidential_gas_schedule()
-                    .wrap_err("failed to fetch confidential gas schedule")?;
+                let operator_key_pair = context.operator_key_pair().cloned().ok_or_else(|| {
+                    eyre::eyre!("confidential gas read requires --operator-private-key-file")
+                })?;
+                let operator = iroha::blocking::OperatorClient::from_client(
+                    context
+                        .client_from_config()?
+                        .operator_client(operator_key_pair)?,
+                )?;
+                let schedule = operator
+                    .configuration()
+                    .get()
+                    .wrap_err("failed to fetch confidential gas schedule")?
+                    .confidential_gas;
                 context.println(format!("proof_base: {}", schedule.proof_base))?;
                 context.println(format!("per_public_input: {}", schedule.per_public_input))?;
                 context.println(format!("per_proof_byte: {}", schedule.per_proof_byte))?;
@@ -266,6 +275,16 @@ mod tests {
             self.lines.push(data.to_string());
             Ok(())
         }
+    }
+    #[test]
+    fn confidential_gas_read_requires_explicit_operator_authority() {
+        let mut context = TestContext::new();
+        let error = GasCommand::Get
+            .run(&mut context)
+            .expect_err("configuration reads require an operator key");
+        assert!(format!("{error:#}").contains("--operator-private-key-file"));
+        assert!(context.printed.is_empty());
+        assert!(context.lines.is_empty());
     }
     #[test]
     fn create_keys_with_seed_outputs_expected_hex() {

@@ -14,7 +14,7 @@ use super::{
     KagemushaRetailEnrollmentSubjectV1, kagemusha_verify_device_response_v1,
 };
 use crate::name::Name;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Algorithm, SignatureOf};
 use iroha_schema::IntoSchema;
@@ -35,9 +35,22 @@ const ACCOUNT_DOMAIN: &str = "iroha:kagemusha:v1:retail-enrollment-account-posse
 const EVIDENCE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:retail-enrollment-ceremony-evidence";
 
 /// Exact server-created challenge. Decoding grants no issuer or outstanding-challenge authority.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-challenge")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentChallengeV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-challenge"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentChallengeV1 {
     /// Sole first-release format, 1.
@@ -62,9 +75,22 @@ pub struct KagemushaRetailEnrollmentChallengeV1 {
 }
 
 /// Account-controller signing payload with a separate purpose domain.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-account-proof")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentAccountProofV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-account-proof"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentAccountProofV1 {
     /// Exact account-possession domain populated by `account_signing_payload`.
@@ -74,9 +100,22 @@ pub struct KagemushaRetailEnrollmentAccountProofV1 {
 }
 
 /// Complete dual-possession proof; the challenge must match the server's retained bytes.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-possession-proof")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentPossessionProofV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-possession-proof"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentPossessionProofV1 {
     /// Exact server challenge, never independently trusted from this envelope.
@@ -1151,7 +1190,7 @@ mod tests {
             changed.issued_at_ms + KAGEMUSHA_RETAIL_ENROLLMENT_CHALLENGE_LIFETIME_MS_V1 + 1;
         assert!(changed.canonical_bytes().is_err());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_unknown_fields_at_challenge_and_proof_boundaries_are_rejected() {
         let f = Fixture::new(1);
@@ -1183,6 +1222,40 @@ mod tests {
             .insert("kyc_approved".into(), norito::json::Value::Bool(true));
         assert!(
             norito::json::from_value::<KagemushaRetailEnrollmentPossessionProofV1>(value).is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaRetailEnrollmentChallengeV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentChallengeV1",
+            "iroha.kagemusha.v1.retail-enrollment-challenge",
+            "74ce1b21f94a6026ac2cc779881dab96",
+        );
+        check::<super::KagemushaRetailEnrollmentAccountProofV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentAccountProofV1",
+            "iroha.kagemusha.v1.retail-enrollment-account-proof",
+            "7407f1d25a1b28c53783dd2397ad1baf",
+        );
+        check::<super::KagemushaRetailEnrollmentPossessionProofV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_challenge_v1::KagemushaRetailEnrollmentPossessionProofV1",
+            "iroha.kagemusha.v1.retail-enrollment-possession-proof",
+            "d431fc569642c312090e6ee42c3d0337",
         );
     }
 }

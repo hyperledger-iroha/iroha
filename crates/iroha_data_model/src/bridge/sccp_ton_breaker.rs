@@ -6,7 +6,7 @@ use super::{
     SccpRouteKeyV1, SccpTonAddressV1, SccpTonMintBreakerGuardianKeysV1,
     canonical_sccp_lane_id_bytes_v1, sccp_lane_id_hash_v1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -22,9 +22,22 @@ pub const SCCP_TON_PENDING_OPERATION_CAP_V1: u16 = 1_024;
 const OBSERVATION_RECORD_DOMAIN_V1: &[u8] = b"iroha:sccp:ton-breaker-observation-record:final-v1";
 
 /// Exact TON block identifier authenticated by native finality or a shard descriptor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -33,7 +46,7 @@ pub struct SccpTonBlockIdExtV1 {
     /// Signed workchain identifier.
     pub workchain: i32,
     /// Full unsigned TON shard identifier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub shard: u64,
     /// Monotonic block sequence number.
     pub seqno: u32,
@@ -60,9 +73,22 @@ impl SccpTonBlockIdExtV1 {
 }
 
 /// Finalized masterchain coordinate and its authenticated UNIX time.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -91,9 +117,22 @@ impl SccpTonFinalizedMasterchainBlockV1 {
 }
 
 /// Authenticated account-state opening at one finalized shard block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -116,10 +155,10 @@ pub struct SccpTonAccountStateReadbackV1 {
     /// Last transaction hash authenticated by the shard-account leaf.
     pub last_transaction_hash: [u8; 32],
     /// Last transaction logical time authenticated by the shard-account leaf.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub last_transaction_lt: u64,
     /// Account storage logical time, strictly after its latest transaction.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub storage_last_transaction_lt: u64,
 }
 
@@ -145,9 +184,22 @@ impl SccpTonAccountStateReadbackV1 {
 }
 
 /// Authenticated sparse replay-forest descriptor stored by a TON contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -156,10 +208,10 @@ pub struct SccpTonReplayForestReadbackV1 {
     /// Absent only for the canonical empty forest.
     pub root_hash: Option<[u8; 32]>,
     /// Number of occupied replay leaves.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub leaf_count: u64,
     /// Monotonic update sequence; final V1 requires it to equal the leaf count.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub update_sequence: u64,
 }
 
@@ -176,9 +228,22 @@ impl SccpTonReplayForestReadbackV1 {
 }
 
 /// Authenticated bridge pending-map roots and bounded live counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -206,9 +271,21 @@ impl SccpTonBridgePendingReadbackV1 {
 }
 
 /// Complete immutable TON deployment/configuration decoded from both accounts.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -223,10 +300,10 @@ pub struct SccpTonDeploymentReadbackV1 {
     /// Immutable SCCP route revision.
     pub route_revision: u32,
     /// Exact Taira-to-Jetton base-unit multiplier.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub taira_to_ton_multiplier: u64,
     /// Positive `coins`-domain wrapped supply cap.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[norito(with = "crate::json_helpers::u128_string")]
     pub max_wrapped_supply: u128,
     /// Canonical TON-to-SORA lane bytes stored by both contracts.
     pub source_lane_bytes: Vec<u8>,
@@ -345,9 +422,22 @@ impl SccpTonDeploymentReadbackV1 {
 }
 
 /// Mutable route-account state decoded at the authenticated block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -370,9 +460,22 @@ pub struct SccpTonRouteStorageReadbackV1 {
 }
 
 /// Mutable Jetton-master state decoded at the authenticated block.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -387,7 +490,7 @@ pub struct SccpTonMasterStorageReadbackV1 {
     /// Exact shared config-cell hash repeated in the master storage root.
     pub bridge_config_cell_hash: [u8; 32],
     /// Current wrapped Jetton supply.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
+    #[norito(with = "crate::json_helpers::u128_string")]
     pub total_supply: u128,
     /// TON representation hash of the metadata cell stored by the master.
     pub metadata_hash: [u8; 32],
@@ -406,9 +509,21 @@ pub struct SccpTonMasterStorageReadbackV1 {
 }
 
 /// Consensus record produced by one canonical, proof-authenticated TON observation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -445,10 +560,10 @@ pub struct SccpTonBreakerObservationRecordV1 {
     /// Canonical submitted proof size charged to SCCP proof limits.
     pub proof_size_bytes: u32,
     /// SORA block height that accepted the observation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub accepted_at_height: u64,
     /// Consensus SORA block creation time that accepted the observation.
-    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
+    #[norito(with = "crate::json_helpers::u64_string")]
     pub accepted_at_unix_ms: u64,
     /// Domain-separated digest of the entire record with this field zeroed.
     pub observation_digest: [u8; 32],
@@ -597,7 +712,7 @@ mod tests {
             norito::decode_from_bytes::<SccpTonAccountStateReadbackV1>(&encoded).unwrap(),
             account
         );
-        #[cfg(feature = "json")]
+
         {
             let encoded = norito::json::to_json(&account).unwrap();
             assert_eq!(

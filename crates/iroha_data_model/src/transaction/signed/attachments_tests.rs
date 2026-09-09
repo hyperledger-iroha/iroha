@@ -27,7 +27,7 @@ mod attachments_tests {
         .sign(&private_key);
         let bytes = norito::to_bytes(&tx).expect("encode");
         let archived = norito::from_bytes::<SignedTransaction>(&bytes).expect("archived");
-        let decoded: SignedTransaction = norito::core::NoritoDeserialize::deserialize(archived);
+        let decoded: SignedTransaction = norito::core::DeserializePayload::deserialize(archived);
         assert!(decoded.attachments().is_some());
         decoded
             .verify_signature()

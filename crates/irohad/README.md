@@ -30,6 +30,14 @@ cargo build --release --features dev-telemetry
 
 A full list of features can be found in the [cargo manifest file](Cargo.toml) for this crate. Explicit features are reserved for platform accelerators, preview providers, profiling/developer tooling, release evidence, and test/fault-injection lanes that cannot form one portable production build.
 
+An Inrou worker has one stock daemon watchdog, the pinned bubblewrap launcher,
+bubblewrap's private PID1 reaper, and QEMU. The watchdog retains an exact daemon
+pidfd and worker cgroup handle; daemon death during startup or normal operation
+kills the entire worker cgroup. QEMU's `exit-with-parent` remains enabled, and
+forced shutdown kills the cgroup before reaping the watchdog. Qualification
+must exercise the stock daemon's actual startup attestation and supervisor
+termination, including namespace construction, before publishing a release.
+
 ### Disable default features
 
 By default, the Iroha binary selects the `daemon` aggregate. It includes the portable Core and Torii production surfaces, full Halo2/STARK proof support, GOST and SM algorithms, event and metrics telemetry, schema endpoints, DAG recovery verification, HTTPS/WSS webhooks, and the bounded app/MCP API surface. To construct a deliberately reduced specialist library, disable the aggregate explicitly.

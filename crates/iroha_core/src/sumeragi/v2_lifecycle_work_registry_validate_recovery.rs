@@ -2275,30 +2275,33 @@ enum RecoveredWalRegistrySlotV1 {
         broadcast: ConcreteWorkAddress,
         next_sign: ConcreteWorkAddress,
     },
+    ControlContinuation([Option<ConcreteWorkAddress>; 3]),
     DecisionFetch(ConcreteWorkAddress),
     DecisionStore(ConcreteWorkAddress),
     DecisionApply(ConcreteWorkAddress),
 }
 impl RecoveredWalRegistrySlotV1 {
-    const fn addresses(self) -> [Option<ConcreteWorkAddress>; 2] {
+    const fn addresses(self) -> [Option<ConcreteWorkAddress>; 3] {
         match self {
-            Self::None => [None, None],
+            Self::None => [None, None, None],
             Self::PhaseVote(address)
             | Self::ControlSign(address)
             | Self::NextVote(address)
             | Self::SignedBroadcast(address)
             | Self::DecisionFetch(address)
             | Self::DecisionStore(address)
-            | Self::DecisionApply(address) => [Some(address), None],
+            | Self::DecisionApply(address) => [Some(address), None, None],
             Self::SignedBroadcastAndNextVote {
                 broadcast,
                 next_sign,
-            } => [Some(broadcast), Some(next_sign)],
+            } => [Some(broadcast), Some(next_sign), None],
+            Self::ControlContinuation(addresses) => addresses,
         }
     }
-    const fn cardinality(self) -> usize {
+    fn cardinality(self) -> usize {
         match self {
             Self::None => 0,
+            Self::ControlContinuation(addresses) => addresses.into_iter().flatten().count(),
             Self::SignedBroadcastAndNextVote { .. } => 2,
             Self::PhaseVote(_)
             | Self::ControlSign(_)

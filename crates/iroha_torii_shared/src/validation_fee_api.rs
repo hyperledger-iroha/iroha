@@ -93,6 +93,10 @@ pub fn validation_fee_policy_proof_page_tip(
     NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeCurrentPolicyProofRequestV1"
+)]
 pub struct ValidationFeeCurrentPolicyProofRequestV1 {
     /// Request layout version.
     pub version: u16,
@@ -104,6 +108,8 @@ pub struct ValidationFeeCurrentPolicyProofRequestV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeHijiriQuoteRequestV1")]
 pub struct ValidationFeeHijiriQuoteRequestV1 {
     /// Request layout version.
     pub version: u16,
@@ -158,6 +164,8 @@ pub fn validation_fee_hijiri_quote_execution_height(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeCurrentPolicyProofV1")]
 pub struct ValidationFeeCurrentPolicyProofV1 {
     /// Response layout version.
     pub version: u16,
@@ -184,6 +192,10 @@ pub struct ValidationFeeCurrentPolicyProofV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedPolicyProjectionV1"
+)]
 pub struct ValidationFeeVerifiedPolicyProjectionV1 {
     /// Stable projection schema name.
     pub schema: String,
@@ -221,6 +233,10 @@ pub struct ValidationFeeVerifiedPolicyProjectionV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedCurrentPolicyV1"
+)]
 pub struct ValidationFeeVerifiedCurrentPolicyV1 {
     /// Canonical decimal policy version.
     #[norito(rename = "activePolicyVersion")]
@@ -264,6 +280,10 @@ pub struct ValidationFeeVerifiedCurrentPolicyV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeHijiriQuoteProjectionV1"
+)]
 pub struct ValidationFeeHijiriQuoteProjectionV1 {
     /// Stable projection schema name.
     pub schema: String,
@@ -823,6 +843,8 @@ pub fn evaluate_hijiri_quote_v1(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedParliamentV1")]
 pub struct ValidationFeeVerifiedParliamentV1 {
     /// Authorization for the policy proposal.
     #[norito(rename = "validationFeePolicy")]
@@ -839,6 +861,10 @@ pub struct ValidationFeeVerifiedParliamentV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedParliamentProposalV1"
+)]
 pub struct ValidationFeeVerifiedParliamentProposalV1 {
     /// Exact proposal kind expected by mobile runtime configuration.
     pub proposal_kind: String,
@@ -862,6 +888,8 @@ pub struct ValidationFeeVerifiedParliamentProposalV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedPayoutV1")]
 pub struct ValidationFeeVerifiedPayoutV1 {
     /// Canonical deployed contract address.
     #[norito(rename = "contractAddress")]
@@ -903,6 +931,10 @@ pub struct ValidationFeeVerifiedPayoutV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedPayoutRecipientV1"
+)]
 pub struct ValidationFeeVerifiedPayoutRecipientV1 {
     /// Canonical recipient account.
     pub account_id: String,
@@ -1243,7 +1275,10 @@ impl ValidationFeeCurrentPolicyProofV1 {
     }
 }
 /// Validation-fee governance proposal status exposed by the typed read API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, NoritoDeserialize, NoritoSerialize, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalStatusV1")]
 pub enum ValidationFeeProposalStatusV1 {
     /// Parliament processing is active or certified for future execution.
     Proposed,
@@ -1290,6 +1325,8 @@ impl norito::json::JsonDeserialize for ValidationFeeProposalStatusV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalRecordV1")]
 pub struct ValidationFeeProposalRecordV1 {
     /// Bonded citizen who created the proposal.
     pub proposer: AccountId,
@@ -1346,6 +1383,8 @@ fn validation_fee_proposal_default_page_limit() -> u32 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalListQueryV1")]
 pub struct ValidationFeeProposalListQueryV1 {
     /// Opaque continuation token returned by the preceding page.
     #[norito(default)]
@@ -1417,6 +1456,8 @@ pub fn decode_validation_fee_proposal_cursor_v1(encoded: &str) -> Result<(u64, [
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalListV1")]
 pub struct ValidationFeeProposalListV1 {
     /// Response layout version.
     pub version: u16,
@@ -1432,6 +1473,8 @@ pub struct ValidationFeeProposalListV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalDetailV1")]
 pub struct ValidationFeeProposalDetailV1 {
     /// Response layout version.
     pub version: u16,
@@ -1443,7 +1486,20 @@ pub struct ValidationFeeProposalDetailV1 {
     pub governance_certificate: Option<GovernanceCertificateV1>,
 }
 /// Strict empty query for one validation-fee proposal detail projection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, NoritoDeserialize, NoritoSerialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    NoritoDeserialize,
+    NoritoSerialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalDetailQueryV1"
+)]
 pub struct ValidationFeeProposalDetailQueryV1 {}
 impl norito::json::JsonSerialize for ValidationFeeProposalDetailQueryV1 {
     fn json_serialize(&self, out: &mut String) {
@@ -1482,6 +1538,10 @@ impl norito::json::JsonDeserialize for ValidationFeeProposalDetailQueryV1 {
 #[expect(
     clippy::large_enum_variant,
     reason = "boxing one payload would change the canonical public V1 enum construction and wire shape"
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalDraftPayloadV1"
 )]
 pub enum ValidationFeeProposalDraftPayloadV1 {
     /// Draft a policy proposal.
@@ -1524,6 +1584,10 @@ impl ValidationFeeProposalDraftPayloadV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalDraftRequestV1"
+)]
 pub struct ValidationFeeProposalDraftRequestV1 {
     /// Request layout version.
     pub version: u16,
@@ -1540,6 +1604,10 @@ pub struct ValidationFeeProposalDraftRequestV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalInstructionDraftV1"
+)]
 pub struct ValidationFeeProposalInstructionDraftV1 {
     /// Registered instruction wire identifier.
     pub wire_id: String,
@@ -1551,6 +1619,10 @@ pub struct ValidationFeeProposalInstructionDraftV1 {
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::validation_fee_api::ValidationFeeProposalDraftResponseV1"
+)]
 pub struct ValidationFeeProposalDraftResponseV1 {
     /// Response layout version.
     pub version: u16,
@@ -2478,5 +2550,76 @@ mod tests {
             norito::json::from_str("{}").expect("decode default proposal page query");
         assert_eq!(query, ValidationFeeProposalListQueryV1::default());
         assert_eq!(query.limit, VALIDATION_FEE_PROPOSAL_PAGE_DEFAULT_LIMIT_V1);
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeCurrentPolicyProofRequestV1,
+        >(
+            "iroha_torii_shared::validation_fee_api::ValidationFeeCurrentPolicyProofRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeCurrentPolicyProofV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeCurrentPolicyProofV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeHijiriQuoteProjectionV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeHijiriQuoteProjectionV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeHijiriQuoteRequestV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeHijiriQuoteRequestV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeProposalDetailQueryV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeProposalDetailQueryV1");
+        crate::captured_identity_tests::assert_bidirectional::<super::ValidationFeeProposalDetailV1>(
+            "iroha_torii_shared::validation_fee_api::ValidationFeeProposalDetailV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeProposalDraftPayloadV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeProposalDraftPayloadV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeProposalDraftRequestV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeProposalDraftRequestV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeProposalDraftResponseV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeProposalDraftResponseV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeProposalInstructionDraftV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeProposalInstructionDraftV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeProposalListQueryV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeProposalListQueryV1");
+        crate::captured_identity_tests::assert_bidirectional::<super::ValidationFeeProposalListV1>(
+            "iroha_torii_shared::validation_fee_api::ValidationFeeProposalListV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ValidationFeeProposalRecordV1>(
+            "iroha_torii_shared::validation_fee_api::ValidationFeeProposalRecordV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ValidationFeeProposalStatusV1>(
+            "iroha_torii_shared::validation_fee_api::ValidationFeeProposalStatusV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeVerifiedCurrentPolicyV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedCurrentPolicyV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeVerifiedParliamentProposalV1,
+        >(
+            "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedParliamentProposalV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeVerifiedParliamentV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedParliamentV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeVerifiedPayoutRecipientV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedPayoutRecipientV1");
+        crate::captured_identity_tests::assert_bidirectional::<super::ValidationFeeVerifiedPayoutV1>(
+            "iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedPayoutV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::ValidationFeeVerifiedPolicyProjectionV1,
+        >("iroha_torii_shared::validation_fee_api::ValidationFeeVerifiedPolicyProjectionV1");
     }
 }

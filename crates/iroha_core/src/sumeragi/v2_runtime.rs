@@ -8181,17 +8181,7 @@ impl<C: ExactRuntimeCommandIdentity> BoundedIngress<C> {
     /// This is a read-only preparation. In particular it does not rotate the
     /// class cursor, increment service debt, remove a FIFO occurrence, or
     /// inspect any timer. A valid token can be consumed only against this exact
-    /// queue snapshot.
-    #[cfg(test)]
-    fn prepare_completion_capacity_relief(
-        &self,
-        blocked_completion_lifecycle_ordinal: u128,
-    ) -> Result<Option<PreparedCompletionCapacityReliefV1>, EnqueueError> {
-        self.prepare_completion_capacity_relief_at_consumer(
-            blocked_completion_lifecycle_ordinal,
-            self.consumer_authority,
-        )
-    }
+    /// queue snapshot and consumer authority.
     fn prepare_completion_capacity_relief_at_consumer(
         &self,
         blocked_completion_lifecycle_ordinal: u128,

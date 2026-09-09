@@ -9283,7 +9283,11 @@ fn encode_storage_key<T: norito::NoritoSerialize>(value: &T, out: &mut String) {
     let encoded = norito::to_bytes(value).expect("fixed privacy storage keys always encode");
     json::write_json_string(&hex::encode_upper(encoded), out);
 }
-fn decode_storage_key<T: Decode + Encode>(encoded: &str) -> Result<T, json::Error> {
+fn decode_storage_key<
+    T: for<'__frame> norito::NoritoDeserialize<'__frame> + norito::NoritoSerialize,
+>(
+    encoded: &str,
+) -> Result<T, json::Error> {
     let bytes = hex::decode(encoded)
         .map_err(|error| json::Error::Message(format!("invalid privacy key hex: {error}")))?;
     let key: T = norito::decode_from_bytes(&bytes)

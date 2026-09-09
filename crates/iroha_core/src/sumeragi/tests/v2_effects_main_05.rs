@@ -2055,10 +2055,11 @@ fn assert_missing_replay_validate_fails_closed_without_body_mutation(
 ) {
     executor.runtime.exact_effect_ownership = Some((effect.clone(), ownership));
     let before = executor.body_ownership_projection();
+    let result = executor.consume_effects(vec![effect], services);
     assert!(matches!(
-        executor.consume_effects(vec![effect], services),
+        &result,
         Err(EffectExecutorError::Contract(reason)) if reason.contains(expected_reason)
-    ));
+    ), "expected {expected_reason:?}, got {result:?}");
     assert_eq!(executor.body_ownership_projection(), before);
     assert!(executor.pending_durable_validate_admissions.is_empty());
     assert!(executor.durable_validate_retry_seals.is_empty());

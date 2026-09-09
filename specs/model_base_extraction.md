@@ -55,6 +55,16 @@ The wire capture scope contains 17 public binary types and the two private
 ChainId helpers. Supporting errors and lookup/context types move with their
 owner without acquiring a new binary wire surface.
 
+Move the account controllers' validating binary derives with their public
+owners. `MultisigPolicy` and `MultisigMember` invoke their existing strict
+constructors through `#[norito(validate = "path")]`; the hook returns the
+validated owner without sorting or normalizing external components. Their
+private `PolicyFields`/`MemberFields` carriers are JSON-only and need no binary
+identity or archived cast across the new boundary. Preserve these validators,
+strict JSON handling and explicit canonical slice adapters during the move.
+This prerequisite does not complete the atomic identity cutover, physical
+extraction, feature qualification or measured build-memory comparison.
+
 Keep accounts and their registration/recovery/rekey records, domain and asset
 definitions, aliases, lane catalogs, governance, instructions, queries,
 transactions and blocks at the aggregate layer. `NetworkId` currently contains
@@ -71,8 +81,9 @@ replacement marker would merely conceal it.
   `AssetDefinitionId` from `norito_slice_decode.rs` for the same reason.
 - Keep aggregate `Identifiable` and `IdBox` conversions with the local trait
   and enum. The base crate must not inherit the `Into<IdBox>` dependency.
-- Replace aggregate access to private `ParseError.reason` with `new()` and
-  `reason()`. Private settlement currently wipes `AssetDefinitionId.aid_bytes`;
+- All `ParseError` consumers now construct and read errors through the existing
+  `new()` and `reason()` methods. The owner retains its private representation
+  and every rejection message. Private settlement still wipes `AssetDefinitionId.aid_bytes`;
   migrate those sites to an owned discard operation rather than exposing the
   raw field across the new boundary.
 - Move Metadata FFI ownership out of the aggregate handle/export inventory.

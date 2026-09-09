@@ -143,7 +143,7 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
             let mut attrs = f.attrs.clone();
             if f.default.is_some() {
                 attrs.push(parse_quote! {
-                    #[cfg_attr(feature = "json", norito(default))]
+                    #[norito(default)]
                 });
             }
             add_doc_if_missing(
@@ -222,18 +222,14 @@ pub fn impl_registrable_builder(emitter: &mut Emitter, input: &DeriveInput) -> T
         #[derive(Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = #schema_name)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveFastJson)
-        )]
+        #[derive(norito::derive::JsonSerialize, norito::derive::FastJson)]
         // If JsonDeserialize is ever added back as a derive, keep FastFromJson single-sourced
         // from DeriveFastJson by suppressing its fallback emission.
-        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        #[norito(no_fast_from_json)]
         #(#item_attrs)*
         pub struct #builder_name {
             #( #builder_fields, )*
         }
-        #[cfg(feature = "json")]
         impl norito::json::JsonDeserialize for #builder_name {
             fn json_deserialize(
                 parser: &mut norito::json::Parser<'_>,

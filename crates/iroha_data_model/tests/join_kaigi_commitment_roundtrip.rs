@@ -7,7 +7,7 @@ use iroha_data_model::{
     kaigi::{KaigiId, KaigiParticipantCommitment},
     name::Name,
 };
-use norito::core::NoritoDeserialize;
+use norito::core::DeserializePayload;
 use std::str::FromStr;
 #[test]
 fn join_kaigi_preserves_canonical_raw_commitment() {

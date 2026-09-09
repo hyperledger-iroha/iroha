@@ -131,6 +131,9 @@ pqcrypto-mldsa = { version = "0.1.2", default-features = false, features = ["std
 [target.'cfg(not(all(target_os = "windows", target_arch = "aarch64")))'.dependencies]
 pqcrypto-mldsa = { version = "0.1.2", optional = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [dev-dependencies]
 criterion = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["compression"] }
@@ -180,3 +183,8 @@ required-features = ["bls"]
 [[test]]
 name = "iroha_crypto_group_01"
 path = "tests/grouped/group_01.rs"
+
+# Scalar identity fixtures qualify minimal and optional crypto features independently.
+[[test]]
+name = "manual_scalar_identity"
+path = "tests/manual_scalar_identity.rs"

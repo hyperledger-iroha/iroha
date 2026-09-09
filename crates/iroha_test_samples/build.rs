@@ -1,0 +1,81 @@
+//! Build script that stages deterministic IVM sample bytecode for integration tests.
+//!
+//! The fixtures are versioned under `integration_tests/fixtures/ivm` and copied
+//! into this sample crate's Cargo `OUT_DIR`. Consumers resolve that exact output
+//! through `iroha_test_samples`; the source tree is never a staging directory.
+use std::{
+    env, fs,
+    path::{Path, PathBuf},
+};
+const SAMPLE_MANIFEST: &str = include_str!("../ivm/prebuilt_samples.txt");
+fn prebuilt_sample_names() -> Vec<&'static str> {
+    SAMPLE_MANIFEST
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect()
+}
+fn workspace_root() -> PathBuf {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+        .expect("iroha_test_samples must belong to the workspace")
+}
+fn sample_path(dir: &Path, name: &str) -> PathBuf {
+    dir.join(name).with_extension("to")
+}
+fn write_file_if_changed(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    if let Ok(existing) = fs::read(path)
+        && existing == bytes
+    {
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, bytes)
+}
+fn main() {
+    println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=../ivm/prebuilt_samples.txt");
+    println!("cargo:rerun-if-env-changed=IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR");
+    let root = workspace_root();
+    let fixtures_dir = root.join("integration_tests/fixtures/ivm");
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo must provide OUT_DIR"));
+    let prebuilt_dir = out_dir.join("ivm");
+    let samples_dir = prebuilt_dir.join("samples");
+    let profile = if env::var("PROFILE").ok().as_deref() == Some("release") {
+        "Release"
+    } else {
+        "Debug"
+    };
+    let config = format!("profile = \"{profile}\"\n");
+    write_file_if_changed(&prebuilt_dir.join("build_config.toml"), config.as_bytes())
+        .expect("failed to write build config");
+    fs::create_dir_all(&samples_dir).expect("failed to create prebuilt samples directory");
+    let mut sample_names = prebuilt_sample_names();
+    if env::var("IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR")
+        .ok()
+        .as_deref()
+        == Some("1")
+    {
+        sample_names.push("default_executor");
+    }
+    for name in sample_names {
+        let source = sample_path(&fixtures_dir, name);
+        let destination = sample_path(&samples_dir, name);
+        println!("cargo:rerun-if-changed={}", source.display());
+        match fs::read(&source) {
+            Ok(bytes) => {
+                write_file_if_changed(&destination, &bytes).unwrap_or_else(|err| {
+                    panic!("failed to stage {}: {err}", destination.display())
+                });
+            }
+            Err(err) => {
+                panic!("missing canonical fixture {}: {err}", source.display());
+            }
+        }
+    }
+}

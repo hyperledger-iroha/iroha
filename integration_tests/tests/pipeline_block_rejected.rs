@@ -37,8 +37,9 @@ async fn emits_block_rejected_event() -> Result<()> {
             iroha_data_model::block::error::BlockRejectionReason::ConsensusBlockRejection,
         )));
     let mut events = client
-        .client()
-        .listen_for_events([filter])
+        .account_client()
+        .events()
+        .subscribe([filter])
         .await
         .expect("events subscription")
         .take(1);

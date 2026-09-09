@@ -21,7 +21,7 @@ fn make_header<T: core::NoritoSerialize>(len: u64) -> Vec<u8> {
     bytes.extend_from_slice(b"NRT0");
     bytes.push(core::VERSION_MAJOR);
     bytes.push(core::VERSION_MINOR);
-    bytes.extend_from_slice(&T::schema_hash());
+    bytes.extend_from_slice(&norito::schema::identity::frame_hash::<T>());
     bytes.push(core::Compression::None as u8);
     bytes.extend_from_slice(&len.to_le_bytes());
     bytes.extend_from_slice(&0u64.to_le_bytes()); // checksum placeholder

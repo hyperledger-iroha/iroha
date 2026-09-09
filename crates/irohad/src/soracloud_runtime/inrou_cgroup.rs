@@ -16,7 +16,6 @@ use std::{
     os::fd::{AsRawFd as _, FromRawFd as _, OwnedFd, RawFd},
     os::unix::ffi::OsStrExt as _,
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _},
-    os::unix::process::CommandExt as _,
     path::{Path, PathBuf},
     process::Command,
     time::Duration,
@@ -25,6 +24,10 @@ use std::{
 use eyre::WrapErr as _;
 use iroha_crypto::Hash;
 use iroha_data_model::soracloud::SoraResourceLimitsV1;
+
+#[path = "inrou_cgroup/io_device.rs"]
+mod io_device;
+use io_device::InrouCgroupIoDevice;
 
 const INROU_CGROUP2_MOUNT: &str = "/sys/fs/cgroup";
 const INROU_CGROUP_SUBTREE_NAME: &str = "iroha-inrou-v1";
@@ -90,12 +93,6 @@ struct InrouCgroupLimits {
     io_write_iops: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-struct InrouCgroupIoDevice {
-    major: u32,
-    minor: u32,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct InrouCgroupIoLimits {
     read_bytes_per_sec: u64,
@@ -149,6 +146,8 @@ struct InrouInternalLauncherV1 {
     gate_fd: RawFd,
     acknowledgement_fd: RawFd,
     expected_cgroup_path: String,
+    supervisor_pidfd: RawFd,
+    cgroup_directory_fd: RawFd,
     bindings: Vec<InrouInternalLauncherBindingV1>,
     bubblewrap_arguments: Vec<OsString>,
 }
@@ -160,21 +159,45 @@ struct InrouInternalLauncherBindingV1 {
     writable: bool,
 }
 
-/// Run the post-exec Inrou cgroup gate and replace this helper with bubblewrap.
+/// Run the post-exec gate and own the confined child's complete lifetime.
 ///
 /// This process is a fresh `/proc/self/exe` invocation. Ordinary daemon
 /// initialization has not run, and the only non-CLOEXEC inputs are the exact
-/// gate, acknowledgement, and binding descriptors admitted by the parent.
+/// gate, acknowledgement, supervisor pidfd, cgroup directory, and binding
+/// descriptors admitted by the parent. The helper survives supervisor death
+/// long enough to kill its exact cgroup, including itself and every descendant.
 #[allow(unsafe_code)]
-pub(super) fn run_inrou_internal_launcher_v1(arguments: Vec<OsString>) -> eyre::Result<()> {
+pub(super) fn run_inrou_internal_launcher_v1(
+    arguments: Vec<OsString>,
+) -> eyre::Result<std::process::ExitStatus> {
     let request = parse_inrou_internal_launcher_v1(arguments)?;
     let required_descriptors = std::iter::once(request.gate_fd)
         .chain(std::iter::once(request.acknowledgement_fd))
+        .chain([request.supervisor_pidfd, request.cgroup_directory_fd])
         .chain(request.bindings.iter().map(|binding| binding.descriptor))
         .collect::<BTreeSet<_>>();
     let open_descriptors = list_open_inrou_launcher_descriptors()?;
     if !required_descriptors.is_subset(&open_descriptors) {
         eyre::bail!("Inrou internal launcher request names a descriptor that is not open");
+    }
+    // SAFETY: parsing and the descriptor census above prove these are distinct
+    // live descriptors owned only by this freshly exec'd stock helper.
+    let supervisor = unsafe { fs::File::from_raw_fd(request.supervisor_pidfd) };
+    // SAFETY: the same uniqueness/open-descriptor proof applies to the held
+    // directory, which is checked against the exact cgroup before use.
+    let cgroup_directory = unsafe { fs::File::from_raw_fd(request.cgroup_directory_fd) };
+    validate_inrou_watchdog_supervisor(&supervisor)?;
+    validate_inrou_watchdog_directory(&cgroup_directory, &request.expected_cgroup_path)?;
+    let kill = fs::File::from(rustix::fs::openat(
+        &cgroup_directory,
+        "cgroup.kill",
+        rustix::fs::OFlags::WRONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?);
+    // These capabilities belong only to the watchdog. Namespace children must
+    // neither inherit a supervisor pidfd nor gain a writable cgroup handle.
+    for descriptor in [&supervisor, &cgroup_directory] {
+        rustix::io::fcntl_setfd(descriptor, rustix::io::FdFlags::CLOEXEC)?;
     }
     let mut gate = unsafe {
         // SAFETY: parsing proved uniqueness and the immediately preceding
@@ -203,32 +226,199 @@ pub(super) fn run_inrou_internal_launcher_v1(arguments: Vec<OsString>) -> eyre::
         "Inrou child cgroup",
     )?;
     validate_inrou_proc_cgroup(&proc_cgroup, &request.expected_cgroup_path)?;
+    let mut lifetime = InrouWatchdogLifetime { kill, armed: true };
     acknowledgement
         .write_all(INROU_CGROUP_BARRIER_ACK)
         .wrap_err("acknowledge exact Inrou child cgroup placement")?;
     drop(acknowledgement);
 
-    close_unrelated_inrou_launcher_descriptors(
-        &request
-            .bindings
-            .iter()
-            .map(|binding| binding.descriptor)
-            .collect::<Vec<_>>(),
-    )?;
+    let mut retained = request
+        .bindings
+        .iter()
+        .map(|binding| binding.descriptor)
+        .collect::<Vec<_>>();
+    retained.extend([
+        supervisor.as_raw_fd(),
+        cgroup_directory.as_raw_fd(),
+        lifetime.kill.as_raw_fd(),
+    ]);
+    close_unrelated_inrou_launcher_descriptors(&retained)?;
+    if inrou_watchdog_supervisor_exited(&supervisor)? {
+        eyre::bail!("Inrou supervisor exited before namespace construction");
+    }
     validate_internal_bubblewrap_executable()?;
     let mut command = Command::new(INROU_INTERNAL_BWRAP_PATH);
     command
         .args(&request.bubblewrap_arguments)
         .env_clear()
         .current_dir("/");
-    let error = command.exec();
-    Err(error).wrap_err("exec the fixed Inrou bubblewrap launcher")
+    let mut child = command
+        .spawn()
+        .wrap_err("spawn the fixed Inrou bubblewrap launcher")?;
+    for binding in &request.bindings {
+        // SAFETY: the admitted unique binding descriptor is open and is no
+        // longer needed in the watchdog after spawn copied it to bubblewrap.
+        drop(unsafe { fs::File::from_raw_fd(binding.descriptor) });
+    }
+    let status = supervise_inrou_watchdog(
+        || inrou_watchdog_supervisor_exited(&supervisor),
+        || child.try_wait().map_err(Into::into),
+        || std::thread::sleep(Duration::from_millis(10)),
+    )?;
+    // Bubblewrap has reaped QEMU and its PID1 reaper. Do not return a successful
+    // child status while another process still owns this exact worker cgroup.
+    let deadline = std::time::Instant::now() + INROU_CGROUP_STOP_TIMEOUT;
+    loop {
+        let members = read_inrou_watchdog_cgroup_pids(&cgroup_directory)?;
+        if members == [std::process::id()] {
+            lifetime.armed = false;
+            return Ok(status);
+        }
+        if std::time::Instant::now() >= deadline || inrou_watchdog_supervisor_exited(&supervisor)? {
+            eyre::bail!("Inrou namespace descendants remained after bubblewrap exited");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+struct InrouWatchdogLifetime {
+    kill: fs::File,
+    armed: bool,
+}
+
+impl Drop for InrouWatchdogLifetime {
+    fn drop(&mut self) {
+        if self.armed {
+            // A successful write also kills this watchdog. No PID lookup,
+            // pathname reopening, or signal-handler cooperation is involved.
+            if let Err(error) = self.kill.write_all(b"1") {
+                eprintln!("Inrou exact cgroup lifetime termination failed: {error}");
+            }
+        }
+    }
+}
+
+fn supervise_inrou_watchdog<T>(
+    mut supervisor_exited: impl FnMut() -> eyre::Result<bool>,
+    mut child_status: impl FnMut() -> eyre::Result<Option<T>>,
+    mut wait: impl FnMut(),
+) -> eyre::Result<T> {
+    loop {
+        if supervisor_exited()? {
+            eyre::bail!("Inrou supervisor exited; terminating the complete confined lifetime");
+        }
+        if let Some(status) = child_status()? {
+            return Ok(status);
+        }
+        wait();
+    }
+}
+
+fn inrou_watchdog_supervisor_exited(supervisor: &fs::File) -> eyre::Result<bool> {
+    let mut descriptors = [rustix::event::PollFd::new(
+        supervisor,
+        rustix::event::PollFlags::IN,
+    )];
+    let timeout = rustix::event::Timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    loop {
+        match rustix::event::poll(&mut descriptors, Some(&timeout)) {
+            Ok(_) => break,
+            Err(rustix::io::Errno::INTR) => continue,
+            Err(error) => return Err(error.into()),
+        }
+    }
+    let events = descriptors[0].revents();
+    if events.intersects(rustix::event::PollFlags::NVAL | rustix::event::PollFlags::ERR) {
+        eyre::bail!("Inrou supervisor pidfd became invalid");
+    }
+    Ok(events.intersects(rustix::event::PollFlags::IN | rustix::event::PollFlags::HUP))
+}
+
+fn validate_inrou_watchdog_supervisor(supervisor: &fs::File) -> eyre::Result<()> {
+    let fd = supervisor.as_raw_fd();
+    if fs::read_link(format!("/proc/self/fd/{fd}"))? != Path::new("anon_inode:[pidfd]") {
+        eyre::bail!("Inrou supervisor capability is not a pidfd");
+    }
+    let info = read_bounded_text(
+        &PathBuf::from(format!("/proc/self/fdinfo/{fd}")),
+        INROU_CGROUP_PROC_MAX_BYTES,
+        "Inrou supervisor pidfd identity",
+    )?;
+    let parent =
+        rustix::process::getppid().ok_or_else(|| eyre::eyre!("Inrou supervisor already exited"))?;
+    let pids = info
+        .lines()
+        .filter_map(|line| line.strip_prefix("Pid:"))
+        .map(str::trim)
+        .collect::<Vec<_>>();
+    if pids != [parent.as_raw_nonzero().get().to_string()]
+        || inrou_watchdog_supervisor_exited(supervisor)?
+    {
+        eyre::bail!("Inrou supervisor pidfd does not bind the live direct parent");
+    }
+    Ok(())
+}
+
+/// Hold the exact root-owned worker directory across the launcher exec boundary.
+pub(super) fn open_inrou_watchdog_directory(expected: &str) -> eyre::Result<fs::File> {
+    validate_inrou_expected_cgroup_path(expected)?;
+    let path = Path::new(INROU_CGROUP2_MOUNT).join(expected.trim_start_matches('/'));
+    let directory = fs::File::from(rustix::fs::open(
+        &path,
+        rustix::fs::OFlags::RDONLY
+            | rustix::fs::OFlags::DIRECTORY
+            | rustix::fs::OFlags::NOFOLLOW
+            | rustix::fs::OFlags::CLOEXEC,
+        rustix::fs::Mode::empty(),
+    )?);
+    validate_inrou_watchdog_directory(&directory, expected)?;
+    Ok(directory)
+}
+
+fn read_inrou_watchdog_cgroup_pids(directory: &fs::File) -> eyre::Result<Vec<u32>> {
+    let file = fs::File::from(rustix::fs::openat(
+        directory,
+        "cgroup.procs",
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty(),
+    )?);
+    let mut bytes = Vec::new();
+    file.take(INROU_CGROUP_CONTROL_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > INROU_CGROUP_CONTROL_MAX_BYTES {
+        eyre::bail!("Inrou watchdog cgroup.procs exceeds its bound");
+    }
+    parse_cgroup_pids(&String::from_utf8(bytes).wrap_err("decode held Inrou cgroup.procs")?)
+}
+
+fn validate_inrou_watchdog_directory(directory: &fs::File, expected: &str) -> eyre::Result<()> {
+    validate_inrou_expected_cgroup_path(expected)?;
+    let path = Path::new(INROU_CGROUP2_MOUNT).join(expected.trim_start_matches('/'));
+    for ancestor in path.ancestors() {
+        validate_root_custodied_directory(ancestor, "Inrou watchdog cgroup ancestry")?;
+    }
+    let named = fs::symlink_metadata(&path)?;
+    let held = directory.metadata()?;
+    if !held.is_dir() || (named.dev(), named.ino()) != (held.dev(), held.ino()) {
+        eyre::bail!("Inrou watchdog directory does not bind its exact worker cgroup");
+    }
+    let mountinfo = read_bounded_text(
+        Path::new("/proc/self/mountinfo"),
+        INROU_CGROUP_CONTROL_MAX_BYTES,
+        "Inrou watchdog mountinfo",
+    )?;
+    validate_inrou_cgroup2_mount(&mountinfo, Path::new(INROU_CGROUP2_MOUNT))?;
+    require_inrou_cgroup_kill_control(&path.join("cgroup.kill"))?;
+    Ok(())
 }
 
 fn parse_inrou_internal_launcher_v1(
     arguments: Vec<OsString>,
 ) -> eyre::Result<InrouInternalLauncherV1> {
-    if arguments.len() < 5 || arguments.len() > INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS {
+    if arguments.len() < 7 || arguments.len() > INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS {
         eyre::bail!("Inrou internal launcher argument count is outside the V1 bound");
     }
     if arguments.iter().any(|argument| {
@@ -252,6 +442,14 @@ fn parse_inrou_internal_launcher_v1(
         .into_string()
         .map_err(|_| eyre::eyre!("Inrou expected cgroup path is not UTF-8"))?;
     validate_inrou_expected_cgroup_path(&expected_cgroup_path)?;
+    let supervisor_pidfd = parse_inrou_launcher_fd(
+        arguments.next().expect("minimum argument count"),
+        "supervisor pidfd",
+    )?;
+    let cgroup_directory_fd = parse_inrou_launcher_fd(
+        arguments.next().expect("minimum argument count"),
+        "cgroup directory descriptor",
+    )?;
     let binding_count = parse_inrou_launcher_count(
         arguments.next().expect("minimum argument count"),
         "binding count",
@@ -298,9 +496,10 @@ fn parse_inrou_internal_launcher_v1(
     }
     let descriptors = std::iter::once(gate_fd)
         .chain(std::iter::once(acknowledgement_fd))
+        .chain([supervisor_pidfd, cgroup_directory_fd])
         .chain(bindings.iter().map(|binding| binding.descriptor))
         .collect::<BTreeSet<_>>();
-    if descriptors.len() != bindings.len() + 2 {
+    if descriptors.len() != bindings.len() + 4 {
         eyre::bail!("Inrou internal launcher descriptors are not unique");
     }
     if bindings
@@ -318,6 +517,8 @@ fn parse_inrou_internal_launcher_v1(
         gate_fd,
         acknowledgement_fd,
         expected_cgroup_path,
+        supervisor_pidfd,
+        cgroup_directory_fd,
         bindings,
         bubblewrap_arguments,
     })
@@ -490,10 +691,15 @@ fn validate_bubblewrap_binding_map(
         .position(|argument| argument == "--")
         .ok_or_else(|| eyre::eyre!("Inrou bubblewrap arguments omit the command separator"))?;
     let namespace_arguments = &arguments[..separator];
+    if namespace_arguments
+        .iter()
+        .any(|argument| argument == "--as-pid-1")
+    {
+        eyre::bail!("Inrou requires bubblewrap's dedicated namespace PID1 reaper");
+    }
     for required in [
         "--die-with-parent",
         "--new-session",
-        "--as-pid-1",
         "--unshare-pid",
         "--unshare-net",
         "--unshare-ipc",
@@ -909,7 +1115,7 @@ impl InrouWorkerCgroup {
             write_control(
                 &io_max_path,
                 &format_inrou_io_max_line(*device, *io_limits),
-                "Inrou io.max",
+                &format!("Inrou io.max device {}:{}", device.major, device.minor),
             )?;
         }
         let actual_io = parse_inrou_io_max(&read_bounded_text(
@@ -1232,7 +1438,7 @@ fn resolve_inrou_cgroup_io_devices(
     if io_backing_paths.is_empty() {
         eyre::bail!("Inrou cgroup IO confinement requires at least one VM backing path");
     }
-    io_backing_paths
+    let devices = io_backing_paths
         .iter()
         .map(|path| {
             let metadata = fs::metadata(path)
@@ -1250,7 +1456,8 @@ fn resolve_inrou_cgroup_io_devices(
             }
             Ok(InrouCgroupIoDevice { major, minor })
         })
-        .collect()
+        .collect::<eyre::Result<BTreeSet<_>>>()?;
+    io_device::resolve_inrou_whole_io_devices(&devices, Path::new("/sys"))
 }
 
 fn inrou_cgroup_worker_name(key: InrouCgroupWorkerKey<'_>) -> String {
@@ -1519,6 +1726,10 @@ fn parse_inrou_io_max(
 
 fn read_cgroup_pids(path: &Path) -> eyre::Result<Vec<u32>> {
     let contents = read_bounded_text(path, INROU_CGROUP_CONTROL_MAX_BYTES, "cgroup.procs")?;
+    parse_cgroup_pids(&contents)
+}
+
+fn parse_cgroup_pids(contents: &str) -> eyre::Result<Vec<u32>> {
     let mut pids = contents
         .lines()
         .map(|line| {
@@ -2091,6 +2302,8 @@ mod tests {
             "17".into(),
             "29".into(),
             format!("/iroha-inrou-v1/worker-0-{}", "01".repeat(Hash::LENGTH)).into(),
+            "31".into(),
+            "37".into(),
             binding_fds.len().to_string().into(),
         ];
         for (index, descriptor) in binding_fds.iter().enumerate() {
@@ -2105,7 +2318,6 @@ mod tests {
             [
                 "--die-with-parent",
                 "--new-session",
-                "--as-pid-1",
                 "--unshare-pid",
                 "--unshare-net",
                 "--unshare-ipc",
@@ -2140,6 +2352,119 @@ mod tests {
             super::super::inrou_namespace::INROU_NAMESPACE_QEMU_PATH,
         ));
         arguments
+    }
+
+    #[test]
+    fn watchdog_supervisor_death_before_child_launch_kills_the_held_cgroup() -> eyre::Result<()> {
+        let mut kill = tempfile::tempfile()?;
+        {
+            let _lifetime = InrouWatchdogLifetime {
+                kill: kill.try_clone()?,
+                armed: true,
+            };
+            let result = supervise_inrou_watchdog::<()>(
+                || Ok(true),
+                || panic!("supervisor death must be checked before touching the child"),
+                || panic!("a dead supervisor must not wait"),
+            );
+            assert!(result.is_err());
+        }
+        use std::io::Seek as _;
+        kill.rewind()?;
+        let mut bytes = Vec::new();
+        kill.read_to_end(&mut bytes)?;
+        assert_eq!(bytes, b"1");
+        Ok(())
+    }
+
+    #[test]
+    fn watchdog_supervisor_death_after_child_launch_kills_the_held_cgroup() -> eyre::Result<()> {
+        let mut kill = tempfile::tempfile()?;
+        let checks = std::cell::Cell::new(0);
+        {
+            let _lifetime = InrouWatchdogLifetime {
+                kill: kill.try_clone()?,
+                armed: true,
+            };
+            let result = supervise_inrou_watchdog::<()>(
+                || Ok(checks.get() == 1),
+                || {
+                    checks.set(checks.get() + 1);
+                    Ok(None)
+                },
+                || {},
+            );
+            assert!(result.is_err());
+        }
+        use std::io::Seek as _;
+        kill.rewind()?;
+        let mut bytes = Vec::new();
+        kill.read_to_end(&mut bytes)?;
+        assert_eq!(bytes, b"1");
+        assert_eq!(checks.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn watchdog_normal_child_stop_preserves_exit_status_without_self_kill() -> eyre::Result<()> {
+        let kill = tempfile::tempfile()?;
+        let mut lifetime = InrouWatchdogLifetime {
+            kill: kill.try_clone()?,
+            armed: true,
+        };
+        let status = supervise_inrou_watchdog(
+            || Ok(false),
+            || Ok(Some(23)),
+            || panic!("completed child must not wait"),
+        )?;
+        assert_eq!(status, 23);
+        lifetime.armed = false;
+        drop(lifetime);
+        assert_eq!(kill.metadata()?.len(), 0);
+        Ok(())
+    }
+
+    #[test]
+    fn watchdog_poll_failure_keeps_complete_lifetime_termination_armed() -> eyre::Result<()> {
+        let kill = tempfile::tempfile()?;
+        {
+            let _lifetime = InrouWatchdogLifetime {
+                kill: kill.try_clone()?,
+                armed: true,
+            };
+            assert!(
+                supervise_inrou_watchdog::<()>(
+                    || Err(eyre::eyre!("pidfd poll failed")),
+                    || panic!("invalid lifetime capability must fail before child inspection"),
+                    || panic!("invalid lifetime capability must not wait"),
+                )
+                .is_err()
+            );
+        }
+        assert_eq!(kill.metadata()?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn watchdog_rejects_foreign_cgroup_and_non_pidfd_capabilities() -> eyre::Result<()> {
+        let foreign = tempfile::tempdir()?;
+        let directory = fs::File::open(foreign.path())?;
+        let expected = format!("/iroha-inrou-v1/worker-0-{}", "01".repeat(Hash::LENGTH));
+        assert!(validate_inrou_watchdog_directory(&directory, &expected).is_err());
+        assert!(validate_inrou_watchdog_supervisor(&directory).is_err());
+        for descriptor_index in [3, 4] {
+            let mut arguments = internal_launcher_arguments(&[41]);
+            arguments[descriptor_index] = "41".into();
+            assert!(parse_inrou_internal_launcher_v1(arguments).is_err());
+        }
+        let mut no_reaper = internal_launcher_arguments(&[]);
+        let separator = no_reaper
+            .iter()
+            .position(|argument| argument == "--")
+            .expect("command separator");
+        no_reaper.insert(separator, "--as-pid-1".into());
+        assert!(parse_inrou_internal_launcher_v1(no_reaper).is_err());
+        Ok(())
     }
 
     #[test]
@@ -2215,7 +2540,7 @@ mod tests {
         // arguments, the optional initrd, QMP, and the three non-lease drives.
         // Each binding appears once in the typed map and once in bubblewrap;
         // each lease also adds one QEMU drive/device pair.
-        const FIXED_ARGUMENTS_WITH_INITRD_AND_FIXED_DRIVES: usize = 99;
+        const FIXED_ARGUMENTS_WITH_INITRD_AND_FIXED_DRIVES: usize = 100;
         const ARGUMENTS_PER_BINDING: usize = 6;
         const ARGUMENTS_PER_LEASE_DISK: usize = 4;
         let maximum_bindings =
@@ -2226,7 +2551,7 @@ mod tests {
             + maximum_lease_disks * ARGUMENTS_PER_LEASE_DISK;
 
         assert_eq!(maximum_bindings, 39);
-        assert_eq!(maximum_arguments, 461);
+        assert_eq!(maximum_arguments, 462);
         assert!(maximum_bindings < INROU_INTERNAL_LAUNCHER_MAX_BINDINGS);
         assert!(maximum_arguments < INROU_INTERNAL_LAUNCHER_MAX_ARGUMENTS);
     }
@@ -2329,12 +2654,12 @@ mod tests {
             .expect_err("the expected cgroup path must be canonical");
 
         let mut truncated = internal_launcher_arguments(&[41]);
-        truncated[3] = "2".into();
+        truncated[5] = "2".into();
         let _truncated_binding_list_error = parse_inrou_internal_launcher_v1(truncated)
             .expect_err("the binding count must exactly frame the binding list");
 
         let mut alternate_program = internal_launcher_arguments(&[41]);
-        alternate_program[7] = "/bin/sh".into();
+        alternate_program[9] = "/bin/sh".into();
         let _alternate_program_error = parse_inrou_internal_launcher_v1(alternate_program)
             .expect_err("only the pinned bubblewrap path may be executed");
 

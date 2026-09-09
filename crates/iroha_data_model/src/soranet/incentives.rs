@@ -7,7 +7,7 @@
 //! payloads so the treasury can remunerate reliable relays deterministically while exposing the
 //! necessary observability hooks.
 use super::{Digest32, RelayId};
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
@@ -19,21 +19,30 @@ use iroha_crypto::{PrivateKey, PublicKey, Signature, SignatureOf};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 /// Identifier assigned to blinded measurement clients.
 pub type MeasurementId = Digest32;
 /// Canonical payload signed by a blinded measurement client for relay bandwidth proofs.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::soranet::incentives::RelayBandwidthProofPayloadV1")]
 pub struct RelayBandwidthProofPayloadV1 {
     /// Relay fingerprint for which the bandwidth was measured.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Identifier of the blinded measurement flow.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub measurement_id: MeasurementId,
     /// Epoch against which the measurement is recorded.
     pub epoch: u32,
@@ -60,8 +69,17 @@ pub enum RelayBandwidthProofSignatureError {
     Signature(#[from] iroha_crypto::Error),
 }
 /// Configuration knobs controlling relay bonding and slashing policy.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -91,8 +109,17 @@ impl RelayBondPolicyV1 {
     }
 }
 /// Ledger entry recording the bond posted by a `SoraNet` relay.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -103,7 +130,7 @@ impl RelayBondPolicyV1 {
 )]
 pub struct RelayBondLedgerEntryV1 {
     /// Relay fingerprint as advertised in the directory.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Total bond locked for the relay.
     pub bonded_amount: Quantity,
@@ -129,8 +156,8 @@ impl RelayBondLedgerEntryV1 {
 }
 /// Confidence metadata attached to a bandwidth proof.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", norito(tag = "status", content = "details"))]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[norito(tag = "status", content = "details")]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -155,8 +182,17 @@ impl BandwidthConfidenceV1 {
     }
 }
 /// Proof emitted by a blinded measurement client verifying relay bandwidth contribution.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -167,10 +203,10 @@ impl BandwidthConfidenceV1 {
 )]
 pub struct RelayBandwidthProofV1 {
     /// Relay fingerprint for which the bandwidth was measured.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Identifier of the blinded measurement flow.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub measurement_id: MeasurementId,
     /// Epoch against which the measurement is recorded.
     pub epoch: u32,
@@ -292,7 +328,7 @@ impl RelayComplianceStatusV1 {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for RelayComplianceStatusV1 {
     fn json_serialize(&self, out: &mut String) {
         json::write_json_string(self.label(), out);
@@ -304,7 +340,7 @@ impl JsonSerialize for RelayComplianceStatusV1 {
         json::write_json_string_to(self.label(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for RelayComplianceStatusV1 {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let parsed = String::json_deserialize(parser)?;
@@ -319,8 +355,17 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
     }
 }
 /// Aggregated metrics for a relay within a specific epoch window.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -331,7 +376,7 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
 )]
 pub struct RelayEpochMetricsV1 {
     /// Relay fingerprint as advertised in the directory consensus.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Epoch identifier associated with this metrics record.
     pub epoch: u32,
@@ -374,8 +419,17 @@ impl RelayEpochMetricsV1 {
     }
 }
 /// Instruction surfaced to the XOR treasury for rewarding a relay.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -386,7 +440,7 @@ impl RelayEpochMetricsV1 {
 )]
 pub struct RelayRewardInstructionV1 {
     /// Relay fingerprint for which the payout is being issued.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Epoch for which the payout applies.
     pub epoch: u32,
@@ -399,10 +453,7 @@ pub struct RelayRewardInstructionV1 {
     /// Reward score used to derive the payout (mirrors [`RelayEpochMetricsV1::reward_score`]).
     pub reward_score: u64,
     /// Governance approval artefact emitted by the Sora Parliament budgeting flow.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     #[norito(default)]
     pub budget_approval_id: Option<Digest32>,
     /// Optional metadata (treasury notes, distribution batch ID, audit flags).
@@ -446,7 +497,7 @@ impl Default for RelayRewardDisputeStatusV1 {
         Self::Pending
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for RelayRewardDisputeStatusV1 {
     fn json_serialize(&self, out: &mut String) {
         let variant = match self {
@@ -468,7 +519,7 @@ impl JsonSerialize for RelayRewardDisputeStatusV1 {
         JsonSerialize::json_serialize_to(&variant, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for RelayRewardDisputeStatusV1 {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         let variant = String::json_deserialize(parser)?;
@@ -483,8 +534,17 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
     }
 }
 /// Record describing a relay reward dispute submitted to the treasury.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -495,7 +555,7 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
 )]
 pub struct RelayRewardDisputeV1 {
     /// Relay fingerprint associated with the disputed payout.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub relay_id: RelayId,
     /// Epoch identifier for which the payout was calculated.
     pub epoch: u32,
@@ -566,7 +626,7 @@ mod tests {
     fn quantity(value: u64) -> Quantity {
         Quantity::from(value)
     }
-    #[cfg(feature = "json")]
+
     fn assert_exact_json<T: JsonSerialize>(value: &T) {
         let legacy = json::to_json(value).expect("serialize legacy JSON");
         assert_eq!(
@@ -578,7 +638,7 @@ mod tests {
             Err(json::BoundedJsonError::BodyTooLarge)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn relay_status_json_families_have_exact_checked_bounds() {
         assert_exact_json(&RelayComplianceStatusV1::Warning);

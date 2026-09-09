@@ -714,13 +714,21 @@ fn rejected_completion_atomically_publishes_exact_ready_carrier() {
     let before_capacity_generation = coordinator.capacity_generation.clone();
     let before_durable = coordinator.durable_records.clone();
     let before_debts = coordinator.producer_debts.clone();
+    let validation_calls = std::cell::Cell::new(0);
     let executed = dispatch
         .execute(&mut store, |_| {
+            validation_calls.set(validation_calls.get() + 1);
             Err::<wire::ExecutionCommitment, _>(DetachedValidationError::Invalid(
                 "deterministic rejected completion",
             ))
         })
         .expect("execute exact rejected Validate dispatch");
+    assert_eq!(validation_calls.get(), 1);
+    assert_eq!(
+        executed.outcome().rejection_reason(),
+        Some("deterministic rejected completion"),
+        "diagnostics retain the original failure before reducer publication"
+    );
 
     let publication = coordinator
         .complete_durable_validate_dispatch(&mut holder, executed)

@@ -311,13 +311,14 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
         .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
     {
         Ok(record)
-            if record.owner == client.client().account && record.status == NameStatus::Active =>
+            if &record.owner == client.client().account()
+                && record.status == NameStatus::Active =>
         {
             Ok(true)
         }
         Ok(record) => Err(eyre!(
             "domain `{domain}` requires an active SNS lease owned by `{}`; found owner `{}` with status {:?}",
-            client.client().account,
+            client.client().account(),
             record.owner,
             record.status
         )),
@@ -327,12 +328,12 @@ fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> 
 fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_exists = match client.client().query(FindDomains::new()).execute_all() {
         Ok(domains) => match domains.into_iter().find(|existing| existing.id() == domain) {
-            Some(existing) if existing.owned_by() == &client.client().account => true,
+            Some(existing) if existing.owned_by() == client.client().account() => true,
             Some(existing) => {
                 return Err(eyre!(
                     "domain `{domain}` is owned by `{}`, not setup authority `{}`",
                     existing.owned_by(),
-                    client.client().account
+                    client.client().account()
                 ));
             }
             None => false,
@@ -343,7 +344,7 @@ fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bo
                 debug!(
                     err = %report,
                     %domain,
-                    torii_url = %client.client().torii_url,
+                    torii_url = %client.client().endpoint(),
                     "transient domain visibility query failed while checking SNS lease readiness"
                 );
                 false
@@ -377,7 +378,7 @@ pub fn ensure_domain_setup_in_dataspace(
         return Ok(());
     }
     match client.submit(
-        test_domain_setup_instruction(domain, dataspace_id, &client.client().account)?,
+        test_domain_setup_instruction(domain, dataspace_id, client.client().account())?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     ) {
         Ok(_) => {
@@ -414,7 +415,7 @@ pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> 
         if !wait_for_domain_setup(client, domain)? {
             return Err(eyre!(
                 "domain `{domain}` declarative setup was not visible to peer `{}` within {:?}",
-                client.client().torii_url,
+                client.client().endpoint(),
                 TEST_SNS_LEASE_VISIBILITY_TIMEOUT
             ));
         }
@@ -436,7 +437,7 @@ pub fn submit_ensure_domain_for_network(
     client: &Client,
     domain: NewDomain,
 ) -> Result<()> {
-    if client.client().account != network.client().client().account {
+    if client.client().account() != network.client().client().account() {
         return Err(eyre!(
             "network domain setup must be submitted by the network client authority"
         ));
@@ -660,6 +661,14 @@ fn log_status_warning(gate: &StartupWarnGate, warn_log: impl FnOnce(), debug_log
 }
 fn status_error_is_connection_refused(err: &Report) -> bool {
     err.chain().any(|cause| {
+        if let Some(iroha::Error::Transport { kind, .. }) = cause.downcast_ref::<iroha::Error>()
+            && matches!(
+                kind,
+                iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused)
+            )
+        {
+            return true;
+        }
         cause
             .downcast_ref::<std::io::Error>()
             .is_some_and(|io_err| io_err.kind() == ErrorKind::ConnectionRefused)
@@ -667,6 +676,12 @@ fn status_error_is_connection_refused(err: &Report) -> bool {
 }
 fn status_error_is_torii_query_backpressure(err: &Report) -> bool {
     err.chain().any(|cause| {
+        if let Some(iroha::Error::Http { status, body, .. }) = cause.downcast_ref::<iroha::Error>()
+        {
+            return *status == 429
+                && std::str::from_utf8(body)
+                    .is_ok_and(|text| text.contains("Reached the limit of parallel queries"));
+        }
         let message = cause.to_string();
         message.contains("429 Too Many Requests")
             && message.contains("Reached the limit of parallel queries")
@@ -679,6 +694,24 @@ fn torii_request_error_is_transient(err: &Report) -> bool {
     let mut saw_http_transport = false;
     let mut saw_transient_transport = false;
     for cause in err.chain() {
+        if matches!(
+            cause.downcast_ref::<iroha::Error>(),
+            Some(
+                iroha::Error::Timeout { .. }
+                    | iroha::Error::Transport {
+                        kind: iroha::TransportErrorKind::Io(
+                            ErrorKind::ConnectionReset
+                                | ErrorKind::ConnectionAborted
+                                | ErrorKind::BrokenPipe
+                                | ErrorKind::UnexpectedEof
+                                | ErrorKind::TimedOut
+                        ),
+                        ..
+                    }
+            )
+        ) {
+            return true;
+        }
         let message = cause.to_string();
         saw_http_transport |= message.contains("Failed to send http")
             || message.contains("error sending request for url")
@@ -3132,6 +3165,41 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
         waited = waited.saturating_add(NETWORK_PERMIT_POLL_INTERVAL);
     }
 }
+/// Immutable canonical genesis prepared before a peer cohort starts its timers.
+#[derive(Clone)]
+struct PreparedPeerGenesis {
+    bytes: Arc<[u8]>,
+}
+impl PreparedPeerGenesis {
+    async fn prepare(block: GenesisBlock) -> Result<Self> {
+        Self::prepare_with_encoder(block, NetworkPeer::canonical_genesis_bytes).await
+    }
+
+    async fn prepare_optional(block: Option<&GenesisBlock>) -> Result<Option<Self>> {
+        match block {
+            Some(block) => Self::prepare(block.clone()).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    // One blocking owner runs the canonical encoder and its existing sanity checks.
+    // The injectable encoder keeps the ownership/async handoff test deterministic;
+    // production callers always select `canonical_genesis_bytes` through `prepare`.
+    async fn prepare_with_encoder(
+        block: GenesisBlock,
+        encode: impl FnOnce(&GenesisBlock) -> Result<Vec<u8>> + Send + 'static,
+    ) -> Result<Self> {
+        spawn_blocking(move || {
+            init_instruction_registry();
+            encode(&block).map(|bytes| Self {
+                bytes: bytes.into(),
+            })
+        })
+        .await
+        .wrap_err("failed to join canonical genesis preparation")?
+    }
+}
+
 /// Network of peers
 pub struct Network {
     env: Environment,
@@ -3448,13 +3516,15 @@ impl Network {
                 self.peers.len()
             ));
         }
+        // Canonical encoding can be expensive in debug integration builds. Finish
+        // it once, off the async worker, before any validator starts its clock.
+        let prepared_genesis = PreparedPeerGenesis::prepare(self.genesis()).await?;
         // Bind every published observer endpoint before validators start. The
         // relay retains accepted sockets and retries the private upstream until
         // the validators-first bootstrap reaches the observer stage.
         if let Some(relays) = &self.observer_slow_reader_relays {
             relays.start().await?;
         }
-        let genesis_block = Arc::new(self.genesis());
         let genesis_order = Arc::new(submitters.clone());
         let genesis_lookup = Arc::new(
             submitters
@@ -3482,7 +3552,7 @@ impl Network {
         let validator_start_futures = self.peers.iter().enumerate().map(|(index, peer)| {
             let genesis_lookup = genesis_lookup.clone();
             let genesis_order = genesis_order.clone();
-            let genesis_block = genesis_block.clone();
+            let prepared_genesis = prepared_genesis.clone();
             async move {
                 let stage = genesis_lookup.get(&index).copied();
                 let mnemonic = peer.mnemonic().to_string();
@@ -3529,7 +3599,7 @@ impl Network {
                         tokio::time::sleep(delay).await;
                     }
                 }
-                peer.start_checked(self.config_layers(), Some(genesis_block.as_ref()))
+                peer.start_checked_prepared(self.config_layers(), Some(&prepared_genesis))
                     .await?;
                 info!(
                     index,
@@ -3552,7 +3622,7 @@ impl Network {
                 .iter()
                 .enumerate()
                 .map(|(committee_index, peer)| {
-                    let genesis_block = genesis_block.clone();
+                    let prepared_genesis = prepared_genesis.clone();
                     async move {
                         let index = self.peers.len().saturating_add(committee_index);
                         let mnemonic = peer.mnemonic().to_string();
@@ -3571,9 +3641,9 @@ impl Network {
                             role = "committee_validator",
                             "starting non-global committee validator"
                         );
-                        peer.start_checked(
+                        peer.start_checked_prepared(
                             self.config_layers_for_peer(peer),
-                            Some(genesis_block.as_ref()),
+                            Some(&prepared_genesis),
                         )
                         .await?;
                         Self::wait_for_block_1_with_watchdog(
@@ -3596,7 +3666,7 @@ impl Network {
                     .iter()
                     .enumerate()
                     .map(|(observer_index, peer)| {
-                        let genesis_block = genesis_block.clone();
+                        let prepared_genesis = prepared_genesis.clone();
                         let observer_role = self.observer_start_layer(peer);
                         async move {
                             let index = self
@@ -3620,10 +3690,10 @@ impl Network {
                                 role = "observer",
                                 "starting signed observer replica"
                             );
-                            peer.start_checked(
+                            peer.start_checked_prepared(
                                 self.config_layers()
                                     .chain(iter::once(Cow::Owned(observer_role))),
-                                Some(genesis_block.as_ref()),
+                                Some(&prepared_genesis),
                             )
                             .await?;
                             Self::wait_for_block_1_with_watchdog(
@@ -8829,6 +8899,15 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
+        let genesis = PreparedPeerGenesis::prepare_optional(genesis).await?;
+        self.start_prepared(config_layers, genesis.as_ref()).await
+    }
+
+    async fn start_prepared<T: AsRef<Table>>(
+        &self,
+        config_layers: impl Iterator<Item = T>,
+        genesis: Option<&PreparedPeerGenesis>,
+    ) -> Result<()> {
         if self.should_run_bind_preflight() {
             let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
             if let Err(err) = preflight {
@@ -9031,7 +9110,7 @@ impl NetworkPeer {
         }
         {
             let tasks = &mut tasks;
-            let client = self.client();
+            let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
             let events_tx = self.events.clone();
             let block_height_tx = self.block_height.clone();
             let is_running = self.is_running.clone();
@@ -9065,7 +9144,7 @@ impl NetworkPeer {
                         return;
                     }
                     let warn_gate = startup_warn_gate.clone();
-                    // Retry get_status with exponential backoff (50ms ..= 1s); abort if it takes
+                    // Retry status reads with exponential backoff (50ms ..= 1s); abort if it takes
                     // longer than the configured timeout. If Torii is slow to accept connections,
                     // fall back to on-disk height observation so peers can still make progress.
                     let status_backoff = {
@@ -9082,10 +9161,7 @@ impl NetworkPeer {
                             let warn_gate = warn_gate.clone();
                             let http_seen = Arc::clone(&http_seen);
                             async move {
-                                let status = read_on_dedicated_thread(move || {
-                                    client.client().get_status()
-                                })
-                                .await;
+                                let status = client.status().get().await.map_err(Report::from);
                                 match status {
                                     Ok(status) => {
                                         let _ =
@@ -9253,10 +9329,7 @@ impl NetworkPeer {
                                         break;
                                     }
                                     let status = tokio::select! {
-                                        result = read_on_dedicated_thread({
-                                            let client = poll_client.clone();
-                                            move || client.client().get_status()
-                                        }) => result,
+                                        result = async { poll_client.status().get().await } => result.map_err(Report::from),
                                         changed = fatal_rx.changed() => {
                                             if changed.is_ok() && *fatal_rx.borrow() {
                                                 debug!("fatal notify received during status poll");
@@ -9487,9 +9560,19 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
+        let genesis = PreparedPeerGenesis::prepare_optional(genesis).await?;
+        self.start_checked_prepared(config_layers, genesis.as_ref())
+            .await
+    }
+
+    async fn start_checked_prepared<T: AsRef<Table>>(
+        &self,
+        config_layers: impl Iterator<Item = T>,
+        genesis: Option<&PreparedPeerGenesis>,
+    ) -> Result<()> {
         let mut events = self.events();
         let has_genesis = genesis.is_some();
-        self.start(config_layers, genesis).await?;
+        self.start_prepared(config_layers, genesis).await?;
         let context = self
             .startup_context_summary()
             .unwrap_or_else(|| "<startup context not initialized>".to_string());
@@ -9805,6 +9888,14 @@ impl NetworkPeer {
     }
     /// Create a client to interact with this peer
     pub fn client_for(&self, account_id: &AccountId, account_private_key: PrivateKey) -> Client {
+        Client::from_client(self.async_client_for(account_id, account_private_key))
+            .expect("peer blocking client runtime should initialize")
+    }
+    fn async_client_for(
+        &self,
+        account_id: &AccountId,
+        account_private_key: PrivateKey,
+    ) -> AsyncClient {
         tracing::debug!(
             mnemonic = %self.mnemonic,
             port = %self.port_api,
@@ -9856,17 +9947,19 @@ impl NetworkPeer {
             .expect("peer client config should be valid")
             .parse()
             .expect("peer client config should be valid");
-        let mut client = AsyncClient::new(config);
-        client.set_operator_key_pair(self.key_pair.clone());
-        Client::from_client(client).expect("peer blocking client runtime should initialize")
+        let mut builder = AsyncClient::builder(config);
+        builder.operator_key_pair = Some(self.key_pair.clone());
+        builder
+            .build()
+            .expect("peer account context should be valid")
     }
     /// Client for Alice. ([`Self::client_for`] + [`Signatory::Alice`])
     pub fn client(&self) -> Client {
         self.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone())
     }
     pub async fn status(&self) -> Result<Status> {
-        let client = self.client();
-        let result = read_on_dedicated_thread(move || client.client().get_status()).await;
+        let client = self.async_client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let result = client.status().get().await.map_err(Report::from);
         match &result {
             Ok(status) => self.record_status_success(status),
             Err(error) => self.record_status_failure(error),
@@ -10117,7 +10210,7 @@ impl NetworkPeer {
     async fn write_run_config<T: AsRef<Table>>(
         &self,
         cfg_extra_layers: impl Iterator<Item = T>,
-        genesis: Option<&GenesisBlock>,
+        genesis: Option<&PreparedPeerGenesis>,
         existing_genesis_path: Option<&Path>,
         run: usize,
     ) -> Result<PathBuf> {
@@ -10147,10 +10240,7 @@ impl NetworkPeer {
             let path = self.dir.join(format!("run-{run}-genesis.nrt"));
             final_config =
                 final_config.write(["genesis", "file"], path.to_string_lossy().to_string());
-            // Ensure instruction/type registries are initialized before encoding.
-            init_instruction_registry();
-            let framed = Self::canonical_genesis_bytes(block)?;
-            tokio::fs::write(path, framed).await?;
+            tokio::fs::write(path, block.bytes.as_ref()).await?;
         } else if let Some(path) = existing_genesis_path {
             final_config =
                 final_config.write(["genesis", "file"], path.to_string_lossy().to_string());
@@ -11411,6 +11501,28 @@ mod tests {
         assert!(gate.should_warn());
     }
     #[test]
+    fn status_error_is_connection_refused_checks_structured_transport_kind() {
+        for (kind, expected) in [
+            (
+                iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused),
+                true,
+            ),
+            (iroha::TransportErrorKind::Io(ErrorKind::AddrInUse), false),
+            (iroha::TransportErrorKind::Other, false),
+        ] {
+            let report = Report::from(iroha::Error::Transport {
+                operation: "diagnostic.status",
+                kind,
+                details: "Connection refused text must not decide classification".to_owned(),
+            });
+            assert_eq!(status_error_is_connection_refused(&report), expected);
+            let nested = Err::<(), Report>(report)
+                .wrap_err("client status probe failed")
+                .unwrap_err();
+            assert_eq!(status_error_is_connection_refused(&nested), expected);
+        }
+    }
+    #[test]
     fn status_error_is_connection_refused_detects_io_error() {
         let err = std::io::Error::new(ErrorKind::ConnectionRefused, "refused");
         let report = Report::from(err);
@@ -11441,6 +11553,31 @@ mod tests {
         .wrap_err("client status probe failed")
         .unwrap_err();
         assert!(!status_error_is_connection_refused(&report));
+    }
+    #[test]
+    fn status_error_is_torii_query_backpressure_checks_structured_status_and_body() {
+        for (status, body, expected) in [
+            (429, b"Reached the limit of parallel queries".to_vec(), true),
+            (
+                503,
+                b"Reached the limit of parallel queries".to_vec(),
+                false,
+            ),
+            (429, b"another rate limit".to_vec(), false),
+            (429, vec![0xff], false),
+        ] {
+            let report = Report::from(iroha::Error::Http {
+                operation: "diagnostic.status",
+                status,
+                body,
+                retry_after: None,
+            });
+            assert_eq!(status_error_is_torii_query_backpressure(&report), expected);
+            let nested = Err::<(), Report>(report)
+                .wrap_err("client status probe failed")
+                .unwrap_err();
+            assert_eq!(status_error_is_torii_query_backpressure(&nested), expected);
+        }
     }
     #[test]
     fn status_error_is_torii_query_backpressure_detects_status_throttle() {
@@ -11474,6 +11611,62 @@ mod tests {
             .wrap_err("Unexpected status response; status: 429 Too Many Requests")
             .unwrap_err();
         assert!(!status_error_is_torii_query_backpressure(&report));
+    }
+    #[test]
+    fn torii_request_error_is_transient_checks_structured_transport_causes() {
+        let deadline = iroha::Error::Timeout {
+            operation: "diagnostic.status",
+        };
+        let cases = std::iter::once((deadline, true)).chain(
+            [
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionRefused),
+                    true,
+                ),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionReset),
+                    true,
+                ),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::ConnectionAborted),
+                    true,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::BrokenPipe), true),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::UnexpectedEof),
+                    true,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::TimedOut), true),
+                (
+                    iroha::TransportErrorKind::Io(ErrorKind::PermissionDenied),
+                    false,
+                ),
+                (iroha::TransportErrorKind::Io(ErrorKind::InvalidData), false),
+                (iroha::TransportErrorKind::Other, false),
+            ]
+            .into_iter()
+            .map(|(kind, expected)| {
+                (
+                    iroha::Error::Transport {
+                        operation: "diagnostic.status",
+                        kind,
+                        details: "opaque diagnostic".to_owned(),
+                    },
+                    expected,
+                )
+            }),
+        );
+        for (error, expected) in cases {
+            let report = Report::from(error);
+            assert_eq!(torii_request_error_is_transient(&report), expected);
+            let nested = report.wrap_err("status probe");
+            assert_eq!(torii_request_error_is_transient(&nested), expected);
+        }
+        let raw_timeout = Report::from(std::io::Error::new(
+            ErrorKind::TimedOut,
+            "operation timed out while applying local validation",
+        ));
+        assert!(!torii_request_error_is_transient(&raw_timeout));
     }
     #[test]
     fn torii_request_error_is_transient_detects_query_timeout() {
@@ -15941,15 +16134,55 @@ mod tests {
         let client = network.client();
         let async_client = client.client();
         let expected_host = expected.host_str();
-        assert_eq!(async_client.network_id, network.network_id());
+        assert_eq!(*async_client.network_id(), network.network_id());
         assert_eq!(
-            async_client.torii_url.host_str(),
+            async_client.endpoint().host_str(),
             Some(expected_host.as_ref())
         );
         assert_eq!(
-            async_client.torii_url.port_or_known_default(),
+            async_client.endpoint().port_or_known_default(),
             Some(expected.port())
         );
+    }
+    #[test]
+    fn peer_async_client_factory_preserves_account_operator_and_configuration() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let peer = &network.peers()[0];
+        let private_key = iroha_test_samples::BOB_KEYPAIR.private_key().clone();
+        let client = peer.async_client_for(&BOB_ID, private_key.clone());
+        let blocking = peer.client_for(&BOB_ID, private_key);
+        let config = client.to_builder();
+        assert_eq!(config.account, *BOB_ID);
+        assert_eq!(
+            config.key_pair.public_key(),
+            BOB_ID.expect_single_signatory()
+        );
+        assert_eq!(config.operator_key_pair.as_ref(), Some(&peer.key_pair));
+        assert_eq!(config.network_id, network.network_id());
+        assert_eq!(config.chain, config::chain_id());
+        assert_eq!(
+            config.torii_url,
+            peer.torii_url()
+                .parse::<url::Url>()
+                .expect("valid peer endpoint")
+        );
+        assert_eq!(
+            config.transaction_status_timeout,
+            client_status_timeout_env()
+        );
+        assert_eq!(config.torii_request_timeout, client_request_timeout_env());
+        assert_eq!(
+            config.transaction_ttl,
+            Some(client_ttl_env(config.transaction_status_timeout))
+        );
+        assert_eq!(blocking.client().account(), client.account());
+        assert_eq!(blocking.client().key_pair(), client.key_pair());
+        assert_eq!(
+            blocking.client().operator_key_pair(),
+            client.operator_key_pair()
+        );
+        assert_eq!(blocking.client().network_id(), client.network_id());
+        assert_eq!(blocking.client().endpoint(), client.endpoint());
     }
     #[test]
     fn http_start_gate_requires_http_source() {
@@ -16596,6 +16829,85 @@ mod tests {
         user.parse()
             .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
     }
+    #[tokio::test(flavor = "current_thread")]
+    async fn shared_genesis_preparation_precedes_all_peer_configs_and_keeps_async_progress()
+    -> Result<()> {
+        let network = NetworkBuilder::new().with_peers(4).build();
+        let genesis = network.genesis();
+        let expected = genesis.0.encode_wire()?;
+        let async_thread = std::thread::current().id();
+        let preparations = Arc::new(AtomicUsize::new(0));
+        let timer_progress = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = oneshot::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let preparation_count = Arc::clone(&preparations);
+        let preparation = PreparedPeerGenesis::prepare_with_encoder(genesis, move |block| {
+            // This assertion runs before waiting, so an accidental synchronous
+            // implementation fails immediately instead of deadlocking the test.
+            assert_ne!(std::thread::current().id(), async_thread);
+            assert_eq!(preparation_count.fetch_add(1, Ordering::SeqCst), 0);
+            started_tx.send(()).expect("announce encoder ownership");
+            release_rx.recv().expect("async consumer releases encoder");
+            NetworkPeer::canonical_genesis_bytes(block)
+        });
+        let progress = async {
+            started_rx.await.expect("encoder reached blocking worker");
+            tokio::task::yield_now().await;
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            timer_progress.store(true, Ordering::SeqCst);
+            release_tx.send(()).expect("release blocking encoder");
+        };
+        let (prepared, ()) = tokio::join!(preparation, progress);
+        let prepared = prepared?;
+        assert!(timer_progress.load(Ordering::SeqCst));
+        assert_eq!(preparations.load(Ordering::SeqCst), 1);
+        assert_eq!(prepared.bytes.as_ref(), expected.as_slice());
+        let layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let consumers = network.peers().iter().map(|peer| {
+            let prepared = prepared.clone();
+            let layers = &layers;
+            let preparations = Arc::clone(&preparations);
+            async move {
+                assert_eq!(preparations.load(Ordering::SeqCst), 1);
+                peer.write_run_config(layers.iter().map(Cow::Borrowed), Some(&prepared), None, 1)
+                    .await?;
+                let wire = tokio::fs::read(peer.dir.join("run-1-genesis.nrt")).await?;
+                Ok::<_, Report>((prepared, wire))
+            }
+        });
+        let consumers = futures::future::try_join_all(consumers).await?;
+        assert_eq!(consumers.len(), 4);
+        for (consumer, wire) in consumers {
+            assert!(Arc::ptr_eq(&consumer.bytes, &prepared.bytes));
+            assert_eq!(wire, expected);
+        }
+        assert_eq!(preparations.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn shared_genesis_preparation_error_never_publishes_bytes() -> Result<()> {
+        let network = NetworkBuilder::new().with_peers(4).build();
+        let prepared = PreparedPeerGenesis::prepare_with_encoder(network.genesis(), |_| {
+            Err(eyre!("canonical genesis preparation fixture failure"))
+        })
+        .await;
+        assert!(prepared.is_err());
+        assert!(
+            prepared
+                .err()
+                .expect("checked error")
+                .to_string()
+                .contains("canonical genesis preparation fixture failure")
+        );
+        assert!(PreparedPeerGenesis::prepare_optional(None).await?.is_none());
+        assert!(network.peers().iter().all(|peer| !peer.is_running()));
+        Ok(())
+    }
+
     #[tokio::test]
     async fn peer_run_configs_reuse_exact_genesis_expected_hash_without_hashing_restart_artifact()
     -> Result<()> {
@@ -16617,8 +16929,14 @@ mod tests {
             expected_hash,
             "a first start without a local artifact must still receive the operator anchor"
         );
+        let prepared_genesis = PreparedPeerGenesis::prepare(genesis).await?;
         let bootstrap_config = peer
-            .write_run_config(layers.iter().map(Cow::Borrowed), Some(&genesis), None, 1)
+            .write_run_config(
+                layers.iter().map(Cow::Borrowed),
+                Some(&prepared_genesis),
+                None,
+                1,
+            )
             .await?;
         assert_eq!(
             parse_peer_run_config(&bootstrap_config)?

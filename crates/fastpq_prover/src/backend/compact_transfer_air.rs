@@ -38,7 +38,6 @@ use crate::{
     proof::VerifyLimits,
 };
 
-#[cfg(test)]
 use super::{
     FriDomain, GOLDILOCKS_MODULUS,
     compact_hash_quotient::ProverMaskCycle,
@@ -46,33 +45,33 @@ use super::{
     compact_smt_quotient::{CompactSmtFixedValues, FIXED_COLUMN_COUNT, FIXED_ROW_COUNT},
     fixed_schedule::PeriodicSelectors,
 };
-#[cfg(test)]
 use crate::{fft::Planner, gadgets::compact_smt_air::PHYSICAL_HASH_ROWS};
 
 const CONSTRAINT_COUNT: usize = LOCAL_SLOTS + TRANSITION_SLOTS + RESIDUE_COUNT;
 const IDENTITY: &str =
     "fastpq:compact:v1:compact-transfer:v1:342cols:597local+83edge+243smt:65536rows";
-#[cfg(test)]
 const MASK_CYCLE_ROWS: usize = 4096;
-#[cfg(test)]
 const LDE_ROWS: usize = 524_288;
-#[cfg(test)]
 const FIXED_LDE_BYTES: usize = 205_520_896;
-#[cfg(test)]
 const FIXED_COEFFICIENT_BYTES: usize = 25_690_112;
-#[cfg(test)]
 const PHASE_CYCLE_BYTES: usize = 16_777_216;
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::TransferUpdateV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_transfer_air::BoundUpdate",
+    frame = "fastpq_prover::compact_v1::TransferUpdateV1"
+)]
 struct BoundUpdate {
     old_leaf: [u8; 32],
     new_leaf: [u8; 32],
     path: u32,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::TransferStatementV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_transfer_air::BoundStatement",
+    frame = "fastpq_prover::compact_v1::TransferStatementV1"
+)]
 struct BoundStatement {
     version: u16,
     updates: [BoundUpdate; 2],
@@ -159,7 +158,6 @@ impl CompactTransferAir {
         Ok(bytes)
     }
 
-    #[cfg(test)]
     fn prepare(&self) -> Result<PreparedTransferAir<'_>> {
         let lde_rows = PHYSICAL_ROW_COUNT
             .checked_mul(FASTPQ_FINAL_V1.fri.blowup_factor as usize)
@@ -251,14 +249,12 @@ impl FixedAir for CompactTransferAir {
         Ok(combine(hash, smt.residues(&fixed, &current, &next)))
     }
 
-    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         Ok(Box::new(self.prepare()?))
     }
 }
 
 /// Exact immutable public preparation, borrowed by every per-proof worker.
-#[cfg(test)]
 struct PreparedTransferAir<'a> {
     air: &'a CompactTransferAir,
     smt: CompactSmtQuotient<'a>,
@@ -268,7 +264,6 @@ struct PreparedTransferAir<'a> {
     domain: FriDomain,
 }
 
-#[cfg(test)]
 impl PreparedTransferAir<'_> {
     fn fixed_at(&self, index: usize, point: u64) -> Result<CompactSmtFixedValues> {
         if index >= LDE_ROWS {
@@ -295,7 +290,6 @@ impl PreparedTransferAir<'_> {
     }
 }
 
-#[cfg(test)]
 impl PreparedAir for PreparedTransferAir<'_> {
     fn evaluator(&self) -> ProverEvaluator<'_> {
         let mut scratch = self.air.hash.evaluation_scratch::<u64>();
@@ -322,7 +316,6 @@ fn combine(hash: HashNumerators<u64>, smt: [u64; RESIDUE_COUNT]) -> Vec<u64> {
     result
 }
 
-#[cfg(test)]
 fn checked_matrix_bytes(columns: usize, rows: usize, maximum: usize) -> Result<usize> {
     let bytes = columns
         .checked_mul(rows)
@@ -340,7 +333,6 @@ fn check_limit(limit: &'static str, actual: usize, max: usize) -> Result<()> {
     }
 }
 
-#[cfg(test)]
 fn shape(details: &'static str) -> Error {
     Error::InvalidTraceShape {
         details: details.to_owned(),

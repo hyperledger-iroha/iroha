@@ -298,12 +298,10 @@ def onboarding_canonical_auth(
 
 def prepared_binding(kind: str) -> dict[str, object]:
     return {
-        "schema": "iroha.taira.public-reset.mutation-binding.v1",
-        "authorization_sha256": "ab" * 32,
-        "authorization_nonce": "reset_nonce_00000000000000000000",
+        "schema": "iroha.prepared-operation.binding.v1",
+        "semantic_hash_hex": ("11" if kind == "onboarding" else "55") * 32,
         "kind": kind,
-        "phase": "pre_edge",
-        "idempotency_key": "cd" * 32,
+        "request_id": "cd" * 32,
         "execution_expires_at_unix_ms": 4_000_000_000_000,
     }
 
@@ -327,6 +325,7 @@ def onboarding_receipt() -> dict[str, object]:
     return {
         "body": {
             "version": 1,
+            "valid_until_ms": 4_000_000_000_000,
             "request": onboarding_request(),
             "resource": {
                 "disposition": {"kind": "create", "value": None},
@@ -361,7 +360,7 @@ def atomic_onboarding_state(
 
 def prepared_onboarding() -> dict[str, object]:
     return {
-        "schema": "iroha.taira.prepared-transaction.v1",
+        "schema": "iroha.prepared-transaction.v1",
         "binding": prepared_binding("onboarding"),
         "operation": "onboarding",
         "receipt": onboarding_receipt(),
@@ -384,7 +383,7 @@ def prepared_faucet() -> dict[str, object]:
         "pow_nonce_hex": "0000000000000000",
     }
     return {
-        "schema": "iroha.taira.prepared-transaction.v1",
+        "schema": "iroha.prepared-transaction.v1",
         "binding": prepared_binding("faucet"),
         "operation": "faucet",
         "claim": claim,
@@ -426,7 +425,7 @@ def test_prepared_transaction_rejects_hash_without_iroha_marker() -> None:
     prepared["transaction_hash_hex"] = "22" * 32
 
     with pytest.raises(ValueError, match="lowercase marked 32-byte hash"):
-        client_module._copy_prepared_taira_transaction(
+        client_module._copy_prepared_transaction(
             prepared,
             expected_operation="onboarding",
             context="prepared transaction",
@@ -441,11 +440,11 @@ def test_prepared_transaction_signature_v1_shared_golden_is_exact() -> None:
         / "prepared_transaction_signature_v1.json"
     )
     fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
-    assert fixture["schema"] == "iroha.taira.prepared-transaction-signature-fixture.v1"
-    assert fixture["transcript_schema"] == client_module.TAIRA_PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA
+    assert fixture["schema"] == "iroha.prepared-transaction-signature-fixture.v1"
+    assert fixture["transcript_schema"] == client_module.PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA
     assert (
         bytes.fromhex(fixture["signature_domain_hex"])
-        == client_module.TAIRA_PREPARED_SIGNATURE_DOMAIN
+        == client_module.PREPARED_SIGNATURE_DOMAIN
     )
     assert fixture["frame_length_encoding"] == "u64_be"
     assert fixture["digest_algorithm"] == "iroha_blake2b_256"
@@ -475,7 +474,7 @@ def test_prepared_transaction_signature_v1_shared_golden_is_exact() -> None:
             transcript_bytes = bytes(transcript)
         else:
             operation = "onboarding" if vector["name"] == "onboarding_prepared" else "faucet"
-            exact_payload = client_module._copy_prepared_taira_transaction(
+            exact_payload = client_module._copy_prepared_transaction(
                 response_payload,
                 expected_operation=operation,
                 context=f"shared golden {vector['name']}",
@@ -636,7 +635,7 @@ def test_account_onboarding_is_explicit_plan_prepare_submit(
             response(
                 200,
                 {
-                    "schema": "iroha.taira.prepared-transaction-submit.v1",
+                    "schema": "iroha.prepared-transaction-submit.v1",
                     "binding": prepared["binding"],
                     "operation": "onboarding",
                     "transaction_hash_hex": prepared["transaction_hash_hex"],
@@ -1401,7 +1400,7 @@ def test_account_faucet_is_explicit_prepare_then_exact_submit(
             response(
                 200,
                 {
-                    "schema": "iroha.taira.prepared-transaction-submit.v1",
+                    "schema": "iroha.prepared-transaction-submit.v1",
                     "binding": prepared["binding"],
                     "operation": "faucet",
                     "transaction_hash_hex": prepared["transaction_hash_hex"],
@@ -4553,3 +4552,67 @@ def test_permission_helpers_reject_invalid_inputs(
             private_key_hex="11" * 32,
             **kwargs,
         )
+
+
+@pytest.mark.parametrize(
+    "field", ["authorization_sha256", "authorization_nonce", "phase", "idempotency_key"]
+)
+def test_prepared_operation_binding_rejects_private_custody_fields(field: str) -> None:
+    binding = prepared_binding("onboarding")
+    binding[field] = "operator-private"
+    with pytest.raises(TypeError, match="exactly the V1"):
+        client_module._copy_prepared_operation_binding(
+            binding, expected_kind="onboarding", context="binding", require_active=False
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid"),
+    [
+        ("schema", "iroha.taira.public-reset.mutation-binding.v1"),
+        ("kind", "reset"),
+        ("request_id", "AA" * 32),
+        ("request_id", "a" * 63),
+        ("semantic_hash_hex", "GG" * 32),
+        ("execution_expires_at_unix_ms", 0),
+        ("execution_expires_at_unix_ms", True),
+        ("execution_expires_at_unix_ms", 1 << 64),
+    ],
+)
+def test_prepared_operation_binding_rejects_noncanonical_identity(
+    field: str, invalid: object
+) -> None:
+    binding = prepared_binding("onboarding")
+    binding[field] = invalid
+    with pytest.raises(ValueError):
+        client_module._copy_prepared_operation_binding(
+            binding, expected_kind="onboarding", context="binding", require_active=False
+        )
+
+
+def test_prepared_operation_binding_pins_receipt_hash_and_validity() -> None:
+    binding = prepared_binding("onboarding")
+    receipt = onboarding_receipt()
+    client_module._require_onboarding_binding_receipt(binding, receipt, "receipt")
+    substituted = dict(binding, semantic_hash_hex="22" * 32)
+    with pytest.raises(ValueError, match="semantic_hash_hex differs"):
+        client_module._require_onboarding_binding_receipt(substituted, receipt, "receipt")
+    late = dict(binding, execution_expires_at_unix_ms=binding["execution_expires_at_unix_ms"] + 1)
+    with pytest.raises(ValueError, match="deadline exceeds"):
+        client_module._require_onboarding_binding_receipt(late, receipt, "receipt")
+
+
+def test_prepared_operation_transcript_authenticates_public_request_identity() -> None:
+    binding = prepared_binding("onboarding")
+    transcript = client_module._prepared_binding_transcript(
+        client_module.PREPARED_TRANSACTION_SCHEMA, "onboarding", binding
+    )
+    for field in ("authorization_sha256", "authorization_nonce", "phase", "idempotency_key"):
+        assert f"binding.{field}".encode() not in transcript
+    assert b"iroha:prepared-transaction:v1\0" in transcript
+    assert b"binding.semantic_hash_hex" in transcript
+    assert b"binding.request_id" in transcript
+    substituted = dict(binding, request_id="ef" * 32)
+    assert transcript != client_module._prepared_binding_transcript(
+        client_module.PREPARED_TRANSACTION_SCHEMA, "onboarding", substituted
+    )

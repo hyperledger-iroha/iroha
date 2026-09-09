@@ -76,3 +76,6 @@ mod tests {
         assert!(enable_tracing().is_err());
     }
 }
+
+#[cfg(test)]
+mod scalar_payload_tests;

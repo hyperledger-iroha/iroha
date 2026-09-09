@@ -13,6 +13,8 @@ use norito::codec::{Decode, Encode};
 use std::{io, net::AddrParseError};
 use thiserror::Error;
 mod dial_policy;
+#[cfg(test)]
+mod frame_identity_tests;
 pub mod network;
 pub mod peer;
 mod preauth;
@@ -254,15 +256,24 @@ pub fn frame_queue_charge_for<E: aead::AeadCore>(plaintext_frame_bytes: usize) -
 pub mod boilerplate {
     //! Module containing trait shorthands. Remove when trait aliases
     //! are stable <https://github.com/rust-lang/rust/issues/41517>
-    use super::*;
     use aead::{Aead, AeadInOut, KeyInit};
     /// Shorthand for traits required for payload
     pub trait Pload:
-        Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
+        norito::NoritoSerialize
+        + for<'__frame> norito::NoritoDeserialize<'__frame>
+        + for<'a> norito::core::DecodeFromSlice<'a>
+        + Send
+        + Clone
+        + 'static
     {
     }
     impl<T> Pload for T where
-        T: Encode + Decode + for<'a> norito::core::DecodeFromSlice<'a> + Send + Clone + 'static
+        T: norito::NoritoSerialize
+            + for<'__frame> norito::NoritoDeserialize<'__frame>
+            + for<'a> norito::core::DecodeFromSlice<'a>
+            + Send
+            + Clone
+            + 'static
     {
     }
     /// Shorthand for traits required for encryptor type marker.

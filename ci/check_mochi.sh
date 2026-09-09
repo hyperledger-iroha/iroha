@@ -21,6 +21,9 @@ done
 echo "[mochi] cargo test -p mochi-integration --features dev-tools --test supervisor"
 cargo test -p mochi-integration --features dev-tools --test supervisor
 
+echo "[mochi] cargo test -p mochi-integration --features dev-tools --bin kagami_mock"
+cargo test --locked -p mochi-integration --features dev-tools --bin kagami_mock
+
 echo "[mochi] resolve Cargo target directory"
 mochi_target_dir="$(
   cargo metadata --locked --no-deps --format-version 1 |

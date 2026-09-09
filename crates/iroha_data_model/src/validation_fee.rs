@@ -1,5 +1,5 @@
 //! Validation-fee policy data shared by validators and clients.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     Level, NetworkId,
@@ -458,8 +458,19 @@ impl core::fmt::Display for ValidationFeePolicyRegistryError {
 }
 impl std::error::Error for ValidationFeePolicyRegistryError {}
 /// Validation-fee charging mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(
     tag = "charging_mode",
     content = "value",
@@ -475,9 +486,18 @@ pub enum ValidationFeeChargingMode {
     PerQualifyingTransferInstruction,
 }
 /// Canonical Parliament certificate authorization for one enacted validation-fee proposal.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeParliamentAuthorizationV1")]
 pub struct ValidationFeeParliamentAuthorizationV1 {
@@ -490,7 +510,7 @@ pub struct ValidationFeeParliamentAuthorizationV1 {
     /// Complete private-ballot Parliament certificate retained for independent validation.
     pub governance_certificate: GovernanceCertificateV1,
     /// Height at which the certified proposal was appended to its governed registry.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
+    #[norito(json = "crate::json_helpers::u64_string")]
     pub enacted_at_height: u64,
 }
 impl ValidationFeeParliamentAuthorizationV1 {
@@ -532,9 +552,18 @@ impl ValidationFeeParliamentAuthorizationV1 {
 ///
 /// First-release registries retain this reference append-only. There is no
 /// physical lifecycle-retirement state or caller-supplied reference count.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePayoutLifecycleReferenceV1")]
 pub struct ValidationFeePayoutLifecycleReferenceV1 {
     /// Non-zero lifecycle seal bound into the proposal fingerprint.
@@ -558,9 +587,18 @@ impl ValidationFeePayoutLifecycleReferenceV1 {
     }
 }
 /// One entry in the registered validation-fee policy hash chain.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyRegistryEntryV1")]
 pub struct ValidationFeePolicyRegistryEntryV1 {
     /// Complete governed policy, retained so scheduled policies do not hide
@@ -595,9 +633,18 @@ impl ValidationFeePolicyRegistryEntryV1 {
 }
 /// On-ledger validation-fee policy registry used to reject rollback and
 /// skipped-version policy changes while retaining scheduled policy history.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1")]
 pub struct ValidationFeePolicyRegistryV1 {
     /// Registered policy chain in ascending, contiguous version order.
@@ -772,8 +819,18 @@ impl ValidationFeePolicyRegistryV1 {
     }
 }
 /// Valid registry facts bound into each block's synthetic witness write.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotAvailableV1")]
@@ -789,17 +846,13 @@ pub struct ValidationFeePolicySnapshotAvailableV1 {
 }
 /// Registry availability committed by a validation-fee synthetic witness.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    norito(
-        tag = "status",
-        content = "value",
-        rename_all = "SCREAMING_SNAKE_CASE",
-        deny_unknown_fields
-    ),
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[norito(
+    tag = "status",
+    content = "value",
+    rename_all = "SCREAMING_SNAKE_CASE",
+    deny_unknown_fields
 )]
-#[derive(norito::NoritoSchema)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotStatusV1")]
 pub enum ValidationFeePolicySnapshotStatusV1 {
     /// Parliament has not enacted the first policy.
@@ -810,8 +863,18 @@ pub enum ValidationFeePolicySnapshotStatusV1 {
     Available(ValidationFeePolicySnapshotAvailableV1),
 }
 /// Canonical validation-fee registry commitment written into every block witness.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1")]
@@ -889,8 +952,17 @@ impl ValidationFeePolicySnapshotCommitmentV1 {
     }
 }
 /// Sparse-SMT proof that the validation-fee snapshot is an ordinary write.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyWitnessProofV1")]
@@ -1094,8 +1166,18 @@ fn validate_registry_entry_authorization(
     Ok(())
 }
 /// One exact recipient and share in the atomic treasury-payout effect plan.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutRecipientV1")]
@@ -1110,9 +1192,19 @@ pub struct ValidationFeeTreasuryPayoutRecipientV1 {
 /// The binding names one immutable contract image and entrypoint plus the complete
 /// six-transfer effect plan. It is part of policy hashing, authorization, registry
 /// validation, and Norito/JSON serialization.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1")]
 pub struct ValidationFeeTreasuryPayoutBindingV1 {
@@ -1216,9 +1308,19 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
     }
 }
 /// Exact-network validation-fee policy.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::validation_fee::ValidationFeePolicyV1")]
 pub struct ValidationFeePolicyV1 {
@@ -1227,7 +1329,7 @@ pub struct ValidationFeePolicyV1 {
     /// Exact genesis-derived network identity bound into the policy.
     pub network_id: NetworkId,
     /// Monotonic policy version.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
+    #[norito(json = "crate::json_helpers::u64_string")]
     pub policy_version: u64,
     /// Previous policy hash for policy-chain validation.
     #[norito(required)]
@@ -1243,13 +1345,10 @@ pub struct ValidationFeePolicyV1 {
     /// Charging mode.
     pub charging_mode: ValidationFeeChargingMode,
     /// First height at which the policy is active.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::u64_string"))]
+    #[norito(json = "crate::json_helpers::u64_string")]
     pub effective_from_height: u64,
     /// Optional last active height.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::u64_string::option")
-    )]
+    #[norito(json = "crate::json_helpers::u64_string::option")]
     #[norito(required)]
     pub expires_after_height: Option<u64>,
     /// Explicit exemption classes recognized by this policy.

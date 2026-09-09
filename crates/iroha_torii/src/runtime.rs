@@ -1221,7 +1221,7 @@ fn current_unix_seconds() -> u64 {
         .unwrap_or(0)
 }
 fn signed_transaction_schema_hash_hex() -> String {
-    hex::encode(<SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
+    hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
 }
 fn summarize_curve_capabilities(
     crypto: &iroha_config::parameters::actual::Crypto,

@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  ledger::role::delete(Json::parse("{}"));
+  ledger::role::delete(role: Json::parse("{}"));
 }
 
 }

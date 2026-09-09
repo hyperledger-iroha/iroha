@@ -280,9 +280,7 @@ impl ProviderIngestCompletedMusubiSignedCaptureLedgerV1 for CaptureCoordinatorPr
     }
 }
 fn capture_coordinator_test_handle(root: &std::path::Path) -> NodeHandle {
-    let root = root
-        .canonicalize()
-        .expect("canonical coordinator test root");
+    let root = root.canonicalize().expect("canonical coordinator test root");
     NodeHandle::try_new(
         StorageConfig::builder()
             .enabled(true)

@@ -25,8 +25,10 @@ fn minimal_contract_artifact() -> Vec<u8> {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -35,7 +37,7 @@ fn minimal_contract_artifact() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let mut bytes = meta.encode();
@@ -64,8 +66,10 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -74,7 +78,7 @@ fn minimal_contract_artifact_with_debug() -> Vec<u8> {
             triggers: Vec::new(),
             entry_pc: 0,
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
         states: Vec::new(),
     };
     let debug = ivm::EmbeddedContractDebugInfoV1 {

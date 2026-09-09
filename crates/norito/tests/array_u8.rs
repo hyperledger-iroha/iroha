@@ -1,7 +1,16 @@
 #![allow(clippy::manual_div_ceil)]
 //! Ensure [u8; N] fields in packed-structs roundtrip and avoid per-element overhead.
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, decode_from_reader, to_bytes};
-#[derive(Debug, Clone, PartialEq, iroha_schema::IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    iroha_schema::IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.array_u8.BlobPair")]
 struct BlobPair {
     left: [u8; 8],
     right: [u8; 16],

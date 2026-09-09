@@ -102,18 +102,14 @@ async fn submit_all_with_context(
 }
 async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
     let peer_count = network.peers().len();
-    let (status, sumeragi) = spawn_blocking({
+    let status = probe.client().status().get().await.ok();
+    let sumeragi = spawn_blocking({
         let client = probe.clone();
-        move || {
-            (
-                client.client().get_status(),
-                client.client().get_sumeragi_status(),
-            )
-        }
+        move || client.client().get_sumeragi_status()
     })
     .await
-    .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
-    .unwrap_or((None, None));
+    .ok()
+    .and_then(Result::ok);
     let leader_index = sumeragi
         .as_ref()
         .map(|status| status.leader)

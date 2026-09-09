@@ -12,7 +12,7 @@
 //! and query every masked witness column, bind composition quotients to those same openings, and
 //! perform the complete FRI terminal-degree check.
 use super::super::poseidon2::hash_bytes_384_v1;
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 use super::super::poseidon2::{
     LastFieldStream as GoldilocksDigest384LastFieldStreamV1,
     StreamError as GoldilocksDigest384LastFieldStreamErrorV1,
@@ -481,19 +481,6 @@ pub(crate) fn random_goldilocks_fp4_v1<R: TryRngCore>(
     ])
     .ok_or(TransparentStarkErrorV1::NonCanonicalField)
 }
-/// Draw one uniform nonzero quartic-extension element.
-#[cfg(test)]
-pub(crate) fn random_nonzero_goldilocks_fp4_v1<R: TryRngCore>(
-    rng: &mut R,
-) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
-    for _ in 0..MAX_FIELD_REJECTION_ATTEMPTS_V1 {
-        let value = random_goldilocks_fp4_v1(rng)?;
-        if value != GoldilocksFp4V1::ZERO {
-            return Ok(value);
-        }
-    }
-    Err(TransparentStarkErrorV1::RandomnessUnavailable)
-}
 /// Interpolate one native trace column and apply an exact replayable mask.
 ///
 /// For a native domain of size `n`, the returned polynomial is `T(X) + r(X) * (X^n - 1)`. Its
@@ -651,23 +638,6 @@ pub(crate) fn sample_trace_mask_v1<R: TryRngCore>(
     }
     Ok(ReplayableTraceMaskV1 { coefficients: mask })
 }
-/// Interpolate, sample a fresh mask, and evaluate one trace column's LDE.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
-pub(crate) fn masked_trace_lde_column_v1<R: TryRngCore>(
-    base_column: &[GoldilocksFieldV1],
-    base_log_size: u8,
-    lde_log_size: u8,
-    mask_degree: usize,
-    rng: &mut R,
-) -> Result<Vec<GoldilocksFieldV1>, TransparentStarkErrorV1> {
-    let mask = sample_trace_mask_v1(mask_degree, rng)?;
-    masked_trace_lde_column_with_mask_v1(
-        base_column,
-        base_log_size,
-        lde_log_size,
-        mask.coefficients(),
-    )
-}
 fn exact12_catalog_commitment_bytes_v1() -> [u8; 48] {
     GoldilocksDigest384V1::new(PRIVACY_EXACT12_CATALOG_COMMITMENT_WORDS_V1)
         .expect("the pinned Exact12 catalog commitment is canonical")
@@ -710,7 +680,7 @@ pub(crate) fn goldilocks_digest384_frame_v1(
 }
 
 /// Start a bounded digest stream whose final framed field is supplied incrementally.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) fn goldilocks_digest384_last_field_stream_v1(
     context: TransparentStarkDigestContextV1,
     role: &[u8],
@@ -748,7 +718,7 @@ pub(crate) fn goldilocks_digest384_last_field_stream_v1(
 }
 
 /// Map a canonical digest-stream failure without exposing an alternate hash path.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) const fn map_digest_stream_error_v1(
     error: GoldilocksDigest384LastFieldStreamErrorV1,
 ) -> TransparentStarkErrorV1 {
@@ -876,56 +846,6 @@ pub(crate) fn goldilocks_merkle_node_v1(
         0,
         &[&left.to_le_bytes(), &right.to_le_bytes()],
     )
-}
-/// Verify one exact binary Merkle path.
-#[cfg(test)]
-pub(crate) fn verify_goldilocks_merkle_path_v1(
-    context: TransparentStarkDigestContextV1,
-    node_role: &[u8],
-    root: GoldilocksDigest384V1,
-    mut leaf: GoldilocksDigest384V1,
-    mut index: usize,
-    path: &[GoldilocksDigest384V1],
-    expected_depth: usize,
-) -> Result<(), TransparentStarkErrorV1> {
-    context.validate()?;
-    if node_role.is_empty()
-        || u16::try_from(node_role.len()).is_err()
-        || path.len() != expected_depth
-    {
-        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
-    }
-    for (path_level, sibling) in path.iter().copied().enumerate() {
-        let parent_index = index >> 1;
-        leaf = if index & 1 == 0 {
-            goldilocks_merkle_node_v1(
-                context,
-                node_role,
-                u64::try_from(path_level + 1)
-                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
-                u64::try_from(parent_index)
-                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
-                leaf,
-                sibling,
-            )?
-        } else {
-            goldilocks_merkle_node_v1(
-                context,
-                node_role,
-                u64::try_from(path_level + 1)
-                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
-                u64::try_from(parent_index)
-                    .map_err(|_| TransparentStarkErrorV1::InvalidMerkleShape)?,
-                sibling,
-                leaf,
-            )?
-        };
-        index = parent_index;
-    }
-    if index != 0 || leaf != root {
-        return Err(TransparentStarkErrorV1::InvalidMerkleShape);
-    }
-    Ok(())
 }
 /// Stateful framed Fiat–Shamir transcript.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1075,19 +995,6 @@ impl TransparentTranscriptV1 {
             predicate,
         )
     }
-    #[cfg(test)]
-    fn challenge_fp4_with_oracle(
-        &mut self,
-        label: &[u8],
-        mut oracle: impl FnMut(
-            GoldilocksDigest384V1,
-            &[u8],
-            u64,
-            u64,
-        ) -> Result<GoldilocksDigest384V1, TransparentStarkErrorV1>,
-    ) -> Result<GoldilocksFp4V1, TransparentStarkErrorV1> {
-        self.challenge_fp4_with_oracle_and_predicate(label, &mut oracle, |_| true)
-    }
     fn challenge_fp4_with_oracle_and_predicate(
         &mut self,
         label: &[u8],
@@ -1204,36 +1111,6 @@ fn derive_bounded_query_offset_v1(
     }
     Err(TransparentStarkErrorV1::QuerySamplingExhausted)
 }
-/// Compute one binary FRI fold.
-#[cfg(test)]
-pub(crate) fn fri_fold_pair_v1(
-    low: GoldilocksFieldV1,
-    high: GoldilocksFieldV1,
-    beta: GoldilocksFieldV1,
-    x: GoldilocksFieldV1,
-) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
-    let inverse_x = x.inv().ok_or(TransparentStarkErrorV1::DivisionByZero)?;
-    fri_fold_pair_with_inverse_x_v1(low, high, beta, inverse_x)
-}
-/// Compute one binary FRI fold when the caller already tracks `x^-1`.
-///
-/// Provers fold an entire multiplicative coset in order and can update the inverse point with one
-/// multiplication per entry. Keeping that optimization here avoids duplicating the
-/// consensus-critical fold equation in each relation-specific engine.
-#[cfg(test)]
-pub(crate) fn fri_fold_pair_with_inverse_x_v1(
-    low: GoldilocksFieldV1,
-    high: GoldilocksFieldV1,
-    beta: GoldilocksFieldV1,
-    inverse_x: GoldilocksFieldV1,
-) -> Result<GoldilocksFieldV1, TransparentStarkErrorV1> {
-    let inverse_two = GoldilocksFieldV1(2)
-        .inv()
-        .ok_or(TransparentStarkErrorV1::DivisionByZero)?;
-    let even = low.add(high).mul(inverse_two);
-    let odd = low.sub(high).mul(inverse_two).mul(inverse_x);
-    Ok(even.add(beta.mul(odd)))
-}
 /// Compute one binary FRI fold over the quartic Goldilocks extension.
 pub(crate) fn fri_fold_pair_fp4_v1(
     low: GoldilocksFp4V1,
@@ -1270,30 +1147,6 @@ pub(crate) fn fri_fold_pair_with_inverse_x_fp4_v1(
     let even = low.add(high).mul_base(inverse_two);
     let odd = low.sub(high).mul_base(inverse_two).mul_base(inverse_x);
     Ok(even.add(beta.mul(odd)))
-}
-/// Check the entire terminal FRI polynomial against an exact degree bound.
-#[cfg(test)]
-pub(crate) fn ensure_fri_terminal_degree_v1(
-    values: &[GoldilocksFieldV1],
-    log_size: u8,
-    degree_bound: usize,
-) -> Result<(), TransparentStarkErrorV1> {
-    let expected = 1_usize
-        .checked_shl(u32::from(log_size))
-        .ok_or(TransparentStarkErrorV1::InvalidDomain)?;
-    if values.len() != expected || degree_bound >= expected {
-        return Err(TransparentStarkErrorV1::InvalidDomain);
-    }
-    let root = goldilocks_primitive_root_v1(log_size)?;
-    let mut coefficients = values.to_vec();
-    goldilocks_ifft_v1(&mut coefficients, root)?;
-    if coefficients[degree_bound + 1..]
-        .iter()
-        .any(|coefficient| *coefficient != GoldilocksFieldV1::ZERO)
-    {
-        return Err(TransparentStarkErrorV1::FriDegree);
-    }
-    Ok(())
 }
 /// Check an entire quartic-extension FRI terminal against an exact degree.
 pub(crate) fn ensure_fri_terminal_degree_fp4_v1(

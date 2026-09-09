@@ -1,9 +1,15 @@
 # FASTPQ production readiness
 
-Updated: 2026-09-08. **Production qualification is unavailable.** The selected
+Updated: 2026-09-09. **Production qualification is unavailable.** The selected
 completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
+
+The replay resource defaults use one opening-shape derivation for the
+256-transition, 512-column admission profile: 2,163,774 bytes of approximate
+payload and 2,372,085 bytes for the complete canonical Norito frame. The verifier
+uses the payload bound; Core encoding and the sidecar default use the frame
+bound. These replay limits do not qualify or admit compact proofs.
 
 ## Current offline implementation
 
@@ -20,8 +26,21 @@ canonical statement digest; AXT also requires its binding, metadata, mirrors and
 remote-spend expectations. Limits cover transport, public preparation, every
 segment, cumulative queries and cumulative Norito decode charges. The opaque
 success result retains every ordered child's complete six-word row commitment.
-It grants no source finality or admission authority. Proving is test-only; the
-fixed-column synthetic AIR exercises framing and openings, not release semantics.
+It grants no source finality or admission authority.
+
+The same facade exposes ordinary and AXT quantity producers under this one
+six-lane profile. They check independent expectations and explicit byte,
+trace-cell, decode and private-tree budgets before expanding a physical trace.
+Supplied touched-tree roots must match the derived private witnesses. Every
+segment is preflighted, segments are proved sequentially, and a process-local
+admission guard bounds concurrent producer requests. At most 32 indexed jobs
+own row/evaluator workspaces in one phase. The public verifier checks the
+complete artifact before it is returned. Per-segment structural allocation
+charges are local policy, not an RSS reservation or a consensus parameter;
+actual and inherited decoder budgets remain authoritative at final verification.
+Merged-source complete producer execution and resource qualification remain
+required. The fixed-column synthetic AIR exercises framing and openings, not
+release semantics.
 
 The fixed geometry has 65,536 rows, 342 columns, 923 slots, 375 unique queries,
 17 binary folds and four terminal values. The 22-message transcript expands 931
@@ -32,11 +51,14 @@ are explicitly prior-snapshot diagnostics and cannot qualify this implementation
 Compilation is also distinct from complete proof execution and external review.
 
 The current DTO requires at least 1,050,000 raw bytes for its 375 complete rows
-and mixed/quotient pairs, before any framing, indices, roots or FRI openings. It
-therefore exceeds the unchanged 512 KiB proof ceiling and 1 MiB AXT ceiling.
-Larger explicit test budgets provide diagnostics only. The internally reviewed
-conditional ideal-field block/tuple reduction still requires the actual framing
-and AIR mapping and does not qualify the concrete six-lane construction.
+and mixed/quotient pairs, before any framing, indices, roots or FRI openings.
+This exceeds the 512 KiB compact proof target and 1 MiB AXT ceiling. The producer
+requires its fixed valid-shape upper bound of 4,279,877 framed bytes per segment,
+with a separate 7,791,716-byte internal repeated-opening bound. The replay
+defaults are a different resource policy and cannot admit this offline profile.
+Explicit offline budgets provide no production qualification. The internally
+reviewed conditional ideal-field block/tuple reduction still requires the actual
+framing and AIR mapping and does not qualify the concrete six-lane construction.
 
 Production node verification still replays the complete witness; Core has no
 consumer of this offline facade. Execution-owned source quotas and atomic D7
@@ -230,17 +252,15 @@ qualification remain open.
    Existing proofs/witnesses that bind a nonempty permission table must be
    regenerated. This remains contextual input, not an AIR permission proof, and
    its 32-byte width does not establish aggregate 128-bit post-quantum security.
-6. **Mismatched default prover/verifier capacity:** the 256-transition ceiling
-   and 512 KiB approximate proof ceiling are independent. Even a minimally wide
-   16-row transfer proof exceeds the byte ceiling under the current opening
-   layout. Public proving now enforces the same default envelope as public
-   verification, while raw development diagnostics can use explicit larger
-   limits. Raising query counts without redesigning proof size and measured
-   resource budgets would aggravate this mismatch. The 20,000-row accelerator
-   microbenchmark is not evidence of admitted end-to-end proof capacity.
-   The final public-API diagnostic's 360-column fixtures accepted two and four
-   transition rows (147,685 and 321,406 actual Norito wire bytes), but rejected
-   eight and sixteen at approximate payload sizes 652,958 and 1,366,766 bytes.
+6. **Mismatched default prover/verifier capacity:** the previous independent
+   512 KiB payload ceiling rejected valid eight-row genesis batches, and Core
+   also reused that approximate charge as an encoded-frame ceiling. Resource
+   defaults now derive both charges from the same supported opening geometry;
+   neither proof identity nor cryptographic geometry changes. A maximum-shape
+   test compares the derived limits with the real serializer, while eight- and
+   sixteen-row fully witnessed transfer regressions exercise the public prover,
+   default verifier and bounded sidecar encoding. Larger explicit diagnostic
+   limits still grant no state-transition or production admission authority.
 7. **Rollout evidence:** validation must inspect captured workload shape, actual
    CPU/GPU timings, backend availability, both captured-file hashes, numeric
    finiteness, telemetry and externally trusted manifest signatures. Hardware CI

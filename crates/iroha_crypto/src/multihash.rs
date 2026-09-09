@@ -133,7 +133,7 @@ pub fn decode_public_key_str_borrowed(encoded: &str) -> Option<BorrowedPublicKey
     if encoded.len() > MAX_PUBLIC_KEY_LITERAL_BYTES {
         return None;
     }
-    if encoded.len() < 4 || encoded.len() % 2 != 0 {
+    if encoded.len() < 4 || !encoded.len().is_multiple_of(2) {
         return None;
     }
     let mut cursor = 0;
@@ -511,6 +511,22 @@ mod tests {
         assert!(decode_public_key_str(&upper).is_err());
         let prefixed = format!("0x{canonical}");
         assert!(decode_public_key_str(&prefixed).is_err());
+    }
+    #[test]
+    fn borrowed_public_key_hex_rejects_truncated_or_extended_literals() {
+        let canonical = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4";
+        let decoded = decode_public_key_str_borrowed(canonical).expect("canonical public key");
+        assert_eq!(decoded.algorithm, Algorithm::Ed25519);
+        assert_eq!(decoded.payload_hex, &canonical[6..]);
+        for length in 0..canonical.len() {
+            assert!(
+                decode_public_key_str_borrowed(&canonical[..length]).is_none(),
+                "truncated literal of {length} bytes"
+            );
+        }
+        for suffix in ["0", "00"] {
+            assert!(decode_public_key_str_borrowed(&format!("{canonical}{suffix}")).is_none());
+        }
     }
     #[test]
     fn decode_private_key_str_rejects_non_canonical_hex() {

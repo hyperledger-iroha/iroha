@@ -11,6 +11,8 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[getset(get = "pub")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::execute_trigger::model::ExecuteTriggerEvent")]
     pub struct ExecuteTriggerEvent {
         /// Id of trigger to be executed
         pub trigger_id: TriggerId,
@@ -25,6 +27,10 @@ mod model {
         Debug, Clone, PartialOrd, Ord, PartialEq, Eq, Default, Getters, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::execute_trigger::model::ExecuteTriggerEventFilter"
+    )]
     pub struct ExecuteTriggerEventFilter {
         /// Id of trigger catch executions of
         pub(super) trigger_id: Option<TriggerId>,
@@ -32,7 +38,7 @@ mod model {
         pub(super) authority: Option<AccountId>,
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(ExecuteTriggerEvent, ExecuteTriggerEventFilter);
 impl ExecuteTriggerEvent {
     /// Args to pass for trigger execution
@@ -121,3 +127,6 @@ impl EventFilter for ExecuteTriggerEventFilter {
 pub mod prelude {
     pub use super::{ExecuteTriggerEvent, ExecuteTriggerEventFilter};
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

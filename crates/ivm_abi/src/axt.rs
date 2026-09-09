@@ -352,8 +352,17 @@ pub fn resolve_handle_amount_components_from_proof_facts(
 }
 /// Canonical descriptor for an AXT envelope.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Encode, Decode, norito::json::Serialize, norito::json::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    norito::json::Serialize,
+    norito::json::Deserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "ivm_abi::axt::AxtDescriptor")]
 pub struct AxtDescriptor {
     /// List of dataspace identifiers touched by the transaction.
     pub dsids: Vec<DataSpaceId>,
@@ -604,8 +613,17 @@ impl AxtPolicy for SnapshotAxtPolicy {
 }
 /// Declared access set for a dataspace touched by an AXT envelope.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Encode, Decode, norito::json::Serialize, norito::json::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    norito::json::Serialize,
+    norito::json::Deserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "ivm_abi::axt::AxtTouchSpec")]
 pub struct AxtTouchSpec {
     /// Dataspace identifier.
     pub dsid: DataSpaceId,
@@ -616,8 +634,17 @@ pub struct AxtTouchSpec {
 }
 /// Runtime manifest supplied via `AXT_TOUCH`.
 #[derive(
-    Debug, Clone, PartialEq, Eq, Encode, Decode, norito::json::Serialize, norito::json::Deserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    norito::json::Serialize,
+    norito::json::Deserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "ivm_abi::axt::TouchManifest")]
 pub struct TouchManifest {
     /// Keys read within the dataspace during execution.
     pub read: Vec<String>,
@@ -657,7 +684,8 @@ fn canonical_nonempty_strings(values: &[String]) -> bool {
         && values.windows(2).all(|pair| pair[0] < pair[1])
 }
 /// Subset of the AssetHandle ticket encoded by asset dataspace capability issuers.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::axt::AssetHandle")]
 pub struct AssetHandle {
     /// Exact asset definition authorized by the issuer signature.
     pub asset_definition_id: AssetDefinitionId,
@@ -813,7 +841,8 @@ impl TryFrom<&AssetHandle> for ModelAssetHandle {
     }
 }
 /// Capability subject metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::axt::HandleSubject")]
 pub struct HandleSubject {
     /// Canonical I105 account identifier of the spender.
     pub account: String,
@@ -821,7 +850,8 @@ pub struct HandleSubject {
     pub origin_dsid: Option<DataSpaceId>,
 }
 /// Handle budget parameters.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::axt::HandleBudget")]
 pub struct HandleBudget {
     /// Remaining allowance for the capability.
     pub remaining: Quantity,
@@ -829,7 +859,8 @@ pub struct HandleBudget {
     pub per_use: Option<Quantity>,
 }
 /// Dataspace composability group binding advertised by the capability.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::axt::GroupBinding")]
 pub struct GroupBinding {
     /// Domain or composability group identifier.
     pub composability_group_id: Vec<u8>,
@@ -849,7 +880,8 @@ impl Ord for GroupBinding {
     }
 }
 /// Intent forwarded to an asset dataspace via `USE_ASSET_HANDLE`.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::axt::RemoteSpendIntent")]
 pub struct RemoteSpendIntent {
     /// Target asset dataspace identifier.
     pub asset_dsid: DataSpaceId,
@@ -857,7 +889,8 @@ pub struct RemoteSpendIntent {
     pub op: SpendOp,
 }
 /// Simplified representation of spend operations.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::axt::SpendOp")]
 pub struct SpendOp {
     /// Exact asset definition authorized by the handle and proof statement.
     pub asset_definition_id: AssetDefinitionId,
@@ -1088,7 +1121,8 @@ fn validate_remote_spend_intent_commitment_components_from_commitments(
         .map_err(|_| VMError::PermissionDenied)
 }
 /// Wrapper around proof artifacts provided by dataspace verifiers.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::axt::ProofBlob")]
 pub struct ProofBlob {
     /// Raw proof bytes, bounded by the shared AXT proof-envelope payload limit.
     pub payload: Vec<u8>,
@@ -1830,10 +1864,16 @@ mod tests {
     }
     #[test]
     fn proof_blob_requires_explicit_nullable_expiry_slot() {
-        #[derive(Encode)]
+        #[derive(Encode, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "ivm_abi::axt::tests::proof_blob_requires_explicit_nullable_expiry_slot::ProofBlobWithoutExpiry"
+        )]
         struct ProofBlobWithoutExpiry {
             payload: Vec<u8>,
         }
+        crate::captured_identity_tests::assert_serialize::<ProofBlobWithoutExpiry>(
+            "ivm_abi::axt::tests::proof_blob_requires_explicit_nullable_expiry_slot::ProofBlobWithoutExpiry",
+        );
 
         let omitted = encode_canonical_norito(&ProofBlobWithoutExpiry { payload: vec![1] })
             .expect("encode pre-release proof blob without expiry slot");
@@ -3480,5 +3520,42 @@ mod tests {
             state.validate_commit(),
             Err(VMError::PermissionDenied)
         ));
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::AxtDescriptor>(
+            "ivm_abi::axt::AxtDescriptor",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::AxtTouchSpec>(
+            "ivm_abi::axt::AxtTouchSpec",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::TouchManifest>(
+            "ivm_abi::axt::TouchManifest",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::AssetHandle>(
+            "ivm_abi::axt::AssetHandle",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::HandleSubject>(
+            "ivm_abi::axt::HandleSubject",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::HandleBudget>(
+            "ivm_abi::axt::HandleBudget",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::GroupBinding>(
+            "ivm_abi::axt::GroupBinding",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::RemoteSpendIntent>(
+            "ivm_abi::axt::RemoteSpendIntent",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::SpendOp>(
+            "ivm_abi::axt::SpendOp",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::ProofBlob>(
+            "ivm_abi::axt::ProofBlob",
+        );
     }
 }

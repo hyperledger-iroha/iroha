@@ -93,6 +93,7 @@ use iroha_core::{
             encode_atomic_private_settlement_wallet_bundle_v1,
             finalize_atomic_private_settlement_provisional_bundle_v1,
             plan_atomic_private_settlement_bootstrap_v1,
+            prepare_atomic_private_settlement_funding_note_v1,
             prepare_atomic_private_settlement_input_openings_v1,
             prepare_atomic_private_settlement_outputs_v1,
         },
@@ -290,6 +291,11 @@ struct GovernedLeg {
 struct PreparedLeg {
     governed: GovernedLeg,
     prepared: AtomicPrivateSettlementPreparedLegV1,
+}
+
+struct PrivateSettlementFunding {
+    opening: PrivateSettlementAuditNoteOpeningV1,
+    spending_secret: [u8; 32],
     initial_commitments: [PrivacyCommitmentV1; 2],
 }
 
@@ -1307,6 +1313,139 @@ fn private_settlement_leg_private_material(
     digest.finalize().into()
 }
 
+fn private_settlement_funding_material(
+    network_id: iroha::data_model::NetworkId,
+    governed: &GovernedLeg,
+    leg_ordinal: usize,
+    note_ordinal: u8,
+    field: u8,
+) -> [u8; 32] {
+    use sha2::Digest as _;
+
+    // Deterministic release-fixture material is bound to the funded pool,
+    // independently of the later settlement's bundle and authority height.
+    let mut digest = sha2::Sha256::new();
+    digest.update(b"iroha:atomic-private-settlement:release-funding:v1\0");
+    digest.update(network_id.as_bytes());
+    digest.update(governed.governance.governance_digest.as_ref());
+    digest.update(
+        u64::try_from(leg_ordinal)
+            .expect("leg ordinal fits u64")
+            .to_le_bytes(),
+    );
+    digest.update([note_ordinal, field]);
+    digest.finalize().into()
+}
+
+fn private_settlement_funding(
+    network_id: iroha::data_model::NetworkId,
+    governed: &GovernedLeg,
+    ordinal: usize,
+    private_data: &PrivateSettlementLegPrivateData,
+) -> Result<PrivateSettlementFunding> {
+    let reimbursement = if ordinal == 0 { 5 } else { 0 };
+    let input_amount = private_data
+        .amount
+        .checked_add(7)
+        .and_then(|value| value.checked_add(reimbursement))
+        .ok_or_else(|| eyre!("private settlement input amount overflow"))?;
+    let material = |note, field| {
+        private_settlement_funding_material(network_id, governed, ordinal, note, field)
+    };
+    let mut notes = Vec::with_capacity(2);
+    for (note, value) in [(0_u8, input_amount), (1_u8, 1_u128)] {
+        let mut opening = PrivateSettlementAuditNoteOpeningV1 {
+            active: true,
+            commitment: PrivacyCommitmentV1::new([0; 32]),
+            value,
+            spending_authority: derive_note_authority_v1(&material(note, 0))?,
+            rho: material(note, 1),
+            blinding: material(note, 2),
+            memo_digest: material(note, 3),
+            dummy_domain: None,
+        };
+        prepare_atomic_private_settlement_funding_note_v1(&mut opening)?;
+        notes.push(opening);
+    }
+    // The second funded note stays unspent. The spend's zero-value slot is a
+    // fresh bundle-bound virtual dummy, not this reserve note.
+    let initial_commitments = [notes[0].commitment, notes[1].commitment];
+    ensure!(
+        initial_commitments[0] != initial_commitments[1],
+        "funding note collision"
+    );
+    Ok(PrivateSettlementFunding {
+        opening: notes.remove(0),
+        spending_secret: material(0, 0),
+        initial_commitments,
+    })
+}
+
+fn validate_pool_activation_context(
+    governed: &[GovernedLeg],
+    committed_height: u64,
+    expiry_height: u64,
+) -> Result<u64> {
+    ensure!(!governed.is_empty(), "pool activation omitted every leg");
+    ensure!(
+        committed_height < expiry_height,
+        "pools became active after bundle expiry"
+    );
+    for leg in governed {
+        ensure!(
+            leg.policy.is_active_at(committed_height)
+                && leg.governance.body.lifecycle.is_active_at(committed_height),
+            "pool governance is unavailable at the observed authority context"
+        );
+    }
+    Ok(committed_height)
+}
+
+fn activate_governed_private_pools(
+    sponsor: &Client,
+    network_id: iroha::data_model::NetworkId,
+    governed: &[GovernedLeg],
+    private_data: &[PrivateSettlementLegPrivateData],
+    expiry_height: u64,
+) -> Result<u64> {
+    ensure!(
+        governed.len() == private_data.len(),
+        "pool funding omitted a leg"
+    );
+    let activations = governed
+        .iter()
+        .zip(private_data)
+        .enumerate()
+        .map(|(ordinal, (leg, private_data))| {
+            let funding = private_settlement_funding(network_id, leg, ordinal, private_data)?;
+            Ok(ActivatePrivateSettlementPoolV1::from_restricted(
+                &leg.governance,
+                funding.initial_commitments.to_vec(),
+            )?)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let account = sponsor.account_client();
+    let activation = account
+        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            activations,
+            bounded_nexus_fee(),
+            Metadata::default(),
+        ))
+        .and_then(|payload| account.sign_transaction(payload))
+        .wrap_err("build governed pool activation transaction")?;
+    sponsor
+        .submit_transaction_and_wait(&activation)
+        .wrap_err("activate governed pools before proof generation")?;
+    // Applied finality establishes the pools before this context is selected.
+    // Extra admission blocks and a later capability response are both valid;
+    // uploads still enforce the exact historical committee at this height.
+    let committed_height = sponsor
+        .client()
+        .get_privacy_capabilities()?
+        .committed_height;
+    validate_pool_activation_context(governed, committed_height, expiry_height)
+}
+
 fn private_settlement_reimbursement_terms_salt(
     manifest: &AtomicPrivateSettlementV1,
     governed: &GovernedLeg,
@@ -1541,14 +1680,10 @@ fn prepare_leg_with_private_data_and_rngs(
 
     let payer = &private_data.payer;
     let recipient = &private_data.recipient;
+    let funding =
+        private_settlement_funding(manifest.network_id, &governed, ordinal, private_data)?;
     let input_secrets = [
-        private_settlement_leg_private_material(
-            manifest,
-            &governed,
-            ordinal,
-            0,
-            b"input-spending-secret",
-        ),
+        funding.spending_secret,
         private_settlement_leg_private_material(
             manifest,
             &governed,
@@ -1629,10 +1764,6 @@ fn prepare_leg_with_private_data_and_rngs(
     let reimbursement = if ordinal == 0 { 5 } else { 0 };
     let change = 7;
     let amount = private_data.amount;
-    let input_amount = amount
-        .checked_add(change)
-        .and_then(|value| value.checked_add(reimbursement))
-        .ok_or_else(|| eyre!("private settlement input amount overflow"))?;
     let mut plaintext = PrivateSettlementAuditPlaintextV1 {
         version: ATOMIC_PRIVATE_SETTLEMENT_VERSION_V1,
         network_id: manifest.network_id,
@@ -1659,15 +1790,7 @@ fn prepare_leg_with_private_data_and_rngs(
         memo: private_data.memo.clone(),
         policy_references: vec![governed.governance.governance_digest],
         inputs: vec![
-            note_opening(
-                manifest,
-                &governed,
-                ordinal,
-                b"input-note",
-                0,
-                true,
-                input_amount,
-            ),
+            funding.opening,
             note_opening(manifest, &governed, ordinal, b"input-note", 1, false, 0),
         ],
         outputs: vec![
@@ -1750,6 +1873,10 @@ fn prepare_leg_with_private_data_and_rngs(
         &statement,
         &mut plaintext.inputs,
     )?;
+    ensure!(
+        plaintext.inputs[0].commitment == funding.initial_commitments[0],
+        "settlement changed its already-funded positive input"
+    );
     statement.nullifiers = derive_atomic_private_settlement_input_nullifiers_v1(
         manifest,
         &statement,
@@ -1812,10 +1939,7 @@ fn prepare_leg_with_private_data_and_rngs(
     statement.audit_capsule_digest = capsule.digest()?;
     let bootstrap = plan_atomic_private_settlement_bootstrap_v1(
         statement.pool_id,
-        [
-            plaintext.inputs[0].commitment,
-            plaintext.inputs[1].commitment,
-        ],
+        funding.initial_commitments,
         statement
             .output_commitments
             .as_slice()
@@ -1827,7 +1951,6 @@ fn prepare_leg_with_private_data_and_rngs(
     statement.new_root = bootstrap.new_root;
     statement.old_epoch = bootstrap.old_epoch;
     statement.new_epoch = bootstrap.new_epoch;
-    let initial_commitments = bootstrap.initial_commitments;
     statement.validate()?;
     let wallet_id = format!("atomic-private-settlement-release-leg-{ordinal}");
     let owner_bundle = encode_atomic_private_settlement_wallet_bundle_v1(
@@ -1855,11 +1978,7 @@ fn prepare_leg_with_private_data_and_rngs(
         "owner bundle was not wiped"
     );
     let prepared = complete_atomic_private_settlement_prepared_leg_v1(prepared)?;
-    Ok(PreparedLeg {
-        governed,
-        prepared,
-        initial_commitments,
-    })
+    Ok(PreparedLeg { governed, prepared })
 }
 
 fn provisional_materials(
@@ -2003,15 +2122,24 @@ fn run_n3_real_process_smoke() -> Result<()> {
     )?);
     let sponsor = network.client();
     let activated_height = activate_ivm_private_note(&sponsor)?;
-    let authority_context_height = activated_height + 1;
-    let expiry_height = authority_context_height + 1_000;
+    let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(
         routes.len() == 3,
         "exactly three mixed-visibility participant dataspaces are required"
     );
     let committees = committees_from_network(&network, shape, &routes)?;
-    let governed = governed_legs(&routes, authority_context_height, expiry_height)?;
+    let governed = governed_legs(&routes, activated_height, expiry_height)?;
+    let private_data = (0..routes.len())
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    let authority_context_height = activate_governed_private_pools(
+        &sponsor,
+        network.network_id(),
+        &governed,
+        &private_data,
+        expiry_height,
+    )?;
     let manifest = proof_manifest(
         network.network_id(),
         authority_context_height,
@@ -2026,37 +2154,6 @@ fn run_n3_real_process_smoke() -> Result<()> {
             prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)
         })
         .collect::<Result<Vec<_>>>()?;
-    let activations = prepared
-        .iter()
-        .map(|leg| {
-            ActivatePrivateSettlementPoolV1::from_restricted(
-                &leg.governed.governance,
-                leg.initial_commitments.to_vec(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                activations,
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation_transaction)
-        .wrap_err("activate all three governed confidential pools at the bound context height")?;
-    ensure!(
-        sponsor
-            .client()
-            .get_privacy_capabilities()?
-            .committed_height
-            == authority_context_height,
-        "pool activation did not land at the manifest authority context"
-    );
     let before = wait_for_converged_fault_state_snapshot(&network, "smoke-before")?;
     ensure!(
         before.validators.len() == shape.process_count(),
@@ -2400,7 +2497,7 @@ fn run_n3_real_process_smoke() -> Result<()> {
             .block_on(peer.process_id())
             .ok_or_else(|| eyre!("smoke restart target #{peer_index} did not recover"))?;
         ensure!(
-            before_pid != after_pid && peer.client().client().get_status().is_ok(),
+            before_pid != after_pid && peer.client().status().get().is_ok(),
             "smoke restart target #{peer_index} lacks a healthy replacement process"
         );
         ensure!(
@@ -2677,6 +2774,80 @@ fn genesis_ivm_private_note_activation_is_exact() {
             activate_at_height: PRIVACY_PROFILE_ACTIVATION_HEIGHT,
         })
     );
+}
+
+#[test]
+fn pool_funding_is_reproducible_and_binds_network_governance_and_value() {
+    let route = PrivateSettlementRouteV1 {
+        dataspace_id: DataSpaceId::new(1),
+        lane_id: LaneId::new(1),
+        lane_incarnation: hash(0xE0),
+    };
+    let network_id = iroha::data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xF8)),
+    );
+    let other_network = iroha::data_model::NetworkId::from_genesis_hash(
+        HashOf::<BlockHeader>::from_untyped_unchecked(hash(0xF9)),
+    );
+    let governed = governed_legs(&[route], 301, 401).expect("governance");
+    let changed_governance = governed_legs(&[route], 302, 402).expect("other governance");
+    let data = default_private_settlement_leg_data(0);
+    let funding = private_settlement_funding(network_id, &governed[0], 0, &data).unwrap();
+    let repeated = private_settlement_funding(network_id, &governed[0], 0, &data).unwrap();
+    assert_eq!(funding.opening, repeated.opening);
+    assert_eq!(funding.spending_secret, repeated.spending_secret);
+    assert_eq!(funding.initial_commitments, repeated.initial_commitments);
+    assert_ne!(
+        funding.initial_commitments[0],
+        funding.initial_commitments[1]
+    );
+    assert_eq!(funding.opening.value, data.amount + 7 + 5);
+    assert_eq!(funding.opening.commitment, funding.initial_commitments[0]);
+    assert_eq!(
+        funding.opening.spending_authority,
+        derive_note_authority_v1(&funding.spending_secret).unwrap()
+    );
+    for changed in [
+        private_settlement_funding(other_network, &governed[0], 0, &data).unwrap(),
+        private_settlement_funding(network_id, &changed_governance[0], 0, &data).unwrap(),
+        private_settlement_funding(network_id, &governed[0], 1, &data).unwrap(),
+    ] {
+        assert_ne!(funding.initial_commitments, changed.initial_commitments);
+        assert_ne!(funding.spending_secret, changed.spending_secret);
+    }
+    let mut changed_value = data.clone();
+    changed_value.amount += 1;
+    let changed = private_settlement_funding(network_id, &governed[0], 0, &changed_value).unwrap();
+    assert_ne!(
+        funding.initial_commitments[0],
+        changed.initial_commitments[0]
+    );
+    assert_eq!(
+        funding.initial_commitments[1],
+        changed.initial_commitments[1]
+    );
+    changed_value.amount = u128::MAX;
+    assert!(private_settlement_funding(network_id, &governed[0], 0, &changed_value).is_err());
+}
+
+#[test]
+fn pool_activation_context_uses_observed_height_and_rejects_unavailable_governance() {
+    let route = PrivateSettlementRouteV1 {
+        dataspace_id: DataSpaceId::new(1),
+        lane_id: LaneId::new(1),
+        lane_incarnation: hash(0xE0),
+    };
+    let governed = governed_legs(&[route], 301, 401).expect("governance");
+    for observed in [301, 304, 310, 400] {
+        assert_eq!(
+            validate_pool_activation_context(&governed, observed, 401).unwrap(),
+            observed
+        );
+    }
+    for unavailable in [0, 300, 401, 402] {
+        assert!(validate_pool_activation_context(&governed, unavailable, 401).is_err());
+    }
+    assert!(validate_pool_activation_context(&[], 304, 401).is_err());
 }
 
 #[test]

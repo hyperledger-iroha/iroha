@@ -9,13 +9,20 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// Social incentive lifecycle events.
 #[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, derive_more::From,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    derive_more::From,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-#[cfg_attr(feature = "json", norito(tag = "event", content = "payload"))]
+#[norito(tag = "event", content = "payload")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::social::SocialEvent")]
 pub enum SocialEvent {
@@ -29,12 +36,20 @@ pub enum SocialEvent {
     EscrowCancelled(ViralEscrowCancelled),
 }
 /// Reward payment emitted when a binding claim succeeds.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::social::ViralRewardApplied")]
 pub struct ViralRewardApplied {
     /// UAID receiving the payout.
@@ -48,7 +63,7 @@ pub struct ViralRewardApplied {
     /// Budget snapshot after the payout.
     pub budget: ViralRewardBudget,
     /// Campaign-wide spend snapshot after the payout (tracked even when the cap is unlimited).
-    #[cfg_attr(feature = "json", norito(skip_serializing_if = "Option::is_none"))]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub campaign: Option<ViralCampaignBudget>,
     /// Campaign cap configured for the promo (0 = unlimited).
     pub campaign_cap: iroha_primitives::numeric::Quantity,
@@ -60,24 +75,40 @@ pub struct ViralRewardApplied {
     pub recorded_at_ms: u64,
 }
 /// Escrow creation event.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::social::ViralEscrowCreated")]
 pub struct ViralEscrowCreated {
     /// Escrow record captured at creation.
     pub escrow: ViralEscrowRecord,
 }
 /// Escrow delivery event.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::social::ViralEscrowReleased")]
 pub struct ViralEscrowReleased {
     /// Delivered escrow record.
@@ -92,12 +123,20 @@ pub struct ViralEscrowReleased {
     pub released_at_ms: u64,
 }
 /// Escrow cancellation/refund event.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::events::data::social::ViralEscrowCancelled")]
 pub struct ViralEscrowCancelled {
     /// Escrow record being refunded.

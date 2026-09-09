@@ -9,8 +9,8 @@ seiyaku ZkBridge {
         let label = br#"proof-bytes"#;
         let vk = b"vk-bytes";
         let flags = 17;
-        ledger::governance::verify_ballot(proof_env);
-        ledger::governance::submit_ballot(instruction);
+        ledger::governance::verify_ballot(request: proof_env);
+        ledger::governance::submit_ballot(value: instruction);
         require(flags > 0, VerificationError::InvalidFlags);
         debug::info("verified");
     }

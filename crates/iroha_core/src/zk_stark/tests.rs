@@ -535,6 +535,123 @@ fn generic_binding_verifying_key_rejects_domain_above_exact_root_cap() {
     );
 }
 #[test]
+fn ivm_binding_verifying_key_rejects_domain_above_exact_root_cap() {
+    let circuit_id = format!(
+        "{}:{}",
+        crate::zk::ZK_BACKEND_STARK_FRI_V1,
+        crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID
+    );
+    let mut payload = StarkFriVerifyingKeyV1 {
+        version: 1,
+        circuit_id: circuit_id.clone(),
+        n_log2: MAX_BINDING_AIR_DOMAIN_LOG2,
+        blowup_log2: STARK_FRI_CONSENSUS_MIN_BLOWUP_LOG2,
+        fold_arity: 2,
+        queries: STARK_FRI_CONSENSUS_MIN_QUERIES,
+        merkle_arity: 2,
+    };
+    validate_stark_fri_canonical_verifying_key_payload(&payload, &circuit_id, "test")
+        .expect("the exact IVM binding reconstruction bound is admissible");
+    payload.n_log2 += 1;
+    let error = validate_stark_fri_canonical_verifying_key_payload(&payload, &circuit_id, "test")
+        .expect_err("oversized IVM binding verifier key must fail admission");
+    assert!(error.contains("exact trace-root reconstruction limit"));
+}
+#[test]
+fn ivm_binding_air_verifier_pins_statement_and_rejects_tampering() {
+    let backend = crate::zk::ZK_BACKEND_STARK_FRI_V1;
+    let circuit = crate::zk::IVM_EXECUTION_V1_CIRCUIT_ID;
+    let circuit_id = format!("{backend}:{circuit}");
+    let params = StarkFriParamsV1 {
+        version: 1,
+        n_log2: 4,
+        blowup_log2: 2,
+        fold_arity: 2,
+        queries: 2,
+        merkle_arity: 2,
+        domain_tag: "iroha:test:ivm-binding-statement".to_owned(),
+    };
+    let public_digest = test_digest(0x71);
+    let prove = |circuit_id: &str| {
+        prove_stark_fri_reserved_air_envelope_bytes(
+            params.clone(),
+            "IROHA-TEST-IVM-BINDING-STATEMENT".to_owned(),
+            circuit_id.to_owned(),
+            public_digest,
+        )
+        .expect("valid reserved binding AIR fixture")
+    };
+    let limits = StarkVerifierLimits::default();
+    let proof = prove(&circuit_id);
+    assert!(verify_stark_fri_ivm_execution_air_envelope_with_limits(
+        &proof,
+        &limits,
+        &public_digest,
+    ));
+    assert!(
+        !verify_stark_fri_envelope_with_limits(&proof, &limits),
+        "generic verification must continue to reject the reserved IVM circuit"
+    );
+    assert!(!verify_stark_fri_ivm_execution_air_envelope_with_limits(
+        &proof,
+        &limits,
+        &test_digest(0x72),
+    ));
+    for alias in [
+        circuit.to_owned(),
+        format!("{backend}/{circuit}"),
+        format!("unrelated:{circuit}"),
+        format!("{backend}:generic-binding"),
+    ] {
+        assert!(
+            !verify_stark_fri_ivm_execution_air_envelope_with_limits(
+                &prove(&alias),
+                &limits,
+                &public_digest,
+            ),
+            "a valid proof under a different circuit must reject: {alias}"
+        );
+    }
+    let envelope: StarkVerifyEnvelopeV1 =
+        norito::decode_canonical(&proof).expect("decode canonical IVM binding fixture");
+    let mutations: [(&str, fn(&mut StarkVerifyEnvelopeV1)); 5] = [
+        ("trace root", |env| {
+            mutate_test_digest(&mut env.proof.air.as_mut().expect("AIR").trace_root);
+        }),
+        ("composition root", |env| {
+            mutate_test_digest(&mut env.proof.air.as_mut().expect("AIR").composition_root);
+        }),
+        ("opened row", |env| {
+            env.proof.air.as_mut().expect("AIR").openings[0].row[0] ^= 1;
+        }),
+        ("public digest", |env| {
+            mutate_test_digest(&mut env.proof.air.as_mut().expect("AIR").public_digest);
+        }),
+        (
+            "auxiliary composition",
+            attach_valid_auxiliary_composition_values,
+        ),
+    ];
+    for (label, mutate) in mutations {
+        let mut tampered = envelope.clone();
+        mutate(&mut tampered);
+        let bytes = norito::encode_canonical(&tampered).expect("encode tampered IVM proof");
+        assert!(
+            !verify_stark_fri_ivm_execution_air_envelope_with_limits(
+                &bytes,
+                &limits,
+                &public_digest,
+            ),
+            "IVM binding verifier accepted altered {label}"
+        );
+    }
+    assert!(verify_stark_fri_ivm_execution_air_envelope_with_limits(
+        &proof,
+        &limits,
+        &public_digest,
+    ));
+}
+#[test]
 fn stark_verifier_limits_cannot_relax_canonical_structure_caps() {
     let valid = StarkFriParamsV1 {
         version: 1,

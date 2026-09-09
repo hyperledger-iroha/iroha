@@ -20,7 +20,8 @@ derive = ["iroha_version_derive"]
 json = ["norito/json"]
 
 [dependencies]
-norito = {workspace = true, default-features = false }
+# Versioned binary diagnostics require the complete foundational codec surface.
+norito = { workspace = true, default-features = false, features = ["base-codec"] }
 iroha_version_derive = { path = "../iroha_version_derive", default-features = false, optional = true }
 
 iroha_macro = { workspace = true }

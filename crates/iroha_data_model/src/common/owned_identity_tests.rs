@@ -40,8 +40,8 @@ where
         + JsonSerialize
         + JsonDeserialize,
 {
-    let serialize_hash = <T as NoritoSerialize>::schema_hash();
-    let deserialize_hash = <T as NoritoDeserialize>::schema_hash();
+    let serialize_hash = norito::schema::identity::frame_hash::<T>();
+    let deserialize_hash = norito::schema::identity::frame_hash::<T>();
     assert_eq!(serialize_hash, deserialize_hash, "directional identity");
     assert_eq!(
         serialize_hash,

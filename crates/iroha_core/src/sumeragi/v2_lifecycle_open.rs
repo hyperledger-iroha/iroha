@@ -68,6 +68,7 @@ enum RecoveredWalStartupProjectionV1<'authority> {
         &'authority RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
         &'authority RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     ),
+    ControlContinuation(&'authority super::wal_recovery::RecoveredControlContinuationV1),
     DecisionFetch(&'authority AuthenticatedRecoveredWalDecisionFetchProjection),
     DecisionStore(
         &'authority AuthenticatedRecoveredWalDecisionFetchProjection,
@@ -555,6 +556,30 @@ impl AuthenticatedLifecycleRecoveryCut {
             Some(&mut body_pipeline),
         )?;
         Ok((recovery, body_pipeline))
+    }
+    /// Join every live output in one exact cold Proposal continuation.
+    #[allow(clippy::result_large_err)]
+    pub(super) fn assemble_storage_only_with_control_continuation(
+        ledger: LifecycleLedgerV1,
+        serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
+        body_store: &mut V2BodyStore,
+        continuation: &super::wal_recovery::RecoveredControlContinuationV1,
+        mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
+    ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
+    {
+        let recovery = Self::assemble_storage_only_with_terminal_validate_outcomes(
+            ledger,
+            serve_payloads,
+            body_store,
+            RecoveredWalStartupProjectionV1::ControlContinuation(continuation),
+            Some(&mut body_pipeline),
+        )?;
+        Ok((recovery, body_pipeline))
+    }
+
+    /// Compare the complete retained frame used to install a cold continuation.
+    pub(super) fn owns_control_continuation_frame(&self, ledger: &LifecycleLedgerV1) -> bool {
+        self.authenticated_ledger == *ledger
     }
     /// Assemble the standalone Decision Fetch with every durable body-backed Fetch.
     ///
@@ -3288,6 +3313,11 @@ fn recovered_wal_exactly_owns_signed_broadcast(
     record: &LifecycleLedgerRecordV1,
 ) -> bool {
     match recovered_wal {
+        RecoveredWalStartupProjectionV1::ControlContinuation(continuation) => {
+            continuation.exactly_matches_ledger(ledger)
+                && continuation.owns_live_ordinal(record.ordinal())
+                && record.work_class() == Some(LifecycleWorkClass::Broadcast)
+        }
         RecoveredWalStartupProjectionV1::PhaseBroadcast(projection, broadcast) => {
             projection.signed_broadcast_chain_is_exact(
                 ledger.context(),
@@ -3351,6 +3381,9 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
 > {
     let body_pipeline_startup = body_pipeline.is_some();
     let belongs_to_context = match recovered_wal {
+        RecoveredWalStartupProjectionV1::ControlContinuation(continuation) => {
+            continuation.exactly_matches_ledger(ledger)
+        }
         RecoveredWalStartupProjectionV1::None => true,
         RecoveredWalStartupProjectionV1::PhaseVote(projection) => {
             projection.belongs_to_context(ledger.context())
@@ -3407,6 +3440,13 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
     }
     let mut candidates = BTreeMap::new();
     match recovered_wal {
+        RecoveredWalStartupProjectionV1::ControlContinuation(continuation) => {
+            if !continuation.splice_candidates(ledger, &mut candidates) {
+                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                    "cold Proposal continuation lost its exact live candidates",
+                ));
+            }
+        }
         RecoveredWalStartupProjectionV1::ControlBroadcastAndSign(control, pair, combined) => {
             let Some([_parent, broadcast, next_sign]) =
                 recovered_control_broadcast_and_sign_records(ledger, control, pair, combined)
@@ -3505,6 +3545,10 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
                 },
             ) => {
                 let admitted_recovered_wal = match recovered_wal {
+                    RecoveredWalStartupProjectionV1::ControlContinuation(continuation) => {
+                        continuation.owns_live_ordinal(record.ordinal())
+                            && continuation.owns_candidates(&candidates)
+                    }
                     RecoveredWalStartupProjectionV1::None => false,
                     RecoveredWalStartupProjectionV1::PhaseVote(projection)
                         if record.key() == Some(projection.child_key()) =>
@@ -3669,6 +3713,15 @@ fn assemble_storage_only_candidates_and_terminal_validate_claims(
         );
     }
     match recovered_wal {
+        RecoveredWalStartupProjectionV1::ControlContinuation(continuation) => {
+            if !continuation.exactly_matches_ledger(ledger)
+                || !continuation.owns_candidates(&candidates)
+            {
+                return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(
+                    "cold Proposal continuation lost its complete recovery census",
+                ));
+            }
+        }
         RecoveredWalStartupProjectionV1::PhaseVote(projection) => {
             if !projection.owns_spliced_candidates(&candidates) {
                 return Err(LifecycleRecoveryAssemblyErrorKind::RecoveredWalSign(

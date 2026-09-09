@@ -31,8 +31,11 @@ use crate::{
     proof::PublicIO,
 };
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::PublicDeltaV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_transfer::BoundDelta",
+    frame = "fastpq_prover::compact_v1::PublicDeltaV1"
+)]
 struct BoundDelta {
     from_account: AccountId,
     to_account: AccountId,
@@ -57,8 +60,11 @@ impl From<&PublicTransferDelta> for BoundDelta {
     }
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::PublicTranscriptV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_transfer::BoundTranscript",
+    frame = "fastpq_prover::compact_v1::PublicTranscriptV1"
+)]
 struct BoundTranscript {
     batch_hash: Hash,
     authority_digest: Hash,
@@ -66,8 +72,11 @@ struct BoundTranscript {
     poseidon_preimage_digest: Option<Hash>,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::PublicTransferContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_transfer::BoundContext",
+    frame = "fastpq_prover::compact_v1::PublicTransferContextV1"
+)]
 struct BoundContext {
     version: u16,
     semantics: u8,
@@ -77,8 +86,11 @@ struct BoundContext {
 }
 
 /// Nominal full-domain envelope; its identity requires QuantityValueV1 rows.
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::QuantityTransferContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_transfer::BoundQuantityContext",
+    frame = "fastpq_prover::compact_v1::QuantityTransferContextV1"
+)]
 struct BoundQuantityContext {
     version: u16,
     quantity_value_format: u16,
@@ -252,7 +264,7 @@ fn invariant(details: &str) -> Error {
 
 #[cfg(test)]
 mod tests {
-    // Isolate the unchanged512KiB byte ceiling from the independently retained
+    // Isolate the derived replay byte ceiling from the independently retained
     // raw-replay default query ceiling. This is an explicit test policy.
     fn byte_limit_policy() -> crate::VerifyLimits {
         crate::VerifyLimits {
@@ -499,26 +511,35 @@ mod tests {
 
     #[test]
     fn extracted_context_preserves_original_one_delta_envelope_bytes() {
-        // Keep a separate schema spelling and original field order as the
-        // extraction oracle; do not route this through the new shared encoder.
-        #[derive(NoritoSerialize)]
-        #[norito(schema_name = "fastpq_prover::compact_v1::PublicDeltaV1")]
+        // Keep independent records with the original field order as the bare
+        // payload oracle; do not route this through the shared encoder.
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "fastpq_prover::backend::compact_public_transfer::tests::OriginalDelta",
+            frame = "fastpq_prover::compact_v1::PublicDeltaV1"
+        )]
         struct OriginalDelta {
             from_account: AccountId,
             to_account: AccountId,
             asset_definition: AssetDefinitionId,
             quantities: [Quantity; 5],
         }
-        #[derive(NoritoSerialize)]
-        #[norito(schema_name = "fastpq_prover::compact_v1::PublicTranscriptV1")]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "fastpq_prover::backend::compact_public_transfer::tests::OriginalTranscript",
+            frame = "fastpq_prover::compact_v1::PublicTranscriptV1"
+        )]
         struct OriginalTranscript {
             batch_hash: Hash,
             authority_digest: Hash,
             deltas: Vec<OriginalDelta>,
             poseidon_preimage_digest: Option<Hash>,
         }
-        #[derive(NoritoSerialize)]
-        #[norito(schema_name = "fastpq_prover::compact_v1::PublicTransferContextV1")]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "fastpq_prover::backend::compact_public_transfer::tests::OriginalContext",
+            frame = "fastpq_prover::compact_v1::PublicTransferContextV1"
+        )]
         struct OriginalContext {
             version: u16,
             semantics: u8,

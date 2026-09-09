@@ -19,7 +19,7 @@ use core::{
 use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
+    DeserializePayload, SerializePayload, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::{
@@ -281,19 +281,21 @@ impl JsonDeserialize for ConstString {
         parser.parse_string().map(Into::into)
     }
 }
-impl NoritoSerialize for ConstString {}
+
 impl SerializePayload for ConstString {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         <&str as SerializePayload>::serialize(&self.as_ref(), writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for ConstString {
+
+impl<'a> DeserializePayload<'a> for ConstString {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();
-        if let Ok(value) = <&str as NoritoDeserialize>::try_deserialize(archived.cast::<&str>()) {
+        if let Ok(value) = <&str as DeserializePayload>::try_deserialize(archived.cast::<&str>()) {
             return value.into();
         }
-        if let Ok(value) = <String as NoritoDeserialize>::try_deserialize(archived.cast::<String>())
+        if let Ok(value) =
+            <String as DeserializePayload>::try_deserialize(archived.cast::<String>())
         {
             return value.as_str().into();
         }
@@ -487,10 +489,7 @@ impl TryFrom<String> for InlinedString {
     type Error = String;
     #[inline]
     fn try_from(value: String) -> Result<Self, Self::Error> {
-        match Self::try_from(value.as_str()) {
-            Ok(inlined) => Ok(inlined),
-            Err(_) => Err(value),
-        }
+        Self::try_from(value.as_str()).ok().ok_or(value)
     }
 }
 #[cfg(test)]

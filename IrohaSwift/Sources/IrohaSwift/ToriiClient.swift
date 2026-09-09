@@ -12085,6 +12085,9 @@ public enum ToriiEntrypointValueTypeNodeV1: Codable, Sendable, Equatable {
     case result
     case list(ToriiEntrypointListTypeNodeV1)
     case leaf(ToriiEntrypointValueKindV1)
+    case unit
+    case error(ToriiContractErrorTypeDescriptor)
+    case stateCursor(ToriiEntrypointValueKindV1)
 
     private enum CodingKeys: String, CodingKey {
         case kind
@@ -12128,6 +12131,17 @@ public enum ToriiEntrypointValueTypeNodeV1: Codable, Sendable, Equatable {
             self = .list(
                 try container.decode(ToriiEntrypointListTypeNodeV1.self, forKey: .value)
             )
+        case "Unit":
+            guard container.contains(.value), try container.decodeNil(forKey: .value) else {
+                throw DecodingError.dataCorruptedError(forKey: .value, in: container, debugDescription: "Unit schema payload must be null")
+            }
+            self = .unit
+        case "StateCursor":
+            let key = try container.decode(ToriiEntrypointValueKindV1.self, forKey: .value)
+            guard key != .json else { throw DecodingError.dataCorruptedError(forKey: .value, in: container, debugDescription: "Json is not a state cursor key kind") }
+            self = .stateCursor(key)
+        case "Error":
+            self = .error(try container.decode(ToriiContractErrorTypeDescriptor.self, forKey: .value))
         case "Leaf":
             self = .leaf(try container.decode(ToriiEntrypointValueKindV1.self, forKey: .value))
         default:
@@ -12156,6 +12170,15 @@ public enum ToriiEntrypointValueTypeNodeV1: Codable, Sendable, Equatable {
             try container.encodeNil(forKey: .value)
         case .list(let value):
             try container.encode("List", forKey: .kind)
+            try container.encode(value, forKey: .value)
+        case .unit:
+            try container.encode("Unit", forKey: .kind)
+            try container.encodeNil(forKey: .value)
+        case .stateCursor(let key):
+            try container.encode("StateCursor", forKey: .kind)
+            try container.encode(key, forKey: .value)
+        case .error(let value):
+            try container.encode("Error", forKey: .kind)
             try container.encode(value, forKey: .value)
         case .leaf(let value):
             try container.encode("Leaf", forKey: .kind)
@@ -12241,7 +12264,11 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "Option",
         "Result",
         "List",
+        "ListError",
+        "NumericError",
         "StateMap",
+        "StateCursor",
+        "StatePage",
         "Secret",
         "AccountView",
         "AssetView",
@@ -12255,8 +12282,12 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "SoracloudRequest",
         "SoracloudResponse",
         "state_map_get",
+        "__kotodama_state_page",
+        "__kotodama_state_take",
         "__kotodama_list_len",
         "__kotodama_list_get",
+        "__kotodama_list_set",
+        "__kotodama_list_push",
         "__kotodama_list_try_set",
         "__kotodama_list_try_push",
         "__kotodama_list_pop",
@@ -12264,6 +12295,8 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "__kotodama_list_take",
         "__kotodama_list_enumerate",
         "__kotodama_decimal_div_round",
+        "__kotodama_decimal_mul_div_round",
+        "__kotodama_quantity_mul_div_round",
         "__kotodama_quantity_div_round",
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",
@@ -12319,7 +12352,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         "Name",
     ]
     private static let dynamicAccessBoundKinds: Set<String> = [
-        "range",
+        "page",
         "take",
     ]
     private static let maximumDynamicAccessKeys: UInt32 = 64
@@ -12377,6 +12410,33 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         isCanonicalDeclarationIdentifier(value) && !retiredNumericTypeNames.contains(value)
     }
 
+    private static func isCanonicalQualifiedStructIdentifier(_ value: String) -> Bool {
+        guard value.utf8.count <= 1024,
+              value.utf8.allSatisfy({ $0 < 128 }),
+              !value.contains("__kotodama_link_") else { return false }
+        let parts = value.components(separatedBy: "::")
+        guard parts.count == 3,
+              isCanonicalTypeDeclarationIdentifier(parts[1]),
+              isCanonicalTypeDeclarationIdentifier(parts[2]) else { return false }
+        func component(_ value: String) -> Bool {
+            func identifierByte(_ byte: UInt8) -> Bool {
+                (65...90).contains(byte) || (97...122).contains(byte)
+                    || (48...57).contains(byte) || byte == 95
+            }
+            guard let first = value.utf8.first, identifierByte(first) else { return false }
+            return value.utf8.allSatisfy { identifierByte($0) || $0 == 46 || $0 == 45 }
+        }
+        let package = parts[0].components(separatedBy: "@")
+        return (1...2).contains(package.count)
+            && package[0].components(separatedBy: "/").allSatisfy(component)
+            && (package.count == 1 || component(package[1]))
+    }
+
+    private static func isCanonicalUserStructIdentifier(_ value: String) -> Bool {
+        value.utf8.count <= 1024
+            && (isCanonicalTypeDeclarationIdentifier(value) || isCanonicalQualifiedStructIdentifier(value))
+    }
+
     fileprivate static func isCanonicalStateMapKeyType(_ value: String) -> Bool {
         stateMapKeyTypeNames.contains(value)
     }
@@ -12389,7 +12449,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         (1...maximumDynamicAccessKeys).contains(value)
     }
 
-    fileprivate static func isCanonicalStateTypeName(_ value: String) -> Bool {
+    fileprivate static func isCanonicalStateTypeName(_ value: String, errorIdentities: Set<String>? = nil) -> Bool {
         guard !value.isEmpty else {
             return false
         }
@@ -12460,6 +12520,21 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
                 return nil
             }
 
+            if consume("()") { return "unit" }
+            let errorStart = cursor
+            var errorEnd = cursor
+            let identityPunctuation = Set("_:/@.-".utf8)
+            while errorEnd < bytes.count && (bytes[errorEnd] >= 128 || isASCIILetter(bytes[errorEnd]) || isASCIIDigit(bytes[errorEnd]) || identityPunctuation.contains(bytes[errorEnd])) { errorEnd += 1 }
+            let errorIdentity = String(decoding: bytes[errorStart..<errorEnd], as: UTF8.self)
+            let qualifiedStructName = errorEnd < bytes.count && bytes[errorEnd] == 123
+                && isCanonicalQualifiedStructIdentifier(errorIdentity) ? errorIdentity : nil
+            if qualifiedStructName != nil {
+                cursor = errorEnd
+            } else if errorIdentity.contains("::"), ToriiContractErrorTypeDescriptor.isCanonicalIdentity(errorIdentity) {
+                if let errorIdentities, !errorIdentities.contains(errorIdentity) { return nil }
+                cursor = errorEnd
+                return "error"
+            }
             if consume("(") {
                 guard parseType(allowStateMap: false, depth: depth + 1) != nil,
                       consume(", "),
@@ -12474,7 +12549,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
                 return consume(")") ? "" : nil
             }
 
-            guard let name = identifier() else {
+            guard let name = qualifiedStructName ?? identifier() else {
                 return nil
             }
             if stateScalarTypeNames.contains(name) {
@@ -12508,6 +12583,10 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
                 }
                 return ""
             }
+            if name == "StateCursor" {
+                guard consume("<"), let key = identifier(), Self.isCanonicalStateMapKeyType(key), consume(">") else { return nil }
+                return "aggregate"
+            }
             if name == "StateMap" {
                 guard allowStateMap,
                       consume("<") else {
@@ -12526,7 +12605,16 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
                 }
                 return ""
             }
-            guard isCanonicalTypeDeclarationIdentifier(name),
+            if name == "StatePage" {
+                nodes += 5 // List, Tuple, scalar key, Option, StateCursor.
+                guard nodes <= maximumStateTypeNodes, depth + 3 <= maximumStateTypeDepth,
+                      consume("{items: List<("), let key = identifier(), stateMapKeyTypeNames.contains(key),
+                      consume(", "), parseType(allowStateMap: false, depth: depth + 3) != nil,
+                      consume("), "), listCapacity(), consume(">, next: Option<StateCursor<"),
+                      consume(key), consume(">>}") else { return nil }
+                return "aggregate"
+            }
+            guard isCanonicalUserStructIdentifier(name),
                   consume("{") else {
                 return nil
             }
@@ -12648,7 +12736,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
             return 1
         case .result:
             return 2
-        case .leaf:
+        case .leaf, .unit, .error, .stateCursor:
             return 0
         }
     }
@@ -12701,11 +12789,11 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
 
             switch node {
             case .structType(let descriptor):
-                let isReservedSchemaName = descriptor.name == "QueryPage"
+                let isReservedSchemaName = descriptor.name == "QueryPage" || descriptor.name == "StatePage"
                     || Self.coreQueryViewNames.contains(descriptor.name)
                 guard !descriptor.fields.isEmpty,
                       isReservedSchemaName
-                        || Self.isCanonicalTypeDeclarationIdentifier(descriptor.name),
+                        || Self.isCanonicalUserStructIdentifier(descriptor.name),
                       descriptor.fields.allSatisfy(Self.isCanonicalIdentifier),
                       Set(descriptor.fields).count == descriptor.fields.count else {
                     return nil
@@ -12718,7 +12806,11 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
                 guard (1...64).contains(descriptor.capacity) else {
                     return nil
                 }
-            case .option, .result, .leaf:
+            case .stateCursor(let key):
+                guard key != .json else { return nil }
+            case .error(let descriptor):
+                guard descriptor.isCanonical else { return nil }
+            case .option, .result, .leaf, .unit:
                 break
             }
 
@@ -12726,7 +12818,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
             switch node {
             case .option, .result, .list:
                 isHandle = true
-            case .structType, .tuple, .leaf:
+            case .structType, .tuple, .leaf, .unit, .error, .stateCursor:
                 isHandle = false
             }
             if !suppressWords && (isHandle || Self.childCount(of: node) == 0) {
@@ -12750,7 +12842,7 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
         }
 
         var rendered: [RenderedType] = []
-        for node in nodes.reversed() {
+        for (index, node) in nodes.enumerated().reversed() {
             guard let children = Self.takeRenderedChildren(
                 &rendered,
                 count: Self.childCount(of: node)
@@ -12761,7 +12853,25 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
             switch node {
             case .structType(let descriptor):
                 let childTypeNames = children.map(\.canonicalTypeName)
-                if descriptor.name == "QueryPage" {
+                if descriptor.name == "StatePage" {
+                    guard descriptor.fields == ["items", "next"], index + 3 < nodes.count,
+                          case .list(let list) = nodes[index + 1], case .tuple(2) = nodes[index + 2],
+                          case .leaf(let key) = nodes[index + 3], key != .json else { return nil }
+                    var end = index + 4
+                    var pending = 1
+                    while pending > 0 {
+                        guard end < nodes.count else { return nil }
+                        pending += Self.childCount(of: nodes[end]) - 1
+                        end += 1
+                    }
+                    guard end + 1 < nodes.count, nodes[end] == .option, nodes[end + 1] == .stateCursor(key),
+                          children.count == 2 else { return nil }
+                    let listName = children[0].canonicalTypeName
+                    let suffix = "), \(list.capacity)>"
+                    guard listName.hasPrefix("List<("), listName.hasSuffix(suffix) else { return nil }
+                    let types = listName.dropFirst(6).dropLast(suffix.count)
+                    result = RenderedType(canonicalTypeName: "StatePage<\(types), \(list.capacity)>", coreQueryViewName: nil, listCapacity: nil, listElementCoreQueryViewName: nil)
+                } else if descriptor.name == "QueryPage" {
                     guard descriptor.fields == ["items", "next_offset"],
                           children.count == 2,
                           children[0].listCapacity == 64,
@@ -12834,6 +12944,12 @@ public struct ToriiEntrypointValueTypeV1: Codable, Sendable, Equatable {
                     listCapacity: descriptor.capacity,
                     listElementCoreQueryViewName: child.coreQueryViewName
                 )
+            case .stateCursor(let key):
+                result = RenderedType(canonicalTypeName: "StateCursor<\(Self.canonicalLeafName(key))>", coreQueryViewName: nil, listCapacity: nil, listElementCoreQueryViewName: nil)
+            case .unit:
+                result = RenderedType(canonicalTypeName: "()", coreQueryViewName: nil, listCapacity: nil, listElementCoreQueryViewName: nil)
+            case .error(let descriptor):
+                result = RenderedType(canonicalTypeName: descriptor.identity, coreQueryViewName: nil, listCapacity: nil, listElementCoreQueryViewName: nil)
             case .leaf(let kind):
                 result = RenderedType(
                     canonicalTypeName: Self.canonicalLeafName(kind),
@@ -13275,9 +13391,7 @@ public struct ToriiContractEntrypointDescriptor: Codable, Sendable, Equatable {
             hasExactArguments = false
         }
         let hasExactReturn: Bool
-        if returnType == nil, returnSchema == nil {
-            hasExactReturn = true
-        } else if let returnType, let returnSchema {
+        if let returnType, let returnSchema {
             hasExactReturn = returnSchema.wordCount.map { $0 <= 13 } == true
                 && returnSchema.canonicalTypeName == returnType
                 && isExactContractManifestString(returnType)
@@ -13447,70 +13561,71 @@ public struct ToriiContractStateDescriptor: Codable, Sendable, Equatable {
     }
 }
 
-public struct ToriiContractErrorCodeDescriptor: Codable, Sendable, Equatable {
-    public var namespace: String
+/// One nonzero enum-local variant in a finite nominal error type.
+public struct ToriiContractErrorVariantDescriptor: Codable, Sendable, Equatable {
     public var name: String
     public var code: UInt32
-
-    public init(namespace: String, name: String, code: UInt32) {
-        self.namespace = namespace
-        self.name = name
-        self.code = code
+    public init(name: String, code: UInt32) { self.name = name; self.code = code }
+    private enum CodingKeys: String, CodingKey { case name, code }
+    fileprivate var isCanonical: Bool {
+        code != 0 && (ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name)
+            || (!name.unicodeScalars.allSatisfy { $0.isASCII }
+                && name.range(of: #"^[\p{L}_][\p{L}\p{N}_]*$"#, options: .regularExpression) != nil))
     }
-
-    private enum CodingKeys: String, CodingKey {
-        case namespace
-        case name
-        case code
-    }
-
     public init(from decoder: Decoder) throws {
-        try rejectUnknownContractManifestFields(
-            from: decoder,
-            allowed: ["namespace", "name", "code"],
-            context: "contract error descriptor"
-        )
+        try rejectUnknownContractManifestFields(from: decoder, allowed: ["name", "code"], context: "error variant")
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        namespace = try container.decode(String.self, forKey: .namespace)
         name = try container.decode(String.self, forKey: .name)
         code = try container.decode(UInt32.self, forKey: .code)
-        guard ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(namespace) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .namespace,
-                in: container,
-                debugDescription: "Kotodama error namespace must be a canonical type declaration"
-            )
-        }
-        guard ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name) else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .name,
-                in: container,
-                debugDescription: "Kotodama error variant must be a canonical identifier"
-            )
-        }
-        guard code != 0 else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .code,
-                in: container,
-                debugDescription: "Kotodama error code must be a non-zero u32"
-            )
+        guard isCanonical else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "error variant requires a canonical name and nonzero u32 code"))
         }
     }
-
     public func encode(to encoder: Encoder) throws {
-        guard ToriiEntrypointValueTypeV1.isCanonicalTypeDeclarationIdentifier(namespace),
-              ToriiEntrypointValueTypeV1.isCanonicalIdentifier(name),
-              code != 0 else {
-            throw EncodingError.invalidValue(
-                self,
-                .init(codingPath: encoder.codingPath,
-                      debugDescription: "Kotodama error descriptors require names and a non-zero u32 code")
-            )
+        guard isCanonical else {
+            throw EncodingError.invalidValue(self, .init(codingPath: encoder.codingPath, debugDescription: "invalid nominal error variant"))
         }
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(namespace, forKey: .namespace)
         try container.encode(name, forKey: .name)
         try container.encode(code, forKey: .code)
+    }
+}
+
+/// Stable package/unit/enum identity and the exact ordered variant schema.
+public struct ToriiContractErrorTypeDescriptor: Codable, Sendable, Equatable {
+    public var identity: String
+    public var variants: [ToriiContractErrorVariantDescriptor]
+    public init(identity: String, variants: [ToriiContractErrorVariantDescriptor]) {
+        self.identity = identity
+        self.variants = variants
+    }
+    private enum CodingKeys: String, CodingKey { case identity, variants }
+    fileprivate static func isCanonicalIdentity(_ value: String) -> Bool {
+        !value.isEmpty && value.utf8.count <= 1024 && !value.contains("__kotodama_link_")
+            && value.range(of: #"^[\p{L}\p{N}_:/@.-]+$"#, options: .regularExpression) != nil
+    }
+    fileprivate var isCanonical: Bool {
+        Self.isCanonicalIdentity(identity) && (1...256).contains(variants.count)
+            && variants.allSatisfy(\.isCanonical)
+            && Set(variants.map(\.name)).count == variants.count
+            && zip(variants, variants.dropFirst()).allSatisfy { $0.code < $1.code }
+    }
+    public init(from decoder: Decoder) throws {
+        try rejectUnknownContractManifestFields(from: decoder, allowed: ["identity", "variants"], context: "error type descriptor")
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        identity = try container.decode(String.self, forKey: .identity)
+        variants = try container.decode([ToriiContractErrorVariantDescriptor].self, forKey: .variants)
+        guard isCanonical else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "error identity and ordered variant schema must be canonical"))
+        }
+    }
+    public func encode(to encoder: Encoder) throws {
+        guard isCanonical else {
+            throw EncodingError.invalidValue(self, .init(codingPath: encoder.codingPath, debugDescription: "error identity and ordered variant schema must be canonical"))
+        }
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(identity, forKey: .identity)
+        try container.encode(variants, forKey: .variants)
     }
 }
 
@@ -13677,7 +13792,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
     public var accessSetHints: ToriiContractAccessSetHints?
     public var entrypoints: [ToriiContractEntrypointDescriptor]?
     public var states: [ToriiContractStateDescriptor]?
-    public var errorCodes: [ToriiContractErrorCodeDescriptor]?
+    public var errorTypes: [ToriiContractErrorTypeDescriptor]?
     public var kotoba: [ToriiContractKotobaTranslationEntry]?
     public var provenance: ToriiContractManifestProvenance?
 
@@ -13689,7 +13804,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
                 accessSetHints: ToriiContractAccessSetHints? = nil,
                 entrypoints: [ToriiContractEntrypointDescriptor]? = nil,
                 states: [ToriiContractStateDescriptor]? = nil,
-                errorCodes: [ToriiContractErrorCodeDescriptor]? = nil,
+                errorTypes: [ToriiContractErrorTypeDescriptor]? = nil,
                 kotoba: [ToriiContractKotobaTranslationEntry]? = nil,
                 provenance: ToriiContractManifestProvenance? = nil) {
         self.seiyakuName = seiyakuName
@@ -13700,7 +13815,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         self.accessSetHints = accessSetHints
         self.entrypoints = entrypoints
         self.states = states
-        self.errorCodes = errorCodes
+        self.errorTypes = errorTypes
         self.kotoba = kotoba
         self.provenance = provenance
     }
@@ -13714,7 +13829,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         case accessSetHints = "access_set_hints"
         case entrypoints
         case states
-        case errorCodes = "error_codes"
+        case errorTypes = "error_types"
         case kotoba
         case provenance
     }
@@ -13791,10 +13906,26 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
                 }
             }
         }
-        if let errorCodes {
-            let paths = errorCodes.map { "\($0.namespace)::\($0.name)" }
-            if Set(paths).count != paths.count || Set(errorCodes.map(\.code)).count != errorCodes.count {
-                return "error paths and numeric codes must be unique"
+        if let errorTypes {
+            if errorTypes.count > 256 || !errorTypes.allSatisfy(\.isCanonical) || Set(errorTypes.map(\.identity)).count != errorTypes.count {
+                return "error_types must contain at most 256 unique canonical identities"
+            }
+        }
+        let catalog = Dictionary(uniqueKeysWithValues: (errorTypes ?? []).map { ($0.identity, $0) })
+        for state in states ?? [] {
+            if !ToriiEntrypointValueTypeV1.isCanonicalStateTypeName(state.typeName, errorIdentities: Set(catalog.keys)) {
+                return "state nominal error identity is not declared in error_types catalog"
+            }
+        }
+        for entrypoint in entrypoints ?? [] {
+            var schemas = (entrypoint.argumentSchema?.fields ?? []).map(\.type)
+            if let schema = entrypoint.returnSchema { schemas.append(schema) }
+            for schema in schemas {
+                for node in schema.nodes {
+                    if case .error(let error) = node, catalog[error.identity] != error {
+                        return "boundary error schema does not match error_types catalog"
+                    }
+                }
             }
         }
         if let kotoba, Set(kotoba.map(\.messageId)).count != kotoba.count {
@@ -13809,7 +13940,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
             allowed: [
                 "seiyaku_name", "code_hash", "abi_hash", "compiler_fingerprint",
                 "features_bitmap", "access_set_hints", "entrypoints", "states",
-                "error_codes", "kotoba", "provenance",
+                "error_types", "kotoba", "provenance",
             ],
             context: "contract manifest"
         )
@@ -13865,9 +13996,9 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
             forKey: .entrypoints
         )
         states = try container.decodeIfPresent([ToriiContractStateDescriptor].self, forKey: .states)
-        errorCodes = try container.decodeIfPresent(
-            [ToriiContractErrorCodeDescriptor].self,
-            forKey: .errorCodes
+        errorTypes = try container.decodeIfPresent(
+            [ToriiContractErrorTypeDescriptor].self,
+            forKey: .errorTypes
         )
         kotoba = try container.decodeIfPresent(
             [ToriiContractKotobaTranslationEntry].self,
@@ -13937,7 +14068,7 @@ public struct ToriiContractManifest: Codable, Sendable, Equatable {
         try container.encode(accessSetHints, forKey: .accessSetHints)
         try container.encode(entrypoints, forKey: .entrypoints)
         try container.encode(states, forKey: .states)
-        try container.encode(errorCodes, forKey: .errorCodes)
+        try container.encode(errorTypes, forKey: .errorTypes)
         try container.encode(kotoba, forKey: .kotoba)
         try container.encode(provenance, forKey: .provenance)
     }
@@ -22710,7 +22841,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountOnboarding(
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -22741,7 +22872,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ proofRequired: ToriiAccountOnboardingProofRequiredPrepareResponseV1,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -22796,7 +22927,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     @discardableResult
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId,
@@ -22944,7 +23075,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
     public func prepareAccountOnboarding(
         _ receipt: ToriiAccountOnboardingPlanReceipt,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         onboardingToken: String,
         expectedAuthority: String,
@@ -23025,7 +23156,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
         _ proofRequired: ToriiAccountOnboardingProofRequiredPrepareResponseV1,
         request originalRequest: ToriiAccountOnboardingPlanRequest,
         receipt: ToriiAccountOnboardingPlanReceipt,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         expectedAuthority: String,
         expectedNetworkId: NetworkId,
         canonicalAuth: ToriiCanonicalRequestAuth,
@@ -23194,7 +23325,7 @@ public final class ToriiClient: ToriiTransactionEntrypointSubmitting, @unchecked
 
     public func prepareAccountFaucet(
         _ claim: ToriiAccountFaucetClaimV1,
-        binding: ToriiTairaPublicResetMutationBindingV1,
+        binding: ToriiPreparedOperationBindingV1,
         feePayment: FeePaymentIntent,
         policy: ToriiAccountFaucetPolicyV1,
         expectedNetworkId: NetworkId

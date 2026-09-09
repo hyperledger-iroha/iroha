@@ -1576,35 +1576,21 @@ fn run_lifecycle_active_height(
                 },
             )?;
             if terminal_stall_due {
-                let (pending_historical_recovery, durable_completion_matches_finality) = activated
-                    .with_runner_runtime(
-                        &mut active_runner,
-                        |_owner, executor, _services, _local_proposal| {
-                            let pending = lane_work.has_pending_historical_recovery()?;
-                            let durable = if pending {
-                                None
-                            } else {
-                                let (_, artifact) =
-                                    executor.durable_finality().ok_or_else(|| {
-                                        V2RunnerError::Service(
-                                            "finalized lane diagnostic lost durable finality"
-                                                .to_owned(),
-                                        )
-                                    })?;
-                                Some(
-                                    lane_work
-                                        .durable_completion_matches_finality(artifact)
-                                        .map_err(V2RunnerError::from)?,
-                                )
-                            };
-                            Ok::<_, V2RunnerError>((pending, durable))
-                        },
-                    )?;
+                // Report the actual completed preflight, not a second storage
+                // audit after ingress may have changed the durable lane state.
+                let pending_historical_recovery = activated.with_runner_runtime(
+                    &mut active_runner,
+                    |_owner, _executor, _services, _local_proposal| {
+                        lane_work
+                            .has_pending_historical_recovery()
+                            .map_err(V2RunnerError::from)
+                    },
+                )?;
                 iroha_logger::warn!(
                     height = context.height,
                     canonical_lane_body_recovered,
                     pending_historical_recovery,
-                    ?durable_completion_matches_finality,
+                    rollover_preflight_ready = rollover_ready,
                     "Sumeragi v2 finalized lane rollover preflight stalled"
                 );
             }
@@ -1877,6 +1863,7 @@ fn run_lifecycle_active_height(
 /// authority here after finalization.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 pub(super) fn run_non_pending_lifecycle_loop(
+    build_identity: crate::release_identity::BuildIdentity,
     config: iroha_config::parameters::actual::Sumeragi,
     common_config: iroha_config::parameters::actual::Common,
     events_sender: crate::EventsSender,
@@ -1954,7 +1941,7 @@ pub(super) fn run_non_pending_lifecycle_loop(
             .map_err(ingress_capacity_error)?;
         super::super::status::set_v2_network_ingress(context.id(), context.height, &block_rx);
         let shared_config = config.v2_config(block_cadence, context.mode)?;
-        let fingerprints = adapter_fingerprints(&local_peer, &shared_config);
+        let fingerprints = adapter_fingerprints(build_identity, &local_peer, &shared_config);
         let control_queue_capacity = usize::try_from(shared_config.limits.control_queue_capacity)?;
         let body_queue_capacity = usize::try_from(shared_config.limits.body_queue_capacity)?;
         let chunk_queue_capacity = usize::try_from(shared_config.limits.chunk_queue_capacity)?;

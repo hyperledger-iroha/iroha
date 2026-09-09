@@ -2988,7 +2988,7 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
         nexus::LaneId,
     };
     use norito::{
-        core::NoritoDeserialize,
+        DeserializePayload,
         json::{Map as JsonMap, Value},
     };
     use sorafs_manifest::{
@@ -3909,7 +3909,18 @@ fn incentives_daemon_processes_metrics_spool() {
 }
 #[cfg(unix)]
 #[test]
+#[allow(
+    unsafe_code,
+    reason = "the child-only pre_exec hook passes one retained read-only operator descriptor through exec using fcntl"
+)]
 fn sumeragi_summary_commands_against_torii_mock() {
+    use std::{
+        io::{Seek as _, SeekFrom},
+        os::{
+            fd::{AsRawFd as _, BorrowedFd},
+            unix::process::CommandExt as _,
+        },
+    };
     use torii_mock_support::{
         SpawnError, TempDir, ToriiMockProcess, configure_sumeragi, write_client_config,
     };
@@ -4003,28 +4014,53 @@ fn sumeragi_summary_commands_against_torii_mock() {
         }),
     )
     .expect("configure canonical Sumeragi status");
+    let mut inherited_operator_file =
+        fs::File::open(operator_key_file.path()).expect("read-only operator descriptor");
+    inherited_operator_file
+        .seek(SeekFrom::Start(5))
+        .expect("retain caller cursor");
+    let operator_fd = inherited_operator_file.as_raw_fd();
     let assert_summary = |args: &[&str], expected: &str| {
-        let output = command()
-            .arg("--config")
-            .arg(&config_path)
-            .arg("--operator-private-key-file")
-            .arg(operator_key_file.path())
-            .arg("--output-format")
-            .arg("text")
-            .args(args)
-            .output()
-            .unwrap_or_else(|err| panic!("failed to execute iroha {args:?}: {err}"));
-        assert!(
-            output.status.success(),
-            "expected iroha {args:?} to succeed, stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        assert_eq!(
-            stdout.trim_end(),
-            expected,
-            "unexpected summary for {args:?}, stdout: {stdout}"
-        );
+        for inherited in [false, true] {
+            let mut invocation = command();
+            invocation.arg("--config").arg(&config_path);
+            if inherited {
+                invocation
+                    .arg("--operator-private-key-fd")
+                    .arg(operator_fd.to_string());
+                // SAFETY: the read-only file remains open through child execution; this child-only
+                // hook uses only fcntl and lends the descriptor without taking ownership.
+                unsafe {
+                    invocation.inner.pre_exec(move || {
+                        let fd = BorrowedFd::borrow_raw(operator_fd);
+                        let flags = rustix::io::fcntl_getfd(fd).map_err(io::Error::from)?;
+                        rustix::io::fcntl_setfd(fd, flags & !rustix::io::FdFlags::CLOEXEC)
+                            .map_err(io::Error::from)
+                    });
+                }
+            } else {
+                invocation
+                    .arg("--operator-private-key-file")
+                    .arg(operator_key_file.path());
+            }
+            let output = invocation
+                .arg("--output-format")
+                .arg("text")
+                .args(args)
+                .output()
+                .unwrap_or_else(|err| panic!("failed to execute iroha {args:?}: {err}"));
+            assert!(
+                output.status.success(),
+                "expected iroha {args:?} to succeed, stderr: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            assert_eq!(
+                stdout.trim_end(),
+                expected,
+                "unexpected summary for {args:?}, stdout: {stdout}"
+            );
+        }
     };
     assert_summary(
         &["ops", "sumeragi", "status"],
@@ -4033,6 +4069,12 @@ fn sumeragi_summary_commands_against_torii_mock() {
     assert_summary(
         &["ops", "sumeragi", "leader"],
         "leader=3 prf_h=20 prf_v=2 seed=feedface",
+    );
+    assert_eq!(
+        inherited_operator_file
+            .stream_position()
+            .expect("caller descriptor remains open"),
+        5
     );
 }
 #[test]

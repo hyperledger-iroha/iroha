@@ -21,7 +21,7 @@ fn repro_name_bare_vs_header_valid() {
     // Header-framed path
     let header = norito::to_bytes(&name).expect("to_bytes");
     let archived = norito::from_bytes::<Name>(&header).expect("from_bytes");
-    let name_header = norito::core::NoritoDeserialize::deserialize(archived);
+    let name_header = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(name_bare.as_ref(), name.as_ref(), "bare mismatch");
     assert_eq!(name_header.as_ref(), name.as_ref(), "header mismatch");
 }
@@ -38,7 +38,7 @@ fn repro_ipfs_bare_vs_header_valid() {
     let header = norito::to_bytes(&path).expect("to_bytes");
     let archived =
         norito::from_bytes::<iroha_data_model::ipfs::IpfsPath>(&header).expect("from_bytes");
-    let path_header = norito::core::NoritoDeserialize::deserialize(archived);
+    let path_header = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(path_bare.as_ref(), path.as_ref(), "bare mismatch");
     assert_eq!(path_header.as_ref(), path.as_ref(), "header mismatch");
 }
@@ -57,7 +57,7 @@ fn repro_timeinterval_bare_vs_header() {
         norito::codec::DecodeAll::decode_all(&mut &bare[..]).expect("bare decode");
     let header = norito::to_bytes(&ti).expect("to_bytes");
     let archived = norito::from_bytes::<TimeInterval>(&header).expect("from_bytes");
-    let ti_header = norito::core::NoritoDeserialize::deserialize(archived);
+    let ti_header = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(ti_bare, ti, "bare mismatch");
     assert_eq!(ti_header, ti, "header mismatch");
 }
@@ -82,7 +82,7 @@ fn repro_blocksignature_bare_vs_header() {
     let archived = norito::from_bytes::<iroha_data_model::prelude::BlockSignature>(&header_bytes)
         .expect("from_bytes");
     let bs_header: iroha_data_model::prelude::BlockSignature =
-        norito::core::NoritoDeserialize::deserialize(archived);
+        norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(bs_bare, bs, "bare mismatch");
     assert_eq!(bs_header, bs, "header mismatch");
 }

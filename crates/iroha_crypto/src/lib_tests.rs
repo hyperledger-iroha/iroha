@@ -1351,7 +1351,8 @@ mod tests {
             .len()
             - norito::core::Header::SIZE;
         assert_eq!(
-            norito::core::SerializePayload::encoded_len_exact(&pk).expect("exact public key length"),
+            norito::core::SerializePayload::encoded_len_exact(&pk)
+                .expect("exact public key length"),
             expected
         );
     }
@@ -1440,7 +1441,7 @@ mod tests {
             norito::core::frame_bare_with_header_flags::<PublicKeyCompact>(&payload, flags)
                 .expect("frame compact");
         let archived = norito::from_bytes::<PublicKeyCompact>(&framed).expect("archive");
-        let err = <PublicKeyCompact as norito::core::NoritoDeserialize>::try_deserialize(archived)
+        let err = <PublicKeyCompact as norito::core::DeserializePayload>::try_deserialize(archived)
             .expect_err("invalid compact payload");
         assert!(matches!(err, norito::core::Error::Message(_)));
     }
@@ -1610,7 +1611,7 @@ mod tests {
         let framed = norito::core::frame_bare_with_header_flags::<PublicKey>(&payload, flags)
             .expect("frame");
         let archived = norito::from_bytes::<PublicKey>(&framed).expect("archive");
-        let err = <PublicKey as norito::core::NoritoDeserialize>::try_deserialize(archived)
+        let err = <PublicKey as norito::core::DeserializePayload>::try_deserialize(archived)
             .expect_err("invalid key");
         assert!(matches!(err, norito::core::Error::Message(_)));
     }

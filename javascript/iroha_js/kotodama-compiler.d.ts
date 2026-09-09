@@ -107,7 +107,10 @@ export type KotodamaCompiledEntrypointValueTypeNode =
       kind: "List";
       value: { capacity: number };
     }
-  | { kind: "Leaf"; value: KotodamaCompiledEntrypointValueKind };
+  | { kind: "Leaf"; value: KotodamaCompiledEntrypointValueKind }
+  | { kind: "Unit"; value: null }
+  | { kind: "StateCursor"; value: KotodamaCompiledEntrypointValueKind }
+  | { kind: "Error"; value: KotodamaCompiledErrorTypeDescriptor };
 
 export interface KotodamaCompiledEntrypointArgumentSchema {
   fields: Array<{
@@ -124,8 +127,8 @@ export interface KotodamaCompiledEntrypoint {
     type_name: string;
   }>;
   argument_schema: KotodamaCompiledEntrypointArgumentSchema | null;
-  return_type: string | null;
-  return_schema: KotodamaCompiledEntrypointValueType | null;
+  return_type: string;
+  return_schema: KotodamaCompiledEntrypointValueType;
   permission: string | null;
   read_keys: string[];
   write_keys: string[];
@@ -178,7 +181,7 @@ export type KotodamaCompiledStateMapKeyTypeName =
   | "DomainId"
   | "Name";
 
-export type KotodamaCompiledDynamicAccessBoundKind = "range" | "take";
+export type KotodamaCompiledDynamicAccessBoundKind = "page" | "take";
 
 export interface KotodamaCompiledDynamicAccessHint {
   base_key: string;
@@ -192,10 +195,10 @@ export interface KotodamaCompiledStateDescriptor {
   type_name: string;
 }
 
-export interface KotodamaCompiledErrorCodeDescriptor {
-  namespace: string;
-  name: string;
-  code: number;
+export interface KotodamaCompiledErrorVariantDescriptor { name: string; code: number; }
+export interface KotodamaCompiledErrorTypeDescriptor {
+  identity: string;
+  variants: KotodamaCompiledErrorVariantDescriptor[];
 }
 
 export interface KotodamaCompiledManifestProvenance {
@@ -217,7 +220,7 @@ export interface KotodamaCompiledManifestMetadata {
     dynamic_writes: KotodamaCompiledDynamicAccessHint[];
   } | null;
   states: KotodamaCompiledStateDescriptor[];
-  error_codes: KotodamaCompiledErrorCodeDescriptor[] | null;
+  error_types: KotodamaCompiledErrorTypeDescriptor[] | null;
   kotoba: KotodamaCompiledKotobaEntry[] | null;
   /** Signed provenance is not accepted until its exact V1 message can be verified. */
   provenance: null;

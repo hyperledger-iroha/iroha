@@ -2377,19 +2377,6 @@ fn certify_autonomous_payload_for_test(fixture: &ApplyFixture, payload: &LaneExe
         .persist_committed_lane_block_session(&session, &signer_pops)
         .expect("persist exact autonomous certification");
 }
-fn body_with_merge_reference(reference: CertifiedMergeLedgerReference) -> SignedBlock {
-    let key = KeyPair::try_from_seed(vec![0xC9; 32], Algorithm::BlsNormal)
-        .expect("derive decided-body signer");
-    let execution_context =
-        BlockExecutionContextBundle::new(Vec::new()).with_merge_entry(reference);
-    let block = BlockBuilder::new_with_time_source(Vec::new(), TimeSource::new_system())
-        .chain(0, None)
-        .with_execution_context(Some(execution_context))
-        .try_sign_with_index(key.private_key(), 0)
-        .expect("sign decided body")
-        .unpack(|_| {});
-    SignedBlock::from(block)
-}
 fn body_with_exact_merge_execution_header(entry: &MergeLedgerEntry) -> SignedBlock {
     let key = KeyPair::try_from_seed(vec![0xCA; 32], Algorithm::BlsNormal)
         .expect("derive execution-carrier signer");

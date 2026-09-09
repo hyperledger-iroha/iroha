@@ -63,7 +63,7 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
     // Subscribe to committed block headers.
     let mut events = timeout(
         network.sync_timeout(),
-        test_client.listen_for_events([BlockEventFilter::new()
+        test_client.account_client().events().subscribe([BlockEventFilter::new()
             .for_height(nonzero!(2u64))
             .for_status(BlockStatus::Committed)]),
     )
@@ -96,7 +96,7 @@ async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()
         *event.header()
     })
     .await?;
-    events.close().await;
+    events.close().await?;
     let block_hash = header.hash();
     // Query the committed transaction by its entrypoint hash.
     let test_client = network.client();

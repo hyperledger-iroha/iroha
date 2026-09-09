@@ -1,6 +1,6 @@
 #![allow(clippy::useless_let_if_seq)]
 use crate::sorafs::pin_registry::StorageClass;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_primitives::numeric::{RoundingMode, XorQuantity};
 use iroha_schema::IntoSchema;
@@ -13,16 +13,12 @@ use thiserror::Error;
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::BlobDigest")]
 pub struct BlobDigest(
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes",
-            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes",
+        bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
     )]
     pub [u8; 32],
 );
@@ -80,16 +76,12 @@ pub type ChunkDigest = BlobDigest;
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema, Default,
 )]
 #[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::StorageTicketId")]
 pub struct StorageTicketId(
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::fixed_bytes",
-            bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::fixed_bytes",
+        bounded_with = "crate::json_helpers::fixed_bytes::serialize_bounded"
     )]
     pub [u8; 32],
 );
@@ -137,9 +129,20 @@ impl<'a> norito::core::DecodeFromSlice<'a> for StorageTicketId {
 }
 /// Semantic classification for an incoming DA blob.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "class", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::BlobClass")]
@@ -157,8 +160,7 @@ pub enum BlobClass {
 /// Codec label describing the blob payload.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default)]
 #[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::BlobCodec")]
 pub struct BlobCodec(pub String);
 impl BlobCodec {
@@ -170,10 +172,22 @@ impl BlobCodec {
 }
 /// Compression applied to the submitted payload.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default, Hash,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(tag = "kind", content = "value"))]
+#[norito(tag = "kind", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::Compression")]
 pub enum Compression {
@@ -192,8 +206,7 @@ pub enum Compression {
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default, Hash,
 )]
 #[repr(transparent)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::GovernanceTag")]
 pub struct GovernanceTag(pub String);
 impl GovernanceTag {
@@ -205,9 +218,21 @@ impl GovernanceTag {
 }
 /// Forward-error-correction schemes supported by the DA layer.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default, Hash, PartialOrd, Ord,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    Hash,
+    PartialOrd,
+    Ord,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "scheme", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::FecScheme")]
@@ -241,8 +266,18 @@ impl From<norito::streaming::FecScheme> for FecScheme {
     }
 }
 /// Erasure coding parameters applied during chunking.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::ErasureProfile")]
@@ -270,8 +305,20 @@ impl Default for ErasureProfile {
     }
 }
 /// Retention policy negotiated for a DA blob.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Hash)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Hash,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::RetentionPolicy")]
@@ -299,8 +346,18 @@ impl Default for RetentionPolicy {
     }
 }
 /// Optional metadata entries supplied by submitters.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::ExtraMetadata")]
@@ -316,12 +373,8 @@ impl ExtraMetadata {
     }
 }
 /// Encryption algorithm applied to a metadata entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "cipher", content = "params", deny_unknown_fields)
-)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default, DeriveJsonSerialize)]
+#[norito(tag = "cipher", content = "params", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::MetadataEncryption")]
 pub enum MetadataEncryption {
@@ -331,7 +384,7 @@ pub enum MetadataEncryption {
     /// `ChaCha20Poly1305` envelope with explicit metadata (e.g., a nullable key label).
     ChaCha20Poly1305(MetadataCipherEnvelope),
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for MetadataEncryption {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -397,7 +450,7 @@ impl norito::json::JsonDeserialize for MetadataEncryption {
         Ok(encryption)
     }
 }
-#[cfg(feature = "json")]
+
 impl<'a> norito::json::FastFromJson<'a> for MetadataEncryption {
     fn parse(
         walker: &mut norito::json::TapeWalker<'a>,
@@ -419,8 +472,18 @@ impl MetadataEncryption {
     }
 }
 /// Additional envelope metadata associated with an encrypted entry.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::MetadataCipherEnvelope")]
@@ -442,8 +505,17 @@ impl MetadataCipherEnvelope {
     }
 }
 /// Single metadata entry stored alongside the blob.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::MetadataEntry")]
@@ -451,12 +523,9 @@ pub struct MetadataEntry {
     /// Metadata key (UTF-8, governance-approved).
     pub key: String,
     /// Raw metadata value bytes (Norito or application-specific encoding).
-    #[cfg_attr(
-        feature = "json",
-        norito(
-            with = "crate::json_helpers::base64_vec",
-            bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
-        )
+    #[norito(
+        with = "crate::json_helpers::base64_vec",
+        bounded_with = "crate::json_helpers::base64_vec::serialize_bounded"
     )]
     pub value: Vec<u8>,
     /// Visibility scope for the entry.
@@ -487,8 +556,19 @@ impl MetadataEntry {
     }
 }
 /// Visibility scope for a metadata entry.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "visibility", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::MetadataVisibility")]
@@ -508,9 +588,18 @@ pub const DA_RENT_POLICY_VERSION_V1: u8 = 1;
 /// preventing other DA amounts from exceeding XOR's independent nine-decimal ledger limit.
 const DA_RENT_RATE_SCALE: u32 = 6;
 /// Rent and incentive policy for DA submissions (see roadmap task DA-7).
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::types::DaRentPolicyV1")]
 pub struct DaRentPolicyV1 {
     /// Schema version (`DA_RENT_POLICY_VERSION_V1`).
@@ -639,8 +728,17 @@ fn apply_basis_points(amount: &XorQuantity, basis_points: u16) -> Result<XorQuan
         .map_err(|_| DaRentError::Overflow)
 }
 /// Rent and incentive breakdown derived from [`DaRentPolicyV1`].
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::types::DaRentQuote")]
@@ -671,9 +769,18 @@ impl Default for DaRentQuote {
     }
 }
 /// Ledger-oriented projection derived from a [`DaRentQuote`].
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::da::types::DaRentLedgerProjection")]
 pub struct DaRentLedgerProjection {
     /// Total rent owed for the retention period.
@@ -755,7 +862,7 @@ impl RentRatioField {
         }
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod manifest_carrier_json_tests {
     use super::*;
     use norito::json;
@@ -959,7 +1066,7 @@ mod rent_policy_tests {
             egress_credit_per_gib: Numeric::zero().into(),
         }
     }
-    #[cfg(feature = "json")]
+
     fn quote_json(base_rent: &str) -> String {
         format!(
             r#"{{"base_rent":{base_rent},"protocol_reserve":"0","provider_reward":"0","pdp_bonus":"0","potr_bonus":"0","egress_credit_per_gib":"0"}}"#
@@ -1065,14 +1172,14 @@ mod rent_policy_tests {
             assert_eq!(decoded, quote, "canonical={canonical}");
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn rent_policy_json_uses_canonical_quantity_strings() {
         let json = norito::json::to_json(&DaRentPolicyV1::default()).expect("serialize policy");
         assert!(json.contains("\"base_rate_per_gib_month\":\"0.25\""));
         assert!(json.contains("\"egress_credit_per_gib\":\"0.0015\""));
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn rent_quote_json_rejects_invalid_xor_representations() {
         for invalid in [
@@ -1094,7 +1201,7 @@ mod rent_policy_tests {
             );
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn rent_quote_json_roundtrips_submicro_wide_and_maximum_values() {
         for canonical in [
@@ -1110,7 +1217,7 @@ mod rent_policy_tests {
             assert!(encoded.contains(&format!("\"base_rent\":\"{canonical}\"")));
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn rent_policy_json_rejects_retired_micro_aliases() {
         let legacy = r#"{"version":1,"base_rate_per_gib_month_micro":250000,"protocol_reserve_bps":2000,"pdp_bonus_bps":500,"potr_bonus_bps":250,"egress_credit_per_gib_micro":1500}"#;

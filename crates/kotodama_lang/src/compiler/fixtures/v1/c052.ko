@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main(AccountId account) {
-  ledger::permission::revoke(account, 1);
+  ledger::permission::revoke(account: account, permission: 1);
 }
 
 }

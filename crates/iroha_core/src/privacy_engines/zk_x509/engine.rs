@@ -640,6 +640,62 @@ mod tests {
             independent
         );
     }
+    /// Record forbidden entropy reads while rejecting every request immediately.
+    #[derive(Default)]
+    struct PreflightEntropyV1 {
+        requests: usize,
+    }
+    impl rand::TryRngCore for PreflightEntropyV1 {
+        type Error = &'static str;
+
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            self.requests += 1;
+            Err("preflight must not request entropy")
+        }
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            self.requests += 1;
+            Err("preflight must not request entropy")
+        }
+        fn try_fill_bytes(&mut self, _destination: &mut [u8]) -> Result<(), Self::Error> {
+            self.requests += 1;
+            Err("preflight must not request entropy")
+        }
+    }
+    impl rand::TryCryptoRng for PreflightEntropyV1 {}
+
+    #[test]
+    fn credential_prover_rejects_profile_or_genesis_before_entropy() {
+        let fixture = super::super::relation::release_fixture::build_zk_x509_reference_fixture_v1()
+            .expect("canonical reference fixture");
+        let (sha_digests, p256_digest) =
+            compiled_profile_schedule_digests_v1().expect("all six frozen schedules");
+        let fields = compiled_profile_fields_v1(&sha_digests, &p256_digest);
+        let independent = independent_compiled_profile_digest_v1(&fields);
+        // Profile admission precedes genesis and witness preparation. Keep that ordering test
+        // independent of release readiness: the separate release-pin equality test above must
+        // still fail if the current manifest and pin disagree.
+        let expected = match ZK_X509_COMPILED_PROFILE_DIGEST_V1 {
+            None => ZkX509EngineErrorV1::CompiledProfileUnpinned,
+            Some(pin) if pin != independent => ZkX509EngineErrorV1::CompiledProfileMismatch,
+            Some(_) => {
+                ZkX509EngineErrorV1::CredentialProof(ZkX509CredentialProofErrorV1::InvalidStatement)
+            }
+        };
+        let mut rng = PreflightEntropyV1::default();
+        let error = prove_zk_x509_credential_proof_v1_with_rng(
+            &fixture.statement,
+            &fixture.authoritative_state,
+            fixture.statement.presentation_not_before_unix_seconds * 1_000,
+            &PrivacyConsensusLimitsV1::taira_default(),
+            [0; 32],
+            &[],
+            &mut rng,
+        )
+        .expect_err("invalid genesis must not reach credential proof construction");
+        assert_eq!(error, expected);
+        assert_eq!(rng.requests, 0, "credential preflight consumed entropy");
+    }
+
     #[test]
     fn sole_profile_is_pinned_while_release_activation_stays_governance_gated() {
         assert!(ZK_X509_COMPILED_PROFILE_DIGEST_V1.is_some());

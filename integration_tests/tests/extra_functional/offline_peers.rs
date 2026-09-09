@@ -124,14 +124,8 @@ async fn check_status(network: &Network, expected_peers: u64) -> Result<()> {
     loop {
         let mut all_ok = true;
         for peer in network.peers() {
-            let client = peer.client();
-            let status = match spawn_blocking(move || client.client().get_status()).await {
-                Ok(Ok(status)) => status,
-                Ok(Err(err)) => {
-                    last_err = Some(err);
-                    all_ok = false;
-                    continue;
-                }
+            let status = match peer.status().await {
+                Ok(status) => status,
                 Err(err) => {
                     last_err = Some(err.into());
                     all_ok = false;

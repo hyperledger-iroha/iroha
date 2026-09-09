@@ -139,6 +139,9 @@ fn sample_inrou_published_artifact() -> SoraPublishedInrouGuestImageArtifactV1 {
 }
 include!("soracloud_initial_fixture_tests.rs");
 #[cfg(feature = "zk-stark")]
+#[path = "soracloud_full_bootstrap_preflight_tests.rs"]
+mod full_bootstrap_preflight_tests;
+#[cfg(feature = "zk-stark")]
 #[path = "soracloud_required_refresh_mode_tests.rs"]
 mod required_refresh_mode_tests;
 macro_rules! permissioned_soracloud_state {
@@ -13692,7 +13695,7 @@ fn soracloud_multi_input_add_matches_plaintext_slots() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key,
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let inputs = [
         encrypt_identifier_from_seed(&public_parameters, &[1, 2], b"soracloud-fhe-add-input-1")
@@ -13702,10 +13705,14 @@ fn soracloud_multi_input_add_matches_plaintext_slots() {
         encrypt_identifier_from_seed(&public_parameters, &[5, 6], b"soracloud-fhe-add-input-3")
             .expect("encrypt input 3"),
     ];
+    for input in &inputs {
+        assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
+    }
     let evaluation_keys = sample_bfv_evaluation_key_bundle();
     let job = sample_fhe_job(Vec::new());
     let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
         .expect("execute three-input FHE add job");
+    assert_eq!(output.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let plaintext_slots = output
         .slots
         .iter()
@@ -13733,7 +13740,7 @@ fn soracloud_multi_input_multiply_matches_plaintext_slots() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key,
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let inputs = [
         encrypt_identifier_from_seed(&public_parameters, &[2, 3], b"soracloud-fhe-mul-input-1")
@@ -13743,6 +13750,9 @@ fn soracloud_multi_input_multiply_matches_plaintext_slots() {
         encrypt_identifier_from_seed(&public_parameters, &[6, 7], b"soracloud-fhe-mul-input-3")
             .expect("encrypt input 3"),
     ];
+    for input in &inputs {
+        assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
+    }
     let evaluation_keys = sample_bfv_evaluation_key_bundle();
     let mut job = sample_fhe_job(Vec::new());
     job.operation = FheJobOperationV1::Multiply;
@@ -13750,6 +13760,7 @@ fn soracloud_multi_input_multiply_matches_plaintext_slots() {
         bfv_balanced_multiplication_depth(inputs.len()).expect("three-input depth plan");
     let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
         .expect("execute three-input FHE multiply job");
+    assert_eq!(output.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let plaintext_slots = output
         .slots
         .iter()
@@ -14096,11 +14107,12 @@ fn soracloud_bootstrap_uses_refresh_key() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key: public_key.clone(),
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let input =
         encrypt_identifier_from_seed(&public_parameters, b"abc", b"soracloud-bootstrap-input")
             .expect("encrypt input");
+    assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,
         rotation_keys: Vec::new(),
@@ -14537,10 +14549,11 @@ fn soracloud_rotate_left_uses_rotation_key_refresh() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key: public_key.clone(),
-        max_input_bytes: 4,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let input = encrypt_identifier_from_seed(&public_parameters, b"ab", b"soracloud-rotate-input")
         .expect("encrypt input");
+    assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let mut plain_rotated = input.slots.clone();
     plain_rotated.rotate_left(1);
     let evaluation_keys = BfvEvaluationKeyBundle {
@@ -14576,6 +14589,23 @@ fn soracloud_rotate_left_uses_rotation_key_refresh() {
         .iter()
         .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
         .collect::<Vec<_>>();
+    let fixed_width_plaintext_slots = plaintext_slots;
+    // The canonical [length, a, b, padding...] input rotates left once:
+    // a and b lead, all 61 padding slots follow, and length occupies slot 63.
+    let mut expected_slots = vec![0; RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT];
+    expected_slots[0] = 97;
+    expected_slots[1] = 98;
+    expected_slots[RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT - 1] = 2;
+    assert_eq!(fixed_width_plaintext_slots, expected_slots);
+    // Preserve the original five-coordinate assertion as a projection of the
+    // complete, independently specified fixed-width result checked above.
+    let plaintext_slots = vec![
+        fixed_width_plaintext_slots[0],
+        fixed_width_plaintext_slots[1],
+        fixed_width_plaintext_slots[2],
+        fixed_width_plaintext_slots[3],
+        fixed_width_plaintext_slots[RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT - 1],
+    ];
     assert_eq!(plaintext_slots, vec![97, 98, 0, 0, 2]);
 }
 #[test]
@@ -14586,7 +14616,7 @@ fn soracloud_rotate_left_rejects_outer_slot_full_cycle_noop() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key: public_key.clone(),
-        max_input_bytes: 4,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let input = encrypt_identifier_from_seed(
         &public_parameters,
@@ -14594,6 +14624,7 @@ fn soracloud_rotate_left_rejects_outer_slot_full_cycle_noop() {
         b"soracloud-rotate-full-cycle-input",
     )
     .expect("encrypt input");
+    assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let full_cycle_steps = u32::try_from(input.slots.len()).expect("slot count fits u32");
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,

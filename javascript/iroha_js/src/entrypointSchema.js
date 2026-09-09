@@ -1,4 +1,5 @@
-import { isCanonicalKotodamaIdentifier } from "./kotodamaIdentifiers.js";
+import { normalizeContractErrorTypeV1 } from "./contractErrorTypes.js";
+import { isCanonicalKotodamaIdentifier, isCanonicalKotodamaStructName } from "./kotodamaIdentifiers.js";
 
 const TEXT_IS_NOT_ONE_COMPLETE_CANONICAL_PREFIX_TYPE_TREE = "is not one complete canonical prefix type tree";
 const TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE = "is not a V1 entrypoint value-type node";
@@ -107,6 +108,9 @@ function childCount(node, context) {
     case "Result":
       return 2;
     case "Leaf":
+    case "Unit":
+    case "Error":
+    case "StateCursor":
       return 0;
     default:
       fail(`${context}.kind`, TEXT_IS_NOT_A_V1_ENTRYPOINT_VALUE_TYPE_NODE);
@@ -122,10 +126,10 @@ function validateNode(node, context) {
     case "Struct": {
       requireExactKeys(node.value, ["name", "fields"], `${context}.value`);
       const reservedSchemaName =
-        CORE_QUERY_VIEWS.has(node.value.name) || node.value.name === "QueryPage";
+        CORE_QUERY_VIEWS.has(node.value.name) || node.value.name === "QueryPage" || node.value.name === "StatePage";
       if (
         (!reservedSchemaName &&
-          !isCanonicalKotodamaIdentifier(node.value.name, { typeDeclaration: true })) ||
+          !isCanonicalKotodamaStructName(node.value.name)) ||
         !Array.isArray(node.value.fields) ||
         node.value.fields.length === 0
       ) {
@@ -147,6 +151,7 @@ function validateNode(node, context) {
       }
       break;
     }
+    case "Unit":
     case "Option":
     case "Result":
       if (node.value !== null) {
@@ -168,6 +173,12 @@ function validateNode(node, context) {
       }
       break;
     }
+    case "Error":
+      normalizeContractErrorTypeV1(node.value, `${context}.value`);
+      break;
+    case "StateCursor":
+      if (node.value?.kind === "Json") fail(context, "cannot use Json cursor keys");
+      // Cursor schemas carry one exact scalar key-kind descriptor.
     case "Leaf": {
       requireExactKeys(node.value, ["kind", "value"], `${context}.value`);
       if (!LEAF_TYPE_NAMES.has(node.value.kind) || node.value.value !== null) {
@@ -221,7 +232,7 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
     maxDepth = Math.max(maxDepth, depth);
 
     const handle = node.kind === "Option" || node.kind === "Result" || node.kind === "List";
-    if (!suppressWords && (handle || node.kind === "Leaf")) {
+    if (!suppressWords && (handle || node.kind === "Leaf" || node.kind === "Unit" || node.kind === "Error" || node.kind === "StateCursor")) {
       wordCount += 1;
     }
     const children = childCount(node, `${context}.nodes[${index}]`);
@@ -260,6 +271,13 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
             fail(context, "contains a forged reserved query-view schema");
           }
           result = { canonicalName: node.value.name, coreView: node.value.name };
+        } else if (node.value.name === "StatePage") {
+          const [items, next] = childValues;
+          const pair = items?.elementChildren;
+          if (JSON.stringify(node.value.fields) !== JSON.stringify(["items", "next"]) || items?.kind !== "List" || pair?.length !== 2 || !pair[0].scalarKind || pair[0].scalarKind === "Json" || next?.canonicalName !== `Option<StateCursor<${pair[0].canonicalName}>>`) {
+            fail(context, "contains a forged StatePage schema");
+          }
+          result = { canonicalName: `StatePage<${pair[0].canonicalName}, ${pair[1].canonicalName}, ${items.capacity}>` };
         } else if (node.value.name === "QueryPage") {
           const [items, nextOffset] = childValues;
           if (
@@ -280,6 +298,7 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
       case "Tuple":
         result = {
           canonicalName: `(${childValues.map((child) => child.canonicalName).join(", ")})`,
+          tupleChildren: childValues,
         };
         break;
       case "Option":
@@ -296,10 +315,20 @@ export function analyzeEntrypointValueTypeV1(value, context = "entrypoint value 
           kind: "List",
           capacity: Number(node.value.capacity),
           listElementCoreView: childValues[0].coreView,
+          elementChildren: childValues[0].tupleChildren,
         };
         break;
+      case "StateCursor":
+        result = { canonicalName: `StateCursor<${LEAF_TYPE_NAMES.get(node.value.kind)}>` };
+        break;
+      case "Unit":
+        result = { canonicalName: "()" };
+        break;
+      case "Error":
+        result = { canonicalName: node.value.identity };
+        break;
       case "Leaf":
-        result = { canonicalName: LEAF_TYPE_NAMES.get(node.value.kind) };
+        result = { canonicalName: LEAF_TYPE_NAMES.get(node.value.kind), scalarKind: node.value.kind };
         break;
       default:
         fail(context, "contains an unsupported V1 type node");

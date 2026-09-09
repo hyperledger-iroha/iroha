@@ -1,23 +1,28 @@
 pub mod musubi {
     //! First-release Musubi registry query definitions.
-    use std::fmt;
+    pub use self::model::*;
     use crate::musubi::{
         MusubiAliasQueryV1, MusubiArchiveLocationQueryV1, MusubiArchiveRetentionQueryV1,
         MusubiExactPackageQueryV1, MusubiExactReleaseQueryV1, MusubiOrderedPrefixQueryV1,
         MusubiPackagePageQueryV1, MusubiProviderBundleAttestationKeyV1, MusubiResolverIndexQueryV1,
     };
-    pub use self::model::*;
+    use std::fmt;
     #[iroha_data_model_derive::model]
     mod model {
         use super::*;
         use norito::codec::{Decode, Encode};
         /// Fetch one exact authoritative Musubi V1 package record.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiExactPackageV1 {
@@ -25,12 +30,17 @@ pub mod musubi {
             pub request: MusubiExactPackageQueryV1,
         }
         /// Fetch one paired finalized Musubi V1 home/universal release view.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiExactReleaseV1 {
@@ -38,12 +48,17 @@ pub mod musubi {
             pub request: MusubiExactReleaseQueryV1,
         }
         /// Fetch one exact immutable Musubi V1 provider bundle-attestation audit record.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiProviderBundleAttestationV1 {
@@ -51,12 +66,17 @@ pub mod musubi {
             pub key: MusubiProviderBundleAttestationKeyV1,
         }
         /// Fetch a finalized page from the universal Musubi V1 resolver index.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiResolverIndexV1 {
@@ -64,12 +84,17 @@ pub mod musubi {
             pub request: MusubiResolverIndexQueryV1,
         }
         /// Fetch a finalized page of structured Musubi V1 package versions.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiVersionsV1 {
@@ -77,12 +102,17 @@ pub mod musubi {
             pub request: MusubiPackagePageQueryV1,
         }
         /// Fetch a finalized page of accepted Musubi V1 package members.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiMaintainersV1 {
@@ -90,12 +120,17 @@ pub mod musubi {
             pub request: MusubiPackagePageQueryV1,
         }
         /// Fetch a finalized page of renewable Musubi V1 archive locations.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiArchiveLocationsV1 {
@@ -103,12 +138,17 @@ pub mod musubi {
             pub request: MusubiArchiveLocationQueryV1,
         }
         /// Fetch exact finalized cache-retention decisions for a bounded archive batch.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiArchiveRetentionV1 {
@@ -116,12 +156,17 @@ pub mod musubi {
             pub request: MusubiArchiveRetentionQueryV1,
         }
         /// Fetch one exact permanent Musubi V1 global alias record.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiAliasV1 {
@@ -129,12 +174,17 @@ pub mod musubi {
             pub request: MusubiAliasQueryV1,
         }
         /// Fetch a finalized page of permanent Musubi V1 alias history.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiAliasHistoryV1 {
@@ -142,12 +192,17 @@ pub mod musubi {
             pub request: MusubiAliasQueryV1,
         }
         /// Fetch a finalized byte-ordered prefix page from the Musubi V1 directory.
-        #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            PartialEq,
+            Eq,
+            Decode,
+            Encode,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
-        #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+        #[norito(deny_unknown_fields)]
         #[derive(derive_more::Constructor, iroha_schema::IntoSchema)]
         #[repr(transparent)]
         pub struct FindMusubiOrderedPrefixV1 {
@@ -265,7 +320,6 @@ pub mod musubi {
     }
     #[cfg(test)]
     mod tests {
-        use norito::codec::{Decode, Encode};
         use super::prelude::*;
         use crate::{
             musubi::{
@@ -284,6 +338,7 @@ pub mod musubi {
             query::{SingularQuery, SingularQueryBox, SingularQueryOutputBox},
             sorafs::{capacity::ProviderId, pin_registry::ReplicationOrderId},
         };
+        use norito::codec::{Decode, Encode};
         fn package() -> MusubiPackageIdV1 {
             MusubiPackageIdV1::new(
                 DataSpaceId::new(7),
@@ -402,7 +457,7 @@ pub mod musubi {
             assert_output_variant::<crate::musubi::MusubiAliasHistoryPageV1>();
             assert_output_variant::<MusubiOrderedPackagePageV1>();
         }
-        #[cfg(feature = "json")]
+
         #[test]
         fn v1_query_wrapper_json_rejects_unknown_fields() {
             let query =

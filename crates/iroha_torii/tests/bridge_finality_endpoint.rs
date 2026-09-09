@@ -240,7 +240,10 @@ fn endpoint_fixture(persist_artifact: bool) -> EndpointFixture {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii bridge-finality fixture");
     EndpointFixture {
@@ -384,3 +387,6 @@ async fn proof_and_bundle_endpoints_fail_closed_for_a_malformed_durable_envelope
     }
     fixture.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

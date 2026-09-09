@@ -2034,7 +2034,6 @@ fn prove_funded_prerequisite(
         &hash_eq,
         &hash_ep,
         material.platform_credential.clone(),
-        material.authorization_relation.device_authority_secret,
     );
     let authorization_keys = MintAuthorizationKeys::generate(
         &material,
@@ -2970,7 +2969,6 @@ fn real_recipient_mint_authorization_uses_hardware_credential_and_paired_proofs(
                 &hash_eq,
                 &hash_ep,
                 material.platform_credential.clone(),
-                material.authorization_relation.device_authority_secret,
             );
             let keys = MintAuthorizationKeys::generate(
                 &material,
@@ -3157,8 +3155,7 @@ fn real_guard_bundle_carries_current_credential_sha_histories_with_reusable_keys
                     &relation.statement,
                     digest(b"real-guard-state-nonce", index),
                 );
-                let credential =
-                    credential_keys.prove(&eq, &ep, &hash_eq, &hash_ep, relation, device_secret);
+                let credential = credential_keys.prove(&eq, &ep, &hash_eq, &hash_ep, relation);
                 assert_augmented_credential_proof_rejections(
                     &eq,
                     &ep,

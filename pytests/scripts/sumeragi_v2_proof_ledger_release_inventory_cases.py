@@ -1243,6 +1243,80 @@ def test_production_release_inventory_seals_contention_tolerant_restart_deadline
     ), errors
 
 
+def assert_retired_reader_mutation_changes_only_its_helper_seal(
+    tmp_path: Path, old: str, new: str
+) -> None:
+    """Run the complete helper owner; isolate only the new reader-seal error."""
+
+    module = load_checker()
+    seals = module._PRODUCTION_LIVENESS_HELPER_SEALS
+    assert len(seals) == 11
+    fixture_sources = module._PRODUCTION_LIVENESS_HELPER_FIXTURE_SOURCES
+    assert {seal.source for seal in seals} == set(fixture_sources)
+    for relative in fixture_sources.values():
+        source = ROOT_DIR / relative
+        assert source.is_file() and not source.is_symlink(), source
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+
+    reader_name = "read_autonomous_lane_retired_attempt"
+    reader_seals = [seal for seal in seals if seal.item == reader_name]
+    assert len(reader_seals) == 1
+    reader_seal = reader_seals[0]
+    before = module._production_liveness_helper_source_seal_errors(tmp_path)
+    assert all(reader_name not in error for error in before), before
+    reader_path = tmp_path / fixture_sources[reader_seal.source]
+    mutate_rust_item_source_in_context(
+        module,
+        reader_path,
+        reader_name,
+        (("impl", "Kura"),),
+        old,
+        new,
+    )
+
+    # These are seal-negative checks, not Rust execution or equivalence tests.
+    # Retain every other helper diagnostic rather than resealing unrelated code.
+    after = module._production_liveness_helper_source_seal_errors(tmp_path)
+    reader_errors = [error for error in after if reader_name in error]
+    assert len(reader_errors) == 1, after
+    assert (
+        f"production liveness helper {reader_name} declaration and complete "
+        "control flow must match the exact reviewed token digest "
+        f"{reader_seal.item_token_sha256}; found "
+    ) in reader_errors[0], reader_errors
+    assert [error for error in after if reader_name not in error] == before, {
+        "before": before,
+        "after": after,
+    }
+    assert module._PRODUCTION_LIVENESS_HELPER_SEALS == seals
+
+
+def test_retired_reader_helper_seal_rejects_latest_pointer_lookup(
+    tmp_path: Path,
+) -> None:
+    """Changing exact-attempt lookup must invalidate the reviewed reader seal."""
+
+    assert_retired_reader_mutation_changes_only_its_helper_seal(
+        tmp_path,
+        ".read_autonomous_lane_block_attempt_record_with_current_locked(",
+        ".read_autonomous_lane_block_record_locked(",
+    )
+
+
+def test_retired_reader_helper_seal_rejects_reversed_retirement_equality(
+    tmp_path: Path,
+) -> None:
+    """Reversing exact retirement equality must invalidate the reader seal."""
+
+    assert_retired_reader_mutation_changes_only_its_helper_seal(
+        tmp_path,
+        "if retirement != AutonomousLaneSlotRetirementV1::from_payload(",
+        "if retirement == AutonomousLaneSlotRetirementV1::from_payload(",
+    )
+
+
 def test_production_release_inventory_seals_successor_parent_binding(
     tmp_path: Path,
 ) -> None:
@@ -2248,3 +2322,61 @@ def test_release_inventory_checker_has_one_component_owned_provider() -> None:
         errors = provider_errors(mutated_sources)
         assert len(errors) == 1
         assert name in errors[0] and SCRIPT.name in errors[0], errors
+
+
+def test_reviewed_rust_include_manifests_are_static_and_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_checker()
+    observed = {
+        Path(parent): tuple(Path(component) for component in components)
+        for parent, components in module._REVIEWED_RUST_INCLUDE_MANIFESTS.items()
+    }
+    assert observed == REVIEWED_RUST_INCLUDE_MANIFESTS
+    assert module._reviewed_rust_include_manifest_errors() == []
+
+    helper = module._RECURSIVE_REVIEWED_RUST_SOURCE
+    errors: list[str] = []
+    helper._validate_reviewed_rust_include_manifest(ROOT_DIR, errors)
+    assert errors == []
+
+    manifest_relative = helper.REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE
+    canonical_path = ROOT_DIR / manifest_relative
+    canonical_pin = helper.REVIEWED_RUST_INCLUDE_MANIFEST_SHA256
+    corrupted_pin = ("0" if canonical_pin[0] != "0" else "1") + canonical_pin[1:]
+    assert corrupted_pin != canonical_pin
+    with monkeypatch.context() as patch:
+        patch.setattr(helper, "REVIEWED_RUST_INCLUDE_MANIFEST_SHA256", corrupted_pin)
+        errors = []
+        helper._validate_reviewed_rust_include_manifest(ROOT_DIR, errors)
+        assert errors == [
+            f"{canonical_path}: reviewed Rust include manifest digest must equal "
+            f"{corrupted_pin}; found {canonical_pin}"
+        ]
+
+    source = canonical_path.read_text(encoding="utf-8")
+    component = "consensus_v2/messages.rs"
+    removed = f"        '{component}',\n"
+    assert source.count(removed) == 1
+    changed = source.replace(removed, "", 1)
+    assert changed != source
+    mutant_path = tmp_path / manifest_relative
+    mutant_path.parent.mkdir(parents=True, exist_ok=True)
+    mutant_path.write_text(changed, encoding="utf-8")
+    changed_manifest = dict(helper._REVIEWED_RUST_INCLUDE_MANIFESTS)
+    parent = "crates/iroha_data_model/src/block/consensus_v2.rs"
+    changed_manifest[parent] = tuple(
+        child for child in changed_manifest[parent] if child != component
+    )
+    changed_digest = hashlib.sha256(
+        json.dumps(
+            changed_manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+        ).encode("ascii")
+    ).hexdigest()
+    assert changed_digest != canonical_pin
+    errors = []
+    helper._validate_reviewed_rust_include_manifest(tmp_path, errors)
+    assert errors == [
+        f"{mutant_path}: reviewed Rust include manifest digest must equal "
+        f"{canonical_pin}; found {changed_digest}"
+    ]

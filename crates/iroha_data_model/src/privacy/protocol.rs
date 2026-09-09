@@ -5,12 +5,11 @@
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyP256PointV1")]
 pub struct PrivacyP256PointV1(
     /// The exact 33-byte compressed SEC1 value.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub [u8; 33],
 );
 impl PrivacyP256PointV1 {
@@ -51,9 +50,22 @@ impl AsRef<[u8; 33]> for PrivacyP256PointV1 {
     }
 }
 /// Canonical twisted-ElGamal ciphertext `(C_L, C_R)` over P-256.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyP256CiphertextV1")]
 pub struct PrivacyP256CiphertextV1 {
@@ -63,9 +75,22 @@ pub struct PrivacyP256CiphertextV1 {
     pub right: PrivacyP256PointV1,
 }
 /// Governed policy namespace payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPolicyNamespaceV1")]
 pub struct PrivacyPolicyNamespaceV1 {
@@ -73,9 +98,22 @@ pub struct PrivacyPolicyNamespaceV1 {
     pub policy_id: PrivacyPolicyIdV1,
 }
 /// Pool namespace payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPoolNamespaceV1")]
 pub struct PrivacyPoolNamespaceV1 {
@@ -83,9 +121,22 @@ pub struct PrivacyPoolNamespaceV1 {
     pub pool_id: PrivacyPoolIdV1,
 }
 /// Issuer, admitted-identity registry, and policy namespace payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyIssuerRegistryPolicyNamespaceV1")]
 pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
@@ -100,9 +151,22 @@ pub struct PrivacyIssuerRegistryPolicyNamespaceV1 {
 ///
 /// This scope owns the single CA-membership root derived from a complete
 /// trust store. It deliberately excludes certificate-policy identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyTrustAnchorNamespaceV1")]
 pub struct PrivacyTrustAnchorNamespaceV1 {
@@ -112,9 +176,22 @@ pub struct PrivacyTrustAnchorNamespaceV1 {
 /// Trust-anchor and certificate-policy namespace payload.
 ///
 /// This scope owns policy-specific statement state and the corresponding issuer CRL root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyTrustAnchorPolicyNamespaceV1")]
 pub struct PrivacyTrustAnchorPolicyNamespaceV1 {
@@ -124,9 +201,22 @@ pub struct PrivacyTrustAnchorPolicyNamespaceV1 {
     pub policy_id: PrivacyPolicyIdV1,
 }
 /// Governed parameter namespace payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyParameterNamespaceV1")]
 pub struct PrivacyParameterNamespaceV1 {
@@ -134,9 +224,22 @@ pub struct PrivacyParameterNamespaceV1 {
     pub parameter_id: PrivacyParameterIdV1,
 }
 /// Issuer and selective-disclosure policy namespace payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyIssuerPolicyNamespaceV1")]
 pub struct PrivacyIssuerPolicyNamespaceV1 {
@@ -146,9 +249,22 @@ pub struct PrivacyIssuerPolicyNamespaceV1 {
     pub policy_id: PrivacyPolicyIdV1,
 }
 /// Pool and private-program namespace payload.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPoolProgramNamespaceV1")]
 pub struct PrivacyPoolProgramNamespaceV1 {
@@ -158,12 +274,22 @@ pub struct PrivacyPoolProgramNamespaceV1 {
     pub program_id: PrivacyProgramIdV1,
 }
 /// Protocol-specific portion of a replay, output, or root namespace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "scope", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "scope", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyNamespaceScopeV1")]
 pub enum PrivacyNamespaceScopeV1 {
@@ -201,9 +327,22 @@ pub enum PrivacyNamespaceComponentV1 {
     Program,
 }
 /// Closed namespace for one protocol's replay, output, and root state.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyNamespaceV1")]
 pub struct PrivacyNamespaceV1 {
@@ -444,12 +583,22 @@ pub enum PrivacyNamespaceValidationError {
     },
 }
 /// Authority responsible for advancing one root role after initialization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "management", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "management", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyRootManagementV1")]
 pub enum PrivacyRootManagementV1 {
@@ -459,12 +608,22 @@ pub enum PrivacyRootManagementV1 {
     GovernanceManaged,
 }
 /// Semantic role of one canonical root inside a protocol namespace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "role", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "role", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyRootRoleV1")]
 pub enum PrivacyRootRoleV1 {
@@ -549,9 +708,21 @@ impl PrivacyRootRoleV1 {
     }
 }
 /// Governance payload publishing one canonical privacy root.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyRootPublicationV1")]
 pub struct PrivacyRootPublicationV1 {
@@ -672,9 +843,20 @@ pub enum PrivacyRootPublicationValidationError {
 /// The payload deliberately contains neither an initial root nor an initial epoch. Core derives the
 /// pinned Orchard V3 empty-tree root and installs it at [`PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1`],
 /// so governance cannot choose an alternate accumulator origin.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyOrchardPoolBootstrapV1")]
 pub struct PrivacyOrchardPoolBootstrapV1 {
@@ -777,20 +959,33 @@ pub const PRIVACY_FCMP_OUTPUT_TUPLE_BYTES_V1: usize = 3 * 32;
 /// All three values are canonical compressed prime-order Edwards points. The data model preserves
 /// the exact encodings; the native FCMP++ engine performs the curve, subgroup, and non-identity
 /// checks before governance or proof admission.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyFcmpOutputTupleV1")]
 pub struct PrivacyFcmpOutputTupleV1 {
     /// One-time output key `O`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub output_key: [u8; 32],
     /// Per-output linking-tag generator `I`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub linking_tag_generator: [u8; 32],
     /// Amount commitment `C`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub amount_commitment: [u8; 32],
 }
 impl PrivacyFcmpOutputTupleV1 {
@@ -854,16 +1049,29 @@ pub enum PrivacyFcmpOutputTupleValidationErrorV1 {
 ///
 /// Odd layer counts identify Selene roots and even layer counts identify Helios roots. The layer
 /// count is cryptographically significant and cannot be inferred from the compressed point.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyFcmpTreeRootV1")]
 pub struct PrivacyFcmpTreeRootV1 {
     /// Number of alternating curve-tree layers.
     pub layers: u8,
     /// Canonical compressed Selene or Helios point selected by layer parity.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub point: [u8; 32],
 }
 impl PrivacyFcmpTreeRootV1 {
@@ -919,23 +1127,36 @@ pub enum PrivacyFcmpTreeRootValidationErrorV1 {
 /// The IFC1 proof duplicates `O~`, `I~`, and `R`; the native decoder must
 /// compare those bytes exactly. `C~` and the key image `L` remain
 /// statement-only public inputs to the complete relation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyFcmpInputPublicV1")]
 pub struct PrivacyFcmpInputPublicV1 {
     /// Rerandomized output key `O~`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub output_key_tilde: [u8; 32],
     /// Rerandomized linking-tag generator `I~`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub linking_tag_generator_tilde: [u8; 32],
     /// Rerandomization commitment `R`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub rerandomization_commitment: [u8; 32],
     /// Pseudo output amount commitment `C~`.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub pseudo_out: [u8; 32],
     /// Linkability key image `L`.
     pub key_image: PrivacyFcmpKeyImageV1,
@@ -1030,9 +1251,20 @@ pub const PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1: usize = 4
 ///
 /// The output identifier is a ledger index only. The statement and native curve tree always retain
 /// and consume the corresponding full `(O, I, C)` tuple.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyFcmpEncryptedOutputV1")]
 pub struct PrivacyFcmpEncryptedOutputV1 {
@@ -1043,13 +1275,24 @@ pub struct PrivacyFcmpEncryptedOutputV1 {
     /// Identifier of the ordered public output tuple.
     pub output_id: PrivacyFcmpOutputIdV1,
     /// Exact `IFCE || nonce || XChaCha20-Poly1305(FCMP note)` bytes.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub ciphertext: Vec<u8>,
 }
 /// Immutable governance payload for one FCMP++ complete-output-set pool.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyFcmpPoolBootstrapV1")]
 pub struct PrivacyFcmpPoolBootstrapV1 {
@@ -1061,9 +1304,20 @@ pub struct PrivacyFcmpPoolBootstrapV1 {
     pub initial_outputs: Vec<PrivacyFcmpOutputTupleV1>,
 }
 /// Immutable governance payload for one private-IVM program pool.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyIvmPrivateNotePoolBootstrapV1")]
 pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
@@ -1081,9 +1335,20 @@ pub struct PrivacyIvmPrivateNotePoolBootstrapV1 {
     pub initial_note_commitments: Vec<PrivacyCommitmentV1>,
 }
 /// Immutable governance payload for one PQ-MASP note pool.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPqMaspPoolBootstrapV1")]
 pub struct PrivacyPqMaspPoolBootstrapV1 {
@@ -1099,23 +1364,31 @@ pub struct PrivacyPqMaspPoolBootstrapV1 {
 /// Initial roots and epochs are deliberately absent. Core derives each protocol's pinned root from
 /// the complete canonical genesis commitment set at epoch one, preventing governance from selecting
 /// an alternate accumulator origin.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "protocol", content = "bootstrap", deny_unknown_fields)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "protocol", content = "bootstrap", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProofManagedPoolBootstrapV1")]
 pub enum PrivacyProofManagedPoolBootstrapV1 {
     /// FCMP++ complete-output-set origin.
-    #[cfg_attr(feature = "json", norito(rename = "monero-fcmp-plus-plus-v1"))]
+    #[norito(rename = "monero-fcmp-plus-plus-v1")]
     MoneroFcmpPlusPlusV1(PrivacyFcmpPoolBootstrapV1),
     /// Native private-IVM program-state origin.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
+    #[norito(rename = "iroha-ivm-private-note-stark-v1")]
     IrohaIvmPrivateNoteStarkV1(PrivacyIvmPrivateNotePoolBootstrapV1),
     /// PQ-MASP note-commitment origin.
-    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v1"))]
+    #[norito(rename = "pq-masp-stark-v1")]
     PqMaspStarkV1(PrivacyPqMaspPoolBootstrapV1),
 }
 impl PrivacyProofManagedPoolBootstrapV1 {
@@ -1419,9 +1692,21 @@ pub enum PrivacyProofManagedPoolBootstrapValidationErrorV1 {
     IncompatibleRootRole,
 }
 /// One canonical encrypted account in a PGC account-state bootstrap.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPgcAccountV1")]
 pub struct PrivacyPgcAccountV1 {
@@ -1446,13 +1731,24 @@ pub enum PrivacyPgcAccountPointV1 {
 /// ordinary privacy actions. The native verifier must additionally perform an
 /// exact decode and require byte-for-byte canonical re-encoding before core
 /// derives [`PrivacyPgcBootstrapProofDigestV1`] for persisted provenance.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPgcBootstrapProofBytesV1")]
 pub struct PrivacyPgcBootstrapProofBytesV1 {
     /// Exact native proof encoding.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub bytes: Vec<u8>,
 }
 impl PrivacyPgcBootstrapProofBytesV1 {
@@ -1534,9 +1830,20 @@ pub enum PrivacyPgcBootstrapProofValidationError {
     LengthOverflow,
 }
 /// Governed bootstrap payload for a complete PGC encrypted account table.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyPgcAccountBootstrapV1")]
 pub struct PrivacyPgcAccountBootstrapV1 {
@@ -1712,9 +2019,21 @@ pub enum PrivacyLimitFieldV1 {
 /// The first release permits governance to lower these values but not exceed
 /// the Taira hard ceilings. Raising a ceiling requires an explicit data-model
 /// release so old validators cannot silently admit a larger resource surface.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyConsensusLimitsV1")]
 pub struct PrivacyConsensusLimitsV1 {
@@ -1738,228 +2057,6 @@ pub struct PrivacyConsensusLimitsV1 {
     pub max_commitments_per_action: u32,
     /// Number of recent commitment roots retained for proof admission.
     pub retained_root_count: u32,
-}
-impl PrivacyConsensusLimitsV1 {
-    /// Return the approved first-release Taira profile.
-    #[must_use]
-    pub const fn taira_default() -> Self {
-        Self {
-            max_actions_per_transaction: TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1,
-            max_actions_per_block: TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK_V1,
-            max_proof_bytes_per_action: TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
-            max_action_bytes: TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
-            max_privacy_bytes_per_transaction: TAIRA_PRIVACY_MAX_BYTES_PER_TRANSACTION_V1,
-            max_privacy_bytes_per_block: TAIRA_PRIVACY_MAX_BYTES_PER_BLOCK_V1,
-            max_statement_and_encrypted_output_bytes_per_transaction:
-                TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1,
-            max_nullifiers_per_action: TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
-            max_commitments_per_action: TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1,
-            retained_root_count: TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1,
-        }
-    }
-    /// Validate non-zero, hard-ceiling, and cross-field ordering invariants.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`PrivacyConsensusLimitsValidationError`] for the first invalid
-    /// field or relationship in deterministic field order.
-    pub fn validate(&self) -> Result<(), PrivacyConsensusLimitsValidationError> {
-        let fields = [
-            (
-                PrivacyLimitFieldV1::ActionsPerTransaction,
-                self.max_actions_per_transaction,
-                TAIRA_PRIVACY_MAX_ACTIONS_PER_TRANSACTION_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::ActionsPerBlock,
-                self.max_actions_per_block,
-                TAIRA_PRIVACY_MAX_ACTIONS_PER_BLOCK_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::ProofBytesPerAction,
-                self.max_proof_bytes_per_action,
-                TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::ActionBytes,
-                self.max_action_bytes,
-                TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
-                self.max_privacy_bytes_per_transaction,
-                TAIRA_PRIVACY_MAX_BYTES_PER_TRANSACTION_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::PrivacyBytesPerBlock,
-                self.max_privacy_bytes_per_block,
-                TAIRA_PRIVACY_MAX_BYTES_PER_BLOCK_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::StatementAndEncryptedOutputBytesPerTransaction,
-                self.max_statement_and_encrypted_output_bytes_per_transaction,
-                TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::NullifiersPerAction,
-                self.max_nullifiers_per_action,
-                TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::CommitmentsPerAction,
-                self.max_commitments_per_action,
-                TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1,
-            ),
-            (
-                PrivacyLimitFieldV1::RetainedRootCount,
-                self.retained_root_count,
-                TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1,
-            ),
-        ];
-        for (field, value, hard_max) in fields {
-            if value == 0 {
-                return Err(PrivacyConsensusLimitsValidationError::Zero { field });
-            }
-            if value > hard_max {
-                return Err(PrivacyConsensusLimitsValidationError::ExceedsHardMaximum {
-                    field,
-                    value,
-                    hard_max,
-                });
-            }
-        }
-        validate_limit_order(
-            PrivacyLimitFieldV1::ActionsPerTransaction,
-            self.max_actions_per_transaction,
-            PrivacyLimitFieldV1::ActionsPerBlock,
-            self.max_actions_per_block,
-        )?;
-        validate_limit_order(
-            PrivacyLimitFieldV1::ProofBytesPerAction,
-            self.max_proof_bytes_per_action,
-            PrivacyLimitFieldV1::ActionBytes,
-            self.max_action_bytes,
-        )?;
-        validate_limit_order(
-            PrivacyLimitFieldV1::ActionBytes,
-            self.max_action_bytes,
-            PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
-            self.max_privacy_bytes_per_transaction,
-        )?;
-        validate_limit_order(
-            PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
-            self.max_privacy_bytes_per_transaction,
-            PrivacyLimitFieldV1::PrivacyBytesPerBlock,
-            self.max_privacy_bytes_per_block,
-        )?;
-        validate_limit_order(
-            PrivacyLimitFieldV1::StatementAndEncryptedOutputBytesPerTransaction,
-            self.max_statement_and_encrypted_output_bytes_per_transaction,
-            PrivacyLimitFieldV1::ActionBytes,
-            self.max_action_bytes,
-        )?;
-        Ok(())
-    }
-    /// Validate `next` as a strict component-wise tightening of this policy.
-    ///
-    /// # Errors
-    ///
-    /// Rejects invalid profiles, any increased component, and a no-op update.
-    pub fn validate_tightening_to(
-        &self,
-        next: &Self,
-    ) -> Result<(), PrivacyConsensusLimitsTighteningErrorV1> {
-        self.validate()
-            .map_err(PrivacyConsensusLimitsTighteningErrorV1::InvalidCurrent)?;
-        next.validate()
-            .map_err(PrivacyConsensusLimitsTighteningErrorV1::InvalidNext)?;
-        let fields = [
-            (
-                PrivacyLimitFieldV1::ActionsPerTransaction,
-                self.max_actions_per_transaction,
-                next.max_actions_per_transaction,
-            ),
-            (
-                PrivacyLimitFieldV1::ActionsPerBlock,
-                self.max_actions_per_block,
-                next.max_actions_per_block,
-            ),
-            (
-                PrivacyLimitFieldV1::ProofBytesPerAction,
-                self.max_proof_bytes_per_action,
-                next.max_proof_bytes_per_action,
-            ),
-            (
-                PrivacyLimitFieldV1::ActionBytes,
-                self.max_action_bytes,
-                next.max_action_bytes,
-            ),
-            (
-                PrivacyLimitFieldV1::PrivacyBytesPerTransaction,
-                self.max_privacy_bytes_per_transaction,
-                next.max_privacy_bytes_per_transaction,
-            ),
-            (
-                PrivacyLimitFieldV1::PrivacyBytesPerBlock,
-                self.max_privacy_bytes_per_block,
-                next.max_privacy_bytes_per_block,
-            ),
-            (
-                PrivacyLimitFieldV1::StatementAndEncryptedOutputBytesPerTransaction,
-                self.max_statement_and_encrypted_output_bytes_per_transaction,
-                next.max_statement_and_encrypted_output_bytes_per_transaction,
-            ),
-            (
-                PrivacyLimitFieldV1::NullifiersPerAction,
-                self.max_nullifiers_per_action,
-                next.max_nullifiers_per_action,
-            ),
-            (
-                PrivacyLimitFieldV1::CommitmentsPerAction,
-                self.max_commitments_per_action,
-                next.max_commitments_per_action,
-            ),
-            (
-                PrivacyLimitFieldV1::RetainedRootCount,
-                self.retained_root_count,
-                next.retained_root_count,
-            ),
-        ];
-        for (field, current, candidate) in fields {
-            if candidate > current {
-                return Err(PrivacyConsensusLimitsTighteningErrorV1::Increase {
-                    field,
-                    current,
-                    candidate,
-                });
-            }
-        }
-        if self == next {
-            return Err(PrivacyConsensusLimitsTighteningErrorV1::NoChange);
-        }
-        Ok(())
-    }
-}
-impl Default for PrivacyConsensusLimitsV1 {
-    fn default() -> Self {
-        Self::taira_default()
-    }
-}
-fn validate_limit_order(
-    smaller_field: PrivacyLimitFieldV1,
-    smaller_value: u32,
-    larger_field: PrivacyLimitFieldV1,
-    larger_value: u32,
-) -> Result<(), PrivacyConsensusLimitsValidationError> {
-    if smaller_value > larger_value {
-        return Err(PrivacyConsensusLimitsValidationError::InconsistentOrder {
-            smaller_field,
-            smaller_value,
-            larger_field,
-            larger_value,
-        });
-    }
-    Ok(())
 }
 /// Validation failure for [`PrivacyConsensusLimitsV1`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -2021,9 +2118,21 @@ pub enum PrivacyConsensusLimitsTighteningErrorV1 {
     NoChange,
 }
 /// Scheduled successor for the singleton chain-wide privacy policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyConsensusPolicyTighteningV1")]
 pub struct PrivacyConsensusPolicyTighteningV1 {
@@ -2034,30 +2143,22 @@ pub struct PrivacyConsensusPolicyTighteningV1 {
     /// Complete component-wise-lower successor policy.
     pub next_limits: PrivacyConsensusLimitsV1,
 }
-impl PrivacyConsensusPolicyTighteningV1 {
-    /// Validate schedule timing and component-wise monotonicity.
-    ///
-    /// # Errors
-    ///
-    /// Rejects zero/overflowing heights, insufficient notice, an invalid
-    /// successor, any increase, or a no-op.
-    pub fn validate_against(
-        &self,
-        current_limits: &PrivacyConsensusLimitsV1,
-    ) -> Result<(), PrivacyPolicyValidationErrorV1> {
-        validate_privacy_policy_schedule_heights_v1(
-            self.scheduled_at_height,
-            self.effective_at_height,
-        )?;
-        current_limits
-            .validate_tightening_to(&self.next_limits)
-            .map_err(PrivacyPolicyValidationErrorV1::ConsensusTightening)
-    }
-}
 /// Singleton chain-wide privacy admission policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyConsensusPolicyV1")]
 pub struct PrivacyConsensusPolicyV1 {
@@ -2065,82 +2166,6 @@ pub struct PrivacyConsensusPolicyV1 {
     pub current_limits: PrivacyConsensusLimitsV1,
     /// At most one delayed, component-wise tightening.
     pub pending_tightening: Option<PrivacyConsensusPolicyTighteningV1>,
-}
-impl PrivacyConsensusPolicyV1 {
-    /// Construct the first-release Taira policy with no pending change.
-    #[must_use]
-    pub const fn taira_default() -> Self {
-        Self {
-            current_limits: PrivacyConsensusLimitsV1::taira_default(),
-            pending_tightening: None,
-        }
-    }
-    /// Validate the complete persisted policy independent of chain height.
-    ///
-    /// # Errors
-    ///
-    /// Rejects invalid current limits or a malformed pending tightening.
-    pub fn validate(&self) -> Result<(), PrivacyPolicyValidationErrorV1> {
-        self.current_limits
-            .validate()
-            .map_err(PrivacyPolicyValidationErrorV1::InvalidCurrentLimits)?;
-        if let Some(pending) = self.pending_tightening {
-            pending.validate_against(&self.current_limits)?;
-        }
-        Ok(())
-    }
-    /// Validate a restored policy against the latest committed block height.
-    ///
-    /// A pending transition at height `E` is valid in a snapshot committed at
-    /// `E - 1`, and invalid in a snapshot already committed at `E`.
-    ///
-    /// # Errors
-    ///
-    /// Rejects an intrinsically invalid policy or a missed/due transition.
-    pub fn validate_at_committed_height(
-        &self,
-        committed_height: u64,
-    ) -> Result<(), PrivacyPolicyValidationErrorV1> {
-        self.validate()?;
-        if let Some(pending) = self.pending_tightening {
-            if pending.scheduled_at_height > committed_height {
-                return Err(
-                    PrivacyPolicyValidationErrorV1::PendingScheduledAfterCommitted {
-                        scheduled_at_height: pending.scheduled_at_height,
-                        committed_height,
-                    },
-                );
-            }
-            if pending.effective_at_height <= committed_height {
-                return Err(PrivacyPolicyValidationErrorV1::PendingNotFuture {
-                    effective_at_height: pending.effective_at_height,
-                    committed_height,
-                });
-            }
-        }
-        Ok(())
-    }
-    /// Root-retention cap enforced while admitting new roots.
-    ///
-    /// During the notice window new histories must already satisfy the pending
-    /// lower limit so the effective-height transition is deterministic.
-    #[must_use]
-    pub const fn admission_retained_root_count(&self) -> u32 {
-        match self.pending_tightening {
-            Some(pending)
-                if pending.next_limits.retained_root_count
-                    < self.current_limits.retained_root_count =>
-            {
-                pending.next_limits.retained_root_count
-            }
-            _ => self.current_limits.retained_root_count,
-        }
-    }
-}
-impl Default for PrivacyConsensusPolicyV1 {
-    fn default() -> Self {
-        Self::taira_default()
-    }
 }
 /// Validation failure for a singleton privacy-policy value or schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -2198,34 +2223,22 @@ pub enum PrivacyPolicyValidationErrorV1 {
         committed_height: u64,
     },
 }
-fn validate_privacy_policy_schedule_heights_v1(
-    scheduled_at_height: u64,
-    effective_at_height: u64,
-) -> Result<(), PrivacyPolicyValidationErrorV1> {
-    if scheduled_at_height == 0 {
-        return Err(PrivacyPolicyValidationErrorV1::ZeroScheduledHeight);
-    }
-    if effective_at_height <= scheduled_at_height {
-        return Err(PrivacyPolicyValidationErrorV1::EffectiveNotLater {
-            scheduled_at_height,
-            effective_at_height,
-        });
-    }
-    let earliest_effective_height = scheduled_at_height
-        .checked_add(MIN_PRIVACY_POLICY_DELAY_BLOCKS_V1)
-        .ok_or(PrivacyPolicyValidationErrorV1::HeightOverflow)?;
-    if effective_at_height < earliest_effective_height {
-        return Err(PrivacyPolicyValidationErrorV1::LeadTimeTooShort {
-            effective_at_height,
-            earliest_effective_height,
-        });
-    }
-    Ok(())
-}
 /// Proposed lifecycle state fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProposedLifecycleV1")]
 pub struct PrivacyProposedLifecycleV1 {
@@ -2235,9 +2248,21 @@ pub struct PrivacyProposedLifecycleV1 {
     pub activate_at_height: u64,
 }
 /// Active lifecycle state fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyActiveLifecycleV1")]
 pub struct PrivacyActiveLifecycleV1 {
@@ -2249,9 +2274,21 @@ pub struct PrivacyActiveLifecycleV1 {
     pub state_since_height: u64,
 }
 /// Suspended lifecycle state fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacySuspendedLifecycleV1")]
 pub struct PrivacySuspendedLifecycleV1 {
@@ -2263,9 +2300,21 @@ pub struct PrivacySuspendedLifecycleV1 {
     pub state_since_height: u64,
 }
 /// Retired lifecycle state fields.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyRetiredLifecycleV1")]
 pub struct PrivacyRetiredLifecycleV1 {
@@ -2277,26 +2326,35 @@ pub struct PrivacyRetiredLifecycleV1 {
     pub state_since_height: u64,
 }
 /// Governed lifecycle of a protocol activation record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "state", content = "record", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "state", content = "record", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLifecycleV1")]
 pub enum PrivacyProtocolLifecycleV1 {
     /// Governance approved a future activation height.
-    #[cfg_attr(feature = "json", norito(rename = "proposed"))]
+    #[norito(rename = "proposed")]
     Proposed(PrivacyProposedLifecycleV1),
     /// The protocol is currently active.
-    #[cfg_attr(feature = "json", norito(rename = "active"))]
+    #[norito(rename = "active")]
     Active(PrivacyActiveLifecycleV1),
     /// The protocol is temporarily fail-closed.
-    #[cfg_attr(feature = "json", norito(rename = "suspended"))]
+    #[norito(rename = "suspended")]
     Suspended(PrivacySuspendedLifecycleV1),
     /// The protocol is permanently unavailable.
-    #[cfg_attr(feature = "json", norito(rename = "retired"))]
+    #[norito(rename = "retired")]
     Retired(PrivacyRetiredLifecycleV1),
 }
 impl PrivacyProtocolLifecycleV1 {
@@ -2537,9 +2595,21 @@ pub const PRIVACY_SECURITY_CLAIM_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:secur
 /// The model is always the weakest model in the full composition. Parameter
 /// and verifier digests bind the claim to the exact native activation rather
 /// than to a family name or caller-selected profile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacySecurityClaimV1")]
 pub struct PrivacySecurityClaimV1 {
@@ -2693,9 +2763,21 @@ pub enum PrivacySecurityClaimValidationErrorV1 {
 }
 
 /// Activation-specific Anonymous PGC policy limits.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::AnonymousPgcActivationLimitsV1")]
 pub struct AnonymousPgcActivationLimitsV1 {
@@ -2705,9 +2787,21 @@ pub struct AnonymousPgcActivationLimitsV1 {
     pub max_recipient_count: u32,
 }
 /// Activation-specific `VeRange` aggregation policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::VeRangeActivationLimitsV1")]
 pub struct VeRangeActivationLimitsV1 {
@@ -2715,9 +2809,21 @@ pub struct VeRangeActivationLimitsV1 {
     pub max_aggregation_count: u32,
 }
 /// Activation-specific ZK-AMS admission and provisioning policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::ZkAmsActivationLimitsV1")]
 pub struct ZkAmsActivationLimitsV1 {
@@ -2727,9 +2833,21 @@ pub struct ZkAmsActivationLimitsV1 {
     pub max_ring_size: u32,
 }
 /// Activation-specific Jindo batched univariate-opening policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::JindoActivationLimitsV1")]
 pub struct JindoActivationLimitsV1 {
@@ -2737,9 +2855,21 @@ pub struct JindoActivationLimitsV1 {
     pub max_polynomial_count: u32,
 }
 /// Activation-specific Orchard action policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::OrchardActivationLimitsV1")]
 pub struct OrchardActivationLimitsV1 {
@@ -2747,9 +2877,21 @@ pub struct OrchardActivationLimitsV1 {
     pub max_action_count: u32,
 }
 /// Activation-specific FCMP++ transfer policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::FcmpActivationLimitsV1")]
 pub struct FcmpActivationLimitsV1 {
@@ -2759,9 +2901,21 @@ pub struct FcmpActivationLimitsV1 {
     pub max_output_count: u32,
 }
 /// Activation-specific native IVM private-note policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::IvmPrivateNoteActivationLimitsV1")]
 pub struct IvmPrivateNoteActivationLimitsV1 {
@@ -2771,9 +2925,21 @@ pub struct IvmPrivateNoteActivationLimitsV1 {
     pub max_output_count: u32,
 }
 /// Activation-specific PQ-MASP policy.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PqMaspActivationLimitsV1")]
 pub struct PqMaspActivationLimitsV1 {
@@ -2783,53 +2949,59 @@ pub struct PqMaspActivationLimitsV1 {
     pub max_output_count: u32,
 }
 /// Protocol-specific governed limits carried by an activation record.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "protocol", content = "limits", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "protocol", content = "limits", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolActivationLimitsV1")]
 pub enum PrivacyProtocolActivationLimitsV1 {
     /// ZK-ACE has no additional first-release count limits.
-    #[cfg_attr(feature = "json", norito(rename = "zk-ace-pq-authorization-v1"))]
+    #[norito(rename = "zk-ace-pq-authorization-v1")]
     ZkAcePqAuthorizationV1,
     /// Anonymous PGC receiver policy.
-    #[cfg_attr(feature = "json", norito(rename = "anonymous-pgc-k-out-of-n-v1"))]
+    #[norito(rename = "anonymous-pgc-k-out-of-n-v1")]
     AnonymousPgcKOutOfNV1(AnonymousPgcActivationLimitsV1),
     /// `VeRange` aggregation policy.
-    #[cfg_attr(feature = "json", norito(rename = "verange-transparent-range-v1"))]
+    #[norito(rename = "verange-transparent-range-v1")]
     VeRangeTransparentRangeV1(VeRangeActivationLimitsV1),
     /// ZK-AMS batch-admission and account-provisioning policy.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-ams-v1"))]
+    #[norito(rename = "iroha-zk-ams-v1")]
     IrohaZkAmsV1(ZkAmsActivationLimitsV1),
     /// Vega has no additional first-release count limits.
-    #[cfg_attr(feature = "json", norito(rename = "vega-existing-credential-zk-v1"))]
+    #[norito(rename = "vega-existing-credential-zk-v1")]
     VegaExistingCredentialZkV1,
     /// X.509 has fixed first-release limits encoded by its statement validator.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-zk-x509-stark-p256-v1"))]
+    #[norito(rename = "iroha-zk-x509-stark-p256-v1")]
     IrohaZkX509StarkP256V1,
     /// Jindo batched opening policy.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "iroha-jindo-polynomial-commitment-v1")
-    )]
+    #[norito(rename = "iroha-jindo-polynomial-commitment-v1")]
     IrohaJindoPolynomialCommitmentV1(JindoActivationLimitsV1),
     /// Lantern anonymous credentials have a fixed first-release parameter profile.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-bootle-lantern-anoncred-v1"))]
+    #[norito(rename = "iroha-bootle-lantern-anoncred-v1")]
     IrohaBootleLanternAnoncredV1,
     /// Orchard one-to-one action policy.
-    #[cfg_attr(feature = "json", norito(rename = "orchard-halo2-actions-v1"))]
+    #[norito(rename = "orchard-halo2-actions-v1")]
     OrchardHalo2ActionsV1(OrchardActivationLimitsV1),
     /// FCMP++ input/output policy.
-    #[cfg_attr(feature = "json", norito(rename = "monero-fcmp-plus-plus-v1"))]
+    #[norito(rename = "monero-fcmp-plus-plus-v1")]
     MoneroFcmpPlusPlusV1(FcmpActivationLimitsV1),
     /// Native private-note input/output policy.
-    #[cfg_attr(feature = "json", norito(rename = "iroha-ivm-private-note-stark-v1"))]
+    #[norito(rename = "iroha-ivm-private-note-stark-v1")]
     IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteActivationLimitsV1),
     /// PQ-MASP input/output policy.
-    #[cfg_attr(feature = "json", norito(rename = "pq-masp-stark-v1"))]
+    #[norito(rename = "pq-masp-stark-v1")]
     PqMaspStarkV1(PqMaspActivationLimitsV1),
 }
 impl PrivacyProtocolActivationLimitsV1 {
@@ -3187,9 +3359,21 @@ pub enum PrivacyProtocolActivationLimitsValidationError {
     },
 }
 /// Scheduled component-wise tightening for one protocol activation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLimitsTighteningV1")]
 pub struct PrivacyProtocolLimitsTighteningV1 {
@@ -3199,30 +3383,6 @@ pub struct PrivacyProtocolLimitsTighteningV1 {
     pub effective_at_height: u64,
     /// Complete protocol-tagged successor limit set.
     pub next_limits: PrivacyProtocolActivationLimitsV1,
-}
-impl PrivacyProtocolLimitsTighteningV1 {
-    /// Validate schedule timing and strict component-wise monotonicity.
-    ///
-    /// # Errors
-    ///
-    /// Rejects insufficient notice, a protocol mismatch, invalid limits, an increase, or a no-op.
-    pub fn validate_against(
-        &self,
-        current_limits: &PrivacyProtocolActivationLimitsV1,
-    ) -> Result<(), PrivacyProtocolLimitsTighteningValidationErrorV1> {
-        validate_privacy_policy_schedule_heights_v1(
-            self.scheduled_at_height,
-            self.effective_at_height,
-        )
-        .map_err(PrivacyProtocolLimitsTighteningValidationErrorV1::Schedule)?;
-        self.next_limits
-            .validate_with_ceiling(current_limits)
-            .map_err(PrivacyProtocolLimitsTighteningValidationErrorV1::Limits)?;
-        if self.next_limits == *current_limits {
-            return Err(PrivacyProtocolLimitsTighteningValidationErrorV1::NoChange);
-        }
-        Ok(())
-    }
 }
 /// Validation failure for a scheduled protocol-specific tightening.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -3238,9 +3398,21 @@ pub enum PrivacyProtocolLimitsTighteningValidationErrorV1 {
     NoChange,
 }
 /// Governed activation record for one exact privacy protocol implementation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1")]
 pub struct PrivacyProtocolActivationRecordV1 {
@@ -3393,9 +3565,21 @@ pub const PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1: u32 = 1;
 /// This is a wire-model counterpart of the core-only compiled profile. It
 /// deliberately contains no lifecycle or readiness boolean: governance state
 /// is carried separately by [`PrivacyCapabilityRowV1::activation`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledProfileSnapshotV1")]
 pub struct PrivacyCompiledProfileSnapshotV1 {
@@ -3532,57 +3716,84 @@ pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
     ProtocolLimits(PrivacyProtocolActivationLimitsValidationError),
 }
 /// Typed failure canonicalizing a compiled public-statement schema.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "schema_error", content = "detail", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "schema_error", content = "detail", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledStatementSchemaErrorV1")]
 pub enum PrivacyCompiledStatementSchemaErrorV1 {
     /// Two types reused one stable identifier for incompatible shapes.
-    #[cfg_attr(feature = "json", norito(rename = "conflicting-stable-type-id"))]
+    #[norito(rename = "conflicting-stable-type-id")]
     ConflictingStableTypeId,
     /// A schema referenced a type absent from the canonical map.
-    #[cfg_attr(feature = "json", norito(rename = "missing-type-reference"))]
+    #[norito(rename = "missing-type-reference")]
     MissingTypeReference,
 }
 /// Typed reason why one closed protocol has no executable compiled profile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "reason", content = "detail", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "reason", content = "detail", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledProfileUnavailableReasonV1")]
 pub enum PrivacyCompiledProfileUnavailableReasonV1 {
     /// This binary contains no complete end-to-end engine for the protocol.
-    #[cfg_attr(feature = "json", norito(rename = "engine-unavailable"))]
+    #[norito(rename = "engine-unavailable")]
     EngineUnavailable,
     /// Deterministic transparent parameter initialization failed.
-    #[cfg_attr(feature = "json", norito(rename = "profile-initialization-failed"))]
+    #[norito(rename = "profile-initialization-failed")]
     ProfileInitializationFailed,
     /// The locally generated statement schema was ambiguous or incomplete.
-    #[cfg_attr(feature = "json", norito(rename = "statement-schema-invalid"))]
+    #[norito(rename = "statement-schema-invalid")]
     StatementSchemaInvalid(PrivacyCompiledStatementSchemaErrorV1),
 }
 /// Closed result of obtaining one locally compiled privacy profile.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "status", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "status", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledProfileResultV1")]
 pub enum PrivacyCompiledProfileResultV1 {
     /// The exact native profile is executable in this binary.
-    #[cfg_attr(feature = "json", norito(rename = "available"))]
+    #[norito(rename = "available")]
     Available(PrivacyCompiledProfileSnapshotV1),
     /// The protocol remains explicitly unavailable and fail-closed.
-    #[cfg_attr(feature = "json", norito(rename = "unavailable"))]
+    #[norito(rename = "unavailable")]
     Unavailable(PrivacyCompiledProfileUnavailableReasonV1),
 }
 /// One local build result in the canonical compiled-profile catalog.
@@ -3590,9 +3801,21 @@ pub enum PrivacyCompiledProfileResultV1 {
 /// This row deliberately has no activation, lifecycle, committed height, or consensus-policy field.
 /// It describes only what the current binary was compiled to execute. Authoritative readiness comes
 /// exclusively from a committed [`PrivacyExact12CapabilityManifestV1`] returned by Torii.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledProfileCatalogRowV1")]
 pub struct PrivacyCompiledProfileCatalogRowV1 {
@@ -3647,12 +3870,23 @@ pub enum PrivacyCompiledProfileCatalogRowValidationErrorV1 {
 /// `protocols` contains exactly [`PrivacyProtocolIdV1::ALL`] in Norito
 /// discriminant order. This catalog is local build metadata, not committed
 /// governance state and not evidence that a protocol is live on any network.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.compiled-profile-catalog.v1")]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledProfileCatalogV1", frame = "iroha.privacy.compiled-profile-catalog.v1")]
+#[norito_schema(
+    name = "iroha_data_model::privacy::PrivacyCompiledProfileCatalogV1",
+    frame = "iroha.privacy.compiled-profile-catalog.v1"
+)]
 pub struct PrivacyCompiledProfileCatalogV1 {
     /// Exact catalog schema version.
     pub version: u32,
@@ -3747,9 +3981,21 @@ pub enum PrivacyCompiledProfileCatalogValidationErrorV1 {
     },
 }
 /// One protocol row in the canonical public capability snapshot.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCapabilityRowV1")]
 pub struct PrivacyCapabilityRowV1 {
@@ -4080,9 +4326,18 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
 /// `protocols` must contain exactly [`PrivacyProtocolIdV1::ALL`] in Norito
 /// discriminant order. The ordering rule makes missing, duplicate, and
 /// reordered rows fail closed without accepting aliases.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCapabilitySnapshotV1")]
 pub struct PrivacyCapabilitySnapshotV1 {

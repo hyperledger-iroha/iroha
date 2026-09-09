@@ -921,7 +921,8 @@ struct SoranetTransportCertificateV5 {
     transport_public_key: iroha_crypto::PublicKey,
     relay_authentication_mldsa65_public_key: iroha_crypto::PublicKey,
 }
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::peer::SignedSoranetTransportCertificateV5")]
 struct SignedSoranetTransportCertificateV5 {
     certificate: SoranetTransportCertificateV5,
     node_signature: Vec<u8>,
@@ -937,7 +938,8 @@ struct SignedSoranetTransportProofV5 {
     statement: SoranetTransportProofStatementV5,
     transport_signature: Vec<u8>,
 }
-#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq)]
+#[derive(Clone, Debug, Encode, Decode, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::peer::SignedSoranetTransportDelegationV5")]
 struct SignedSoranetTransportDelegationV5 {
     certificate: SignedSoranetTransportCertificateV5,
     proof: SignedSoranetTransportProofV5,
@@ -3730,6 +3732,26 @@ pub mod handles {
         };
         use norito::codec::{Decode, Encode};
         use tokio::sync::mpsc::error::TryRecvError;
+        #[test]
+        fn captured_original_test_payload_identities() {
+            crate::frame_identity_tests::test_payload_identity::<ConsensusSafetyMsg>(
+                "iroha_p2p::peer::handles::tests::ConsensusSafetyMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<ConsensusChunkMsg>(
+                "iroha_p2p::peer::handles::tests::ConsensusChunkMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<ConsensusPayloadMsg>(
+                "iroha_p2p::peer::handles::tests::ConsensusPayloadMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<PriorityMsg>(
+                "iroha_p2p::peer::handles::tests::PriorityMsg",
+            );
+            crate::frame_identity_tests::test_payload_identity::<BudgetRouteMsg>(
+                "iroha_p2p::peer::handles::tests::BudgetRouteMsg",
+            );
+        }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::ConsensusSafetyMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusSafetyMsg;
         impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusSafetyMsg {
@@ -3742,6 +3764,8 @@ pub mod handles {
                 Topic::ConsensusSafety
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::ConsensusChunkMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusChunkMsg;
         impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusChunkMsg {
@@ -3754,6 +3778,8 @@ pub mod handles {
                 Topic::ConsensusChunk
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::ConsensusPayloadMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct ConsensusPayloadMsg;
         impl<'a> norito::core::DecodeFromSlice<'a> for ConsensusPayloadMsg {
@@ -3766,6 +3792,8 @@ pub mod handles {
                 Topic::ConsensusPayload
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::PriorityMsg")]
         #[derive(Clone, Debug, Decode, Encode)]
         struct PriorityMsg {
             priority: Priority,
@@ -3783,6 +3811,8 @@ pub mod handles {
                 self.priority
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::handles::tests::BudgetRouteMsg")]
         #[derive(Clone, Debug, Decode, Encode, PartialEq, Eq)]
         enum BudgetRouteMsg {
             Gossip,
@@ -4223,7 +4253,7 @@ mod run {
             topic_frame_caps: crate::network::TopicFrameCaps,
             byte_budget: InboundSourceByteBudget,
         ) -> Result<Self, Error> {
-            let framed_schema = <T as ncore::NoritoSerialize>::schema_hash();
+            let framed_schema = norito::schema::identity::frame_hash::<T>();
             let align = ncore::archived_payload_align::<T>();
             let framed_padding = if align <= 1 {
                 0
@@ -6610,7 +6640,7 @@ mod run {
                 buffer: BytesMut::with_capacity(capacity),
                 decode_scratch: Vec::new(),
                 pending: VecDeque::new(),
-                framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
+                framed_schema: norito::schema::identity::frame_hash::<M>(),
                 framed_padding,
                 max_frame_bytes,
                 topic_frame_caps,
@@ -8314,6 +8344,21 @@ mod run {
             }
         }
     }
+    #[cfg(test)]
+    pub(crate) fn assert_captured_p2p_message<T>(owner: &str, variant: &str, value: T)
+    where
+        T: Clone + ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
+    {
+        use crate::frame_identity_tests::shapes;
+        shapes(owner, &format!("{variant}_data"), &Message::Data(value));
+        shapes(owner, &format!("{variant}_ping"), &Message::<T>::Ping);
+        shapes(owner, &format!("{variant}_pong"), &Message::<T>::Pong);
+    }
+    #[test]
+    fn captured_original_p2p_scalar_message_frames() {
+        assert_captured_p2p_message("message_u32", "scalar", 0x12345678_u32);
+        assert_captured_p2p_message("message_u64", "scalar", 0x0123456789abcdef_u64);
+    }
     /// Either message or ping
     #[derive(Encode, Decode, Clone, Debug)]
     enum Message<T> {
@@ -8390,6 +8435,14 @@ mod run {
             )
         }
     }
+    impl<T: norito::NoritoSchema> norito::NoritoSchema for Message<T> {
+        fn nominal_name() -> String {
+            norito::schema::identity::generic_name(
+                "iroha_p2p::peer::run::Message",
+                &[T::nominal_name()],
+            )
+        }
+    }
     impl<'a, T> ncore::DecodeFromSlice<'a> for Message<T>
     where
         T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
@@ -8407,7 +8460,7 @@ mod run {
             };
             let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
             let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-            let value = <Self as ncore::NoritoDeserialize>::try_deserialize(archived.archived())?;
+            let value = <Self as ncore::DeserializePayload>::try_deserialize(archived.archived())?;
             Ok((value, bytes.len()))
         }
     }
@@ -8596,6 +8649,26 @@ mod run {
             time::Duration,
         };
         use tokio::io::{AsyncRead, AsyncWrite};
+        #[test]
+        fn captured_original_test_payload_identities() {
+            crate::frame_identity_tests::test_payload_identity::<Dummy>(
+                "iroha_p2p::peer::run::tests::Dummy",
+            );
+            crate::frame_identity_tests::test_payload_identity::<Blob>(
+                "iroha_p2p::peer::run::tests::Blob",
+            );
+            crate::frame_identity_tests::test_payload_identity::<GuardedBlob>(
+                "iroha_p2p::peer::run::tests::GuardedBlob",
+            );
+            crate::frame_identity_tests::test_payload_identity::<PredecodeGuardedBlob>(
+                "iroha_p2p::peer::run::tests::PredecodeGuardedBlob",
+            );
+            crate::frame_identity_tests::test_payload_identity::<RoutedMsg>(
+                "iroha_p2p::peer::run::tests::RoutedMsg",
+            );
+        }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::Dummy")]
         #[derive(Encode, Decode, Clone, Debug)]
         struct Dummy;
         impl ClassifyTopic for Dummy {}
@@ -9167,6 +9240,8 @@ mod run {
             assert_eq!(source_budget.retained_total(), 0);
             assert_eq!(high_budget.retained_total(), 0);
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::Blob")]
         #[derive(Encode, Decode, Clone, Debug)]
         struct Blob(Vec<u8>);
         impl ClassifyTopic for Blob {}
@@ -9175,6 +9250,8 @@ mod run {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::GuardedBlob")]
         #[derive(Encode, Decode, Clone, Debug)]
         struct GuardedBlob(Vec<u8>);
         impl ClassifyTopic for GuardedBlob {
@@ -9194,6 +9271,8 @@ mod run {
         }
         static PREDECODE_POLICY_CALLS: std::sync::atomic::AtomicUsize =
             std::sync::atomic::AtomicUsize::new(0);
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::PredecodeGuardedBlob")]
         #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
         struct PredecodeGuardedBlob(Vec<u8>);
         impl ClassifyTopic for PredecodeGuardedBlob {
@@ -9227,6 +9306,8 @@ mod run {
                 ncore::decode_field_canonical::<Self>(bytes)
             }
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_p2p::peer::run::tests::RoutedMsg")]
         #[derive(Encode, Decode, Clone, Debug, PartialEq, Eq)]
         enum RoutedMsg {
             ConsensusSafety(u8),
@@ -15653,3 +15734,6 @@ impl Connection {
         }
     }
 }
+
+#[cfg(test)]
+pub(crate) use run::assert_captured_p2p_message;

@@ -13,10 +13,17 @@ mod model {
     use super::*;
     /// Asset represents some sort of commodity or value.
     /// All possible variants of [`Asset`] entity's components.
-    #[derive(Debug, Display, Clone, IdEqOrdHash, Getters, Decode, Encode, IntoSchema)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Display,
+        Clone,
+        IdEqOrdHash,
+        Getters,
+        Decode,
+        Encode,
+        IntoSchema,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[display("{id}: {value}")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]

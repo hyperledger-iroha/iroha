@@ -1,0 +1,10 @@
+{
+  "schema": "iroha.multisig.instruction-batch-hash.v1",
+  "description": "One iroha.custom instruction with canonical JSON null; the batch hash covers its bare Norito vector, including the nested custom frame.",
+  "layout_flags": 2,
+  "instruction_json": "null",
+  "custom_instruction_frame_hex": "4e52543000006b86902a75600648d186d52cd662b2290007000000000000007caaf1c383a8d97d020605046e756c6c",
+  "instruction_batch_hex": "0100000000000000460d0c69726f68612e637573746f6d372f000000000000004e52543000006b86902a75600648d186d52cd662b2290007000000000000007caaf1c383a8d97d020605046e756c6c",
+  "instruction_batch_hash_hex": "2899a33e1a9cd672ec9ded63b45b22fc51e780b61f069297f2b48dec79356b21",
+  "rejected_extra_length_custom_frame_hex": "4e52543000006b86902a75600648d186d52cd662b229000800000000000000a8fca2ca1dc6469802070605046e756c6c"
+}

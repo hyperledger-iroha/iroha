@@ -6,7 +6,16 @@
 //! now encoded as fixed-size payloads, the packed-struct bitset should remain
 //! zero for both positions.
 use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature, SignatureOf};
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.USig")]
 struct USig {
     a: u64,
     b: SignatureOf<()>,
@@ -52,10 +61,19 @@ fn packed_bitset_alignment_for_u64_signatureof() {
     let bytes = norito::core::to_bytes(&value).expect("encode");
     // Header flags live in the last header byte; PACKED_STRUCT is bit 0x04
     let archived = norito::core::from_bytes::<USig>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.USignature")]
 struct USignature {
     a: u64,
     b: Signature,
@@ -67,10 +85,19 @@ fn packed_bitset_alignment_for_u64_signature() {
     let value = USignature { a: 7, b: sig };
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<USignature>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.TupSigOf")]
 struct TupSigOf(u64, SignatureOf<()>);
 #[test]
 fn packed_bitset_alignment_for_tuple_u64_signatureof() {
@@ -79,10 +106,19 @@ fn packed_bitset_alignment_for_tuple_u64_signatureof() {
     let value = TupSigOf(1, sig);
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<TupSigOf>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.TupSig")]
 struct TupSig(Signature, u64);
 #[test]
 fn packed_bitset_alignment_for_tuple_signature_u64() {
@@ -91,10 +127,19 @@ fn packed_bitset_alignment_for_tuple_signature_u64() {
     let value = TupSig(sig, 2);
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<TupSig>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.SigOfUNamed")]
 struct SigOfUNamed {
     b: SignatureOf<()>,
     a: u64,
@@ -106,6 +151,6 @@ fn packed_bitset_alignment_for_signatureof_u64_named() {
     let value = SigOfUNamed { b: sig, a: 3 };
     let bytes = norito::core::to_bytes(&value).expect("encode");
     let archived = norito::core::from_bytes::<SigOfUNamed>(&bytes).expect("from_bytes");
-    let got = norito::core::NoritoDeserialize::deserialize(archived);
+    let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }

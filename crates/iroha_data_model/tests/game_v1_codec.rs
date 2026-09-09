@@ -1,5 +1,5 @@
 //! Independent Rust/browser compact-Norito parity for generic game authorization.
-#![cfg(feature = "json")]
+
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::{
     NetworkId,

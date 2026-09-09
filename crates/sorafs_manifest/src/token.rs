@@ -106,6 +106,8 @@ pub enum StreamTokenBodyError {
     KeyVersion,
 }
 /// Canonical body for stream tokens issued by gateways.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::token::StreamTokenBodyV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamTokenBodyV1 {
     pub token_id: String,
@@ -134,6 +136,8 @@ impl StreamTokenBodyV1 {
     }
 }
 /// Signed stream token payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::token::StreamTokenV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamTokenV1 {
     pub body: StreamTokenBodyV1,
@@ -402,3 +406,6 @@ mod tests {
 #[cfg(test)]
 #[path = "token/body_policy_tests.rs"]
 mod body_policy_tests;
+
+#[cfg(test)]
+include!("token/captured_owner_identity_tests.rs");

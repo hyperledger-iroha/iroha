@@ -935,6 +935,7 @@ include!("v2_runner/lifecycle_terminal_recovery.rs");
 #[allow(clippy::too_many_lines)]
 fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     let SumeragiWorker {
+        build_identity,
         config,
         common_config,
         events_sender,
@@ -1120,6 +1121,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
     );
     match pending_kura_apply {
         None => lifecycle_run_inner::run_non_pending_lifecycle_loop(
+            build_identity,
             config,
             common_config,
             events_sender,
@@ -1163,6 +1165,7 @@ fn run_inner(worker: SumeragiWorker) -> Result<(), V2RunnerError> {
             block_sync_server,
         ),
         Some(pending) => lifecycle_pending_kura::run_pending_kura_lifecycle_height(
+            build_identity,
             config,
             common_config,
             events_sender,
@@ -2824,11 +2827,15 @@ const fn certified_merge_selection_for_npos(
         PendingCertifiedMergeSelection::Any
     }
 }
-fn adapter_fingerprints(local_peer: &PeerId, config: &SumeragiV2Config) -> AdapterFingerprints {
+fn adapter_fingerprints(
+    build_identity: crate::release_identity::BuildIdentity,
+    local_peer: &PeerId,
+    config: &SumeragiV2Config,
+) -> AdapterFingerprints {
     let node = Hash::new(local_peer.encode());
     AdapterFingerprints {
         node,
-        build: crate::release_identity::build_fingerprint(),
+        build: build_identity.build_fingerprint(),
         config: config.fingerprint(),
     }
 }

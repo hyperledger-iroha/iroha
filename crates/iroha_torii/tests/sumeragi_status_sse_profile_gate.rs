@@ -48,7 +48,10 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        telemetry,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            telemetry,
+        ),
     )
     .expect("valid Torii Sumeragi-SSE fixture")
 }
@@ -96,3 +99,6 @@ async fn status_sse_restricted_under_operator_profile() {
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

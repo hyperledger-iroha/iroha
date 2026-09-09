@@ -1,9 +1,10 @@
 //! Independently qualified enrollment and terminal custody transitions with no old-key response.
 
 use super::*;
+#[cfg(test)]
+use sorafs_manifest::signer::custody::SignerCustodyEnrollmentContextV1;
 use sorafs_manifest::signer::custody::{
-    SignerCustodyEnrollmentContextV1, VerifiedSignerCustodyEnrollmentV1,
-    verify_signer_custody_enrollment_v1,
+    VerifiedSignerCustodyEnrollmentV1, verify_signer_custody_enrollment_v1,
 };
 
 /// Privately verified enrollment request; candidate bytes never choose the trusted configuration.
@@ -162,6 +163,9 @@ pub fn enroll_initial_signer_custody_v1(
 }
 
 /// Private prepared successor; it contains public metadata and independent trust, never key bytes.
+// TODO: Compile the private terminal-transition helpers outside tests when a production control
+// producer owns their independently governed successor configuration and durable terminal audit.
+#[cfg(test)]
 pub(in crate::signer_operation) struct PreparedSignerCustodyActivationV1 {
     binding: SignerCustodyBindingV1,
     record: Vec<u8>,
@@ -169,12 +173,14 @@ pub(in crate::signer_operation) struct PreparedSignerCustodyActivationV1 {
     context: SignerCustodyEnrollmentContextV1,
     enrollment: VerifiedSignerCustodyEnrollmentV1,
 }
+#[cfg(test)]
 impl PreparedSignerCustodyActivationV1 {
     pub(in crate::signer_operation) fn record_digest(&self) -> [u8; 32] {
         self.enrollment.record_digest()
     }
 }
 
+#[cfg(test)]
 impl SignerOperationCoordinatorV1 {
     /// Prepare only against independently governed expected successor configuration and trust.
     pub(in crate::signer_operation) fn prepare_custody_activation(
@@ -197,6 +203,7 @@ impl SignerOperationCoordinatorV1 {
     }
 }
 
+#[cfg(test)]
 fn validate_successor(
     previous: &SignerCustodyBindingV1,
     next: &SignerCustodyBindingV1,
@@ -246,6 +253,7 @@ fn verify_activation(
     Ok(active)
 }
 
+#[cfg(test)]
 impl SignerOperationV1<'_> {
     fn prepare_terminal(
         &mut self,

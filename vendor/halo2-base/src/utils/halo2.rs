@@ -1,5 +1,3 @@
-use std::collections::hash_map::Entry;
-
 use crate::ff::Field;
 use crate::halo2_proofs::{
     circuit::{AssignedCell, Cell, Region, Value},
@@ -115,17 +113,12 @@ pub fn constrain_virtual_equals_external<F: Field + Ord>(
     copy_manager: &mut CopyConstraintManager<F>,
 ) {
     let ctx_cell = virtual_cell.cell.unwrap();
-    match copy_manager.assigned_advices.entry(ctx_cell) {
-        Entry::Occupied(acell) => {
-            // The virtual cell has already been assigned, so we can constrain it to equal the external cell.
-            region.constrain_equal(*acell.get(), external_cell);
-        }
-        Entry::Vacant(assigned) => {
-            // The virtual cell **must** be an external cell
-            assert_eq!(ctx_cell.type_id(), EXTERNAL_CELL_TYPE_ID);
-            // We map the virtual cell to point to the raw external cell in `copy_manager`
-            assigned.insert(external_cell);
-        }
+    if let Some(assigned) = copy_manager.assigned_advices.resolve(&ctx_cell) {
+        region.constrain_equal(assigned, external_cell);
+    } else {
+        // Only an external identity may first acquire coordinates at this bridge.
+        assert_eq!(ctx_cell.type_id(), EXTERNAL_CELL_TYPE_ID);
+        copy_manager.assigned_advices.insert(ctx_cell, external_cell);
     }
 }
 

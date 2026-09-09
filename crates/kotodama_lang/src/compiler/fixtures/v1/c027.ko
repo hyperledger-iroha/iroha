@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main(AccountId account) {
-  let _balance = ledger::asset::balance(account, Name::parse("not_asset"));
+  let _balance = ledger::asset::balance(account: account, asset_definition: Name::parse("not_asset"));
 }
 
 }

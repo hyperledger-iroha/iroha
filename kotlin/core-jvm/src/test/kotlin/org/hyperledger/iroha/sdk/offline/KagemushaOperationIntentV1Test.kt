@@ -1,6 +1,10 @@
 package org.hyperledger.iroha.sdk.offline
 
+import java.util.EnumSet
 import kotlin.test.*
+import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.norito.NoritoCodec
+import org.hyperledger.iroha.sdk.norito.NoritoHeader
 
 class KagemushaOperationIntentV1Test {
     @Test fun `lost sync response retains exact ID and command across owner recreation`() {
@@ -149,4 +153,128 @@ class KagemushaOperationIntentV1Test {
         assertContentEquals(byteArrayOf(7), store.load(10, id)!!.canonicalResult())
         assertFailsWith<IllegalArgumentException> { owner.completedResult(10, id, byteArrayOf(8)) }
     }
+
+    @Test fun `intent codec rejects compression and nonzero layouts before decoding fields`() {
+        val record = KagemushaOperationIntentV1(byteArrayOf(1), 5, ByteArray(32) { 2 },
+            KagemushaOperationIntentPurposeV1.CALLER, byteArrayOf(3))
+        val encoded = KagemushaOperationIntentCodecV1.encode(record)
+        for (candidate in listOf(
+            withArchiveHeader(encoded, compression = NoritoHeader.COMPRESSION_ZSTD),
+            withArchiveHeader(encoded, flags = NoritoHeader.COMPACT_LEN),
+        )) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                KagemushaOperationIntentCodecV1.decodeExact(candidate)
+            }
+            assertEquals("operation intent requires an uncompressed archive with zero layout flags", error.message)
+        }
+        assertContentEquals(encoded, KagemushaOperationIntentCodecV1.encode(
+            KagemushaOperationIntentCodecV1.decodeExact(encoded)))
+    }
+
+    @Test fun `qualification codec rejects compression and nonzero layouts before decoding fields`() {
+        val encoded = KagemushaOperationIntentCodecV1.encodeQualification(structuralQualification())
+        for (candidate in listOf(
+            withArchiveHeader(encoded, compression = NoritoHeader.COMPRESSION_ZSTD),
+            withArchiveHeader(encoded, flags = NoritoHeader.COMPACT_LEN),
+        )) {
+            val error = assertFailsWith<IllegalArgumentException> {
+                KagemushaOperationIntentCodecV1.decodeQualification(candidate)
+            }
+            assertEquals("operation qualification requires an uncompressed archive with zero layout flags", error.message)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaOperationIntentCodecV1.decodeQualification(ByteArray(0))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaOperationIntentCodecV1.decodeQualification(ByteArray(4097))
+        }
+    }
+
+    @Test fun `qualification codec retains exact canonical history and defensive copies`() {
+        val encoded = KagemushaOperationIntentCodecV1.encodeQualification(structuralQualification())
+        val expected = encoded.copyOf()
+        val decoded = KagemushaOperationIntentCodecV1.decodeQualification(encoded)
+        encoded.fill(0)
+        decoded.releaseId().fill(0)
+        assertContentEquals(expected, KagemushaOperationIntentCodecV1.encodeQualification(decoded))
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaOperationIntentCodecV1.decodeQualification(expected + 0)
+        }
+        val corrupt = expected.copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 1).toByte() }
+        assertFailsWith<IllegalArgumentException> {
+            KagemushaOperationIntentCodecV1.decodeQualification(corrupt)
+        }
+    }
+
+    @Test fun `intent and qualification codecs retain enclosing decode flags on success and failure`() {
+        val intent = KagemushaOperationIntentCodecV1.encode(KagemushaOperationIntentV1(
+            byteArrayOf(1), 5, ByteArray(32) { 2 }, KagemushaOperationIntentPurposeV1.CALLER, byteArrayOf(3)))
+        val qualification = KagemushaOperationIntentCodecV1.encodeQualification(structuralQualification())
+        val previousFlags = NoritoCodec.effectiveDecodeFlags()
+        NoritoCodec.DecodeFlagsGuard.enter(NoritoHeader.COMPACT_LEN).use {
+            KagemushaOperationIntentCodecV1.decodeExact(intent)
+            assertEquals(NoritoHeader.COMPACT_LEN, NoritoCodec.effectiveDecodeFlags())
+            KagemushaOperationIntentCodecV1.decodeQualification(qualification)
+            assertEquals(NoritoHeader.COMPACT_LEN, NoritoCodec.effectiveDecodeFlags())
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaOperationIntentCodecV1.decodeExact(withArchiveHeader(intent,
+                    compression = NoritoHeader.COMPRESSION_ZSTD))
+            }
+            assertEquals(NoritoHeader.COMPACT_LEN, NoritoCodec.effectiveDecodeFlags())
+            assertFailsWith<IllegalArgumentException> {
+                KagemushaOperationIntentCodecV1.decodeQualification(withArchiveHeader(qualification,
+                    flags = NoritoHeader.COMPACT_LEN))
+            }
+            assertEquals(NoritoHeader.COMPACT_LEN, NoritoCodec.effectiveDecodeFlags())
+        }
+        assertEquals(previousFlags, NoritoCodec.effectiveDecodeFlags())
+    }
+
+    private fun withArchiveHeader(
+        encoded: ByteArray,
+        compression: Int = NoritoHeader.COMPRESSION_NONE,
+        flags: Int = 0,
+    ): ByteArray {
+        val archive = NoritoHeader.decode(encoded, null)
+        // Keep the actual and declared payload small; this tests rejection before decompression.
+        return NoritoHeader(archive.header.schemaHash, archive.header.payloadLength,
+            archive.header.checksum, flags, compression).encode() + archive.payload
+    }
+
+    private fun structuralQualification(): KagemushaHardwareQualificationV1 {
+        // Public P-256 generator and shape-only r=s=1 signature; no hardware authentication.
+        val deviceKey = KagemushaDevicePublicKeyV1(
+            ("04" +
+                "6b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0f4a13945d898c296" +
+                "4fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5")
+                .chunked(2).map { it.toInt(16).toByte() }.toByteArray(),
+        )
+        val signature = KagemushaDeviceSignatureV1(ByteArray(64).also { it[31] = 1; it[63] = 1 })
+        val profile = KagemushaHardwareProfileV1(
+            version = 1, protocolVersion = 1,
+            hardwareProfileId = digest(1), providerId = digest(3),
+            platformClass = KagemushaHardwarePlatformClassV1.ANDROID_OEM_SERVICE,
+            productClassDigest = digest(4), firmwarePolicyDigest = digest(5),
+            enrollmentAttestationVerifierDigest = digest(6), attestationTrustRootsDigest = digest(7),
+            allowedSuiteCommitment = digest(8), policyEpoch = 1,
+            governanceCredentialPublicKey = deviceKey, capabilityMask = 0xffff,
+            qualificationReportDigest = digest(9), validFromMs = 1, expiresAtMs = 20000,
+        )
+        val credential = KagemushaHardwareCredentialV1(
+            version = 1, credentialId = digest(10), networkId = NetworkId.fromBytes(digest(11)),
+            hardwareProfileId = profile.hardwareProfileId(), suiteId = digest(12),
+            firmwarePolicyDigest = profile.firmwarePolicyDigest(), policyEpoch = profile.policyEpoch,
+            laneCommitment = digest(13), hardwareEpochId = digest(14), hardwareEpochGeneration = 1,
+            devicePublicKey = deviceKey, deviceKeyReference = digest(15),
+            issuedAtMs = 10, expiresAtMs = 19000, governanceSignature = signature,
+        )
+        return KagemushaHardwareQualificationV1(
+            protocolVersion = 1, profile = profile, credential = credential,
+            releaseId = digest(16), hardwarePolicyDigest = digest(2),
+            coreAuthorizationKeyReference = digest(17),
+            capabilities = EnumSet.allOf(KagemushaHardwareCapabilityV1::class.java),
+        )
+    }
+
+    private fun digest(value: Int): ByteArray = ByteArray(32) { value.toByte() }
 }

@@ -324,7 +324,7 @@ mod fault_injection_tests {
         assert_eq!(tx.result_proof, original_result_proof);
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::KeyPair;

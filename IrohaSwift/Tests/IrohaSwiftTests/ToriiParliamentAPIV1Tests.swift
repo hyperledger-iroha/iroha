@@ -132,7 +132,7 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         )
 
         let transitions = try XCTUnwrap(fixture["public_transitions"] as? [[String: Any]])
-        XCTAssertEqual(transitions.count, 21)
+        XCTAssertEqual(transitions.count, 22)
         XCTAssertEqual(transitions.count, ToriiParliamentAPIV1.publicTransitions.count)
         for (fixtureEntry, sdkEntry) in zip(transitions, ToriiParliamentAPIV1.publicTransitions) {
             XCTAssertEqual(fixtureEntry["norito_index"] as? Int, Int(sdkEntry.noritoIndex))
@@ -197,6 +197,37 @@ final class ToriiParliamentAPIV1Tests: XCTestCase {
         )
         let partial = try XCTUnwrap(fixture["tle_partial_release"] as? [String: Any])
         XCTAssertEqual((partial["response_fields"] as? [String])?.count, 9)
+    }
+
+    func testInitialSortitionDraftUsesOnlyTheEnclosingAttempt() throws {
+        let transition = ToriiParliamentLifecycleTransitionV1.registerInitialSortition
+        XCTAssertEqual(transition.layout.noritoIndex, 21)
+        XCTAssertEqual(transition.layout.jsonTag, "RegisterInitialSortition")
+        XCTAssertFalse(transition.layout.jsonPayloadRequired)
+        XCTAssertEqual(transition.layout.eventKindIndex, 24)
+
+        let encoded = try ToriiParliamentAPIV1.transitionDraftRequestData(
+            governanceAttemptId: attemptID,
+            transition: transition
+        )
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+        )
+        XCTAssertEqual(Set(object.keys), ["version", "governance_attempt_id", "transition"])
+        XCTAssertEqual(object["version"] as? Int, 1)
+        XCTAssertEqual(object["governance_attempt_id"] as? String, attemptID)
+        let tagged = try XCTUnwrap(object["transition"] as? [String: String])
+        XCTAssertEqual(tagged, ["transition": "RegisterInitialSortition"])
+        let standalone = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(transition)) as? [String: String]
+        )
+        XCTAssertEqual(standalone, tagged)
+        XCTAssertThrowsError(
+            try ToriiParliamentAPIV1.transitionDraftRequestData(
+                governanceAttemptId: String(repeating: "00", count: 32),
+                transition: transition
+            )
+        )
     }
 
     func testBuildersEmitOnlyCanonicalVersionedFields() throws {

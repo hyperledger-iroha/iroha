@@ -11807,7 +11807,7 @@ pub(crate) mod valid {
                             )),
                         )
                     }
-                    AcceptTransactionFail::TransactionInTheFuture => {
+                    AcceptTransactionFail::TransactionInTheFuture { .. } => {
                         TransactionRejectionReason::Validation(
                             iroha_data_model::ValidationFail::NotPermitted(
                                 "transaction creation time is in the future".to_owned(),
@@ -14423,6 +14423,7 @@ pub(crate) mod valid {
                             }
                             let mut state_tx = state_block.transaction();
                             let mut batch_successes = 0usize;
+                            let mut batch_touched_lanes = BTreeSet::new();
                             let mut batch_gas_used = 0u64;
                             let mut aborts: Vec<(usize, &'static str)> = Vec::new();
                             for p in prepared_chunk {
@@ -14529,6 +14530,7 @@ pub(crate) mod valid {
                                         batch_successes = batch_successes.saturating_add(1);
                                         record_result(p.idx, Ok(trigger_sequence));
                                         let lane_id = routing_decisions[p.idx].lane_id;
+                                        batch_touched_lanes.insert(lane_id);
                                         let summary = lane_summaries.entry(lane_id).or_default();
                                         summary.detached_merged =
                                             summary.detached_merged.saturating_add(1);
@@ -14563,8 +14565,12 @@ pub(crate) mod valid {
                                 // active when it was recorded. Clear the overlay hash so apply()
                                 // flushes batched transcripts into their per-transaction buckets.
                                 state_tx.tx_call_hash = None;
+                                // The last attempted lane can belong to a rejected entry.
+                                // Publish the complete successful set only after applying.
+                                state_tx.current_lane_id = None;
                                 let confidential_work = ConfidentialWorkV1::capture(&state_tx);
                                 state_tx.apply();
+                                state_block.record_applied_batch_lanes(batch_touched_lanes);
                                 account_transaction_gas(state_block, batch_gas_used);
                                 confidential_work.account(state_block);
                                 state_block
@@ -27902,7 +27908,7 @@ mod event {
                 | AcceptTransactionFail::SignatureVerification(_)
                 | AcceptTransactionFail::UnexpectedGenesisAccountSignature
                 | AcceptTransactionFail::TransactionDomainMismatch(_)
-                | AcceptTransactionFail::TransactionInTheFuture
+                | AcceptTransactionFail::TransactionInTheFuture { .. }
                 | AcceptTransactionFail::TransactionExpired { .. }
                 | AcceptTransactionFail::NetworkTimeUnhealthy { .. } => {
                     Reason::TransactionValidationFailed
@@ -29987,21 +29993,6 @@ pub(crate) mod tests {
         unexpected_leg.participant_settlement =
             iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
                 unexpected_leg.lane_id,
-                unexpected_leg.participant_settlement.dataspace_id(),
-                unexpected_leg.participant_settlement.lane_incarnation(),
-                unexpected_leg
-                    .participant_settlement
-                    .participant_lane_block_height(),
-                unexpected_leg
-                    .participant_settlement
-                    .authority_context_height(),
-                None,
-                unexpected_leg.participant_settlement.source_ids().to_vec(),
-            )
-            .expect("valid conflicting Native control identity");
-        unexpected_leg.participant_settlement =
-            iroha_data_model::block::consensus::NativeAmxParticipantSettlement::try_new(
-                unexpected_leg.participant_settlement.lane_id(),
                 unexpected_leg.dataspace_id,
                 unexpected_leg.participant_settlement.lane_incarnation(),
                 unexpected_leg
@@ -30010,9 +30001,7 @@ pub(crate) mod tests {
                 unexpected_leg
                     .participant_settlement
                     .authority_context_height(),
-                unexpected_leg
-                    .participant_settlement
-                    .previous_native_settlement_hash(),
+                None,
                 unexpected_leg.participant_settlement.source_ids().to_vec(),
             )
             .expect("valid conflicting Native control identity");

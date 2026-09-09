@@ -26,3 +26,17 @@ build lane and reuses the existing target directory.
 The command-local optimization affects only the primitive implementation's
 build profile. It does not change parameters, byte encodings, or verification
 policy. `ordering_hash.json` separately pins the public BLAKE2b ordering hash.
+
+`public_frames.json` contains 45 complete frames captured before separating
+Norito payload serialization from explicit frame identity. It covers the Fp4
+scalar, public IO, all six operation variants, and a transition batch at root,
+optional, and vector boundaries. The unit test decodes these original bytes,
+reproduces them exactly, checks nominal and root identities, and rejects
+incorrect identities, truncation, and trailing data. This fixture describes
+wire records; it does not qualify execution or proofs.
+
+The 2026-09-09 capture used source fingerprint
+`e2dbd01b24db3226a4d28ed24a46e9908dbd1281cac256e0b17cb6169795c258`.
+Both original codec directions agreed on every captured identity. The JSON
+SHA-256 is `bce4b2bf50ef9ed93a1ab97082d8b31845170abeaf890f8e0b0817c91d92d5ac`.
+Do not regenerate this reference from the implementation under test.

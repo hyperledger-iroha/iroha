@@ -1124,6 +1124,8 @@ include!("runtime_governance_auth.rs");
 include!("zk_compute_auth.rs");
 mod block;
 mod bounded_replay_cache;
+#[cfg(test)]
+mod build_identity_test_fixture;
 #[cfg(feature = "connect")]
 mod connect;
 #[cfg(feature = "connect")]
@@ -2661,6 +2663,7 @@ mod mcp_dispatch_router_lifetime_tests {
 
 #[allow(clippy::struct_excessive_bools)]
 struct AppState {
+    build_status: iroha_torii_shared::status::BuildStatus,
     shutdown_signal: ShutdownSignal,
     events: EventsSender,
     kura: Arc<Kura>,
@@ -2909,7 +2912,7 @@ struct AppState {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     #[cfg(feature = "connect")]
     torii_proxy_pending:
-        Arc<tokio::sync::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>,
+        Arc<parking_lot::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>,
     #[cfg(feature = "connect")]
     torii_proxy_completed: Arc<tokio::sync::Mutex<CompletedToriiProxyRequests>>,
     #[cfg(feature = "connect")]
@@ -21565,6 +21568,7 @@ async fn handler_status_root(
     let authoritative_block_height = u64::try_from(app.state.committed_height())
         .expect("committed height must fit the canonical u64 wire field");
     routing::handle_status(
+        &app.build_status,
         &app.telemetry,
         accept.map(|e| e.0),
         nexus_routing_policy,
@@ -24484,7 +24488,7 @@ mod torii_proxy_session_id_tests {
 type OwnedToriiProxyRequestIdPreimage = (&'static str, Hash, PeerId, u64, ToriiProxyRequestKindV1);
 /// Borrowed wire-equivalent of [`OwnedToriiProxyRequestIdPreimage`].
 ///
-/// Each tuple field keeps the historical length prefix, but the potentially
+/// Each tuple field uses its canonical length prefix, while the potentially
 /// large request arm is streamed directly instead of being cloned merely to
 /// derive its request id.
 #[cfg(feature = "connect")]
@@ -24496,9 +24500,12 @@ struct BorrowedToriiProxyRequestIdPreimage<'a> {
     request: &'a ToriiProxyRequestKindV1,
 }
 #[cfg(feature = "connect")]
-impl norito::core::NoritoSerialize for BorrowedToriiProxyRequestIdPreimage<'_> {
-    fn schema_hash() -> [u8; 16] {
-        <OwnedToriiProxyRequestIdPreimage as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for BorrowedToriiProxyRequestIdPreimage<'_> {
+    fn nominal_name() -> String {
+        "iroha_torii::BorrowedToriiProxyRequestIdPreimage<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <OwnedToriiProxyRequestIdPreimage as norito::NoritoSchema>::frame_name()
     }
 }
 #[cfg(feature = "connect")]
@@ -24608,35 +24615,23 @@ fn torii_proxy_hedge_delay(app: &AppState) -> Duration {
         .clamp(Duration::from_millis(50), Duration::from_millis(250))
 }
 #[cfg(feature = "connect")]
-fn torii_proxy_candidate_launch_delay(
-    queue_plan_synced: bool,
-    hedge_delay: Duration,
-    candidate_index: usize,
-) -> Duration {
-    if queue_plan_synced || candidate_index == 0 {
-        return Duration::ZERO;
-    }
-    hedge_delay.saturating_mul(u32::try_from(candidate_index).unwrap_or(u32::MAX))
-}
-#[cfg(feature = "connect")]
 async fn prune_completed_torii_proxy_requests(app: &SharedAppState) {
     let now = Instant::now();
     let mut completed = app.torii_proxy_completed.lock().await;
     completed.prune(now);
 }
 #[cfg(feature = "connect")]
-async fn register_torii_proxy_pending_waiter(
+fn register_torii_proxy_pending_waiter(
     app: &SharedAppState,
     pending_key: (Hash, PeerId),
     sender: tokio::sync::oneshot::Sender<ToriiProxyHttpResponseV1>,
     max_body_bytes: usize,
     strict_queue_plan_synced: bool,
-) -> Arc<()> {
+) -> ToriiProxyPendingWaiter {
     let waiter_token = Arc::new(());
     app.torii_proxy_pending
         .lock()
-        .await
-        .entry(pending_key)
+        .entry(pending_key.clone())
         .or_default()
         .push(PendingToriiProxyRequest {
             waiter_token: Arc::clone(&waiter_token),
@@ -24644,21 +24639,33 @@ async fn register_torii_proxy_pending_waiter(
             max_body_bytes,
             strict_queue_plan_synced,
         });
-    waiter_token
+    ToriiProxyPendingWaiter {
+        pending: Arc::clone(&app.torii_proxy_pending),
+        pending_key,
+        waiter_token,
+    }
+}
+/// Owns exactly one response waiter, including when an attempt is cancelled.
+#[cfg(feature = "connect")]
+struct ToriiProxyPendingWaiter {
+    pending: Arc<parking_lot::Mutex<BTreeMap<(Hash, PeerId), Vec<PendingToriiProxyRequest>>>>,
+    pending_key: (Hash, PeerId),
+    waiter_token: Arc<()>,
 }
 #[cfg(feature = "connect")]
-async fn remove_torii_proxy_pending_waiter(
-    app: &SharedAppState,
-    pending_key: &(Hash, PeerId),
-    waiter_token: &Arc<()>,
-) {
-    let mut pending = app.torii_proxy_pending.lock().await;
-    let remove_key = pending.get_mut(pending_key).is_some_and(|waiters| {
-        waiters.retain(|waiter| !Arc::ptr_eq(&waiter.waiter_token, waiter_token));
-        waiters.is_empty()
-    });
-    if remove_key {
-        pending.remove(pending_key);
+impl Drop for ToriiProxyPendingWaiter {
+    fn drop(&mut self) {
+        // All registry critical sections are synchronous and contain no I/O.
+        // Cleanup completes synchronously with the attempt; it never schedules
+        // detached work or removes an identical caller.
+        let mut pending = self.pending.lock();
+        let remove_key = pending.get_mut(&self.pending_key).is_some_and(|waiters| {
+            waiters.retain(|waiter| !Arc::ptr_eq(&waiter.waiter_token, &self.waiter_token));
+            waiters.is_empty()
+        });
+        if remove_key {
+            pending.remove(&self.pending_key);
+        }
     }
 }
 #[cfg(feature = "connect")]
@@ -25918,7 +25925,6 @@ impl CanonicalFanoutBatchRef<'_> {
         }
     }
 }
-impl norito::core::NoritoSerialize for CanonicalFanoutBatchRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutBatchRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.discriminant(), writer)?;
@@ -25935,7 +25941,6 @@ impl norito::core::SerializePayload for CanonicalFanoutBatchRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutValuesRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutValuesRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutValuesRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize_values(writer)
@@ -25949,7 +25954,6 @@ impl norito::core::SerializePayload for CanonicalFanoutValuesRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutOneColumnRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutOneColumnRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutOneColumnRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_seq_len(writer, 1)?;
@@ -25965,7 +25969,6 @@ impl norito::core::SerializePayload for CanonicalFanoutOneColumnRef<'_> {
 }
 #[derive(Clone, Copy)]
 struct CanonicalFanoutBatchTupleRef<'a>(CanonicalFanoutBatchRef<'a>);
-impl norito::core::NoritoSerialize for CanonicalFanoutBatchTupleRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutBatchTupleRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_len_prefixed(writer, &CanonicalFanoutOneColumnRef(self.0))
@@ -25985,7 +25988,6 @@ struct CanonicalFanoutOutputRef<'a> {
     has_more: &'a bool,
     continue_cursor: &'a Option<iroha_data_model::query::parameters::ForwardCursor>,
 }
-impl norito::core::NoritoSerialize for CanonicalFanoutOutputRef<'_> {}
 impl norito::core::SerializePayload for CanonicalFanoutOutputRef<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::write_len_prefixed(writer, &CanonicalFanoutBatchTupleRef(self.batch))?;
@@ -26057,9 +26059,12 @@ impl BoundedCanonicalIterableFanoutResponse {
         }
     }
 }
-impl norito::core::NoritoSerialize for BoundedCanonicalIterableFanoutResponse {
-    fn schema_hash() -> [u8; 16] {
-        <iroha_data_model::query::QueryResponse as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for BoundedCanonicalIterableFanoutResponse {
+    fn nominal_name() -> String {
+        "iroha_torii::BoundedCanonicalIterableFanoutResponse".to_owned()
+    }
+    fn frame_name() -> String {
+        <iroha_data_model::query::QueryResponse as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for BoundedCanonicalIterableFanoutResponse {
@@ -27410,6 +27415,9 @@ impl std::fmt::Display for ToriiProxyAttemptError {
         }
     }
 }
+/// Fixed bound on simultaneous strict-admission responses, independent of roster size.
+#[cfg(feature = "connect")]
+const QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS: usize = 4;
 #[cfg(feature = "connect")]
 const QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1: usize =
     iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
@@ -27724,6 +27732,18 @@ fn validate_queue_plan_synced_acceptance(
         QueuePlanAdmissionCertificateStrengthV1::Partial,
     )?;
     Ok(validated.certificate.attestations)
+}
+/// A retry hint only: this never proves non-admission or contributes an attestation.
+#[cfg(feature = "connect")]
+fn queue_plan_synced_authority_needs_catch_up(snapshot: &ToriiProxyHttpResponseV1) -> bool {
+    snapshot.status_code == StatusCode::SERVICE_UNAVAILABLE.as_u16()
+        && validate_queue_plan_synced_snapshot_bounds(snapshot).is_ok()
+        && validate_queue_plan_synced_response_header(
+            snapshot,
+            "x-iroha-reject-code",
+            Some("queue_plan_admission_context_future"),
+        )
+        .is_ok()
 }
 #[cfg(feature = "connect")]
 fn merge_queue_plan_synced_attestations(
@@ -28141,14 +28161,13 @@ async fn execute_torii_proxy_request_via_peer(
     let strict_queue_plan_synced = queue_plan_synced_entrypoint_hash(&request.request).is_some();
     let (tx, rx) = tokio::sync::oneshot::channel();
     prune_completed_torii_proxy_requests(app).await;
-    let waiter_token = register_torii_proxy_pending_waiter(
+    let _waiter = register_torii_proxy_pending_waiter(
         app,
         pending_key.clone(),
         tx,
         max_body_bytes,
         strict_queue_plan_synced,
-    )
-    .await;
+    );
     iroha_logger::debug!(
         request_id = %pending_key.0,
         peer_id = %target_peer_id,
@@ -28175,7 +28194,6 @@ async fn execute_torii_proxy_request_via_peer(
     )
     .await;
     if let Err(error) = admission {
-        remove_torii_proxy_pending_waiter(app, &pending_key, &waiter_token).await;
         return Err(ToriiProxyAttemptError::before_dispatch(format!(
             "Torii proxy request `{}` to peer `{target_peer_id}` was not admitted by P2P: {error}",
             pending_key.0
@@ -28184,7 +28202,6 @@ async fn execute_torii_proxy_request_via_peer(
     let remaining_budget = match validate_torii_proxy_deadline(deadline_unix_ms) {
         Ok(remaining) => remaining,
         Err(error) => {
-            remove_torii_proxy_pending_waiter(app, &pending_key, &waiter_token).await;
             return Err(ToriiProxyAttemptError::after_dispatch(format!(
                 "Torii proxy request `{}` to peer `{target_peer_id}` was admitted but exhausted its deadline before response wait: {error}",
                 pending_key.0
@@ -28194,7 +28211,6 @@ async fn execute_torii_proxy_request_via_peer(
     let local_remaining = attempt_deadline.saturating_duration_since(tokio::time::Instant::now());
     let attempt_timeout = remaining_budget.min(local_remaining);
     if attempt_timeout.is_zero() {
-        remove_torii_proxy_pending_waiter(app, &pending_key, &waiter_token).await;
         return Err(ToriiProxyAttemptError::after_dispatch(format!(
             "Torii proxy request `{}` to peer `{target_peer_id}` was admitted at its local attempt deadline",
             pending_key.0
@@ -28223,7 +28239,6 @@ async fn execute_torii_proxy_request_via_peer(
             pending_key.0
         ))),
         Err(_) => {
-            remove_torii_proxy_pending_waiter(app, &pending_key, &waiter_token).await;
             iroha_logger::warn!(
                 request_id = %pending_key.0,
                 peer_id = %target_peer_id,
@@ -28770,13 +28785,17 @@ where
     CFut: core::future::Future<Output = ()>,
 {
     let request_id = request.request_id.clone();
-    if let Err(error) = validate_torii_proxy_deadline(request.deadline_unix_ms) {
-        return torii_proxy_error_response(
-            StatusCode::REQUEST_TIMEOUT,
-            "proxy_deadline_exceeded",
-            error,
-        );
-    }
+    let execution_started = tokio::time::Instant::now();
+    let execution_budget = match validate_torii_proxy_deadline(request.deadline_unix_ms) {
+        Ok(budget) => budget.min(TORII_PROXY_EXECUTION_BUDGET),
+        Err(error) => {
+            return torii_proxy_error_response(
+                StatusCode::REQUEST_TIMEOUT,
+                "proxy_deadline_exceeded",
+                error,
+            );
+        }
+    };
     let queue_plan_synced_expectation = match queue_plan_synced_acceptance_expectation(&request) {
         Ok(expectation) => expectation,
         Err(error) => {
@@ -28919,162 +28938,237 @@ where
     let mut durable_attestations = BTreeMap::<u16, QueuePlanAdmissionAttestationV1>::new();
     let mut last_retryable: Option<Response> = None;
     let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
-    let queue_plan_started = tokio::time::Instant::now();
-    for (index, peer_id) in candidate_peers.into_iter().enumerate() {
-        // One certificate snapshot is protocol-bounded, but multiplying that
-        // bound by the full validator roster is not. Keep exactly one response
-        // in flight while collecting the same deterministic quorum.
-        let launch_delay = torii_proxy_candidate_launch_delay(strict_durable, hedge_delay, index);
-        if launch_delay > Duration::ZERO {
-            tokio::time::sleep_until(queue_plan_started + launch_delay).await;
-        }
-        let candidate_index = index;
-        let outcome = execute(peer_id.clone(), request.clone()).await;
-        match outcome {
-            Ok(mut snapshot) => {
-                if let Some(expected) = queue_plan_synced_expectation.as_ref() {
-                    match validate_queue_plan_synced_acceptance(&snapshot, expected) {
-                        Ok(receipts) => {
-                            if let Err(validator_index) = merge_queue_plan_synced_attestations(
-                                &mut durable_attestations,
-                                receipts,
-                            ) {
-                                let mut response = queue_plan_outcome_unknown_response(
-                                    expected.entrypoint_hash.clone(),
-                                    expected.signed_transaction_hash.clone(),
-                                    format!(
-                                        "coordinator validator index `{validator_index}` produced conflicting durable admission claims"
-                                    ),
-                                );
-                                insert_route_transport_header(
-                                    &mut response,
-                                    peer_id.transport_label(),
-                                );
-                                complete_request(request_id.clone()).await;
-                                return response;
-                            }
-                            if durable_attestations.len() >= expected.durability_threshold {
-                                let certificate = QueuePlanAdmissionCertificateV1 {
-                                    version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
-                                    binding: expected.admission_binding.clone(),
-                                    attestations: durable_attestations
-                                        .values()
-                                        .take(expected.durability_threshold)
-                                        .cloned()
-                                        .collect(),
-                                };
-                                let body = match norito::core::to_bytes_bounded(
-                                    &certificate,
-                                    QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
+    let execution_deadline = execution_started + execution_budget;
+    let retry_delay = hedge_delay.clamp(Duration::from_millis(50), Duration::from_millis(250));
+    let mut attempt_budget = retry_delay;
+    'catch_up: loop {
+        let mut retry_authority = false;
+        let mut pending = futures_util::stream::FuturesUnordered::new();
+        let mut next_candidate = 0;
+        loop {
+            if tokio::time::Instant::now() >= execution_deadline {
+                break 'catch_up;
+            }
+            // The full ingress envelope charges every in-flight response and
+            // reduction scratch before dispatch. A silent prefix cannot retain
+            // all slots until the global deadline: each round gives attempts a
+            // bounded share, then increases that share for slower honest peers.
+            while pending.len() < QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS
+                && next_candidate < candidate_peers.len()
+            {
+                let candidate_index = next_candidate;
+                next_candidate += 1;
+                let peer_id = candidate_peers[candidate_index].clone();
+                if queue_plan_synced_expectation
+                    .as_ref()
+                    .is_some_and(|expected| {
+                        let coordinator = &expected
+                            .admission_binding
+                            .admission_context
+                            .route_incarnations[0];
+                        durable_attestations.keys().any(|validator_index| {
+                            coordinator.validator_set.get(usize::from(*validator_index))
+                                == Some(peer_id.peer_id())
+                        })
+                    })
+                {
+                    continue;
+                }
+                let attempt_deadline =
+                    (tokio::time::Instant::now() + attempt_budget).min(execution_deadline);
+                let attempt = execute(peer_id.clone(), request.clone());
+                pending.push(async move {
+                    (
+                        candidate_index,
+                        peer_id,
+                        tokio::time::timeout_at(attempt_deadline, attempt).await,
+                    )
+                });
+            }
+            let Some((candidate_index, peer_id, outcome)) = pending.next().await else {
+                break;
+            };
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(_) => {
+                    retry_authority = true;
+                    if let Some(expected) = queue_plan_synced_expectation.as_ref() {
+                        let mut response = queue_plan_outcome_unknown_response(
+                            expected.entrypoint_hash.clone(),
+                            expected.signed_transaction_hash.clone(),
+                            "authority attempt exhausted its bounded share of the original admission deadline",
+                        );
+                        insert_route_transport_header(&mut response, peer_id.transport_label());
+                        retain_strongest_queue_plan_synced_failure(
+                            &mut queue_plan_synced_failure,
+                            candidate_index,
+                            response,
+                        );
+                    }
+                    continue;
+                }
+            };
+            match outcome {
+                Ok(mut snapshot) => {
+                    retry_authority |= queue_plan_synced_authority_needs_catch_up(&snapshot);
+                    if let Some(expected) = queue_plan_synced_expectation.as_ref() {
+                        match validate_queue_plan_synced_acceptance(&snapshot, expected) {
+                            Ok(receipts) => {
+                                if let Err(validator_index) = merge_queue_plan_synced_attestations(
+                                    &mut durable_attestations,
+                                    receipts,
                                 ) {
-                                    Ok(body) => body,
-                                    Err(norito::core::BoundedEncodeError::FrameTooLarge {
-                                        ..
-                                    }) => {
-                                        let mut response = queue_plan_outcome_unknown_response(
-                                            expected.entrypoint_hash.clone(),
-                                            expected.signed_transaction_hash.clone(),
-                                            "durable admission certificate exceeds its protocol bound",
-                                        );
-                                        insert_route_transport_header(
-                                            &mut response,
-                                            peer_id.transport_label(),
-                                        );
-                                        retain_strongest_queue_plan_synced_failure(
-                                            &mut queue_plan_synced_failure,
-                                            candidate_index,
-                                            response,
-                                        );
-                                        continue;
-                                    }
-                                    Err(error) => {
-                                        let mut response = queue_plan_outcome_unknown_response(
-                                            expected.entrypoint_hash.clone(),
-                                            expected.signed_transaction_hash.clone(),
-                                            format!(
-                                                "failed to encode durable admission certificate: {error}"
-                                            ),
-                                        );
-                                        insert_route_transport_header(
-                                            &mut response,
-                                            peer_id.transport_label(),
-                                        );
-                                        retain_strongest_queue_plan_synced_failure(
-                                            &mut queue_plan_synced_failure,
-                                            candidate_index,
-                                            response,
-                                        );
-                                        continue;
-                                    }
-                                };
-                                snapshot.status_code = StatusCode::ACCEPTED.as_u16();
-                                snapshot.headers =
-                                    canonical_queue_plan_synced_certificate_headers(expected);
-                                snapshot.body = body;
-                                let mut response = torii_proxy_snapshot_to_response(snapshot);
-                                insert_route_transport_header(
-                                    &mut response,
-                                    peer_id.transport_label(),
-                                );
-                                complete_request(request_id.clone()).await;
-                                return response;
+                                    let mut response = queue_plan_outcome_unknown_response(
+                                        expected.entrypoint_hash.clone(),
+                                        expected.signed_transaction_hash.clone(),
+                                        format!(
+                                            "coordinator validator index `{validator_index}` produced conflicting durable admission claims"
+                                        ),
+                                    );
+                                    insert_route_transport_header(
+                                        &mut response,
+                                        peer_id.transport_label(),
+                                    );
+                                    complete_request(request_id.clone()).await;
+                                    return response;
+                                }
+                                if durable_attestations.len() >= expected.durability_threshold {
+                                    let certificate = QueuePlanAdmissionCertificateV1 {
+                                        version: QUEUE_PLAN_ADMISSION_CERTIFICATE_VERSION_V1,
+                                        binding: expected.admission_binding.clone(),
+                                        attestations: durable_attestations
+                                            .values()
+                                            .take(expected.durability_threshold)
+                                            .cloned()
+                                            .collect(),
+                                    };
+                                    let body = match norito::core::to_bytes_bounded(
+                                        &certificate,
+                                        QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1,
+                                    ) {
+                                        Ok(body) => body,
+                                        Err(norito::core::BoundedEncodeError::FrameTooLarge {
+                                            ..
+                                        }) => {
+                                            let mut response = queue_plan_outcome_unknown_response(
+                                                expected.entrypoint_hash.clone(),
+                                                expected.signed_transaction_hash.clone(),
+                                                "durable admission certificate exceeds its protocol bound",
+                                            );
+                                            insert_route_transport_header(
+                                                &mut response,
+                                                peer_id.transport_label(),
+                                            );
+                                            retain_strongest_queue_plan_synced_failure(
+                                                &mut queue_plan_synced_failure,
+                                                candidate_index,
+                                                response,
+                                            );
+                                            continue;
+                                        }
+                                        Err(error) => {
+                                            let mut response = queue_plan_outcome_unknown_response(
+                                                expected.entrypoint_hash.clone(),
+                                                expected.signed_transaction_hash.clone(),
+                                                format!(
+                                                    "failed to encode durable admission certificate: {error}"
+                                                ),
+                                            );
+                                            insert_route_transport_header(
+                                                &mut response,
+                                                peer_id.transport_label(),
+                                            );
+                                            retain_strongest_queue_plan_synced_failure(
+                                                &mut queue_plan_synced_failure,
+                                                candidate_index,
+                                                response,
+                                            );
+                                            continue;
+                                        }
+                                    };
+                                    snapshot.status_code = StatusCode::ACCEPTED.as_u16();
+                                    snapshot.headers =
+                                        canonical_queue_plan_synced_certificate_headers(expected);
+                                    snapshot.body = body;
+                                    let mut response = torii_proxy_snapshot_to_response(snapshot);
+                                    insert_route_transport_header(
+                                        &mut response,
+                                        peer_id.transport_label(),
+                                    );
+                                    complete_request(request_id.clone()).await;
+                                    return response;
+                                }
+                                continue;
                             }
-                            continue;
+                            Err(_) => {}
                         }
-                        Err(_) => {}
+                    }
+                    let mut response = match queue_plan_synced_expectation.as_ref() {
+                        Some(expected) => {
+                            queue_plan_synced_snapshot_to_response(snapshot, expected)
+                        }
+                        None => torii_proxy_snapshot_to_response(snapshot),
+                    };
+                    let status = response.status();
+                    insert_route_transport_header(&mut response, peer_id.transport_label());
+                    if strict_durable && !status.is_success() {
+                        retain_strongest_queue_plan_synced_failure(
+                            &mut queue_plan_synced_failure,
+                            candidate_index,
+                            response,
+                        );
+                        continue;
+                    }
+                    if should_retry_torii_proxy_status(status) {
+                        retain_strongest_retryable_response(&mut last_retryable, response);
+                        continue;
+                    }
+                    complete_request(request_id.clone()).await;
+                    return response;
+                }
+                Err(error) => {
+                    iroha_logger::warn!(
+                        peer_id = %peer_id.peer_id(),
+                        transport = peer_id.transport_label(),
+                        %error,
+                        "Torii ingress proxy attempt failed"
+                    );
+                    if error.may_have_reached_authority()
+                        && let Some((entrypoint_hash, signed_transaction_hash)) =
+                            queue_plan_synced_expectation.as_ref().map(|expected| {
+                                (
+                                    &expected.entrypoint_hash,
+                                    expected.signed_transaction_hash.as_ref(),
+                                )
+                            })
+                    {
+                        let mut response = queue_plan_outcome_unknown_response(
+                            entrypoint_hash.clone(),
+                            signed_transaction_hash.cloned(),
+                            error.to_string(),
+                        );
+                        insert_route_transport_header(&mut response, peer_id.transport_label());
+                        retain_strongest_queue_plan_synced_failure(
+                            &mut queue_plan_synced_failure,
+                            candidate_index,
+                            response,
+                        );
                     }
                 }
-                let mut response = match queue_plan_synced_expectation.as_ref() {
-                    Some(expected) => queue_plan_synced_snapshot_to_response(snapshot, expected),
-                    None => torii_proxy_snapshot_to_response(snapshot),
-                };
-                let status = response.status();
-                insert_route_transport_header(&mut response, peer_id.transport_label());
-                if strict_durable && !status.is_success() {
-                    retain_strongest_queue_plan_synced_failure(
-                        &mut queue_plan_synced_failure,
-                        candidate_index,
-                        response,
-                    );
-                    continue;
-                }
-                if should_retry_torii_proxy_status(status) {
-                    retain_strongest_retryable_response(&mut last_retryable, response);
-                    continue;
-                }
-                complete_request(request_id.clone()).await;
-                return response;
-            }
-            Err(error) => {
-                iroha_logger::warn!(
-                    peer_id = %peer_id.peer_id(),
-                    transport = peer_id.transport_label(),
-                    %error,
-                    "Torii ingress proxy attempt failed"
-                );
-                if error.may_have_reached_authority()
-                    && let Some((entrypoint_hash, signed_transaction_hash)) =
-                        queue_plan_synced_expectation.as_ref().map(|expected| {
-                            (
-                                &expected.entrypoint_hash,
-                                expected.signed_transaction_hash.as_ref(),
-                            )
-                        })
-                {
-                    let mut response = queue_plan_outcome_unknown_response(
-                        entrypoint_hash.clone(),
-                        signed_transaction_hash.cloned(),
-                        error.to_string(),
-                    );
-                    insert_route_transport_header(&mut response, peer_id.transport_label());
-                    retain_strongest_queue_plan_synced_failure(
-                        &mut queue_plan_synced_failure,
-                        candidate_index,
-                        response,
-                    );
-                }
             }
         }
+        if !retry_authority {
+            break;
+        }
+        // Retry an explicit catch-up hint or timed-out attempt without renewing
+        // the signed request, binding, identity, or absolute deadline. The next
+        // round skips already-attested authorities and gives slow peers more time.
+        let retry_at = tokio::time::Instant::now() + retry_delay;
+        if retry_at >= execution_deadline {
+            break;
+        }
+        tokio::time::sleep_until(retry_at).await;
+        attempt_budget = attempt_budget.saturating_mul(2).min(execution_budget);
     }
     complete_request(request_id).await;
     if let Some(expected) = queue_plan_synced_expectation.as_ref()
@@ -31968,7 +32062,10 @@ async fn execute_incoming_torii_proxy_request_with_admission_inner(
                                         &admission_binding.admission_context,
                                     );
                                 match context_disposition {
-                                    Ok(queue::QueuePlanAdmissionContextDisposition::Current) => {
+                                    Ok(
+                                        queue::QueuePlanAdmissionContextDisposition::Current
+                                        | queue::QueuePlanAdmissionContextDisposition::Historical,
+                                    ) => {
                                         let coordinator = admission_binding
                                             .admission_context
                                             .route_incarnations
@@ -32485,7 +32582,7 @@ async fn process_incoming_torii_proxy_response(
 ) {
     let pending_key = (proxy_response.request_id, responder_peer_id.clone());
     let (pending_waiters, has_other_pending) = {
-        let mut pending_requests = app.torii_proxy_pending.lock().await;
+        let mut pending_requests = app.torii_proxy_pending.lock();
         let pending_waiters = pending_requests.remove(&pending_key);
         let has_other_pending = pending_requests
             .keys()
@@ -47981,6 +48078,7 @@ mod test_api_router_runtime_tests {
 
 /// Main network handler and the only entrypoint of Iroha's HTTP API.
 pub struct Torii {
+    build_identity: iroha_core::release_identity::BuildIdentity,
     chain_id: Arc<ChainId>,
     signed_query_admission: Arc<routing::SignedQueryAdmission>,
     kiso: KisoHandle,
@@ -48190,6 +48288,7 @@ pub struct Torii {
 /// container.
 #[derive(Clone)]
 pub struct ToriiRuntimeDeps {
+    build_identity: iroha_core::release_identity::BuildIdentity,
     telemetry: routing::MaybeTelemetry,
     #[cfg(feature = "app_api")]
     private_settlement_availability_signer:
@@ -48314,10 +48413,14 @@ pub struct ToriiRuntimeDeps {
     vpn_operator_signer: Option<KeyPair>,
 }
 impl ToriiRuntimeDeps {
-    /// Construct runtime dependencies from the resolved telemetry handle.
+    /// Construct dependencies from the owning executable identity and telemetry.
     #[must_use]
-    pub fn new(telemetry: routing::MaybeTelemetry) -> Self {
+    pub fn new(
+        build_identity: iroha_core::release_identity::BuildIdentity,
+        telemetry: routing::MaybeTelemetry,
+    ) -> Self {
         Self {
+            build_identity,
             telemetry,
             #[cfg(feature = "app_api")]
             private_settlement_availability_signer: None,
@@ -48416,7 +48519,7 @@ impl ToriiRuntimeDeps {
     /// signers while Torii is being constructed, so none of them may cross this
     /// boundary. The normal Strict restart reconstructs and validates them.
     fn into_emergency_fast(self) -> Self {
-        Self::new(self.telemetry)
+        Self::new(self.build_identity, self.telemetry)
     }
     /// Attach the deployment-owned Parliament TLE partial-release coordinator.
     ///
@@ -48920,8 +49023,11 @@ fn torii_runtime_deps_keep_vpn_and_proxy_signers_separate() {
         .expect("proxy signer fixture");
     let vpn_signer = KeyPair::try_from_seed(vec![0x92; 32], iroha_crypto::Algorithm::Ed25519)
         .expect("VPN signer fixture");
-    let proxy_only = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_torii_proxy_bridge_signer(proxy_signer.clone());
+    let proxy_only = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_torii_proxy_bridge_signer(proxy_signer.clone());
     assert!(
         proxy_only.vpn_operator_signer.is_none(),
         "proxy signer must never fill the VPN signer role"
@@ -48948,15 +49054,23 @@ fn emergency_fast_runtime_deps_drop_external_services_and_signers() {
         .expect("proxy signer fixture");
     let vpn_signer = KeyPair::try_from_seed(vec![0x94; 32], iroha_crypto::Algorithm::Ed25519)
         .expect("VPN signer fixture");
-    let deps = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
-        .with_torii_proxy_bridge_signer(proxy_signer)
-        .with_vpn_operator_signer(vpn_signer)
-        .into_emergency_fast();
+    let deps = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
+    .with_torii_proxy_bridge_signer(proxy_signer)
+    .with_vpn_operator_signer(vpn_signer)
+    .into_emergency_fast();
 
     assert!(deps.torii_proxy_bridge_signer.is_none());
     assert!(deps.vpn_operator_signer.is_none());
     assert!(deps.soracloud_runtime.is_none());
     assert!(deps.sorafs_node.is_none());
+    assert_eq!(
+        deps.build_identity,
+        crate::build_identity_test_fixture::build_identity(),
+        "emergency recovery retains the executable identity"
+    );
 }
 
 #[cfg(test)]
@@ -48988,17 +49102,17 @@ fn emergency_fast_uses_only_the_process_local_sorafs_facade() {
 fn emergency_fast_does_not_configure_or_start_the_background_zk_prover() {
     let source = include_str!("lib.rs");
     let app_services = source
-        .rsplit_once("// Configure app API subsystems (attachments) from Torii config")
-        .expect("app-service startup section")
+        .rsplit_once("torii.validate_startup_configuration()?;")
+        .expect("Torii configuration preflight")
         .1
-        .split_once("let query_rate = config")
-        .expect("end of app-service startup section")
+        .split_once("// Commit process-wide Torii policy")
+        .expect("process-wide publication boundary")
         .0;
     let fast_guard = app_services
         .find("if !emergency_fast")
         .expect("emergency Fast ZK-prover guard");
     let configure = app_services
-        .find("crate::zk_prover::configure(")
+        .find("crate::zk_prover::prepare_configuration(")
         .expect("ZK-prover configuration");
     assert!(fast_guard < configure);
     assert!(
@@ -49063,11 +49177,6 @@ fn torii_start_binds_before_launching_background_workers() {
     }
 }
 
-impl From<routing::MaybeTelemetry> for ToriiRuntimeDeps {
-    fn from(telemetry: routing::MaybeTelemetry) -> Self {
-        Self::new(telemetry)
-    }
-}
 #[cfg(feature = "app_api")]
 fn qualify_configured_sorafs_native_transaction_signer_for_startup<S>(
     role: SorafsNativeTransactionSignerRoleV1,
@@ -52239,6 +52348,7 @@ impl Torii {
     /// pass an explicit [`routing::MaybeTelemetry`] profile.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
+        build_identity: iroha_core::release_identity::BuildIdentity,
         chain_id: ChainId,
         network_id: NetworkId,
         kiso: KisoHandle,
@@ -52264,7 +52374,7 @@ impl Torii {
             da_receipt_signer,
             online_peers,
             None,
-            routing::MaybeTelemetry::disabled(),
+            ToriiRuntimeDeps::new(build_identity, routing::MaybeTelemetry::disabled()),
         )
     }
     /// Construct `Torii`.
@@ -52288,7 +52398,7 @@ impl Torii {
         da_receipt_signer: KeyPair,
         online_peers: OnlinePeersProvider,
         sumeragi: Option<iroha_core::sumeragi::SumeragiHandle>,
-        runtime_deps: impl Into<ToriiRuntimeDeps>,
+        runtime_deps: ToriiRuntimeDeps,
     ) -> Result<Self, ToriiBuildError> {
         if state.network_id != network_id {
             return Err(ToriiBuildError::invalid_configuration(
@@ -52357,7 +52467,6 @@ impl Torii {
                 ),
             ));
         }
-        let runtime_deps = runtime_deps.into();
         let runtime_deps = if emergency_fast {
             runtime_deps.into_emergency_fast()
         } else {
@@ -52416,6 +52525,7 @@ impl Torii {
                 None
             }
         };
+        let build_identity = runtime_deps.build_identity;
         let telemetry = runtime_deps.telemetry.clone();
         #[cfg(feature = "app_api")]
         let parliament_tle_release_coordinator =
@@ -53819,6 +53929,7 @@ impl Torii {
             })?;
 
         let torii = Self {
+            build_identity,
             chain_id: Arc::new(chain_id),
             signed_query_admission,
             kiso,
@@ -54026,6 +54137,33 @@ impl Torii {
 
         torii.validate_startup_configuration()?;
 
+        #[cfg(feature = "app_api")]
+        let prepared_prover = if !emergency_fast {
+            Some(
+                crate::zk_prover::prepare_configuration(
+                    build_identity,
+                    config.zk_prover_enabled,
+                    config.zk_prover_scan_period_secs,
+                    config.zk_prover_reports_ttl_secs,
+                    config.zk_prover_reports_max_count,
+                    config.zk_prover_reports_max_bytes,
+                    config.zk_prover_max_inflight,
+                    config.zk_prover_max_scan_bytes,
+                    config.zk_prover_max_scan_millis,
+                    config.zk_prover_keys_dir.clone(),
+                    config.zk_prover_allowed_backends.clone(),
+                    config.zk_prover_allowed_circuits.clone(),
+                    Some(state.clone()),
+                    telemetry.clone(),
+                )
+                .map_err(|error| {
+                    ToriiBuildError::invalid_configuration("zk_prover.build_identity", error)
+                })?,
+            )
+        } else {
+            None
+        };
+
         // Commit process-wide Torii policy only after every configuration value and durable
         // component above has been validated successfully.
         crate::app_auth::configure(app_auth_config).map_err(|error| {
@@ -54071,23 +54209,10 @@ impl Torii {
                     telemetry.clone(),
                 );
             }
-            if !emergency_fast {
-                crate::zk_prover::configure(
-                    config.zk_prover_enabled,
-                    config.zk_prover_scan_period_secs,
-                    config.zk_prover_reports_ttl_secs,
-                    config.zk_prover_reports_max_count,
-                    config.zk_prover_reports_max_bytes,
-                    config.zk_prover_max_inflight,
-                    config.zk_prover_max_scan_bytes,
-                    config.zk_prover_max_scan_millis,
-                    config.zk_prover_keys_dir.clone(),
-                    config.zk_prover_allowed_backends.clone(),
-                    config.zk_prover_allowed_circuits.clone(),
-                    Some(state),
-                    telemetry.clone(),
-                );
-            }
+        }
+        #[cfg(feature = "app_api")]
+        if let Some(prepared_prover) = prepared_prover {
+            prepared_prover.commit();
         }
         #[cfg(all(feature = "telemetry", feature = "app_api"))]
         telemetry.with_metrics(|tel| {
@@ -54796,6 +54921,7 @@ impl Torii {
         let da_runtime = self.prepare_da_runtime_services()?;
         let mcp_inflight_requests = Arc::new(mcp::McpInflightRegistry::default());
         let app_state: SharedAppState = Arc::new(AppState {
+            build_status: self.build_identity.status(),
             shutdown_signal,
             events: self.events.clone(),
             kura: self.kura.clone(),
@@ -55040,7 +55166,7 @@ impl Torii {
             vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
             soracloud_runtime: self.soracloud_runtime.clone(),
             #[cfg(feature = "connect")]
-            torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+            torii_proxy_pending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
             #[cfg(feature = "connect")]
             torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(
                 CompletedToriiProxyRequests::default(),

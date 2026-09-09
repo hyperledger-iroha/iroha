@@ -2,7 +2,7 @@ pub use self::model::*;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use thiserror::Error;
 #[model]
@@ -70,7 +70,7 @@ impl ::core::convert::TryFrom<u8> for Level {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl FastJsonWrite for Level {
     fn write_json(&self, out: &mut String) {
         json::write_json_string(&self.to_string(), out);
@@ -82,7 +82,7 @@ impl FastJsonWrite for Level {
         json::write_json_string_to(&self.to_string(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for Level {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = parser.parse_string()?;
@@ -94,7 +94,7 @@ impl JsonDeserialize for Level {
             })
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use norito::json::{self, FastJsonWrite};

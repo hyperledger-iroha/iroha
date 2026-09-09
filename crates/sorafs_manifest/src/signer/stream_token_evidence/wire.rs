@@ -77,6 +77,8 @@ impl SignerStreamTokenObservationRequestSubjectV1 {
 }
 
 /// Canonical observer query; decoding this public claim does not create a retained expectation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenObservationRequestV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerStreamTokenObservationRequestV1 {
     /// Sole marker, available from [`Self::magic`].
@@ -215,6 +217,8 @@ impl SignerStreamTokenStateSubjectV1 {
 }
 
 /// Exact current finalized state, signed by the independently configured observer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenStateObservationBodyV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerStreamTokenStateObservationBodyV1 {
     /// Sole marker, available from [`Self::magic`].
@@ -297,6 +301,8 @@ impl SignerStreamTokenStateObservationBodyV1 {
 }
 
 /// Canonical signed token observation; its key and trust never come from this envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::stream_token_evidence::SignerStreamTokenStateObservationV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerStreamTokenStateObservationV1 {
     /// Exact signed phase/query/current/completed state.

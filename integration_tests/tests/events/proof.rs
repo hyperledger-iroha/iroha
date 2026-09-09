@@ -149,8 +149,9 @@ async fn verify_proof_emits_event(
     let mut events = tokio::time::timeout(
         proof_event_timeout(network),
         client
-            .client()
-            .listen_for_events([DataEventFilter::Proof(ProofEventFilter::new())]),
+            .account_client()
+            .events()
+            .subscribe([DataEventFilter::Proof(ProofEventFilter::new())]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening proof event stream"))??;
@@ -201,7 +202,7 @@ async fn verify_proof_emits_event(
         Ok(())
     }
     .await;
-    events.close().await;
+    events.close().await?;
     result
 }
 #[tokio::test]

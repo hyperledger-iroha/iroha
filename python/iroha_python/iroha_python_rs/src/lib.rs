@@ -5561,12 +5561,10 @@ mod tests {
     #[test]
     fn prepared_binding_parser_accepts_only_the_exact_v1_shape() {
         let binding = r#"{
-            "schema":"iroha.taira.public-reset.mutation-binding.v1",
-            "authorization_sha256":"0000000000000000000000000000000000000000000000000000000000000000",
-            "authorization_nonce":"reset_nonce_00000000000000000000",
+            "schema":"iroha.prepared-operation.binding.v1",
+            "semantic_hash_hex":"0000000000000000000000000000000000000000000000000000000000000000",
             "kind":"faucet",
-            "phase":"pre_edge",
-            "idempotency_key":"1111111111111111111111111111111111111111111111111111111111111111",
+            "request_id":"1111111111111111111111111111111111111111111111111111111111111111",
             "execution_expires_at_unix_ms":1
         }"#;
         assert!(require_prepared_binding_json_v1(binding, "faucet").is_ok());
@@ -5637,6 +5635,32 @@ mod tests {
     fn py_err_message(err: pyo3::PyErr) -> String {
         ensure_python();
         Python::attach(|py| err.value(py).to_string())
+    }
+    #[test]
+    fn sorafs_alias_defaults_match_the_canonical_service_policy() {
+        let actual = sorafs_default_policy();
+        assert_eq!(
+            [
+                actual.positive_ttl(),
+                actual.refresh_window(),
+                actual.hard_expiry(),
+                actual.negative_ttl(),
+                actual.revocation_ttl(),
+                actual.rotation_max_age(),
+                actual.successor_grace(),
+                actual.governance_grace(),
+            ],
+            [
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_POSITIVE_TTL_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_REFRESH_WINDOW_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_HARD_EXPIRY_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_NEGATIVE_TTL_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_REVOCATION_TTL_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_ROTATION_MAX_AGE_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_SUCCESSOR_GRACE_SECS),
+                Duration::from_secs(sorafs::DEFAULT_ALIAS_GOVERNANCE_GRACE_SECS),
+            ]
+        );
     }
     #[test]
     fn sorafs_alias_policy_parser_accepts_zero_grace_and_rejects_retired_shapes() {
@@ -7234,10 +7258,12 @@ mod tests {
             )),
             "NotPermitted"
         );
+        let schema_hash = [7_u8; 32];
         let contract = TransactionRejectionReason::Validation(ValidationFail::ContractRejected(
             iroha_data_model::executor::ContractRejection {
                 contract: "BoiFiLiquidity".into(),
-                namespace: "FiLiquidityError".into(),
+                error_type: "example/boifi@1::BoiFiLiquidity::FiLiquidityError".into(),
+                schema_hash,
                 name: "BelowMinimum".into(),
                 code: 18,
             },
@@ -7247,7 +7273,8 @@ mod tests {
             transaction_contract_rejection_json(&contract),
             Some(norito::json!({
                 "contract": "BoiFiLiquidity",
-                "namespace": "FiLiquidityError",
+                "error_type": "example/boifi@1::BoiFiLiquidity::FiLiquidityError",
+                "schema_hash": schema_hash,
                 "name": "BelowMinimum",
                 "code": 18,
             }))
@@ -12085,8 +12112,18 @@ fn transaction_contract_rejection_json(reason: &TransactionRejectionReason) -> O
         json::Value::String(rejection.contract.clone()),
     );
     value.insert(
-        "namespace".into(),
-        json::Value::String(rejection.namespace.clone()),
+        "error_type".into(),
+        json::Value::String(rejection.error_type.clone()),
+    );
+    value.insert(
+        "schema_hash".into(),
+        json::Value::Array(
+            rejection
+                .schema_hash
+                .into_iter()
+                .map(json::Value::from)
+                .collect(),
+        ),
     );
     value.insert("name".into(), json::Value::String(rejection.name.clone()));
     value.insert("code".into(), json::Value::from(rejection.code));
@@ -12914,14 +12951,12 @@ fn require_prepared_binding_json_v1(
     binding_json: &str,
     expected_operation: &str,
 ) -> PyResult<norito::json::Value> {
-    const SCHEMA: &str = "iroha.taira.public-reset.mutation-binding.v1";
-    const FIELDS: [&str; 7] = [
+    const SCHEMA: &str = "iroha.prepared-operation.binding.v1";
+    const FIELDS: [&str; 5] = [
         "schema",
-        "authorization_sha256",
-        "authorization_nonce",
+        "semantic_hash_hex",
         "kind",
-        "phase",
-        "idempotency_key",
+        "request_id",
         "execution_expires_at_unix_ms",
     ];
     let value = json::from_str::<norito::json::Value>(binding_json).map_err(|error| {
@@ -12950,7 +12985,7 @@ fn require_prepared_binding_json_v1(
             "prepared mutation binding schema or operation is invalid",
         ));
     }
-    for field in ["authorization_sha256", "idempotency_key"] {
+    for field in ["semantic_hash_hex", "request_id"] {
         let value = exact_string(field)?;
         if value.len() != 64
             || !value
@@ -12961,27 +12996,6 @@ fn require_prepared_binding_json_v1(
                 "prepared mutation binding `{field}` must be 64 lowercase hex characters"
             )));
         }
-    }
-    let nonce = exact_string("authorization_nonce")?;
-    if nonce.len() != 32
-        || !nonce.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
-    {
-        return Err(PyValueError::new_err(
-            "prepared mutation binding authorization_nonce is noncanonical",
-        ));
-    }
-    let phase = exact_string("phase")?;
-    if phase.is_empty()
-        || phase.len() > 128
-        || !phase.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
-        })
-    {
-        return Err(PyValueError::new_err(
-            "prepared mutation binding phase is noncanonical",
-        ));
     }
     if object
         .get("execution_expires_at_unix_ms")
@@ -13183,7 +13197,7 @@ fn verify_python_prepared_faucet_context_v1(
 
 #[pyfunction]
 #[pyo3(name = "verify_prepared_transaction_context_v1")]
-/// Authenticate one fixed-V1 prepared transaction and its exact public reset context.
+/// Authenticate one fixed-V1 prepared transaction and its exact public operation context.
 fn verify_prepared_transaction_context_v1_py(
     signed_transaction_versioned: &[u8],
     network_id: &PyNetworkId,
@@ -13205,6 +13219,15 @@ fn verify_prepared_transaction_context_v1_py(
         "prepared transaction expected authority",
     )?;
     let binding_value = require_prepared_binding_json_v1(binding_json, operation)?;
+    if binding_value
+        .get("semantic_hash_hex")
+        .and_then(norito::json::Value::as_str)
+        != Some(semantic_hash_hex)
+    {
+        return Err(PyValueError::new_err(
+            "prepared binding semantic hash differs from its envelope",
+        ));
+    }
     let binding = Json::from_norito_value_ref(&binding_value).map_err(|error| {
         PyValueError::new_err(format!("invalid prepared mutation binding: {error}"))
     })?;
@@ -13221,25 +13244,46 @@ fn verify_prepared_transaction_context_v1_py(
             "prepared transaction network, authority, or fee payment was substituted",
         ));
     }
+    let deadline = binding_value
+        .get("execution_expires_at_unix_ms")
+        .and_then(norito::json::Value::as_u64)
+        .expect("prepared binding parser requires positive u64 deadline");
+    let transaction_expiry = signed
+        .payload()
+        .time_to_live_ms
+        .and_then(|ttl| signed.payload().creation_time_ms.checked_add(ttl.get()));
+    if transaction_expiry.is_none_or(|expiry| expiry > deadline) {
+        return Err(PyValueError::new_err(
+            "prepared transaction outlives its operation binding",
+        ));
+    }
     let mut expected_metadata = Metadata::default();
     expected_metadata.insert(
-        "taira_public_reset_binding"
+        "prepared_operation_binding"
             .parse::<Name>()
             .expect("static prepared binding metadata key"),
         binding,
     );
     expected_metadata.insert(
-        "taira_prepared_operation"
+        "prepared_operation"
             .parse::<Name>()
             .expect("static prepared operation metadata key"),
         Json::new(operation.to_owned()),
     );
     expected_metadata.insert(
-        "taira_prepared_semantic_hash"
+        "prepared_semantic_hash"
             .parse::<Name>()
             .expect("static prepared semantic-hash metadata key"),
         Json::new(semantic_hash_hex.to_owned()),
     );
+    if operation == "faucet" {
+        expected_metadata.insert(
+            iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
+                .parse::<Name>()
+                .expect("static faucet claim marker metadata key"),
+            Json::new(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1),
+        );
+    }
     if signed.metadata() != &expected_metadata {
         return Err(PyValueError::new_err(
             "prepared transaction metadata differs from its exact binding",
@@ -13254,6 +13298,15 @@ fn verify_prepared_transaction_context_v1_py(
                             "invalid prepared onboarding operation context JSON: {error}"
                         ))
                     })?;
+            if binding_value
+                .get("execution_expires_at_unix_ms")
+                .and_then(norito::json::Value::as_u64)
+                .is_none_or(|deadline| deadline > context.receipt.body.valid_until_ms)
+            {
+                return Err(PyValueError::new_err(
+                    "prepared binding deadline exceeds receipt validity",
+                ));
+            }
             verify_python_prepared_onboarding_context_v1(
                 &context,
                 &signed,

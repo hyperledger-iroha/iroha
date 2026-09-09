@@ -92,8 +92,12 @@ pub const KAGEMUSHA_OPERATION_STATUS_JSON_MAX_BYTES_V1: usize = 16 * 1024 * 1024
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
-#[norito(schema_name = "iroha.torii.v1.kagemusha.readiness.response")]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::kagemusha_api::KagemushaReadinessV1",
+    frame = "iroha.torii.v1.kagemusha.readiness.response"
+)]
 pub struct KagemushaReadinessV1 {
     /// Exact irreversible KAGEMUSHA peer-handoff contract.
     pub kagemusha_handoff_capability: String,
@@ -560,3 +564,13 @@ pub fn decode_kagemusha_operation_status_json_v1(
 #[cfg(test)]
 #[path = "kagemusha_v1_api_tests.rs"]
 mod kagemusha_v1_api_tests;
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::KagemushaReadinessV1>(
+            "iroha_torii_shared::kagemusha_api::KagemushaReadinessV1",
+        );
+    }
+}

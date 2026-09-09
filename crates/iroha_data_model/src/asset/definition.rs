@@ -1,7 +1,7 @@
 //! Asset definitions and builders.
 pub use self::model::*;
 use super::{alias::AssetDefinitionAlias, id::AssetDefinitionId};
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
@@ -18,7 +18,7 @@ use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder, model};
 use iroha_primitives::numeric::{NumericSpec, Quantity};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 use norito::json::Value;
 /// Maximum accepted asset human-name length.
 pub const MAX_ASSET_NAME_LEN: usize = 128;
@@ -157,8 +157,8 @@ mod model {
     )]
     #[display("{id} {spec}{mintable}")]
     #[allow(clippy::multiple_inherent_impl)]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::definition::model::AssetDefinition")]
@@ -251,13 +251,22 @@ mod model {
     }
     /// Remaining mintability budget for limited assets.
     #[derive(
-        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, CopyGetters,
+        Debug,
+        Clone,
+        Copy,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        IntoSchema,
+        CopyGetters,
+        DeriveJsonSer,
+        DeriveJsonDe,
+        DeriveFast,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(DeriveJsonSer, DeriveJsonDe, DeriveFast),
-        norito(no_fast_from_json)
-    )]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[repr(transparent)]
     pub struct MintabilityTokens {
@@ -380,9 +389,11 @@ mod model {
         IntoSchema,
         CopyGetters,
         Getters,
+        DeriveJsonSer,
+        DeriveJsonDe,
+        DeriveFast,
     )]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct ConfidentialPolicyTransition {
         /// Identifier of the new mode to transition into.
@@ -415,9 +426,11 @@ mod model {
         IntoSchema,
         CopyGetters,
         Getters,
+        DeriveJsonSer,
+        DeriveJsonDe,
+        DeriveFast,
     )]
-    #[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetConfidentialPolicy {
         /// Current mode for shielded versus transparent handling.
@@ -667,7 +680,7 @@ impl HasMetadata for AssetDefinition {
         &self.metadata
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Mintable {
     fn write_json(&self, out: &mut String) {
         match self {
@@ -694,7 +707,7 @@ impl norito::json::FastJsonWrite for Mintable {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
     fn write_json(&self, out: &mut String) {
         let label = match self {
@@ -716,7 +729,7 @@ impl norito::json::FastJsonWrite for ConfidentialPolicyMode {
         norito::json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for AssetBalancePolicy {
     fn write_json(&self, out: &mut String) {
         let label = match self {
@@ -736,7 +749,7 @@ impl norito::json::FastJsonWrite for AssetBalancePolicy {
         norito::json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -753,7 +766,7 @@ impl norito::json::JsonDeserialize for ConfidentialPolicyMode {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for AssetBalancePolicy {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -769,7 +782,7 @@ impl norito::json::JsonDeserialize for AssetBalancePolicy {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Mintable {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -778,7 +791,7 @@ impl norito::json::JsonDeserialize for Mintable {
         parse_mintable_label(label.as_str())
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_mintable_label(label: &str) -> Result<Mintable, norito::json::Error> {
     match label {
         "Infinitely" => Ok(Mintable::Infinitely),
@@ -872,11 +885,11 @@ mod validation_tests {
             expected
         );
         assert_eq!(
-            <NewAssetDefinition as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<NewAssetDefinition>(),
             expected
         );
         assert_eq!(
-            <NewAssetDefinition as norito::NoritoDeserialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<NewAssetDefinition>(),
             expected
         );
     }
@@ -1121,7 +1134,7 @@ mod validation_tests {
             .expect("one allowed display-name stem should be accepted");
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod json_tests {
     use super::*;
     use crate::{Name, domain::DomainId, metadata::Metadata};

@@ -148,7 +148,7 @@ fn soracloud_fhe_input_admission_schema_advertises_backend() {
             "public schema must advertise input-admission bound contract {required}"
         );
     }
-    #[cfg(feature = "json")]
+
     {
         let schema_value: Value =
             json::from_slice(SORACLOUD_FHE_INPUT_ADMISSION_PUBLIC_INPUTS_SCHEMA_V1)
@@ -352,7 +352,7 @@ fn soracloud_fhe_public_key_schema_advertises_statement_material() {
             "public schema must advertise public-key proof term {required}"
         );
     }
-    #[cfg(feature = "json")]
+
     {
         let schema_value: Value =
             json::from_slice(SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1)
@@ -533,7 +533,7 @@ fn soracloud_fhe_public_key_schema_advertises_proof_input_material() {
             "public schema must advertise public-key proof input term {required}"
         );
     }
-    #[cfg(feature = "json")]
+
     {
         let schema_value: Value =
             json::from_slice(SORACLOUD_FHE_PUBLIC_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1)
@@ -757,7 +757,7 @@ fn soracloud_fhe_bootstrap_key_schema_advertises_refresh_summary() {
             "public schema must advertise bootstrap refresh summary term {required}"
         );
     }
-    #[cfg(feature = "json")]
+
     {
         let schema_value: Value =
             json::from_slice(SORACLOUD_FHE_BOOTSTRAP_KEY_PROOF_PUBLIC_INPUTS_SCHEMA_V1)
@@ -1093,7 +1093,7 @@ fn soracloud_fhe_full_bootstrap_execution_schema_advertises_witness_digest() {
         1,
         "execution schema must advertise artifact digest domains in release-audit evidence"
     );
-    #[cfg(feature = "json")]
+
     {
         let schema_value: Value =
             json::from_slice(SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_PUBLIC_INPUTS_SCHEMA_V1)

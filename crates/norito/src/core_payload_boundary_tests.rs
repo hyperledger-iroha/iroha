@@ -12,7 +12,7 @@ fn string_and_str_decode_require_payload_context() {
     assert!(matches!(error, Error::MissingPayloadContext));
     clear_payload_ctx();
     let archived_str = unsafe { &*(archive.as_slice().as_ptr() as *const Archived<&str>) };
-    let error = <&str as NoritoDeserialize>::try_deserialize(archived_str)
+    let error = <&str as DeserializePayload>::try_deserialize(archived_str)
         .expect_err("a raw archived address has no payload bounds");
     assert!(matches!(error, Error::MissingPayloadContext));
     let _payload = PayloadCtxGuard::enter_with_flags(archive.as_slice(), 0);
@@ -21,7 +21,7 @@ fn string_and_str_decode_require_payload_context() {
         "ok"
     );
     assert_eq!(
-        <&str as NoritoDeserialize>::try_deserialize(archived_str).expect("str"),
+        <&str as DeserializePayload>::try_deserialize(archived_str).expect("str"),
         "ok"
     );
 }

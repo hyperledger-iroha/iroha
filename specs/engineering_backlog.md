@@ -9264,7 +9264,7 @@ redistributable schemas, and official trust/revocation bundles.
     is green with `CARGO_TARGET_DIR=target/codex-ivm-scallx`. Core host
     coverage for `core_queries_return_typed_handles_and_specialists_remain_norito`,
     `block_height_sysvar_uses_attached_transaction_context`, and scoped
-    durable-state `STATE_KEYS`/`STATE_HAS`/`STATE_LEN`/`STATE_COUNT`
+    durable-state `STATE_HAS`/`STATE_LEN`/`STATE_COUNT`
     tombstone resolution is
     green with `CARGO_TARGET_DIR=target/codex-core-scallx`.
     Broader IVM validation is also green with
@@ -9278,8 +9278,9 @@ redistributable schemas, and official trust/revocation bundles.
     canonical-Norito APIs; all paths charge the documented deterministic query
     gas model.
     `SYSVAR_BLOCK_HEIGHT` is threaded through default hosts and attached core
-    query-state contexts. `STATE_KEYS` now provides deterministic durable-state
-    prefix enumeration with pagination and contract-scope prefix stripping.
+    query-state contexts. The final V1 `STATE_SCAN` surface provides bounded live
+    keyset pagination with authenticated instance/map cursors and contract-scope
+    prefix stripping; final qualification is tracked in `kotodama_v1_redesign.md`.
     `STATE_HAS`/`STATE_LEN` provide cheap presence and payload-length probes,
     and `STATE_COUNT` counts matching durable-state keys without returning the
     key list over the same scoped durable-state resolution. Classic `STATE_GET`,

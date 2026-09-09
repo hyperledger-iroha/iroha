@@ -42,8 +42,10 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
             params: Vec::new(),
             argument_schema: None,
-            return_type: None,
-            return_schema: None,
+            return_type: Some("()".to_owned()),
+            return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+            }),
             permission: None,
             read_keys: Vec::new(),
             write_keys: Vec::new(),
@@ -59,7 +61,7 @@ fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractIn
                 value: Box::new(EmbeddedStateType::Bytes),
             },
         }],
-        error_codes: Vec::new(),
+        error_types: Vec::new(),
     }
 }
 fn assemble_state_map_syscall(number: u32, name: &str, key: EmbeddedStateType) -> Vec<u8> {

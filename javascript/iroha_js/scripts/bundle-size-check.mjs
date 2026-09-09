@@ -98,11 +98,10 @@ export const BUNDLE_TARGETS = Object.freeze([
     entryPoint: join(ROOT, "dist", "kotodamaCompiler", "browser.js"),
     platform: "browser",
     target: "es2020",
-    // Pinned-esbuild predecessor is 52,156 bytes. Exact V1 manifest state-type,
-    // feature-bit, dynamic-access, and trigger-identifier validation produces
-    // 52,928 bytes (+1.48%); the 53 KiB ceiling keeps this required boundary hardening
-    // below the release-wide 5% regression limit.
-    limitKb: 53,
+    // Final V1 nominal errors, Unit, qualified structs, and cursor/page schemas
+    // share validation across eight canonical modules: 55,396 bytes with pinned
+    // esbuild. The 56 KiB ceiling leaves 1,948 bytes; browser isolation is mandatory.
+    limitKb: 56,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
   }),
@@ -114,11 +113,13 @@ export const BUNDLE_TARGETS = Object.freeze([
     // The prior first-release aggregate measured a 517,186-byte eager split closure
     // on the pinned runner. Removing feature-specific exports, then adding private
     // browser transport state and exact URL/header/timeout guards, leaves the
-    // reviewed eager surface at 496,687 bytes (-3.96%); the 486 KiB ceiling leaves
-    // 977 bytes. The typed Sumeragi parser and deployment-submit continuation
-    // remain separately inventoried so startup and deferred code cannot trade
+    // reviewed eager surface at 496,687 bytes (-3.96%). Adding canonical nominal
+    // error catalogs, explicit Unit returns, and cursor/page schema validation to
+    // the compact normalizers produces 502,325 bytes; the 491 KiB ceiling leaves
+    // 459 bytes and retains the prior reviewed growth bound. The typed Sumeragi
+    // parser and deployment-submit continuation remain separately inventoried so startup and deferred code cannot trade
     // against one another.
-    limitKb: 486,
+    limitKb: 491,
     reviewedEagerBytes: 496_687,
     reviewedCombinedBytes: 578_683,
     lazyChunks: Object.freeze([

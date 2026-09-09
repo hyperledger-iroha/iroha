@@ -5,7 +5,7 @@
 
 use iroha_crypto::{Signature, SignatureOf};
 use iroha_data_model::block::{BlockHeader, BlockSignature, header::wire::BlockSignatureWire};
-use norito::core::{DecodeFlagsGuard, Encoder, NoritoSerialize, SerializePayload, header_flags};
+use norito::core::{DecodeFlagsGuard, Encoder, SerializePayload, header_flags};
 use std::{
     alloc::{GlobalAlloc, Layout, System},
     cell::Cell,

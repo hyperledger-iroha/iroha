@@ -22,9 +22,10 @@ name = "iroha_config_integration"
 path = "tests/iroha_config_integration.rs"
 
 [dependencies]
+fastpq_isi = { path = "../fastpq_isi" }
 iroha_service_model = { workspace = true }
 iroha_config_base = { workspace = true }
-iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
+iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "pqc"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

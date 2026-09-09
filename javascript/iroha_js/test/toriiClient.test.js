@@ -124,6 +124,11 @@ if (sumeragiDiagnosticsFocus !== null && typeof nodeTest.only === "function") {
 
 const BASE_URL = "https://localhost:8080";
 
+const UNIT_RETURN_DESCRIPTOR = Object.freeze({
+  returnType: "()",
+  returnSchema: { nodes: [{ kind: "Unit", value: null }] },
+});
+
 function toriiTestHooks(hooks) {
   return { [TORII_TEST_HOOKS]: hooks };
 }
@@ -20956,13 +20961,13 @@ test("registerContractCode posts manifest JSON", async () => {
           {
             base_key: "state:Votes",
             key_type: "Name",
-            bound_kind: "range",
+            bound_kind: "page",
             max_keys: "2",
           },
         ],
       },
       entrypoints: [
-        { name: "kaizen", kind: "Kaizen" },
+        { name: "kaizen", kind: "Kaizen", ...UNIT_RETURN_DESCRIPTOR },
       ],
       states: [
         { name: "Balances", typeName: "StateMap<AccountId, quantity>" },
@@ -21009,7 +21014,7 @@ test("registerContractCode posts manifest JSON", async () => {
           {
             base_key: "state:Votes",
             key_type: "Name",
-            bound_kind: "range",
+            bound_kind: "page",
             max_keys: 2,
           },
         ],
@@ -21020,8 +21025,8 @@ test("registerContractCode posts manifest JSON", async () => {
           kind: { kind: "Kaizen", value: null },
           params: [],
           argument_schema: null,
-          return_type: null,
-          return_schema: null,
+          return_type: "()",
+          return_schema: { nodes: [{ kind: "Unit", value: null }] },
           permission: null,
           read_keys: [],
           write_keys: [],
@@ -21034,7 +21039,7 @@ test("registerContractCode posts manifest JSON", async () => {
         { name: "Balances", type_name: "StateMap<AccountId, quantity>" },
         { name: "Votes", type_name: "StateMap<Name, bool>" },
       ],
-      error_codes: null,
+      error_types: null,
       kotoba: [
         {
           msg_id: "contract.title",
@@ -21133,8 +21138,8 @@ test("registerContractCode enforces exact V1 dynamic access hints", async () => 
   }
   for (const [boundKind, expected] of [
     ["", /dynamic_reads\[0\]\.bound_kind must not be empty/u],
-    ["Take", /dynamic_reads\[0\]\.bound_kind must be exactly take or range/u],
-    ["prefix", /dynamic_reads\[0\]\.bound_kind must be exactly take or range/u],
+    ["Take", /dynamic_reads\[0\]\.bound_kind must be exactly take or page/u],
+    ["prefix", /dynamic_reads\[0\]\.bound_kind must be exactly take or page/u],
     [
       "range ",
       /dynamic_reads\[0\]\.bound_kind must not contain surrounding whitespace/u,
@@ -21208,7 +21213,7 @@ test("registerContractCode resolves dynamic hints to declared StateMaps per list
     await submit({
       [field]: [
         hint,
-        { ...hint, boundKind: "range", maxKeys: 2 },
+        { ...hint, boundKind: "page", maxKeys: 2 },
       ],
     });
     await assert.rejects(
@@ -21290,8 +21295,8 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
     manifest: {
       seiyakuName: "BrandedLedger",
       entrypoints: [
-        { name: "hajimari", kind: "Hajimari" },
-        { name: "改善", kind: "Kaizen" },
+        { name: "hajimari", kind: "Hajimari", ...UNIT_RETURN_DESCRIPTOR },
+        { name: "改善", kind: "Kaizen", ...UNIT_RETURN_DESCRIPTOR },
         {
           name: "transfer",
           kind: "Kotoage",
@@ -21319,13 +21324,13 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
             ],
           },
         },
-        { name: "balance", kind: "View" },
+        { name: "balance", kind: "View", ...UNIT_RETURN_DESCRIPTOR },
       ],
       states: [
         { name: "amount", typeName: "Transfer{amount: quantity}" },
       ],
-      errorCodes: [
-        { namespace: "LedgerError", name: "amount", code: 7 },
+      errorTypes: [
+        { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
       ],
     },
   });
@@ -21342,7 +21347,7 @@ test("registerContractCode preserves branded romanized and Japanese lifecycle se
   assert.deepEqual(body.manifest.states, [
     { name: "amount", type_name: "Transfer{amount: quantity}" },
   ]);
-  assert.equal(body.manifest.error_codes[0].name, "amount");
+  assert.equal(body.manifest.error_types[0].variants[0].name, "amount");
 });
 
 test("registerContractCode requires agreeing parameter and state type aliases", async () => {
@@ -21360,6 +21365,7 @@ test("registerContractCode requires agreeing parameter and state type aliases", 
         entrypoints: [{
           name: "read",
           kind: "View",
+          ...UNIT_RETURN_DESCRIPTOR,
           params: [{ name: "amount", ...param }],
           argumentSchema: {
             fields: [{ name: "amount", ty: quantity }],
@@ -21686,12 +21692,12 @@ test("registerContractCode rejects forged branded manifest declarations before f
       /states\[0\]\.type_name must be a canonical Kotodama V1 state type/u,
     );
   }
-  for (const namespace of ["Amount", "amount"]) {
+  for (const namespace of ["Invalid Error", "Error<Injected>"]) {
     await assert.rejects(
       submit({
-        errorCodes: [{ namespace, name: "Denied", code: 7 }],
+        errorTypes: [{ identity: namespace, variants: [{ name: "Denied", code: 7 }] }],
       }),
-      /error_codes\[0\]\.namespace must be a canonical Kotodama V1 identifier/u,
+      /error_types\[0\]\.identity must be a stable package\/unit\/enum identity/u,
     );
   }
   for (const keyType of [
@@ -21757,8 +21763,8 @@ test("registerContractCode rejects forged branded manifest declarations before f
   await assert.rejects(
     submit({
       entrypoints: [
-        { name: "same", kind: "View" },
-        { name: "same", kind: "Kotoage", permission: "Same" },
+        { name: "same", kind: "View", ...UNIT_RETURN_DESCRIPTOR },
+        { name: "same", kind: "Kotoage", permission: "Same", ...UNIT_RETURN_DESCRIPTOR },
       ],
     }),
     /entrypoints contains duplicate name same/u,
@@ -21769,6 +21775,7 @@ test("registerContractCode rejects forged branded manifest declarations before f
         {
           name: "read",
           kind: "View",
+          ...UNIT_RETURN_DESCRIPTOR,
           accessHintsComplete: false,
           accessHintsSkipped: [],
         },
@@ -21779,11 +21786,12 @@ test("registerContractCode rejects forged branded manifest declarations before f
   await assert.rejects(
     submit({
       entrypoints: [
-        { name: "read", kind: "View" },
+        { name: "read", kind: "View", ...UNIT_RETURN_DESCRIPTOR },
         {
           name: "schedule",
           kind: "Kotoage",
           permission: "Schedule",
+          ...UNIT_RETURN_DESCRIPTOR,
           triggers: [
             {
               id: "bad_callback",
@@ -24857,7 +24865,7 @@ test("getContractManifest returns normalized payload", async () => {
           access_set_hints: null,
           entrypoints: null,
           states: null,
-          error_codes: null,
+          error_types: null,
           kotoba: [
             {
               msg_id: "contract.title",
@@ -25036,7 +25044,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
       states: [
         { name: "Balances", type_name: "StateMap<AccountId, quantity>" },
       ],
-      error_codes: [{ namespace: "LedgerError", name: "Denied", code: 1 }],
+      error_types: [{ identity: "LedgerError", variants: [{ name: "Denied", code: 1 }] }],
       kotoba: [
         {
           msg_id: "transfer.denied",
@@ -25130,7 +25138,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
       payload.manifest.access_set_hints.dynamic_writes = [{
         base_key: "state:Balances",
         key_type: "Name",
-        bound_kind: "range",
+        bound_kind: "page",
         max_keys: 1,
       }];
     }],
@@ -25191,7 +25199,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
       ];
     }],
     ["camelCase error-code alias", (payload) => {
-      payload.manifest.error_codes[0].errorCode = 1;
+      payload.manifest.error_types[0].errorCode = 1;
     }],
     ["camelCase kotoba alias", (payload) => {
       payload.manifest.kotoba[0].msgId = "transfer.denied";
@@ -25214,7 +25222,7 @@ test("getContractManifest rejects retired trigger sources, aliases, unknown fiel
     });
     await assert.rejects(
       () => client.getContractManifest("11".repeat(32)),
-      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or range|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap|canonical Kotodama V1 identifier/u,
+      /must contain exactly|unsupported fields|unsupported Kotodama V1 feature bits|positive integer|state declaration identifier|StateMap key scalar|exactly take or page|at most 64|duplicate dynamic access hint|declared top-level StateMap|does not match declared StateMap|canonical Kotodama V1 identifier/u,
       label,
     );
   }

@@ -386,16 +386,14 @@ ACCOUNT_FAUCET_PUZZLE_FIELDS_V1 = frozenset(
     }
 )
 ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
-TAIRA_PUBLIC_RESET_MUTATION_BINDING_SCHEMA = (
-    "iroha.taira.public-reset.mutation-binding.v1"
-)
+PREPARED_OPERATION_BINDING_SCHEMA = "iroha.prepared-operation.binding.v1"
 ACCOUNT_ONBOARDING_PREPARE_SCHEMA = "iroha.accounts.onboard.prepare.v1"
 ACCOUNT_FAUCET_PREPARE_SCHEMA = "iroha.accounts.faucet.prepare.v1"
-TAIRA_PREPARED_TRANSACTION_SCHEMA = "iroha.taira.prepared-transaction.v1"
-TAIRA_PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA = (
-    "iroha.taira.prepared-signature-transcript.v1"
+PREPARED_TRANSACTION_SCHEMA = "iroha.prepared-transaction.v1"
+PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA = (
+    "iroha.prepared-signature-transcript.v1"
 )
-TAIRA_PREPARED_SIGNATURE_DOMAIN = b"iroha:taira:prepared-transaction:v1\0"
+PREPARED_SIGNATURE_DOMAIN = b"iroha:prepared-transaction:v1\0"
 ACCOUNT_ONBOARDING_PROOF_REQUIRED_SCHEMA = "iroha.accounts.onboard.prepare-proof-required.v1"
 ACCOUNT_ONBOARDING_CURRENT_STATE_RESPONSE_MAX_BYTES = 4 * 1024
 _ROUTE_SECRET_HEADER_NAMES = frozenset(
@@ -539,7 +537,7 @@ def _require_mapping(value: Any, context: str) -> Mapping[str, Any]:
     return value
 
 
-def _copy_taira_mutation_binding(
+def _copy_prepared_operation_binding(
     value: Any,
     *,
     expected_kind: str,
@@ -549,38 +547,43 @@ def _copy_taira_mutation_binding(
     binding = _require_mapping(value, context)
     required = {
         "schema",
-        "authorization_sha256",
-        "authorization_nonce",
+        "semantic_hash_hex",
         "kind",
-        "phase",
-        "idempotency_key",
+        "request_id",
         "execution_expires_at_unix_ms",
     }
     if set(binding) != required:
-        raise TypeError(f"{context} must contain exactly the V1 mutation-binding fields")
-    if binding.get("schema") != TAIRA_PUBLIC_RESET_MUTATION_BINDING_SCHEMA:
-        raise ValueError(f"{context}.schema is not the V1 mutation-binding schema")
+        raise TypeError(f"{context} must contain exactly the V1 prepared-operation binding fields")
+    if binding.get("schema") != PREPARED_OPERATION_BINDING_SCHEMA:
+        raise ValueError(f"{context}.schema is not the V1 prepared-operation binding schema")
     if binding.get("kind") != expected_kind:
         raise ValueError(f"{context}.kind must be {expected_kind!r}")
-    for hex_field in ("authorization_sha256", "idempotency_key"):
+    for hex_field in ("semantic_hash_hex", "request_id"):
         field_value = binding.get(hex_field)
         if not isinstance(field_value, str) or re.fullmatch(r"[0-9a-f]{64}", field_value) is None:
             raise ValueError(f"{context}.{hex_field} must be exactly 64 lowercase hex characters")
-    nonce = binding.get("authorization_nonce")
-    if not isinstance(nonce, str) or re.fullmatch(r"[a-z0-9_-]{32}", nonce) is None:
-        raise ValueError(
-            f"{context}.authorization_nonce must be exactly 32 lowercase token characters"
-        )
-    phase = binding.get("phase")
-    if not isinstance(phase, str) or re.fullmatch(r"[a-z0-9_-]{1,128}", phase) is None:
-        raise ValueError(f"{context}.phase is not a canonical reset phase")
     expiry = binding.get("execution_expires_at_unix_ms")
-    if isinstance(expiry, bool) or not isinstance(expiry, int) or expiry <= 0:
+    if isinstance(expiry, bool) or not isinstance(expiry, int) or not 0 < expiry < 1 << 64:
         raise ValueError(f"{context}.execution_expires_at_unix_ms must be positive")
     if require_active and expiry <= time.time_ns() // 1_000_000:
         raise ValueError(f"{context} is expired")
     return copy.deepcopy(dict(binding))
 
+
+def _require_onboarding_binding_receipt(
+    binding: Mapping[str, Any], receipt: Mapping[str, Any], context: str
+) -> None:
+    """Bind an operation to its independently authenticated semantic receipt."""
+    if binding["semantic_hash_hex"] != _canonical_receipt_plan_hash_hex(receipt, context):
+        raise ValueError(f"{context}.binding.semantic_hash_hex differs from the receipt")
+    valid_until = _require_mapping(receipt.get("body"), f"{context}.body").get("valid_until_ms")
+    if (
+        isinstance(valid_until, bool)
+        or not isinstance(valid_until, int)
+        or not 0 < valid_until < 1 << 64
+        or binding["execution_expires_at_unix_ms"] > valid_until
+    ):
+        raise ValueError(f"{context}.binding execution deadline exceeds the receipt validity")
 
 def _copy_fee_payment_intent_v1(value: Any, context: str) -> Dict[str, Any]:
     intent = _require_mapping(value, context)
@@ -680,7 +683,7 @@ def _require_same_fee_payer_and_gas_bound_v1(
     return expected_intent
 
 
-def _copy_prepared_taira_transaction(
+def _copy_prepared_transaction(
     value: Any,
     *,
     expected_operation: str,
@@ -711,16 +714,18 @@ def _copy_prepared_taira_transaction(
     expected_fields = common | operation_fields[expected_operation]
     if set(prepared) != expected_fields:
         raise TypeError(f"{context} must contain exactly the {expected_operation} V1 fields")
-    if prepared.get("schema") != TAIRA_PREPARED_TRANSACTION_SCHEMA:
+    if prepared.get("schema") != PREPARED_TRANSACTION_SCHEMA:
         raise ValueError(f"{context}.schema is not the prepared-transaction V1 schema")
     if prepared.get("operation") != expected_operation:
         raise ValueError(f"{context}.operation must be {expected_operation!r}")
-    _copy_taira_mutation_binding(
+    _copy_prepared_operation_binding(
         prepared.get("binding"),
         expected_kind=expected_operation,
         context=f"{context}.binding",
         require_active=False,
     )
+    if prepared["binding"]["semantic_hash_hex"] != prepared.get("semantic_hash_hex"):
+        raise ValueError(f"{context}.binding.semantic_hash_hex differs from the envelope")
     for hex_field in ("semantic_hash_hex", "signed_transaction_wire_sha256"):
         field_value = prepared.get(hex_field)
         if not isinstance(field_value, str) or re.fullmatch(r"[0-9a-f]{64}", field_value) is None:
@@ -749,7 +754,8 @@ def _copy_prepared_taira_transaction(
             f"{context}.server_signature must be one nonzero uppercase Ed25519 signature"
         )
     if expected_operation == "onboarding":
-        _require_mapping(prepared.get("receipt"), f"{context}.receipt")
+        receipt = _require_mapping(prepared.get("receipt"), f"{context}.receipt")
+        _require_onboarding_binding_receipt(prepared["binding"], receipt, context)
         _require_exact_non_empty_string(prepared.get("alias"), f"{context}.alias")
         _require_mapping(prepared.get("disposition"), f"{context}.disposition")
     else:
@@ -795,17 +801,15 @@ def _prepared_binding_transcript(
     operation: str,
     binding: Mapping[str, Any],
 ) -> bytearray:
-    transcript = bytearray(_prepared_signature_frame(TAIRA_PREPARED_SIGNATURE_DOMAIN))
+    transcript = bytearray(_prepared_signature_frame(PREPARED_SIGNATURE_DOMAIN))
     for label, value in (
-        ("transcript_schema", TAIRA_PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA),
+        ("transcript_schema", PREPARED_SIGNATURE_TRANSCRIPT_SCHEMA),
         ("envelope_schema", envelope_schema),
         ("operation", operation),
         ("binding.schema", binding["schema"]),
-        ("binding.authorization_sha256", binding["authorization_sha256"]),
-        ("binding.authorization_nonce", binding["authorization_nonce"]),
+        ("binding.semantic_hash_hex", binding["semantic_hash_hex"]),
         ("binding.kind", binding["kind"]),
-        ("binding.phase", binding["phase"]),
-        ("binding.idempotency_key", binding["idempotency_key"]),
+        ("binding.request_id", binding["request_id"]),
         (
             "binding.execution_expires_at_unix_ms",
             str(binding["execution_expires_at_unix_ms"]),
@@ -1106,7 +1110,7 @@ def _copy_account_onboarding_proof_required_v1(
         or proof_required.get("proof_kind") != "account_alias_current_state"
     ):
         raise ValueError(f"{context} is not the exact nonterminal proof-required outcome")
-    binding = _copy_taira_mutation_binding(
+    binding = _copy_prepared_operation_binding(
         proof_required.get("binding"),
         expected_kind="onboarding",
         context=f"{context}.binding",
@@ -1116,6 +1120,7 @@ def _copy_account_onboarding_proof_required_v1(
         raise ValueError(f"{context}.binding differs from the exact prepare request")
     body = _require_mapping(expected_receipt.get("body"), f"{context}.receipt.body")
     request = _require_mapping(body.get("request"), f"{context}.receipt.body.request")
+    _require_onboarding_binding_receipt(binding, expected_receipt, context)
     semantic_hash_hex = _canonical_receipt_plan_hash_hex(expected_receipt, f"{context}.receipt")
     if proof_required.get("semantic_hash_hex") != semantic_hash_hex:
         raise ValueError(f"{context}.semantic_hash_hex differs from the receipt")
@@ -1182,7 +1187,7 @@ def _validate_prepared_submit_response_v1(
         "outcome",
     }:
         raise TypeError(f"{context} must contain exactly the submit V1 fields")
-    if payload.get("schema") != "iroha.taira.prepared-transaction-submit.v1":
+    if payload.get("schema") != "iroha.prepared-transaction-submit.v1":
         raise ValueError(f"{context}.schema is not the submit V1 schema")
     for response_field in ("binding", "operation", "transaction_hash_hex"):
         if payload.get(response_field) != expected_prepared.get(response_field):
@@ -6265,7 +6270,11 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "Option",
         "Result",
         "List",
+        "ListError",
+        "NumericError",
         "StateMap",
+        "StateCursor",
+        "StatePage",
         "Secret",
         "AccountView",
         "AssetView",
@@ -6279,8 +6288,12 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "SoracloudRequest",
         "SoracloudResponse",
         "state_map_get",
+        "__kotodama_state_page",
+        "__kotodama_state_take",
         "__kotodama_list_len",
         "__kotodama_list_get",
+        "__kotodama_list_set",
+        "__kotodama_list_push",
         "__kotodama_list_try_set",
         "__kotodama_list_try_push",
         "__kotodama_list_pop",
@@ -6288,6 +6301,8 @@ _KOTODAMA_RESERVED_DECLARATION_IDENTIFIERS = frozenset(
         "__kotodama_list_take",
         "__kotodama_list_enumerate",
         "__kotodama_decimal_div_round",
+        "__kotodama_decimal_mul_div_round",
+        "__kotodama_quantity_mul_div_round",
         "__kotodama_quantity_div_round",
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",
@@ -6349,7 +6364,7 @@ _KOTODAMA_V1_STATE_MAP_KEY_TYPES = (
 )
 
 _KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS = (
-    "range",
+    "page",
     "take",
 )
 
@@ -6400,6 +6415,11 @@ def _contract_type_name(value: Any, path: str) -> str:
     type_nesting_depth = 0
     struct_type_nesting_depths: list[int] = []
     scanned_to = 0
+    locked_struct_ranges = [
+        (token.start(), token.end())
+        for token in re.finditer(r"[A-Za-z0-9_./@:-]+", type_name)
+        if "::" in token.group() and _canonical_kotodama_struct_name(token.group())
+    ]
     for match in _KOTODAMA_RETIRED_NUMERIC_TYPE_RE.finditer(type_name):
         for character in type_name[scanned_to : match.start()]:
             if character == "{":
@@ -6426,7 +6446,8 @@ def _contract_type_name(value: Any, path: str) -> str:
             and type_name[cursor] == ":"
             and not type_name.startswith("::", cursor)
         )
-        if not is_struct_field:
+        is_locked_struct_component = any(start <= match.start() and match.end() <= end for start, end in locked_struct_ranges)
+        if not is_struct_field and not is_locked_struct_component:
             raise TypeError(f"{path} contains a retired Kotodama numeric type")
         scanned_to = match.end()
     return type_name
@@ -6456,6 +6477,40 @@ def _canonical_kotodama_identifier(
         )
     )
 
+
+
+def _canonical_kotodama_struct_name(value: str) -> bool:
+    if not isinstance(value, str) or len(value) > 1024:
+        return False
+    if "::" not in value:
+        return _canonical_kotodama_identifier(value, type_declaration=True)
+    if "__kotodama_link_" in value:
+        return False
+    parts = value.split("::")
+    if len(parts) != 3 or not all(_canonical_kotodama_identifier(part, type_declaration=True) for part in parts[1:]):
+        return False
+    package = parts[0].split("@")
+    component = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
+    return (len(package) <= 2 and all(component.fullmatch(part) for part in package[0].split("/"))
+            and (len(package) == 1 or component.fullmatch(package[1]) is not None))
+
+
+def _canonical_contract_error_identity(value: str) -> bool:
+    return (
+        isinstance(value, str)
+        and "__kotodama_link_" not in value
+        and all(character.isalnum() or character in "_:/@.-" for character in value)
+        and 1 <= len(value.encode("utf-8")) <= 1024
+    )
+
+
+def _canonical_contract_error_variant(value: str) -> bool:
+    return _canonical_kotodama_identifier(value) or (
+        bool(value)
+        and not value.isascii()
+        and (value[0].isalpha() or value[0] == "_")
+        and all(character.isalnum() or character == "_" for character in value)
+    )
 
 _KOTODAMA_V1_STATE_SCALAR_TYPES = frozenset(
     {
@@ -6495,7 +6550,9 @@ def _kotodama_v1_state_map_key_type_name(type_name: str) -> Optional[str]:
     return match.group(1)
 
 
-def _canonical_kotodama_state_type_name(value: str) -> bool:
+def _canonical_kotodama_state_type_name(
+    value: str, error_identities: Optional[set[str]] = None
+) -> bool:
     cursor = 0
     nodes = 0
 
@@ -6541,11 +6598,22 @@ def _canonical_kotodama_state_type_name(value: str) -> bool:
         )
 
     def parse_type(allow_state_map: bool, depth: int) -> Optional[str]:
-        nonlocal nodes
+        nonlocal nodes, cursor
         nodes += 1
         if depth > _KOTODAMA_V1_MAX_TYPE_DEPTH or nodes > _KOTODAMA_V1_MAX_TYPE_NODES:
             return None
 
+        if consume("()"):
+            return "unit"
+        error_end = cursor
+        while error_end < len(value) and (value[error_end].isalnum() or value[error_end] in "_:/@.-"):
+            error_end += 1
+        error_identity = value[cursor:error_end]
+        if "::" in error_identity and value[error_end:error_end + 1] != "{" and _canonical_contract_error_identity(error_identity):
+            if error_identities is not None and error_identity not in error_identities:
+                return None
+            cursor = error_end
+            return "error"
         if consume("("):
             if parse_type(False, depth + 1) is None or not consume(", "):
                 return None
@@ -6556,11 +6624,20 @@ def _canonical_kotodama_state_type_name(value: str) -> bool:
                     return None
             return "aggregate" if consume(")") else None
 
-        name = identifier()
+        qualified_struct = re.match(r"[A-Za-z0-9_./@:-]+(?=\{)", value[cursor:])
+        if qualified_struct is not None and "::" in qualified_struct.group():
+            name = qualified_struct.group()
+            cursor += len(name)
+        else:
+            name = identifier()
         if name is None:
             return None
         if name in _KOTODAMA_V1_STATE_SCALAR_TYPES:
             return name
+        if name == "StateCursor":
+            if not consume("<") or identifier() not in _KOTODAMA_V1_STATE_MAP_KEY_TYPES or not consume(">"):
+                return None
+            return "cursor"
         if name == "Option":
             if not consume("<") or parse_type(False, depth + 1) is None or not consume(">"):
                 return None
@@ -6600,7 +6677,19 @@ def _canonical_kotodama_state_type_name(value: str) -> bool:
             ):
                 return None
             return "aggregate"
-        if not _canonical_kotodama_identifier(name, type_declaration=True) or not consume("{"):
+        if name == "StatePage":
+            nodes += 5  # List, Tuple, scalar key, Option, StateCursor.
+            if nodes > _KOTODAMA_V1_MAX_TYPE_NODES or depth + 3 > _KOTODAMA_V1_MAX_TYPE_DEPTH:
+                return None
+            if not consume("{items: List<("):
+                return None
+            key_type = identifier()
+            if (key_type not in _KOTODAMA_V1_STATE_MAP_KEY_TYPES or not consume(", ")
+                    or parse_type(False, depth + 3) is None or not consume("), ")
+                    or not list_capacity() or not consume(">, next: Option<StateCursor<")):
+                return None
+            return "aggregate" if consume(key_type) and consume(">>}") else None
+        if not _canonical_kotodama_struct_name(name) or not consume("{"):
             return None
 
         fields: set[str] = set()
@@ -6735,6 +6824,9 @@ class EntrypointValueTypeNodeKindV1(str, Enum):
     RESULT = "Result"
     LIST = "List"
     LEAF = "Leaf"
+    UNIT = "Unit"
+    ERROR = "Error"
+    STATE_CURSOR = "StateCursor"
 
 
 _RESERVED_ENTRYPOINT_STRUCT_NAMES = frozenset(
@@ -6745,6 +6837,7 @@ _RESERVED_ENTRYPOINT_STRUCT_NAMES = frozenset(
         "DomainView",
         "NftView",
         "QueryPage",
+        "StatePage",
     }
 )
 
@@ -6814,12 +6907,19 @@ class EntrypointValueTypeNodeV1:
         elif kind in (
             EntrypointValueTypeNodeKindV1.OPTION,
             EntrypointValueTypeNodeKindV1.RESULT,
+            EntrypointValueTypeNodeKindV1.UNIT,
         ):
             if raw_value is not None:
                 raise TypeError(f"entrypoint {kind.value} node `value` must be null")
             value = None
         elif kind is EntrypointValueTypeNodeKindV1.LIST:
             value = EntrypointListTypeNodeV1.from_payload(raw_value)
+        elif kind is EntrypointValueTypeNodeKindV1.ERROR:
+            value = ContractErrorTypeDescriptor.from_payload(raw_value)
+        elif kind is EntrypointValueTypeNodeKindV1.STATE_CURSOR:
+            value = EntrypointValueKindV1.from_payload(raw_value)
+            if value is EntrypointValueKindV1.JSON:
+                raise TypeError("StateCursor key type cannot be Json")
         else:
             value = EntrypointValueKindV1.from_payload(raw_value)
         return cls(kind=kind, value=value)
@@ -6869,7 +6969,12 @@ class EntrypointValueTypeV1:
                 return 1
             if node.kind is EntrypointValueTypeNodeKindV1.RESULT:
                 return 2
-            if node.kind is EntrypointValueTypeNodeKindV1.LEAF:
+            if node.kind in (
+                EntrypointValueTypeNodeKindV1.LEAF,
+                EntrypointValueTypeNodeKindV1.UNIT,
+                EntrypointValueTypeNodeKindV1.ERROR,
+                EntrypointValueTypeNodeKindV1.STATE_CURSOR,
+            ):
                 return 0
             return None
 
@@ -6901,9 +7006,7 @@ class EntrypointValueTypeV1:
                     or not descriptor.fields
                     or (
                         not reserved_schema_name
-                        and not _canonical_kotodama_identifier(
-                            descriptor.name, type_declaration=True
-                        )
+                        and not _canonical_kotodama_struct_name(descriptor.name)
                     )
                     or any(not _canonical_kotodama_identifier(field) for field in descriptor.fields)
                     or len(set(descriptor.fields)) != len(descriptor.fields)
@@ -6919,12 +7022,31 @@ class EntrypointValueTypeV1:
                 if not isinstance(node.value, EntrypointValueKindV1):
                     return None
 
+            elif node.kind is EntrypointValueTypeNodeKindV1.UNIT:
+                if node.value is not None:
+                    return None
+            elif node.kind is EntrypointValueTypeNodeKindV1.ERROR:
+                if not isinstance(node.value, ContractErrorTypeDescriptor):
+                    return None
+                try:
+                    node.value.validate()
+                except TypeError:
+                    return None
+            elif node.kind is EntrypointValueTypeNodeKindV1.STATE_CURSOR:
+                if not isinstance(node.value, EntrypointValueKindV1) or node.value is EntrypointValueKindV1.JSON:
+                    return None
+
             handle = node.kind in (
                 EntrypointValueTypeNodeKindV1.OPTION,
                 EntrypointValueTypeNodeKindV1.RESULT,
                 EntrypointValueTypeNodeKindV1.LIST,
             )
-            if not suppress_words and (handle or node.kind is EntrypointValueTypeNodeKindV1.LEAF):
+            if not suppress_words and (handle or node.kind in (
+                EntrypointValueTypeNodeKindV1.LEAF,
+                EntrypointValueTypeNodeKindV1.UNIT,
+                EntrypointValueTypeNodeKindV1.ERROR,
+                EntrypointValueTypeNodeKindV1.STATE_CURSOR,
+            )):
                 word_count += 1
             children = child_count(node)
             if children is None:
@@ -7052,12 +7174,26 @@ class EntrypointValueTypeV1:
                     ):
                         raise ValueError("forged QueryPage schema")
                     result = {"text": f"QueryPage<{children[0]['list_element_core_view']}>"}
+                elif descriptor.name == "StatePage":
+                    items = children[0] if children else {}
+                    pair = items.get("list_element", {}).get("tuple_children", [])
+                    continuation = children[1].get("option_child", {}) if len(children) == 2 else {}
+                    if (
+                        list(descriptor.fields) != ["items", "next"]
+                        or items.get("kind") != "List"
+                        or len(pair) != 2
+                        or pair[0].get("key_type") is None
+                        or continuation.get("kind") != "StateCursor"
+                        or continuation.get("key_type") != pair[0]["key_type"]
+                    ):
+                        raise ValueError("forged StatePage schema")
+                    result = {"text": f"StatePage<{pair[0]['text']}, {pair[1]['text']}, {items['capacity']}>"}
                 else:
                     result = {"text": f"struct {descriptor.name}"}
             elif node.kind is EntrypointValueTypeNodeKindV1.TUPLE:
-                result = {"text": f"({', '.join(child['text'] for child in children)})"}
+                result = {"text": f"({', '.join(child['text'] for child in children)})", "tuple_children": children}
             elif node.kind is EntrypointValueTypeNodeKindV1.OPTION:
-                result = {"text": f"Option<{children[0]['text']}>"}
+                result = {"text": f"Option<{children[0]['text']}>", "option_child": children[0]}
             elif node.kind is EntrypointValueTypeNodeKindV1.RESULT:
                 result = {"text": f"Result<{children[0]['text']}, {children[1]['text']}>"}
             elif node.kind is EntrypointValueTypeNodeKindV1.LIST:
@@ -7069,11 +7205,19 @@ class EntrypointValueTypeV1:
                     "kind": "List",
                     "capacity": descriptor.capacity,
                     "list_element_core_view": children[0].get("core_view"),
+                    "list_element": children[0],
                 }
             elif node.kind is EntrypointValueTypeNodeKindV1.LEAF:
                 if not isinstance(node.value, EntrypointValueKindV1):
                     raise ValueError("invalid leaf node")
-                result = {"text": leaf_names[node.value]}
+                result = {"text": leaf_names[node.value], "key_type": node.value if node.value is not EntrypointValueKindV1.JSON else None}
+            elif node.kind is EntrypointValueTypeNodeKindV1.UNIT:
+                result = {"text": "()"}
+            elif node.kind is EntrypointValueTypeNodeKindV1.ERROR:
+                node.value.validate()
+                result = {"text": node.value.identity}
+            elif node.kind is EntrypointValueTypeNodeKindV1.STATE_CURSOR:
+                result = {"text": f"StateCursor<{leaf_names[node.value]}>", "kind": "StateCursor", "key_type": node.value}
             else:
                 raise ValueError("invalid entrypoint value type")
             rendered.append(result)
@@ -7381,12 +7525,11 @@ class ContractEntrypointDescriptor:
                     strict=True,
                 )
             )
-        exact_return = (descriptor.return_type is None) == (descriptor.return_schema is None) and (
-            descriptor.return_schema is None
-            or (
-                descriptor.return_schema.word_count <= 13
-                and descriptor.return_schema.canonical_type_name == descriptor.return_type
-            )
+        exact_return = (
+            descriptor.return_type is not None
+            and descriptor.return_schema is not None
+            and descriptor.return_schema.word_count <= 13
+            and descriptor.return_schema.canonical_type_name == descriptor.return_type
         )
         lifecycle_kind = (
             ContractEntrypointKind.HAJIMARI
@@ -7453,33 +7596,56 @@ class ContractStateDescriptor:
 
 
 @dataclass(frozen=True)
-class ContractErrorCodeDescriptor:
-    """One stable declared Kotodama application error code."""
+class ContractErrorVariantDescriptor:
+    """One named nonzero u32 discriminant, local to its nominal error type."""
 
-    namespace: str
     name: str
     code: int
 
+    def validate(self) -> None:
+        if not isinstance(self.name, str) or not _canonical_contract_error_variant(self.name):
+            raise TypeError("error variant name must be a canonical Kotodama identifier")
+        if isinstance(self.code, bool) or not isinstance(self.code, int) or not 1 <= self.code <= 0xFFFFFFFF:
+            raise TypeError("error variant code must be a non-zero u32")
+
     @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractErrorCodeDescriptor":
-        value = _contract_object(payload, "error code descriptor")
-        _contract_exact_fields(
-            value,
-            ("namespace", "name", "code"),
-            "error code descriptor",
-        )
-        code = value.get("code")
-        if isinstance(code, bool) or not isinstance(code, int) or not 1 <= code <= 0xFFFFFFFF:
-            raise TypeError("error code descriptor.code must be a non-zero u32")
-        namespace = _contract_required_string(
-            value.get("namespace"), "error code descriptor.namespace"
-        )
-        name = _contract_required_string(value.get("name"), "error code descriptor.name")
-        if not _canonical_kotodama_identifier(
-            namespace, type_declaration=True
-        ) or not _canonical_kotodama_identifier(name):
-            raise TypeError("error code names must be canonical Kotodama identifiers")
-        return cls(namespace=namespace, name=name, code=code)
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractErrorVariantDescriptor":
+        value = _contract_object(payload, "error variant descriptor")
+        _contract_exact_fields(value, ("name", "code"), "error variant descriptor")
+        result = cls(name=value.get("name"), code=value.get("code"))
+        result.validate()
+        return result
+
+
+@dataclass(frozen=True)
+class ContractErrorTypeDescriptor:
+    """Stable nominal identity and its exact ordered variant schema."""
+
+    identity: str
+    variants: Tuple[ContractErrorVariantDescriptor, ...]
+
+    def validate(self) -> None:
+        if not _canonical_contract_error_identity(self.identity):
+            raise TypeError("error type identity must be a canonical nominal identity")
+        if not isinstance(self.variants, tuple) or not 1 <= len(self.variants) <= 256:
+            raise TypeError("error type must declare 1..256 variants")
+        for variant in self.variants:
+            if not isinstance(variant, ContractErrorVariantDescriptor):
+                raise TypeError("error type variants must be typed descriptors")
+            variant.validate()
+        if len({variant.name for variant in self.variants}) != len(self.variants) or any(left.code >= right.code for left, right in zip(self.variants, self.variants[1:])):
+            raise TypeError("error variants must have unique names and increasing enum-local codes")
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractErrorTypeDescriptor":
+        value = _contract_object(payload, "error type descriptor")
+        _contract_exact_fields(value, ("identity", "variants"), "error type descriptor")
+        result = cls(identity=value.get("identity"), variants=tuple(
+            ContractErrorVariantDescriptor.from_payload(variant)
+            for variant in _contract_array(value.get("variants"), "error type variants")
+        ))
+        result.validate()
+        return result
 
 
 @dataclass(frozen=True)
@@ -7667,7 +7833,7 @@ class ContractManifest:
     access_set_hints: Optional[ContractAccessSetHints]
     entrypoints: Optional[Tuple[ContractEntrypointDescriptor, ...]]
     states: Optional[Tuple[ContractStateDescriptor, ...]]
-    error_codes: Optional[Tuple[ContractErrorCodeDescriptor, ...]]
+    error_types: Optional[Tuple[ContractErrorTypeDescriptor, ...]]
     kotoba: Optional[Tuple[ContractKotobaTranslationEntry, ...]]
     provenance: Optional[Mapping[str, Any]]
 
@@ -7692,7 +7858,7 @@ class ContractManifest:
             "access_set_hints",
             "entrypoints",
             "states",
-            "error_codes",
+            "error_types",
             "kotoba",
             "provenance",
         }
@@ -7772,7 +7938,7 @@ class ContractManifest:
 
         entrypoints = optional_descriptors("entrypoints", ContractEntrypointDescriptor.from_payload)
         states = optional_descriptors("states", ContractStateDescriptor.from_payload)
-        error_codes = optional_descriptors("error_codes", ContractErrorCodeDescriptor.from_payload)
+        error_types = optional_descriptors("error_types", ContractErrorTypeDescriptor.from_payload)
         kotoba = optional_descriptors("kotoba", ContractKotobaTranslationEntry.from_payload)
 
         if entrypoints is not None:
@@ -7810,11 +7976,20 @@ class ContractManifest:
         if states is not None and len({state.name for state in states}) != len(states):
             raise TypeError("manifest contains duplicate state descriptors")
         _validate_contract_dynamic_access_hint_state_maps(access_set_hints, states)
-        if error_codes is not None:
-            paths = {(error.namespace, error.name) for error in error_codes}
-            codes = {error.code for error in error_codes}
-            if len(paths) != len(error_codes) or len(codes) != len(error_codes):
-                raise TypeError("manifest contains duplicate error paths or numeric codes")
+        catalog = {error.identity: error for error in error_types or ()}
+        if len(catalog) != len(error_types or ()) or len(catalog) > 256:
+            raise TypeError("manifest error_types must contain at most 256 unique identities")
+        for state in states or ():
+            if not _canonical_kotodama_state_type_name(state.type_name, set(catalog)):
+                raise TypeError("state nominal error identity is not declared in the error_types catalog")
+        for entrypoint in entrypoints or ():
+            schemas = [field.type for field in entrypoint.argument_schema.fields] if entrypoint.argument_schema else []
+            if entrypoint.return_schema is not None:
+                schemas.append(entrypoint.return_schema)
+            for schema in schemas:
+                for node in schema.nodes:
+                    if node.kind is EntrypointValueTypeNodeKindV1.ERROR and catalog.get(node.value.identity) != node.value:
+                        raise TypeError("boundary error schema does not match the error_types catalog")
         if kotoba is not None:
             message_ids = [entry.message_id for entry in kotoba]
             if len(set(message_ids)) != len(message_ids):
@@ -7833,7 +8008,7 @@ class ContractManifest:
             access_set_hints=access_set_hints,
             entrypoints=entrypoints,
             states=states,
-            error_codes=error_codes,
+            error_types=error_types,
             kotoba=kotoba,
             provenance=provenance,
         )
@@ -8501,7 +8676,7 @@ class VerifiedCommittedTransaction:
                 raise TypeError(
                     "verified transaction contract_rejection must be an object or null"
                 )
-            required_contract_fields = {"contract", "namespace", "name", "code"}
+            required_contract_fields = {"contract", "error_type", "schema_hash", "name", "code"}
             if set(contract_rejection_value) != required_contract_fields:
                 raise ValueError(
                     "verified transaction contract_rejection must contain exactly "
@@ -8511,14 +8686,21 @@ class VerifiedCommittedTransaction:
                 contract_rejection_value["contract"],
                 "verified transaction contract rejection contract",
             )
-            contract_namespace = _require_exact_non_empty_string(
-                contract_rejection_value["namespace"],
-                "verified transaction contract rejection namespace",
+            contract_error_type = _require_exact_non_empty_string(
+                contract_rejection_value["error_type"],
+                "verified transaction contract rejection error_type",
             )
+            if not _canonical_contract_error_identity(contract_error_type):
+                raise ValueError("verified transaction contract rejection error_type is not canonical")
+            contract_schema_hash = contract_rejection_value["schema_hash"]
+            if not isinstance(contract_schema_hash, list) or len(contract_schema_hash) != 32 or any(isinstance(byte, bool) or not isinstance(byte, int) or not 0 <= byte <= 255 for byte in contract_schema_hash) or contract_schema_hash[-1] & 1 != 1:
+                raise ValueError("verified transaction contract rejection schema_hash must be exactly 32 canonical hash bytes")
             contract_error_name = _require_exact_non_empty_string(
                 contract_rejection_value["name"],
                 "verified transaction contract rejection name",
             )
+            if not _canonical_contract_error_variant(contract_error_name):
+                raise ValueError("verified transaction contract rejection name is not canonical")
             contract_error_code_value = contract_rejection_value["code"]
             if isinstance(contract_error_code_value, bool) or not isinstance(
                 contract_error_code_value, int
@@ -8538,7 +8720,8 @@ class VerifiedCommittedTransaction:
                 )
             contract_rejection = {
                 "contract": contract_name,
-                "namespace": contract_namespace,
+                "error_type": contract_error_type,
+                "schema_hash": tuple(contract_schema_hash),
                 "name": contract_error_name,
                 "code": contract_error_code,
             }
@@ -20351,7 +20534,7 @@ class ToriiClient(
             expected_amount,
             "prepare_account_faucet.expected_policy",
         )
-        exact_binding = _copy_taira_mutation_binding(
+        exact_binding = _copy_prepared_operation_binding(
             binding,
             expected_kind="faucet",
             context="prepare_account_faucet.binding",
@@ -20405,7 +20588,7 @@ class ToriiClient(
                 payload = response.json()
             except ValueError as error:
                 raise RuntimeError("prepare_account_faucet returned invalid JSON") from error
-            prepared = _copy_prepared_taira_transaction(
+            prepared = _copy_prepared_transaction(
                 payload,
                 expected_operation="faucet",
                 context="prepare_account_faucet.response",
@@ -20452,7 +20635,7 @@ class ToriiClient(
             expected_amount,
             "submit_prepared_account_faucet.expected_policy",
         )
-        exact_prepared = _copy_prepared_taira_transaction(
+        exact_prepared = _copy_prepared_transaction(
             prepared,
             expected_operation="faucet",
             context="submit_prepared_account_faucet.prepared",
@@ -20462,7 +20645,7 @@ class ToriiClient(
             exact_prepared["fee_payment"],
             "submit_prepared_account_faucet.prepared",
         )
-        _copy_taira_mutation_binding(
+        _copy_prepared_operation_binding(
             exact_prepared["binding"],
             expected_kind="faucet",
             context="submit_prepared_account_faucet.prepared.binding",
@@ -20596,7 +20779,7 @@ class ToriiClient(
         """Prepare an exact sponsored transaction from one signed semantic receipt."""
 
         exact_onboarding_token = _require_account_onboarding_token(onboarding_token)
-        exact_binding = _copy_taira_mutation_binding(
+        exact_binding = _copy_prepared_operation_binding(
             binding,
             expected_kind="onboarding",
             context="prepare_account_onboarding.binding",
@@ -20624,6 +20807,7 @@ class ToriiClient(
             expected_request=exact_expected_request,
             context="prepare_account_onboarding.receipt",
         )
+        _require_onboarding_binding_receipt(exact_binding, exact_receipt, "prepare_account_onboarding")
         response = self._request(
             "POST",
             "/v1/accounts/onboard/prepare",
@@ -20647,8 +20831,8 @@ class ToriiClient(
             except ValueError as error:
                 raise RuntimeError("prepare_account_onboarding returned invalid JSON") from error
             schema = payload.get("schema") if isinstance(payload, Mapping) else None
-            if schema == TAIRA_PREPARED_TRANSACTION_SCHEMA:
-                prepared = _copy_prepared_taira_transaction(
+            if schema == PREPARED_TRANSACTION_SCHEMA:
+                prepared = _copy_prepared_transaction(
                     payload,
                     expected_operation="onboarding",
                     context="prepare_account_onboarding.response",
@@ -20737,7 +20921,7 @@ class ToriiClient(
         from durable state must invoke it again.
         """
 
-        exact_binding = _copy_taira_mutation_binding(
+        exact_binding = _copy_prepared_operation_binding(
             binding,
             expected_kind="onboarding",
             context="prove_account_onboarding_current_state.binding",
@@ -20778,6 +20962,7 @@ class ToriiClient(
             expected_request=exact_expected_request,
             context="prove_account_onboarding_current_state.receipt",
         )
+        _require_onboarding_binding_receipt(exact_binding, exact_receipt, "prove_account_onboarding_current_state")
         exact_proof_required = _copy_account_onboarding_proof_required_v1(
             proof_required,
             expected_binding=exact_binding,
@@ -20911,7 +21096,7 @@ class ToriiClient(
         """Submit only one server-authenticated exact onboarding transaction."""
 
         exact_onboarding_token = _require_account_onboarding_token(onboarding_token)
-        exact_prepared = _copy_prepared_taira_transaction(
+        exact_prepared = _copy_prepared_transaction(
             prepared,
             expected_operation="onboarding",
             context="submit_prepared_account_onboarding.prepared",
@@ -20921,7 +21106,7 @@ class ToriiClient(
             exact_prepared["fee_payment"],
             "submit_prepared_account_onboarding.prepared",
         )
-        _copy_taira_mutation_binding(
+        _copy_prepared_operation_binding(
             exact_prepared["binding"],
             expected_kind="onboarding",
             context="submit_prepared_account_onboarding.prepared.binding",

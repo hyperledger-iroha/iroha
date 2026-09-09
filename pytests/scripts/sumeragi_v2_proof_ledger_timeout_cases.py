@@ -655,6 +655,7 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
             destination = repo_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT_DIR / relative, destination)
+        copy_reviewed_rust_include_components(repo_root)
         return repo_root
 
     wire_mutants = (
@@ -707,7 +708,7 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
         repo_root = copy_fixture(case)
         mutate_rust_item_source_in_context(
             module,
-            repo_root / wire_path,
+            reviewed_rust_item_provider(module, repo_root, wire_path, wire_item),
             wire_item,
             test_context,
             old,
@@ -721,7 +722,10 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
     def remove_adapter_case(
         repo_root: Path, start: str, end: str
     ) -> None:
-        path = repo_root / "crates/iroha_core/src/sumeragi/v2.rs"
+        path = reviewed_rust_item_provider(
+            module, repo_root, Path("crates/iroha_core/src/sumeragi/v2.rs"),
+            "locked_subject_reproposal_and_strict_higher_prepare_are_safe",
+        )
         source = path.read_text(encoding="utf-8")
         items = [
             item
@@ -729,7 +733,7 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
                 source,
                 "locked_subject_reproposal_and_strict_higher_prepare_are_safe",
             )
-            if item.brace_context == test_context
+            if item.brace_context == ()
         ]
         assert len(items) == 1
         item = items[0]
@@ -744,20 +748,20 @@ def test_proposal_timeout_exact_regressions_reject_case_removal_mutants(
     adapter_mutants = (
         (
             "adapter_omitted_rejection_removed",
-            "        let mut missing_repeated_high = prepared_proposal.clone();",
-            "        let mut invented_repeated_high = prepared_proposal.clone();",
+            "    let mut missing_repeated_high = prepared_proposal.clone();",
+            "    let mut invented_repeated_high = prepared_proposal.clone();",
             "adapter regression must reject omitted evidence at safe-value admission",
         ),
         (
             "adapter_invented_rejection_removed",
-            "        let mut invented_repeated_high = prepared_proposal.clone();",
-            "        let mut alternate_evidence = prepared_proposal.clone();",
+            "    let mut invented_repeated_high = prepared_proposal.clone();",
+            "    let mut alternate_evidence = prepared_proposal.clone();",
             "adapter regression must reject invented evidence at safe-value admission",
         ),
         (
             "adapter_alternate_evidence_rejection_removed",
-            "        let mut alternate_evidence = prepared_proposal.clone();",
-            "        let mut equal_rank = prepared_proposal.clone();",
+            "    let mut alternate_evidence = prepared_proposal.clone();",
+            "    let mut equal_rank = prepared_proposal.clone();",
             "adapter regression must reject same-reference alternate evidence at safe-value admission",
         ),
     )
@@ -791,12 +795,13 @@ def test_proposal_timeout_full_evidence_production_gates_are_source_bound(
             destination = repo_root / relative
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT_DIR / relative, destination)
+        copy_reviewed_rust_include_components(repo_root)
         return repo_root
 
     production_mutants = (
         (
             "proposal_validate_reference_only",
-            Path("crates/iroha_data_model/src/block/consensus_v2.rs"),
+            Path("crates/iroha_data_model/src/block/consensus_v2/messages.rs"),
             "validate",
             (("impl", "Proposal"),),
             "selected_highest != timeout.highest_prepare_qc.as_ref()",
@@ -834,7 +839,7 @@ def test_proposal_timeout_full_evidence_production_gates_are_source_bound(
         repo_root = copy_fixture(case)
         mutate_rust_item_source_in_context(
             module,
-            repo_root / relative,
+            reviewed_rust_item_provider(module, repo_root, relative, item),
             item,
             context,
             old,
@@ -1097,7 +1102,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
         (path, path.read_text(encoding="utf-8")) for path in checker_source_paths()
     )
     expected_provider = [
-        ("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py", 1144)
+        ("sumeragi_v2_proof_ledger_terminal_discharge_contracts.py", 1223)
     ]
     assert provider_assignments(checker_sources) == expected_provider
     synthetic_shadow = f"\n{provider_name} = {{}}\n"
@@ -1294,9 +1299,7 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             "timeout_ack_classification_bypasses_kernel",
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
             "generation_after_timeout_install",
-            """self
-            .durable
-            .is_strict_same_round_timeout_upgrade(certificate)""",
+            "durable.is_strict_same_round_timeout_upgrade(certificate)",
             "false",
             "InstallTimeout generation must classify the exact strict same-round upgrade and reset only advancing views",
         ),
@@ -1305,9 +1308,10 @@ def test_same_round_semantic_kernel_sources_and_callers_are_fail_closed(
             Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
             "on_persisted",
             """let next_generation = match pending.entry.record() {
-            WalRecord::InstallTimeout(certificate) => self
-                .generation_after_timeout_install(certificate)
-                .ok_or(ReducerError::GenerationOverflow)?,
+            WalRecord::InstallTimeout(certificate) => {
+                Self::generation_after_timeout_install(&self.durable, self.generation, certificate)
+                    .ok_or(ReducerError::GenerationOverflow)?
+            }
             _ => self.generation,
         };""",
             "let next_generation = self.generation;",
@@ -1668,7 +1672,7 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
     )
     prepare_regression_provider_relative = Path(
         "crates/iroha_core/src/sumeragi/v2_core/tests/"
-        "committee_fallback_and_retransmit.rs"
+        "delayed_prepare_qc_cache_bounds.rs"
     )
     fixture_paths = {*source_relatives, prepare_regression_relative}
     pending_fixture_paths = list(fixture_paths)
@@ -1686,7 +1690,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
     mutations = (
         (
             "live-bound",
-            Path("crates/iroha_core/src/sumeragi/v2_core/refinement.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "refinement/volatile_summary_well_formed.rs"
+            ),
             "volatile_summary_well_formed_body",
             "&& $summary.pending_prepare <= 1u64",
             "&& $summary.pending_prepare <= 2u64",
@@ -1695,7 +1702,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
         ),
         (
             "stale-admission",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "reducer/prepare_certificate_handling.rs"
+            ),
             "on_prepare_certificate",
             "if certificate.round().view() < existing.round().view() {",
             "if certificate.round().view() > existing.round().view() {",
@@ -1704,7 +1714,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
         ),
         (
             "historical-retention",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "reducer/prepare_certificate_handling.rs"
+            ),
             "prune_observed_prepare_caches",
             "certificate.round().view() == current_view",
             "certificate.round().view() <= current_view",
@@ -1713,7 +1726,10 @@ def test_prepare_cache_semantic_mutations_survive_refreshed_seals(
         ),
         (
             "lock-omission",
-            Path("crates/iroha_core/src/sumeragi/v2_core/reducer.rs"),
+            Path(
+                "crates/iroha_core/src/sumeragi/v2_core/"
+                "reducer/prepare_certificate_handling.rs"
+            ),
             "prune_observed_prepare_caches",
             ".chain(self.durable.locked())",
             ".chain(self.durable.highest_prepare())",

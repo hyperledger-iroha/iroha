@@ -53,7 +53,10 @@ async fn nfts_endpoints_exist() {
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::disabled(),
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii NFT fixture");
     let runtime = torii
@@ -90,3 +93,6 @@ async fn nfts_endpoints_exist() {
     ));
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

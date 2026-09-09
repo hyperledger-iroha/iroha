@@ -23,6 +23,10 @@ mod model {
     #[event_set(
         schema_name = "iroha_data_model::events::data::smart_contract::model::SmartContractEventSet"
     )]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::SmartContractEvent"
+    )]
     pub enum SmartContractEvent {
         /// Contract bytecode was registered on-chain.
         CodeRegistered(ContractCodeRegistered),
@@ -47,7 +51,19 @@ mod model {
     }
     /// Payload describing a new code registration.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractCodeRegistered"
     )]
     pub struct ContractCodeRegistered {
         /// Code hash of the registered program.
@@ -57,7 +73,19 @@ mod model {
     }
     /// Payload describing a code removal operation.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractCodeRemoved"
     )]
     pub struct ContractCodeRemoved {
         /// Code hash of the removed program.
@@ -70,7 +98,19 @@ mod model {
     }
     /// Payload describing an instance activation.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractInstanceActivated"
     )]
     pub struct ContractInstanceActivated {
         /// Canonical contract address.
@@ -84,7 +124,19 @@ mod model {
     }
     /// Payload describing an instance deactivation.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractInstanceDeactivated"
     )]
     pub struct ContractInstanceDeactivated {
         /// Canonical contract address.
@@ -101,7 +153,19 @@ mod model {
     }
     /// Payload describing a revocable delegation change.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractParliamentDelegationChanged"
     )]
     pub struct ContractParliamentDelegationChanged {
         /// Contract whose delegation changed.
@@ -117,7 +181,19 @@ mod model {
     }
     /// Payload describing a newly recorded ownership offer.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractOwnershipTransferOffered"
     )]
     pub struct ContractOwnershipTransferOffered {
         /// Contract whose ownership was offered.
@@ -133,7 +209,19 @@ mod model {
     }
     /// Payload describing cancellation of an ownership offer.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractOwnershipTransferCancelled"
     )]
     pub struct ContractOwnershipTransferCancelled {
         /// Contract whose offer was cancelled.
@@ -147,7 +235,19 @@ mod model {
     }
     /// Payload describing a completed ownership transfer.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractOwnershipTransferred"
     )]
     pub struct ContractOwnershipTransferred {
         /// Contract whose owner changed.
@@ -163,7 +263,19 @@ mod model {
     }
     /// Payload describing a Parliament emergency hold.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractEmergencyHoldPlaced"
     )]
     pub struct ContractEmergencyHoldPlaced {
         /// Contract whose execution is contained.
@@ -177,7 +289,19 @@ mod model {
     }
     /// Complete audit record for a certified emergency-hold retrospective.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(
+        name = "iroha_data_model::events::data::smart_contract::model::ContractEmergencyHoldRetrospectiveCompleted"
     )]
     pub struct ContractEmergencyHoldRetrospectiveCompleted {
         /// Contract whose expired containment record was reviewed.
@@ -192,3 +316,6 @@ mod model {
         pub lifecycle: crate::smart_contract::ContractLifecycleControlV1,
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

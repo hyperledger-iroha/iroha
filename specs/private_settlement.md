@@ -120,6 +120,19 @@ virtual dummy without bootstrapping another pool or depending on an earlier
 zero output's role memo. Output roles remain recipient, optional payer change,
 and sponsor reimbursement; inactive output slots carry zero value.
 
+`prepare_atomic_private_settlement_funding_note_v1` derives a positive funding
+commitment before a bundle exists. The release harness funds each pool with
+that input and an unspent reserve note, waits for state-resolved Applied
+activation, and only then chooses an observed committed authority height and
+generates the proof. The virtual dummy remains bound to the resulting bundle;
+its fixed-shape path does not spend the reserve note. Smoke, fault, leakage and
+performance preparation share this ordering. They do not predict how many
+admission blocks precede activation or require a later capability query to
+equal the activation transaction's block height. Exact historical committee
+authorization, governance validity, root membership for positive inputs and
+the 300-height protocol activation notice remain mandatory. Current runtime
+qualification of this harness correction is pending.
+
 The required public `audit_input_commitment` binds the exact two ordered input
 openings with SHA-256 inside the AIR. The statement stores the exact raw 32-byte
 digest; no hash-wrapper marker bit or normalization may alter it. Its private
@@ -421,6 +434,15 @@ Collecting -> Audited -> Prepared -> CommitCertified -> Finalized
 9. Local stores reconcile the immutable public receipt or abort marker after
    finality and on restart. Only then do they mark the sidecar terminal and
    release its staged reservations.
+
+When participant effects enter the global carrier through an autonomous lane
+merge, the merge validator applies the publication fence defined in
+`specs/merge_ledger.md`. A State or Kura frontier advance during candidate
+revalidation makes that global round unavailable and preserves the durable
+signing journal for retry; it does not turn the already valid private-settlement
+effect into a semantic failure. The private-key action occurs only after the
+validator rechecks the exact State generation and durable Kura parent while
+both publication leases are held.
 
 The complete prepared-bundle digest commits to every certified Prepare body and
 authority-catalog index, but normalizes away the signer bitmap and aggregate

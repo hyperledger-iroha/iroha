@@ -942,6 +942,7 @@ fn decode_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norito::core::DeserializePayload;
     use std::cell::Cell;
     thread_local! {
         static OWNED_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
@@ -969,7 +970,8 @@ mod tests {
             Some(1)
         }
     }
-    impl<'de> NoritoDeserialize<'de> for DropBeforeDecodeProbe {
+    impl NoritoDeserialize<'_> for DropBeforeDecodeProbe {}
+    impl<'de> DeserializePayload<'de> for DropBeforeDecodeProbe {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("drop-before-decode probe")
         }
@@ -999,7 +1001,8 @@ mod tests {
             Err(norito::core::Error::LengthMismatch)
         }
     }
-    impl<'de> NoritoDeserialize<'de> for EncodeErrorDropProbe {
+    impl NoritoDeserialize<'_> for EncodeErrorDropProbe {}
+    impl<'de> DeserializePayload<'de> for EncodeErrorDropProbe {
         fn deserialize(_archived: &'de norito::core::Archived<Self>) -> Self {
             Self
         }
@@ -1020,7 +1023,8 @@ mod tests {
             SerializePayload::serialize(&1_u8, encoder)
         }
     }
-    impl<'de> NoritoDeserialize<'de> for DecodeErrorDropProbe {
+    impl NoritoDeserialize<'_> for DecodeErrorDropProbe {}
+    impl<'de> DeserializePayload<'de> for DecodeErrorDropProbe {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived).expect("decode-error probe")
         }

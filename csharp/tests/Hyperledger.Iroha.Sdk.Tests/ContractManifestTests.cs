@@ -33,7 +33,7 @@ public sealed class ContractManifestTests
         Assert.Equal("transfer", entrypoint.Triggers.Single().Callback.Entrypoint);
         Assert.Equal("daily-settlement", entrypoint.Triggers.Single().Metadata["purpose"]!.GetValue<string>());
         Assert.Equal("StateMap<AccountId, quantity>", manifest.States!.Single().TypeName);
-        Assert.Equal((uint)1001, manifest.ErrorCodes!.Single().Code);
+        Assert.Equal((uint)1001, manifest.ErrorTypes!.Single().Variants.Single().Code);
         Assert.Equal("ja", manifest.Kotoba!.Single().Translations.Last().Language);
         Assert.Equal("ed25519:fixture", manifest.Provenance!.Signer);
 
@@ -336,7 +336,7 @@ public sealed class ContractManifestTests
                 response,
                 "StateMap<AccountId, quantity>",
                 "Amount{amount: quantity}"),
-            ReplaceFirst(response, "\"namespace\":\"TransferError\"", "\"namespace\":\"Option\""),
+            ReplaceFirst(response, "\"identity\":\"Ledger::TransferError\"", "\"identity\":\"bad identity\""),
             ReplaceFirst(response, "\"features_bitmap\":0", "\"features_bitmap\":4"),
             ReplaceFirst(response, "\"dynamic_writes\":[]", "\"dynamic_writes\":[],\"unknown\":true"),
             ReplaceFirst(
@@ -575,12 +575,12 @@ public sealed class ContractManifestTests
                     {
                         BaseKey = "state:Balances",
                         KeyType = keyType,
-                        BoundKind = "range",
+                        BoundKind = "page",
                         MaxKeys = 64,
                     },
                     stateKeyType: keyType));
         }
-        foreach (var boundKind in new[] { "range", "take" })
+        foreach (var boundKind in new[] { "page", "take" })
         {
             Assert.Equal(boundKind, ParseDynamic(boundKind: boundKind).BoundKind);
         }
@@ -668,7 +668,7 @@ public sealed class ContractManifestTests
                     }));
         }
 
-        foreach (var boundKind in new[] { "", "Range", "Take", "all", "prefix", "range ", " take" })
+        foreach (var boundKind in new[] { "", "range", "Page", "Take", "all", "prefix", "page ", " take" })
         {
             Assert.Throws<JsonException>(() => ParseDynamic(boundKind: boundKind));
             Assert.Throws<JsonException>(
@@ -791,7 +791,7 @@ public sealed class ContractManifestTests
         var amount = canonical with
         {
             BaseKey = "state:amount",
-            BoundKind = "range",
+            BoundKind = "page",
             MaxKeys = 64,
         };
         var accepted = DynamicManifest(
@@ -812,28 +812,20 @@ public sealed class ContractManifestTests
     }
 
     [Theory]
-    [InlineData("Amount")]
-    [InlineData("amount")]
-    public void ManifestRejectsRetiredErrorNamespaces(string retired)
+    [InlineData("")]
+    [InlineData("bad identity")]
+    [InlineData("__kotodama_link_hidden::Failure")]
+    public void ManifestRejectsMalformedErrorIdentities(string identity)
     {
-        var namespaceResponse = ReplaceFirst(
-            FullResponse(),
-            "\"namespace\":\"TransferError\"",
-            $"\"namespace\":\"{retired}\"");
-        var namespaceError = Assert.Throws<JsonException>(
-            () => JsonSerializer.Deserialize<ToriiContractCodeRecord>(namespaceResponse));
-        Assert.Contains("namespace", namespaceError.Message, StringComparison.Ordinal);
-
+        var response = ReplaceFirst(FullResponse(), "\"identity\":\"Ledger::TransferError\"",
+            $"\"identity\":\"{identity}\"");
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<ToriiContractCodeRecord>(response));
         var record = JsonSerializer.Deserialize<ToriiContractCodeRecord>(FullResponse())!;
-        var errorCode = record.Manifest.ErrorCodes!.Single();
-        var forgedNamespace = record with
+        var forged = record.Manifest with
         {
-            Manifest = record.Manifest with
-            {
-                ErrorCodes = [errorCode with { Namespace = retired }],
-            },
+            ErrorTypes = [record.Manifest.ErrorTypes!.Single() with { Identity = identity }],
         };
-        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(forgedNamespace));
+        Assert.Throws<JsonException>(() => JsonSerializer.Serialize(forged));
     }
 
     private static ToriiContractManifest DynamicManifest(
@@ -1069,7 +1061,7 @@ public sealed class ContractManifestTests
               }]
             }],
             "states":[{"name":"Balances","type_name":"StateMap<AccountId, quantity>"}],
-            "error_codes":[{"namespace":"TransferError","name":"InsufficientFunds","code":1001}],
+            "error_types":[{"identity":"Ledger::TransferError","variants":[{"name":"InsufficientFunds","code":1001}]}],
             "kotoba":[{
               "msg_id":"transfer.denied",
               "translations":[

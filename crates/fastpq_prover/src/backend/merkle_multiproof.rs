@@ -211,7 +211,6 @@ impl MultiproofPlan {
     }
 
     /// Return the exact ordered sibling locations for prover extraction.
-    #[cfg(test)]
     pub(super) fn sibling_positions(&self) -> &[SiblingPosition] {
         &self.siblings
     }

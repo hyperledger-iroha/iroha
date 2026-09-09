@@ -1379,9 +1379,12 @@ fn build_test_router() -> (iroha_torii::TestApiRouterRuntime, Arc<Metrics>, KeyP
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        iroha_torii::MaybeTelemetry::from_profile(
-            Some(telemetry),
-            iroha_config::parameters::actual::TelemetryProfile::Operator,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            iroha_torii::MaybeTelemetry::from_profile(
+                Some(telemetry),
+                iroha_config::parameters::actual::TelemetryProfile::Operator,
+            ),
         ),
     )
     .expect("valid Torii address-parsing fixture");
@@ -1447,3 +1450,6 @@ fn counter_total(counter: &prometheus::IntCounterVec) -> u64 {
         })
         .sum()
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

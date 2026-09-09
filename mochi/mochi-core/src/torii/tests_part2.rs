@@ -427,12 +427,8 @@ async fn managed_block_stream_emits_alias_on_error() {
                         message: None,
                     })
                 } else {
-                    let (sender, _) = broadcast::channel(4);
-                    let task = tokio::spawn(async {});
-                    Ok(WsSubscription {
-                        sender,
-                        handle: task,
-                    })
+                    let (_sender, subscription) = stream_test_transport::block_subscription().await;
+                    Ok(subscription)
                 }
             }
         }
@@ -469,12 +465,8 @@ async fn managed_block_stream_emits_alias_on_error() {
 async fn managed_block_stream_abort_stops_worker() {
     let handle = tokio::runtime::Handle::current();
     let stream = ManagedBlockStream::spawn_with_factory(&handle, "abort-peer", || async {
-        let (sender, _) = broadcast::channel(1);
-        let task = tokio::spawn(async {});
-        Ok(WsSubscription {
-            sender,
-            handle: task,
-        })
+        let (_sender, subscription) = stream_test_transport::block_subscription().await;
+        Ok(subscription)
     });
     assert_eq!(stream.alias(), "abort-peer");
     stream.abort();
@@ -1096,7 +1088,12 @@ async fn lane_lifecycle_rejects_network_id_different_from_client() {
         .first()
         .expect("development signer");
     let error = client
-        .apply_lane_lifecycle(supplied_network_id, signer, LaneLifecyclePlan::default())
+        .apply_lane_lifecycle(
+            &stream_test_transport::reader("http://127.0.0.1:9"),
+            supplied_network_id,
+            signer,
+            LaneLifecyclePlan::default(),
+        )
         .await
         .expect_err("mismatched exact network identity must fail before I/O");
     assert!(matches!(error, ToriiError::SignedQueryContext(_)));

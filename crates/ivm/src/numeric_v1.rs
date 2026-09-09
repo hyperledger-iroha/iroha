@@ -45,7 +45,10 @@ fn require_zero_registers(vm: &IVM, reserved: &[usize]) -> Result<(), VMError> {
     }
 }
 fn rounding_mode(vm: &IVM) -> Result<RoundingMode, VMError> {
-    let mode = RoundingModeV1::from_tag(vm.register(NUMERIC_ROUNDING_REGISTER))
+    rounding_mode_at(vm, NUMERIC_ROUNDING_REGISTER)
+}
+fn rounding_mode_at(vm: &IVM, register: usize) -> Result<RoundingMode, VMError> {
+    let mode = RoundingModeV1::from_tag(vm.register(register))
         .ok_or(VMError::NumericFault(NumericFaultV1::InvalidRoundingMode))?;
     Ok(match mode {
         RoundingModeV1::TowardZero => RoundingMode::TowardZero,
@@ -322,6 +325,42 @@ fn decimal_exact_division_observed(
 #[allow(clippy::too_many_lines)]
 pub fn execute(number: u32, vm: &mut IVM) -> Result<u64, VMError> {
     match number {
+        syscalls::SYSCALL_DECIMAL_MUL_DIV_ROUND | syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND => {
+            require_zero_registers(vm, &[15])?;
+            let quantity = number == syscalls::SYSCALL_QUANTITY_MUL_DIV_ROUND;
+            let value = if quantity {
+                decode_quantity_register(vm, 10)?.into_numeric()
+            } else {
+                decode_decimal_register(vm, 10)?
+            };
+            let multiplier = decode_decimal_register(vm, 11)?;
+            let divisor = decode_decimal_register(vm, 12)?;
+            let scale = decode_int_register(vm, 13)?
+                .try_to_u64()
+                .filter(|scale| *scale <= u64::from(numeric_gas::MAX_DECIMAL_SCALE))
+                .ok_or(VMError::NumericFault(NumericFaultV1::InvalidScale))?
+                as u32;
+            let rounding = rounding_mode_at(vm, 14)?;
+            let observed = value.try_decimal_mul_div_round_observed(
+                &multiplier,
+                &divisor,
+                scale,
+                rounding,
+                &mut |step| observe_work(vm, step),
+            );
+            if let Some(value) = resolve_observed(vm, FailureMode::Trap, observed)? {
+                if quantity {
+                    let value = Quantity::from_canonical_numeric(value).map_err(|error| {
+                        numeric_fault(error)
+                            .map(VMError::NumericFault)
+                            .unwrap_or_else(|error| error)
+                    })?;
+                    publish_quantity(vm, &value)?;
+                } else {
+                    publish_decimal(vm, &value)?;
+                }
+            }
+        }
         syscalls::SYSCALL_INT_FROM_I64 | syscalls::SYSCALL_INT_FROM_U64 => {
             let value = if number == syscalls::SYSCALL_INT_FROM_I64 {
                 BigInt::from(vm.register(10) as i64)

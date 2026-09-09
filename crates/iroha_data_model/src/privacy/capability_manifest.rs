@@ -8,7 +8,7 @@ use super::{
     PrivacyPolicyValidationErrorV1, PrivacyProtocolActivationRecordV1, PrivacyProtocolIdV1,
     PrivacyProtocolLifecycleV1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -17,56 +17,60 @@ use thiserror::Error;
 /// Exact public Exact12 capability-manifest wire version.
 pub const PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1: u32 = 1;
 /// Canonical public operation schema selected by one retained protocol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "operation_schema", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "operation_schema", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyOperationSchemaV1")]
 pub enum PrivacyOperationSchemaV1 {
     /// ZK-ACE authorization action.
-    #[cfg_attr(feature = "json", norito(rename = "zk_ace_authorization_action_v1"))]
+    #[norito(rename = "zk_ace_authorization_action_v1")]
     ZkAceAuthorizationActionV1,
     /// Anonymous PGC payment action.
-    #[cfg_attr(feature = "json", norito(rename = "anonymous_pgc_payment_action_v1"))]
+    #[norito(rename = "anonymous_pgc_payment_action_v1")]
     AnonymousPgcPaymentActionV1,
     /// `VeRange` range-proof component.
-    #[cfg_attr(feature = "json", norito(rename = "verange_range_proof_v1"))]
+    #[norito(rename = "verange_range_proof_v1")]
     VeRangeRangeProofV1,
     /// ZK-AMS admission and provisioning action.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "zk_ams_admission_and_provisioning_v1")
-    )]
+    #[norito(rename = "zk_ams_admission_and_provisioning_v1")]
     ZkAmsAdmissionAndProvisioningV1,
     /// Vega credential presentation action.
-    #[cfg_attr(feature = "json", norito(rename = "vega_credential_presentation_v1"))]
+    #[norito(rename = "vega_credential_presentation_v1")]
     VegaCredentialPresentationV1,
     /// ZK-X509 identity presentation action.
-    #[cfg_attr(feature = "json", norito(rename = "zk_x509_identity_presentation_v1"))]
+    #[norito(rename = "zk_x509_identity_presentation_v1")]
     ZkX509IdentityPresentationV1,
     /// Revised Jindo polynomial-evaluation component.
-    #[cfg_attr(feature = "json", norito(rename = "jindo_polynomial_evaluation_v1"))]
+    #[norito(rename = "jindo_polynomial_evaluation_v1")]
     JindoPolynomialEvaluationV1,
     /// Bootle/Lantern credential presentation action.
-    #[cfg_attr(
-        feature = "json",
-        norito(rename = "bootle_lantern_credential_presentation_v1")
-    )]
+    #[norito(rename = "bootle_lantern_credential_presentation_v1")]
     BootleLanternCredentialPresentationV1,
     /// Orchard private-note action.
-    #[cfg_attr(feature = "json", norito(rename = "orchard_note_action_v1"))]
+    #[norito(rename = "orchard_note_action_v1")]
     OrchardNoteActionV1,
     /// FCMP++ membership payment action.
-    #[cfg_attr(feature = "json", norito(rename = "fcmp_membership_payment_v1"))]
+    #[norito(rename = "fcmp_membership_payment_v1")]
     FcmpMembershipPaymentV1,
     /// IVM private-note action.
-    #[cfg_attr(feature = "json", norito(rename = "ivm_private_note_action_v1"))]
+    #[norito(rename = "ivm_private_note_action_v1")]
     IvmPrivateNoteActionV1,
     /// Post-quantum MASP private-note action.
-    #[cfg_attr(feature = "json", norito(rename = "pq_masp_note_action_v1"))]
+    #[norito(rename = "pq_masp_note_action_v1")]
     PqMaspNoteActionV1,
 }
 impl PrivacyOperationSchemaV1 {
@@ -92,32 +96,42 @@ impl PrivacyOperationSchemaV1 {
     }
 }
 /// Closed execution classification for a retained public privacy operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "execution_mode", content = "value", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "execution_mode", content = "value", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyExecutionModeV1")]
 pub enum PrivacyExecutionModeV1 {
     /// Authorization action.
-    #[cfg_attr(feature = "json", norito(rename = "authorization_action"))]
+    #[norito(rename = "authorization_action")]
     AuthorizationAction,
     /// Payment action.
-    #[cfg_attr(feature = "json", norito(rename = "payment_action"))]
+    #[norito(rename = "payment_action")]
     PaymentAction,
     /// Standalone proof component.
-    #[cfg_attr(feature = "json", norito(rename = "component"))]
+    #[norito(rename = "component")]
     Component,
     /// Admission or provisioning action.
-    #[cfg_attr(feature = "json", norito(rename = "admission_action"))]
+    #[norito(rename = "admission_action")]
     AdmissionAction,
     /// Credential or identity presentation action.
-    #[cfg_attr(feature = "json", norito(rename = "presentation_action"))]
+    #[norito(rename = "presentation_action")]
     PresentationAction,
     /// Private-note action.
-    #[cfg_attr(feature = "json", norito(rename = "note_action"))]
+    #[norito(rename = "note_action")]
     NoteAction,
 }
 impl PrivacyExecutionModeV1 {
@@ -138,8 +152,7 @@ impl PrivacyExecutionModeV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(DeriveJsonSerialize, DeriveJsonDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::privacy::capability_manifest::PrivacyFeatureMaskV1")]
 pub struct PrivacyFeatureMaskV1(
     /// Exact first-release feature bits.
@@ -168,12 +181,21 @@ impl PrivacyFeatureMaskV1 {
     }
 }
 /// Evidence-derived local readiness carried by a committed capability row.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "readiness", content = "detail", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "readiness", content = "detail", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityReadinessV1"
@@ -181,44 +203,53 @@ impl PrivacyFeatureMaskV1 {
 pub enum PrivacyCapabilityReadinessV1 {
     /// All compiled, security, audit, release, and deployment evidence matches
     /// the active committed record.
-    #[cfg_attr(feature = "json", norito(rename = "production-qualified"))]
+    #[norito(rename = "production-qualified")]
     ProductionQualified,
     /// The protocol remains fail-closed for the exact evidence-derived reason.
-    #[cfg_attr(feature = "json", norito(rename = "unavailable"))]
+    #[norito(rename = "unavailable")]
     Unavailable(PrivacyCapabilityUnavailableReasonV1),
 }
 /// Evidence-derived reason why a protocol is not production-qualified.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "reason", content = "detail", deny_unknown_fields)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
+#[norito(tag = "reason", content = "detail", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::capability_manifest::PrivacyCapabilityUnavailableReasonV1"
 )]
 pub enum PrivacyCapabilityUnavailableReasonV1 {
     /// The current binary has no complete executable profile.
-    #[cfg_attr(feature = "json", norito(rename = "compiled-profile"))]
+    #[norito(rename = "compiled-profile")]
     CompiledProfile(PrivacyCompiledProfileUnavailableReasonV1),
     /// No committed activation record exists for the protocol.
-    #[cfg_attr(feature = "json", norito(rename = "not-registered"))]
+    #[norito(rename = "not-registered")]
     NotRegistered,
     /// Governance committed a future activation that is not yet active.
-    #[cfg_attr(feature = "json", norito(rename = "proposed"))]
+    #[norito(rename = "proposed")]
     Proposed,
     /// Governance temporarily rejects the protocol.
-    #[cfg_attr(feature = "json", norito(rename = "suspended"))]
+    #[norito(rename = "suspended")]
     Suspended,
     /// Governance permanently retired the protocol.
-    #[cfg_attr(feature = "json", norito(rename = "retired"))]
+    #[norito(rename = "retired")]
     Retired,
     /// Lifecycle is active, but no validated release/deployment evidence is registered.
-    #[cfg_attr(feature = "json", norito(rename = "missing-production-qualification"))]
+    #[norito(rename = "missing-production-qualification")]
     MissingProductionQualification,
     /// Registered evidence is malformed, stale, or bound to another activation.
-    #[cfg_attr(feature = "json", norito(rename = "invalid-production-qualification"))]
+    #[norito(rename = "invalid-production-qualification")]
     InvalidProductionQualification,
 }
 impl PrivacyProtocolIdV1 {
@@ -297,9 +328,21 @@ impl PrivacyProtocolIdV1 {
     }
 }
 /// One row of the canonical public Exact12 capability manifest.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityRowV1"
@@ -515,10 +558,18 @@ pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
 /// exact committed activation state without treating a local catalog as
 /// network authority. The digest detects content drift but is not a signature
 /// or proof that an untrusted producer read committed state.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-capability-manifest.v1")]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::capability_manifest::PrivacyExact12CapabilityManifestV1",

@@ -368,8 +368,8 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    let metrics_url = client.client().torii_url.join("/metrics")?;
-    let mut status = client.client().get_status()?;
+    let metrics_url = client.client().endpoint().join("/metrics")?;
+    let mut status = client.status().get()?;
     let mut last_non_empty_height = status.blocks_non_empty;
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
     client.submit(
@@ -761,10 +761,7 @@ fn associated_permissions_removed_on_unregister() {
         return;
     };
     let iroha = network.client();
-    let mut status = iroha
-        .client()
-        .get_status()
-        .expect("failed to read initial status");
+    let mut status = iroha.status().get().expect("failed to read initial status");
     let mut last_non_empty_height = status.blocks_non_empty;
     let bob_id = BOB_ID.clone();
     let bob_to_set_kv_in_domain = CanModifyDomainMetadata {
@@ -831,10 +828,7 @@ fn associated_permissions_removed_from_role_on_unregister() {
         return;
     };
     let iroha = network.client();
-    let mut status = iroha
-        .client()
-        .get_status()
-        .expect("failed to read initial status");
+    let mut status = iroha.status().get().expect("failed to read initial status");
     let mut last_non_empty_height = status.blocks_non_empty;
     let role_id: RoleId = "role".parse().expect("Valid");
     let set_kv_in_domain = CanModifyDomainMetadata {

@@ -1,3 +1,4 @@
+import { normalizeContractErrorTypeV1 } from "./contractErrorTypes.js";
 import { createNoritoRecordDecoder, createNoritoRecordEncoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { Buffer } from "buffer";
@@ -351,7 +352,7 @@ export function createNoritoContractCodecs(
     "access_set_hints",
     "entrypoints",
     "states",
-    "error_codes",
+    "error_types",
     "kotoba",
     "provenance",
   ]);
@@ -382,9 +383,9 @@ export function createNoritoContractCodecs(
       ],
       [
         encodeOptionValue(
-          value.error_codes ?? null,
-          encodeContractErrorCodeDescriptorsValue,
-          `${context}.error_codes`,
+          value.error_types ?? null,
+          encodeContractErrorTypeDescriptorsValue,
+          `${context}.error_types`,
         ),
       ],
       [
@@ -423,7 +424,7 @@ export function createNoritoContractCodecs(
     ["access_set_hints", decodeAccessSetHintsValue, 1],
     ["entrypoints", decodeEntrypointDescriptorsValue, 1],
     ["states", decodeStateDescriptorsValue, 1],
-    ["error_codes", decodeContractErrorCodeDescriptorsValue, 1],
+    ["error_types", decodeContractErrorTypeDescriptorsValue, 1],
     ["kotoba", decodeKotobaTranslationEntriesValue, 1],
     ["provenance", decodeManifestProvenanceValue, 1],
   ];
@@ -486,8 +487,19 @@ export function createNoritoContractCodecs(
     );
   }
 
+  function validateEntrypointReturnDescriptor(value, context) {
+    if (typeof value.return_type !== "string" || value.return_schema == null) {
+      throw new TypeError(`${context} requires return_type and return_schema, including () and Unit`);
+    }
+    const analysis = analyzeEntrypointValueTypeV1(value.return_schema, `${context}.return_schema`);
+    if (analysis.canonicalName !== value.return_type || analysis.wordCount > 13) {
+      throw new TypeError(`${context}.return_schema must match return_type within the 13-word return window`);
+    }
+  }
+
   function encodeEntrypointDescriptorValue(value, context) {
     assertPlainObjectValue(value, context);
+    validateEntrypointReturnDescriptor(value, context);
     assertOnlyObjectKeys(value, [
       "name",
       "kind",
@@ -594,7 +606,9 @@ export function createNoritoContractCodecs(
   ];
 
   function decodeEntrypointDescriptorValue(payload, context) {
-    return decodeRecordFields(payload, context, EntrypointDescriptorValueFields);
+    const value = decodeRecordFields(payload, context, EntrypointDescriptorValueFields);
+    validateEntrypointReturnDescriptor(value, context);
+    return value;
   }
 
   function encodeEntryPointKindValue(value, context) {
@@ -737,6 +751,13 @@ export function createNoritoContractCodecs(
         return encodeEnumTagValue(5, () =>
           encodeEntrypointValueKindValue(tagged.value, `${context}.value`),
         );
+      case "Unit":
+        requireNullEnumPayload(tagged.value, context);
+        return encodeEnumTagValue(6);
+      case "StateCursor":
+        return encodeEnumTagValue(8, () => encodeEntrypointValueKindValue(tagged.value, `${context}.value`));
+      case "Error":
+        return encodeEnumTagValue(7, () => encodeContractErrorTypeDescriptorValue(tagged.value, `${context}.value`));
       default:
         rejectError(`${context}.kind uses unsupported value-type node ${tagged.kind}`);
     }
@@ -781,6 +802,13 @@ export function createNoritoContractCodecs(
             `${context}.value`,
           ),
         };
+      case 6:
+        reader.assertEof();
+        return { kind: "Unit", value: null };
+      case 7:
+        return { kind: "Error", value: decodeContractErrorTypeDescriptorValue(readSingleEnumPayload(reader, context), `${context}.value`) };
+      case 8:
+        return { kind: "StateCursor", value: decodeEntrypointValueKindValue(readSingleEnumPayload(reader, context), `${context}.value`) };
       default:
         rejectError(`${context} uses unsupported value-type node tag ${tag}`);
     }
@@ -897,36 +925,43 @@ export function createNoritoContractCodecs(
     return decodeRecordFields(payload, context, StateDescriptorValueFields);
   }
 
-  function encodeContractErrorCodeDescriptorsValue(value, context) {
+  function encodeContractErrorTypeDescriptorsValue(value, context) {
     assertArrayValue(value, context);
     return encodeNoritoVec(value, (entry, index) =>
-      encodeContractErrorCodeDescriptorValue(entry, `${context}[${index}]`),
+      encodeContractErrorTypeDescriptorValue(entry, `${context}[${index}]`),
     );
   }
 
-  function decodeContractErrorCodeDescriptorsValue(payload, context) {
+  function decodeContractErrorTypeDescriptorsValue(payload, context) {
     return decodeNoritoVec(
       payload,
       (entry, index) =>
-        decodeContractErrorCodeDescriptorValue(entry, `${context}[${index}]`),
+        decodeContractErrorTypeDescriptorValue(entry, `${context}[${index}]`),
       context,
     );
   }
 
-  function encodeContractErrorCodeDescriptorValue(value, context) {
-    assertPlainObjectValue(value, context);
-    assertOnlyObjectKeys(value, ["namespace", "name", "code"], context);
-    return encodeCanonicalRecordFields(value, context, ContractErrorCodeDescriptorValueFields);
+  function encodeContractErrorTypeDescriptorValue(value, context) {
+    const descriptor = normalizeContractErrorTypeV1(value, context);
+    return encodeStructValue([
+      [encodeNoritoStringValue(descriptor.identity)],
+      [encodeNoritoVec(descriptor.variants, (variant, index) => encodeStructValue([
+        [encodeNoritoStringValue(variant.name)],
+        [encodeU32Value(variant.code, `${context}.variants[${index}].code`)],
+      ]))],
+    ]);
   }
 
-  const ContractErrorCodeDescriptorValueFields = [
-    ["namespace", decodeStringValue, 0, encodeRequiredRecordString, 0],
-    ["name", decodeStringValue, 0, encodeRequiredRecordString, 0],
-    ["code", decodeU32Value, 0, encodeU32Value, 0],
-  ];
-
-  function decodeContractErrorCodeDescriptorValue(payload, context) {
-    return decodeRecordFields(payload, context, ContractErrorCodeDescriptorValueFields);
+  function decodeContractErrorTypeDescriptorValue(payload, context) {
+    const fields = decodeStructFields(payload, context, ["identity", "variants"]);
+    return normalizeContractErrorTypeV1({
+      identity: decodeStringValue(fields.identity, `${context}.identity`),
+      variants: decodeNoritoVec(fields.variants, (payload, index) => {
+        const label = `${context}.variants[${index}]`;
+        const variant = decodeStructFields(payload, label, ["name", "code"]);
+        return { name: decodeStringValue(variant.name, `${label}.name`), code: decodeU32Value(variant.code, `${label}.code`) };
+      }, `${context}.variants`),
+    }, context);
   }
 
   function encodeKotobaTranslationEntriesValue(value, context) {

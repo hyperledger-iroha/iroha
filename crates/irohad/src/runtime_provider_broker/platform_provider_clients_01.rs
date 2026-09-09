@@ -481,7 +481,8 @@ impl ProviderIngestBrokerSourceReader {
         source_reader_io_error(kind)
     }
     fn apply_deadline(&mut self) -> std::io::Result<()> {
-        apply_source_socket_deadline(&self.stream, self.deadline)
+        source_deadline_remaining(self.deadline)
+            .map(|_| ())
             .map_err(|_| self.poison(std::io::ErrorKind::TimedOut))
     }
     fn transport_failure(&mut self) -> std::io::Error {
@@ -501,7 +502,10 @@ impl ProviderIngestBrokerSourceReader {
             DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
                 .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
         let frame = read_length_prefixed_with_decode_admission(
-            &mut self.stream,
+            &mut ProviderSourceDeadlineReader {
+                stream: &self.stream,
+                deadline: self.deadline,
+            },
             MAX_PROVIDER_INGEST_SOURCE_CHUNK_FRAME_BYTES_V1,
             &decode_admission,
         )
@@ -564,7 +568,10 @@ impl ProviderIngestBrokerSourceReader {
             DecodeResourceAdmissionV1::acquire(None, SOURCE_STREAM_FRAME_DECODE_POLICY_V1)
                 .map_err(|_| self.poison(std::io::ErrorKind::OutOfMemory))?;
         let frame = read_length_prefixed_with_decode_admission(
-            &mut self.stream,
+            &mut ProviderSourceDeadlineReader {
+                stream: &self.stream,
+                deadline: self.deadline,
+            },
             MAX_PROVIDER_INGEST_SOURCE_TRAILER_FRAME_BYTES_V1,
             &decode_admission,
         )
@@ -591,7 +598,13 @@ impl ProviderIngestBrokerSourceReader {
         }
         self.apply_deadline()?;
         let mut trailing = [0_u8; 1];
-        match std::io::Read::read(&mut self.stream, &mut trailing) {
+        match std::io::Read::read(
+            &mut ProviderSourceDeadlineReader {
+                stream: &self.stream,
+                deadline: self.deadline,
+            },
+            &mut trailing,
+        ) {
             Ok(0) => {
                 self.finished = true;
                 Ok(())
@@ -738,7 +751,10 @@ impl ProviderIngestBrokerAuthenticatedSource {
         write_operation_request_frame(&mut connection.stream, &operation_request, &request_frame)?;
         drop(request_frame);
         let response_frame = read_length_prefixed_with_decode_admission(
-            &mut connection.stream,
+            &mut ProviderSourceDeadlineReader {
+                stream: &connection.stream,
+                deadline,
+            },
             MAX_PROVIDER_INGEST_SOURCE_INITIAL_FRAME_BYTES_V1,
             &decode_admission,
         )?;

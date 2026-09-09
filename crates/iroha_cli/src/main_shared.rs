@@ -36,7 +36,6 @@ mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
 use eyre::{Result, WrapErr, eyre};
-use futures::{TryStreamExt, stream::TryStream};
 use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha::{
     blocking::Client as BlockingClient,
@@ -60,13 +59,18 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
-use tokio::runtime::Runtime;
 // For base64 Engine trait (decode)
 use base64::Engine as _;
 use iroha_service_model::soranet::AnonymityPolicy;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sorafs_manifest::alias_cache::AliasCachePolicy;
 use url::Url;
+fn compiled_build_identity() -> core::result::Result<
+    iroha_core::release_identity::BuildIdentity,
+    iroha_core::release_identity::BuildIdentityError,
+> {
+    iroha_core::compiled_build_identity!()
+}
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
     None => "unknown",
@@ -331,8 +335,18 @@ struct Args {
     /// This runtime-only credential is never inferred from the account key, environment, or
     /// client TOML. The selected node must allowlist its public key for the configured exact
     /// NetworkId.
-    #[arg(long, value_name("ABSOLUTE_PATH"))]
+    #[arg(
+        long,
+        value_name("ABSOLUTE_PATH"),
+        conflicts_with = "operator_private_key_fd"
+    )]
     operator_private_key_file: Option<PathBuf>,
+    /// Borrow an inherited, read-only owner-private operator key descriptor without reopening it.
+    ///
+    /// The descriptor must be a singly linked regular file with exact mode 0600. Reading it
+    /// preserves the caller's file offset. No account, TOML, or environment key is inferred.
+    #[arg(long, value_name("FD"), value_parser = clap::value_parser!(u32).range(3..=65535), conflicts_with = "operator_private_key_file")]
+    operator_private_key_fd: Option<u32>,
     /// Print configuration details to stderr
     #[arg(short, long)]
     verbose: bool,
@@ -431,18 +445,18 @@ trait RunContext {
         self.println(data)
     }
     fn println(&mut self, data: impl Display) -> Result<()>;
-    fn client_from_config(&self) -> Client {
-        let mut client = Client::new(self.config().clone());
-        if let Some(operator_key_pair) = self.operator_key_pair() {
-            client.set_operator_key_pair(operator_key_pair.clone());
-        }
-        client
+    fn client_from_config(&self) -> Result<Client> {
+        let mut builder = Client::builder(self.config().clone());
+        builder.operator_key_pair = self.operator_key_pair().cloned();
+        Ok(builder.build()?)
     }
     fn operator_key_pair(&self) -> Option<&KeyPair> {
         None
     }
     fn server_version(&self) -> Result<String> {
-        self.client_from_config().get_server_version()
+        Ok(BlockingClient::from_client(self.client_from_config()?)?
+            .status()
+            .version()?)
     }
     /// Submit instructions or dump them to stdout depending on the flag
     fn finish(&mut self, instructions: impl Into<Executable>) -> Result<()> {
@@ -548,7 +562,7 @@ trait RunContext {
             }
         };
         let fee_payment = apply_cli_gas_limit_override(self.transaction_fee_payment()?, gas_limit)?;
-        let client = self.client_from_config();
+        let client = self.client_from_config()?;
         let blocking_client = BlockingClient::from_client(client.clone())
             .wrap_err("failed to initialize blocking transaction client")?;
         let (transaction, fee_quote) =
@@ -1219,16 +1233,11 @@ fn run() -> ReportResult<(), MainError> {
             .preflight_before_operator_key_load()
             .map_err(|error| Report::new(MainError::Command(error.to_string())))?;
     }
-    let operator_key_pair = args
-        .operator_private_key_file
-        .as_deref()
-        .map(operator_key::load_operator_key_pair)
-        .transpose()
-        .map_err(|error| {
-            Report::new(MainError::Config)
-                .attach("failed to load runtime operator signing key")
-                .attach(error.to_string())
-        })?;
+    let operator_key_pair = load_runtime_operator_key(&args).map_err(|error| {
+        Report::new(MainError::Config)
+            .attach("failed to load runtime operator signing key")
+            .attach(error.to_string())
+    })?;
     let mut context = PrintJsonContext {
         write: io::stdout(),
         err_write: io::stderr(),
@@ -1261,11 +1270,25 @@ fn map_command_result(result: Result<()>) -> ReportResult<(), MainError> {
         report.change_context(MainError::Command(message))
     })
 }
+fn load_runtime_operator_key(args: &Args) -> Result<Option<KeyPair>> {
+    match (
+        args.operator_private_key_file.as_deref(),
+        args.operator_private_key_fd,
+    ) {
+        (Some(_), Some(_)) => {
+            eyre::bail!("operator private-key file and descriptor are mutually exclusive")
+        }
+        (Some(path), None) => operator_key::load_operator_key_pair(path).map(Some),
+        (None, Some(fd)) => operator_key::load_operator_key_pair_fd(fd).map(Some),
+        (None, None) => Ok(None),
+    }
+}
 fn reject_irrelevant_local_tool_globals(args: &Args, command: &str) -> ReportResult<(), MainError> {
     if args.config.is_some()
         || args.config_fd.is_some()
         || args.config_source_path.is_some()
         || args.operator_private_key_file.is_some()
+        || args.operator_private_key_fd.is_some()
         || args.verbose
         || args.metadata.is_some()
         || args.input
@@ -1287,6 +1310,9 @@ fn reject_irrelevant_taira_doctor_globals(args: &Args) -> ReportResult<(), MainE
     }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");
+    }
+    if args.operator_private_key_fd.is_some() {
+        flags.push("--operator-private-key-fd");
     }
     if args.verbose {
         flags.push("--verbose");
@@ -1331,6 +1357,9 @@ fn reject_irrelevant_taira_public_reset_globals(args: &Args) -> ReportResult<(),
     }
     if args.operator_private_key_file.is_some() {
         flags.push("--operator-private-key-file");
+    }
+    if args.operator_private_key_fd.is_some() {
+        flags.push("--operator-private-key-fd");
     }
     if args.verbose {
         flags.push("--verbose");
@@ -1764,26 +1793,40 @@ mod filter {
         }
     }
 }
-async fn drive_try_stream_until_timeout<S, F>(
-    stream: &mut S,
+fn drive_stream_until_timeout<T, F>(
+    mut receive: impl FnMut(Duration) -> iroha::Result<Option<T>>,
     mut on_item: F,
     timeout: Duration,
     timeout_message: &str,
 ) -> Result<()>
 where
-    S: TryStream + Unpin,
-    S::Error: std::fmt::Display + Send + Sync + 'static,
-    F: FnMut(S::Ok) -> Result<()>,
+    F: FnMut(T) -> Result<()>,
 {
-    while let Ok(item) = tokio::time::timeout(timeout, stream.try_next()).await {
-        match item.map_err(|err| eyre!("Torii event stream error: {err}"))? {
-            Some(value) => on_item(value)?,
-            None => break,
+    loop {
+        match receive(timeout) {
+            Ok(Some(value)) => on_item(value)?,
+            Ok(None)
+            | Err(iroha::Error::Timeout {
+                operation: "stream.receive",
+            }) => break,
+            Err(error) => return Err(eyre!("Torii event stream error: {error}")),
         }
     }
     eprintln!("{timeout_message}");
     Ok(())
 }
+
+fn finish_stream<T>(result: Result<T>, close: iroha::Result<()>) -> Result<T> {
+    match (result, close) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(error.into()),
+        (Err(error), Err(close_error)) => {
+            Err(error.wrap_err(format!("event stream close failed: {close_error}")))
+        }
+    }
+}
+
 fn listen_events_message(
     filter: &EventFilterBox,
     timeout: Option<Duration>,
@@ -1922,32 +1965,31 @@ mod events {
         timeout: Option<Duration>,
     ) -> Result<()> {
         let filter = filter.into();
-        let client = context.client_from_config();
+        let account = context.client_from_config()?.account_client()?;
+        let client = iroha::blocking::AccountClient::from_client(account)?;
         let i18n = context.i18n().clone();
         eprintln!("{}", listen_events_message(&filter, timeout, &i18n));
-        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-        rt.block_on(async {
-            let mut stream = client
-                .listen_for_events([filter])
-                .await
-                .wrap_err("Failed to listen for events")?;
-            if let Some(timeout) = timeout {
-                let timeout_message = i18n.t("warning.timeout_expired");
-                drive_try_stream_until_timeout(
-                    &mut stream,
-                    |event| context.print_data(&event),
-                    timeout,
-                    timeout_message.as_str(),
-                )
-                .await?;
-            } else {
-                while let Some(event) = stream.try_next().await? {
+        let mut stream = client
+            .events()
+            .subscribe([filter])
+            .wrap_err("Failed to listen for events")?;
+        let result = if let Some(timeout) = timeout {
+            let timeout_message = i18n.t("warning.timeout_expired");
+            drive_stream_until_timeout(
+                |timeout| stream.recv(Some(timeout)),
+                |event| context.print_data(&event),
+                timeout,
+                timeout_message.as_str(),
+            )
+        } else {
+            (|| {
+                while let Some(event) = stream.recv(None)? {
                     context.print_data(&event)?;
                 }
-            }
-            Ok::<(), eyre::Report>(())
-        })?;
-        Ok(())
+                Ok(())
+            })()
+        };
+        finish_stream(result, stream.close())
     }
 }
 mod blocks {
@@ -1974,32 +2016,31 @@ mod blocks {
         context: &mut impl RunContext,
         timeout: Option<Duration>,
     ) -> Result<()> {
-        let client = context.client_from_config();
+        let account = context.client_from_config()?.account_client()?;
+        let client = iroha::blocking::AccountClient::from_client(account)?;
         let i18n = context.i18n().clone();
         eprintln!("{}", listen_blocks_message(height, timeout, &i18n));
-        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-        rt.block_on(async {
-            let mut stream = client
-                .listen_for_blocks(height)
-                .await
-                .wrap_err("Failed to listen for blocks")?;
-            if let Some(timeout) = timeout {
-                let timeout_message = i18n.t("warning.timeout_expired");
-                drive_try_stream_until_timeout(
-                    &mut stream,
-                    |event| context.print_data(&event),
-                    timeout,
-                    timeout_message.as_str(),
-                )
-                .await?;
-            } else {
-                while let Some(block) = stream.try_next().await? {
+        let mut stream = client
+            .blocks()
+            .subscribe(height)
+            .wrap_err("Failed to listen for blocks")?;
+        let result = if let Some(timeout) = timeout {
+            let timeout_message = i18n.t("warning.timeout_expired");
+            drive_stream_until_timeout(
+                |timeout| stream.recv(Some(timeout)),
+                |block| context.print_data(&block),
+                timeout,
+                timeout_message.as_str(),
+            )
+        } else {
+            (|| {
+                while let Some(block) = stream.recv(None)? {
                     context.print_data(&block)?;
                 }
-            }
-            Ok::<(), eyre::Report>(())
-        })?;
-        Ok(())
+                Ok(())
+            })()
+        };
+        finish_stream(result, stream.close())
     }
 }
 mod domain {
@@ -2026,7 +2067,7 @@ mod domain {
             match self {
                 List(cmd) => cmd.run(context),
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entries = client
                         .query(FindDomains)
                         .execute_all()
@@ -2084,7 +2125,7 @@ mod domain {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindDomains), &args),
                 List::Filter(filter) => {
@@ -2172,7 +2213,7 @@ mod account {
                 Get(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entry = client
                         .get_account_read(&account_id)
                         .wrap_err("Failed to get account")?;
@@ -2217,7 +2258,7 @@ mod account {
                 List(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let mut builder = client.query(FindRolesByAccountId::new(account_id));
                     if args.limit.is_some() || args.offset > 0 {
                         let pagination = iroha::data_model::query::parameters::Pagination::new(
@@ -2270,7 +2311,7 @@ mod account {
                 List(args) => {
                     let account_id = resolve_account_id(context, &args.id)
                         .wrap_err("failed to resolve --id account")?;
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let mut builder = client.query(FindPermissionsByAccountId::new(account_id));
                     if args.limit.is_some() || args.offset > 0 {
                         let pagination = iroha::data_model::query::parameters::Pagination::new(
@@ -2387,7 +2428,7 @@ mod account {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, &client, &args),
                 List::Filter(filter) => {
@@ -2545,7 +2586,7 @@ mod asset {
                     let id = args
                         .resolve_asset_id(context)
                         .wrap_err("failed to resolve asset identifier")?;
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entries = client
                         .query(FindAssets)
                         .execute_all()
@@ -2590,7 +2631,7 @@ mod asset {
                     let to = resolve_account_id(context, &args.to)
                         .wrap_err("failed to resolve --to account")?;
                     let policy = if args.ensure_destination {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         Some(admission_policy(&client)?)
                     } else {
                         None
@@ -2621,7 +2662,7 @@ mod asset {
         let definition = match (definition, definition_alias) {
             (Some(definition), None) => definition,
             (None, Some(alias)) => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 resolve_asset_definition_id_by_alias(&client, &alias)?
             }
             _ => {
@@ -2681,7 +2722,7 @@ mod asset {
                         let id = args
                             .resolve_id(context)
                             .wrap_err("failed to resolve asset definition identifier")?;
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries = client
                             .query(FindAssetsDefinitions)
                             .execute_all()
@@ -2811,7 +2852,7 @@ mod asset {
         }
         impl Run for List {
             fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 match self {
                     List::All(args) => {
                         list_all(context, client.query(FindAssetsDefinitions), &args)
@@ -2912,7 +2953,7 @@ mod asset {
             match (id, alias) {
                 (Some(id), None) => Ok(id),
                 (None, Some(alias)) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     resolve_asset_definition_id_by_alias(&client, &alias)
                 }
                 _ => eyre::bail!("provide either `--id` or `--alias`"),
@@ -3105,7 +3146,7 @@ mod asset {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindAssets), &args),
                 List::Filter(filter) => {
@@ -3274,7 +3315,7 @@ mod nft {
             use self::Command::*;
             match self {
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entries = client
                         .query(FindNfts)
                         .execute_all()
@@ -3341,7 +3382,7 @@ mod nft {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindNfts), &args),
                 List::Filter(filter) => {
@@ -3443,7 +3484,7 @@ mod rwa {
             use self::Command::*;
             match self {
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entries = client
                         .query(FindRwas)
                         .execute_all()
@@ -3585,7 +3626,7 @@ mod rwa {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindRwas), &args),
                 List::Filter(filter) => {
@@ -3698,7 +3739,7 @@ mod peer {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All(args) => list_all(context, client.query(FindPeers), &args),
             }
@@ -3995,7 +4036,7 @@ mod multisig {
             use iroha::data_model::prelude::FindAccountById;
             let account_id = resolve_account_id(context, &self.account)
                 .wrap_err("failed to resolve --account")?;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let account: Account = client
                 .query_single(FindAccountById::new(account_id.clone()))
                 .wrap_err_with(|| format!("account `{account_id}` not found"))?;
@@ -4105,7 +4146,7 @@ mod multisig {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let (multisig_selectors, limit, offset, fetch_size) = match self {
                 Self::All {
                     multisig_selectors,
@@ -4143,7 +4184,7 @@ mod multisig {
         override_ttl_ms: Option<NonZeroU64>,
     ) -> Result<()> {
         use iroha::data_model::prelude::FindAccountById;
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let account = match client.query_single(FindAccountById::new(multisig_account.clone())) {
             Ok(account) => account,
             Err(err) => {
@@ -4622,7 +4663,7 @@ mod query {
             // {"singular": {"type": "FindContractManifestByCodeHash", "payload": {"code_hash": "0x.."}}}
             // {"iterable": {"type": "FindPeers", "params": {"limit": 100, "offset": 0, "fetch_size": 128}}}
             use iroha::data_model::query::json::QueryEnvelopeJson;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let buf = string_from_stdin()?;
             let envelope: QueryEnvelopeJson = parse_json(&buf).wrap_err("decode query envelope")?;
             let request = envelope
@@ -4644,7 +4685,7 @@ mod query {
     impl Run for ContinueArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             use iroha::data_model::query::QueryRequest;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let bytes = decode_base64_or_hex(
                 &self.cursor,
                 "invalid hex length for ForwardCursor",
@@ -4664,7 +4705,7 @@ mod query {
     pub struct StdinRaw;
     impl Run for StdinRaw {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let s = string_from_stdin()?;
             let s = s.trim();
             let body =
@@ -4740,7 +4781,7 @@ mod transaction {
     }
     impl Run for Status {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             if self.wait.wait {
                 let status = crate::wait_for_transaction_applied(&client, self.hash, &self.wait)?;
                 context.print_data(&status)
@@ -4766,7 +4807,7 @@ mod transaction {
     }
     impl Run for Get {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let transaction = client
                 .query(FindTransactions)
                 .execute_all()?
@@ -4913,7 +4954,7 @@ mod transaction {
                 } else {
                     None
                 };
-                let client = Client::new(context.config().clone());
+                let client = Client::builder(context.config().clone()).build()?;
                 let metadata = context.transaction_metadata().cloned().unwrap_or_default();
                 let fee_payment = context.transaction_fee_payment()?;
                 let i18n = context.i18n().clone();
@@ -5130,7 +5171,7 @@ mod transaction {
             let instructions: Vec<InstructionBox> = parse_json_stdin(context)?;
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             let fee_payment = context.transaction_fee_payment()?;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let blocking_client = BlockingClient::from_client(client)
                 .wrap_err("failed to initialize blocking transaction client")?;
             let executable = Executable::Instructions(instructions.into());
@@ -5218,7 +5259,7 @@ mod role {
             use self::PermissionCommand::*;
             match self {
                 List(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let role = client
                         .query(FindRoles)
                         .execute_all()?
@@ -5294,7 +5335,7 @@ mod role {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All {
                     limit,
@@ -5346,7 +5387,7 @@ mod parameter {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let params = client.query_single(FindParameters)?;
             context.print_data(&params)
         }
@@ -5402,7 +5443,7 @@ mod trigger {
             match self {
                 List(cmd) => cmd.run(context),
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let entry: Trigger = client
                         .query_single(FindTriggerById::new(args.id))
                         .wrap_err("Failed to get trigger")?;
@@ -5464,7 +5505,7 @@ mod trigger {
     }
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             match self {
                 List::All {
                     active,
@@ -5568,7 +5609,7 @@ mod trigger {
                 Executable::Instructions(vec![InstructionBox::from(instruction)].into());
             let metadata = context.transaction_metadata().cloned().unwrap_or_default();
             let fee_payment = context.transaction_fee_payment()?;
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let blocking_client = BlockingClient::from_client(client.clone())
                 .wrap_err("failed to initialize blocking transaction client")?;
             let (transaction, fee_quote) =
@@ -5724,7 +5765,7 @@ mod trigger {
     }
     impl CompletedList {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let trigger_id = self.id.as_ref().map(ToString::to_string);
             let response = client.get_trigger_completions(
                 trigger_id.as_deref(),
@@ -5743,24 +5784,22 @@ mod trigger {
             let filter = completed_filter(self.id, self.outcome);
             let timeout = self.timeout_ms.map(Duration::from_millis);
             if timeout.is_none() && self.limit.is_none() {
-                let client = context.client_from_config();
-                Runtime::new()
-                    .wrap_err("Failed to create runtime")?
-                    .block_on(async {
-                        let mut stream = client
-                            .listen_for_events([filter])
-                            .await
-                            .wrap_err("Failed to listen for trigger completion events")?;
-                        while let Some(event) = stream.try_next().await? {
-                            if let iroha::data_model::events::EventBox::TriggerCompleted(event) =
-                                event
-                            {
-                                context.print_data(&event)?;
-                            }
+                let account = context.client_from_config()?.account_client()?;
+                let client = iroha::blocking::AccountClient::from_client(account)?;
+                let mut stream = client
+                    .events()
+                    .subscribe([filter])
+                    .wrap_err("Failed to listen for trigger completion events")?;
+                let result = (|| {
+                    while let Some(event) = stream.recv(None)? {
+                        if let iroha::data_model::events::EventBox::TriggerCompleted(event) = event
+                        {
+                            context.print_data(&event)?;
                         }
-                        Ok::<(), eyre::Report>(())
-                    })?;
-                return Ok(());
+                    }
+                    Ok(())
+                })();
+                return finish_stream(result, stream.close());
             }
             let events = collect_completed_events(context, filter, timeout, self.limit)?;
             for event in events {
@@ -5782,7 +5821,7 @@ mod trigger {
     }
     impl Inspect {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let entry: Trigger = client
                 .query_single(FindTriggerById::new(self.id.clone()))
                 .wrap_err("Failed to get trigger")?;
@@ -5836,29 +5875,35 @@ mod trigger {
         timeout: Option<Duration>,
         limit: Option<u64>,
     ) -> Result<Vec<iroha::data_model::events::trigger_completed::TriggerCompletedEvent>> {
-        let client = context.client_from_config();
-        let rt = Runtime::new().wrap_err("Failed to create runtime")?;
-        rt.block_on(async move {
-            let mut stream = client
-                .listen_for_events([filter])
-                .await
-                .wrap_err("Failed to listen for trigger completion events")?;
-            let deadline = timeout.map(|duration| tokio::time::Instant::now() + duration);
+        let account = context.client_from_config()?.account_client()?;
+        let client = iroha::blocking::AccountClient::from_client(account)?;
+        let mut stream = client
+            .events()
+            .subscribe([filter])
+            .wrap_err("Failed to listen for trigger completion events")?;
+        let result = (|| {
+            let deadline = timeout.map(|duration| std::time::Instant::now() + duration);
             let mut events = Vec::new();
             loop {
                 if limit.is_some_and(|limit| events.len() as u64 >= limit) {
                     break;
                 }
-                let next = if let Some(deadline) = deadline {
-                    if tokio::time::Instant::now() >= deadline {
+                let remaining = if let Some(deadline) = deadline {
+                    let Some(remaining) =
+                        deadline.checked_duration_since(std::time::Instant::now())
+                    else {
                         break;
-                    }
-                    match tokio::time::timeout_at(deadline, stream.try_next()).await {
-                        Ok(result) => result?,
-                        Err(_) => break,
-                    }
+                    };
+                    Some(remaining)
                 } else {
-                    stream.try_next().await?
+                    None
+                };
+                let next = match stream.recv(remaining) {
+                    Ok(next) => next,
+                    Err(iroha::Error::Timeout {
+                        operation: "stream.receive",
+                    }) => break,
+                    Err(error) => return Err(error.into()),
                 };
                 let Some(event) = next else {
                     break;
@@ -5867,8 +5912,9 @@ mod trigger {
                     events.push(event);
                 }
             }
-            Ok::<_, eyre::Report>(events)
-        })
+            Ok(events)
+        })();
+        finish_stream(result, stream.close())
     }
     #[derive(clap::Args, Debug)]
     pub struct Register {
@@ -6293,7 +6339,7 @@ mod executor {
             use self::Command::*;
             match self {
                 DataModel => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let model = client.query_single(FindExecutorDataModel)?;
                     context.print_data(&model)
                 }
@@ -6340,7 +6386,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<Domain> = client
                             .query(FindDomains)
                             .execute_all()
@@ -6396,7 +6442,7 @@ mod metadata {
                     Get(args) => {
                         let account_id = resolve_account_id(context, &args.id)
                             .wrap_err("failed to resolve --id account")?;
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entry: Account = client
                             .query_single(FindAccountById::new(account_id))
                             .wrap_err("Failed to get value")?;
@@ -6452,7 +6498,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<AssetDefinition> = client
                             .query(FindAssetsDefinitions)
                             .execute_all()
@@ -6508,7 +6554,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<Nft> = client
                             .query(FindNfts)
                             .execute_all()
@@ -6562,7 +6608,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entries: Vec<Rwa> = client
                             .query(FindRwas)
                             .execute_all()
@@ -6616,7 +6662,7 @@ mod metadata {
                 use self::Command::*;
                 match self {
                     Get(args) => {
-                        let client = context.client_from_config();
+                        let client = context.client_from_config()?;
                         let entry: Trigger = client
                             .query_single(FindTriggerById::new(args.id))
                             .wrap_err("Failed to get value")?;
@@ -6789,7 +6835,7 @@ mod repo {
             use self::QueryCommand::*;
             match self {
                 List => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let agreements = client
                         .query(FindRepoAgreements::new())
                         .execute_all()
@@ -6797,7 +6843,7 @@ mod repo {
                     context.print_data(&agreements)
                 }
                 Get(args) => {
-                    let client = context.client_from_config();
+                    let client = context.client_from_config()?;
                     let agreements = client
                         .query(FindRepoAgreements::new())
                         .execute_all()
@@ -6830,7 +6876,7 @@ mod repo {
     }
     impl Margin {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let client = context.client_from_config();
+            let client = context.client_from_config()?;
             let agreements = client
                 .query(FindRepoAgreements::new())
                 .execute_all()
@@ -6941,7 +6987,7 @@ mod settlement {
                 Command::GetFxCorridorPolicy(args) => args.run(context),
                 Command::ListFxCorridorPolicies => {
                     let registry = context
-                        .client_from_config()
+                        .client_from_config()?
                         .query_single(FindFxCorridorPolicyRegistry)?;
                     context.print_data(&registry)
                 }
@@ -7015,7 +7061,7 @@ mod settlement {
     impl GetFxCorridorPolicyArgs {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let policy = context
-                .client_from_config()
+                .client_from_config()?
                 .query_single(FindFxCorridorPolicyById::new(self.policy_id))?;
             context.print_data(&policy)
         }
@@ -10666,7 +10712,7 @@ mod cli_integration_harness {
             entrypoints: None,
             states: None,
             kotoba: None,
-            error_codes: None,
+            error_types: None,
             provenance: None,
         };
         server.manifests.insert(code_hash.clone(), manifest.clone());

@@ -225,6 +225,8 @@ impl fmt::Debug for SignerStreamTokenExpectedV1 {
 }
 
 /// Exact prepared request, tied to its independently verified original custody generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::stream_token::SignerStreamTokenRequestV1")]
 #[derive(Clone, Copy, PartialEq, Eq, Decode, Encode)]
 pub struct SignerStreamTokenRequestV1 {
     /// Exact independently prepared operation identity.
@@ -337,6 +339,8 @@ const RESPONSE_DOMAIN: &[u8] = b"iroha.sorafs.signer.stream-token.response.v1";
 ///
 /// The receipt carries no observer trust, verification clock or authoritative completion. It
 /// cannot qualify its own custody or authorize release without independent current-state evidence.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::stream_token::SignerStreamTokenReceiptV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SignerStreamTokenReceiptV1 {
     /// Exact [`SIGNER_STREAM_TOKEN_RECEIPT_MAGIC_V1`] marker.

@@ -2,7 +2,6 @@
 name = "iroha_core"
 autotests = false
 autobins = false
-build = "build.rs"
 
 edition.workspace = true
 version.workspace = true
@@ -77,7 +76,6 @@ proofs-full = ["proofs-halo2", "proofs-stark"]
 quic = ["iroha_p2p/quic"]
 # Enable Norito-backed JSON helpers throughout the core crate.
 json = [
-    "iroha_data_model/json",
     "iroha_crypto/json",
     "iroha_primitives/json",
 ]
@@ -176,7 +174,7 @@ maintenance = { status = "actively-developed" }
 
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
-iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "json", "bridge", "governance"] }
+iroha_data_model = { workspace = true, default-features = false, features = ["transparent_api", "bridge", "governance"] }
 iroha_macro = { workspace = true }
 iroha_p2p = { workspace = true }
 iroha_logger = { workspace = true }

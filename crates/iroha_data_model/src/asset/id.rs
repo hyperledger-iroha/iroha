@@ -5,7 +5,7 @@ use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, SerializePayload,
     codec::{Decode, Encode},
 };
 use std::{array, fmt, format, str::FromStr, string::String};
@@ -39,12 +39,10 @@ mod model {
         Encode,
         IntoSchema,
         Default,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[cfg_attr(feature = "json", norito(tag = "kind", content = "content"))]
+    #[norito(tag = "kind", content = "content")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::asset::id::model::AssetBalanceScope")]
@@ -71,7 +69,7 @@ mod model {
         pub scope: AssetBalanceScope,
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for AssetDefinitionId {
     fn write_json(&self, out: &mut String) {
         out.push('"');
@@ -87,7 +85,7 @@ impl norito::json::FastJsonWrite for AssetDefinitionId {
         norito::json::write_json_display_to(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for AssetDefinitionId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -109,7 +107,7 @@ const ASSET_DEFINITION_ADDRESS_LEN: usize = 1 + 16 + 4;
 // `bs58` documents this as its allocation-free output bound: ceil(input_len * 1.5).
 const ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN: usize =
     ASSET_DEFINITION_ADDRESS_LEN + ASSET_DEFINITION_ADDRESS_LEN.div_ceil(2);
-#[cfg(feature = "json")]
+
 fn asset_definition_id_json_error(message: &'static str) -> norito::json::Error {
     norito::json::Error::WithPos {
         msg: message,
@@ -118,7 +116,7 @@ fn asset_definition_id_json_error(message: &'static str) -> norito::json::Error 
         col: 1,
     }
 }
-impl NoritoSerialize for AssetDefinitionId {}
+
 impl SerializePayload for AssetDefinitionId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <[u8; 16] as SerializePayload>::serialize(&self.aid_bytes, writer)
@@ -130,20 +128,21 @@ impl SerializePayload for AssetDefinitionId {
         <[u8; 16] as SerializePayload>::encoded_len_exact(&self.aid_bytes)
     }
 }
-impl<'de> NoritoDeserialize<'de> for AssetDefinitionId {
+
+impl<'de> DeserializePayload<'de> for AssetDefinitionId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
-        let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
+        let aid_bytes = <[u8; 16] as DeserializePayload>::deserialize(archived.cast());
         Self::from_uuid_bytes_unchecked(aid_bytes)
     }
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let aid_bytes = <[u8; 16] as NoritoDeserialize>::deserialize(archived.cast());
+        let aid_bytes = <[u8; 16] as DeserializePayload>::deserialize(archived.cast());
         Self::from_uuid_bytes(aid_bytes)
             .map_err(|err| norito::core::Error::Message(err.to_string()))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for AssetId {
     fn write_json(&self, out: &mut String) {
         let literal = self.canonical_literal();
@@ -156,7 +155,7 @@ impl norito::json::FastJsonWrite for AssetId {
         norito::json::write_json_string_to(&self.canonical_literal(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for AssetId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -525,7 +524,6 @@ mod tests {
         assert!(rejected.is_err());
         assert_eq!(usage.total_allocated_bytes(), 0);
 
-        #[cfg(feature = "json")]
         {
             let value = norito::json::Value::String(literal);
             let (parsed, usage) =

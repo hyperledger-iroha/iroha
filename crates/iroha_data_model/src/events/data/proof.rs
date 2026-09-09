@@ -20,6 +20,8 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[event_set(schema_name = "iroha_data_model::events::data::proof::model::ProofEventSet")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::proof::model::ProofEvent")]
     pub enum ProofEvent {
         /// Proof verified successfully.
         Verified(ProofVerified),
@@ -30,8 +32,18 @@ mod model {
     }
     /// A proof verification success event payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::events::data::proof::model::ProofVerified")]
     pub struct ProofVerified {
         /// Proof identifier (backend + proof hash).
         pub id: crate::proof::ProofId,
@@ -47,8 +59,18 @@ mod model {
     }
     /// A proof verification failure event payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::events::data::proof::model::ProofRejected")]
     pub struct ProofRejected {
         /// Proof identifier (backend + proof hash).
         pub id: crate::proof::ProofId,
@@ -63,8 +85,18 @@ mod model {
     }
     /// A proof retention event payload.
     #[derive(
-        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+        norito::NoritoSchema,
     )]
+    #[norito_schema(name = "iroha_data_model::events::data::proof::model::ProofPruned")]
     pub struct ProofPruned {
         /// Backend identifier whose registry entries were pruned.
         pub backend: String,
@@ -90,6 +122,8 @@ mod model {
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::data::proof::model::ProofPruneOrigin")]
     pub enum ProofPruneOrigin {
         /// Retention enforcement triggered while inserting a new proof record.
         Insert,
@@ -97,7 +131,7 @@ mod model {
         Manual,
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     ProofEvent,
     ProofVerified,
@@ -120,3 +154,6 @@ impl ProofEventSet {
         Self::Rejected
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

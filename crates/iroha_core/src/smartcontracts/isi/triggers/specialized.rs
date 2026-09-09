@@ -368,7 +368,7 @@ impl json::JsonDeserialize for TimeTriggerRetryState {
             .map_err(|err| json::Error::Message(err.to_string()))?;
         let archived = norito::from_bytes::<TimeTriggerRetryState>(&bytes)
             .map_err(|err| json::Error::Message(err.to_string()))?;
-        norito::core::NoritoDeserialize::try_deserialize(archived)
+        norito::core::DeserializePayload::try_deserialize(archived)
             .map_err(|err| json::Error::Message(err.to_string()))
     }
 }

@@ -24,7 +24,7 @@ pub mod address;
 pub mod admission;
 pub mod controller;
 pub mod curve;
-#[cfg(feature = "json")]
+
 mod i105_json;
 pub mod recovery;
 pub mod rekey;
@@ -65,11 +65,8 @@ mod model {
     /// Account entity is an authority which is used to execute `Iroha Special Instructions`.
     #[derive(derive_more::Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::account::model::Account")]
@@ -90,9 +87,11 @@ mod model {
     /// Builder submitted in a transaction to register a canonical domainless account.
     #[derive(derive_more::Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
-    #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
-    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    #[derive(crate :: DeriveJsonSerialize)]
+    #[norito(no_fast_from_json)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::account::model::NewAccount")]
     pub struct NewAccount {
         /// Canonical domainless account identity.
         pub id: AccountId,
@@ -129,7 +128,7 @@ impl core::hash::Hash for AccountId {
         self.controller.hash(state);
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for AccountId {
     fn write_json(&self, out: &mut String) {
         let literal = self
@@ -144,7 +143,7 @@ impl norito::json::FastJsonWrite for AccountId {
         i105_json::write_bounded(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for AccountId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -160,7 +159,7 @@ impl norito::json::JsonDeserialize for AccountId {
         account_id_from_json_str(value)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKey for AccountId {
     fn visit_json_key_text<E>(
         &self,
@@ -179,14 +178,13 @@ impl norito::json::JsonObjectKey for AccountId {
         i105_json::visit_key_text(self, visitor)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKeyOwned for AccountId {
     fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         account_id_from_json_str(key)
     }
 }
 
-#[cfg(feature = "json")]
 fn account_id_from_json_str(value: &str) -> Result<AccountId, norito::json::Error> {
     reserve_account_literal_json_decode(value.len())?;
     AccountId::parse_encoded(value).map_err(|error| {
@@ -198,11 +196,10 @@ fn account_id_from_json_str(value: &str) -> Result<AccountId, norito::json::Erro
     })
 }
 
-#[cfg(feature = "json")]
 fn invalid_account_id_json() -> norito::json::Error {
     norito::json::Error::Message("invalid I105 account identifier".to_owned())
 }
-#[cfg(feature = "json")]
+
 pub(super) fn reserve_account_literal_json_decode(
     raw_bytes: usize,
 ) -> Result<(), norito::json::Error> {
@@ -224,7 +221,7 @@ pub(super) fn reserve_account_literal_json_decode(
     norito::core::reserve_decode_allocation(bytes)
         .map_err(norito::json::Error::from_decode_resource)
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for NewAccount {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -284,10 +281,20 @@ impl norito::json::JsonDeserialize for NewAccount {
     }
 }
 /// Opaque identifier that maps to a UAID without disclosing raw PII.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
@@ -353,7 +360,7 @@ impl FromStr for OpaqueAccountId {
         Ok(opaque)
     }
 }
-impl norito::NoritoSerialize for AccountId {}
+
 impl norito::SerializePayload for AccountId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         norito::core::SerializePayload::serialize(&self.controller, writer)
@@ -365,14 +372,15 @@ impl norito::SerializePayload for AccountId {
         norito::core::SerializePayload::encoded_len_exact(&self.controller)
     }
 }
-impl<'de> norito::NoritoDeserialize<'de> for AccountId {
+
+impl<'de> norito::DeserializePayload<'de> for AccountId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("AccountId deserialization must succeed for valid archives")
     }
     fn try_deserialize(archived: &'de norito::core::Archived<Self>) -> Result<Self, norito::Error> {
         let archived_controller = archived.cast::<AccountController>();
-        norito::core::NoritoDeserialize::try_deserialize(archived_controller)
+        norito::core::DeserializePayload::try_deserialize(archived_controller)
             .map(|controller| Self { controller })
     }
 }
@@ -385,12 +393,18 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
 /// Read-only reference to [`Account`]. Used in query filters to avoid copying.
 pub type AccountEntry<'world> = Ref<'world, AccountId, AccountValue>;
 /// Canonical account data stored in the world state without duplicating the identifier.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::account::AccountDetails")]
 pub struct AccountDetails {
@@ -1357,7 +1371,7 @@ mod tests {
         assert_eq!(new_account.build(&account_id).id, account_id);
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod json_tests {
     use super::*;
     use crate::{

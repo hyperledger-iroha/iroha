@@ -22,6 +22,8 @@ use time::Duration;
     JsonDeserialize,
 )]
 #[display("{} bps", value)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::config::EpsilonBps")]
 pub struct EpsilonBps {
     value: u16,
 }
@@ -41,8 +43,17 @@ impl EpsilonBps {
 }
 /// Static knobs controlling shadow-price computation and buffer sizing.
 #[derive(
-    Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "settlement_router::config::SettlementConfig")]
 pub struct SettlementConfig {
     /// Rolling window used for TWAP quotes.
     pub twap_window: crate::DurationSeconds,

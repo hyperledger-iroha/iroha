@@ -377,7 +377,7 @@ fn generate_syscall_signatures() -> Result<(), Box<dyn Error>> {
         generated.push_str(&format!("        {number:#08x} => SYSCALL_ARGS_{count},\n"));
     }
     generated.push_str(
-        "        _ => SYSCALL_ARGS_5,\n\
+        "        _ => SYSCALL_ARGS_6,\n\
          }\n\
          }\n\
          /// Return the exact public output-register window for an ABI syscall.\n\
@@ -440,9 +440,9 @@ fn declared_registers(declaration: &str) -> Result<Vec<usize>, Box<dyn Error>> {
             end += 1;
         }
         let register = declaration[start..end].parse::<usize>()?;
-        if !(10..=14).contains(&register) {
+        if !(10..=15).contains(&register) {
             return Err(format!(
-                "syscall register r{register} exceeds the V1 public window r10..r14"
+                "syscall register r{register} exceeds the V1 public window r10..r15"
             )
             .into());
         }

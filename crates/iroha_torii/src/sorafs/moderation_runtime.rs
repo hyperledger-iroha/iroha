@@ -816,7 +816,7 @@ impl ModerationStrictTransactionIngressV1 for ToriiModerationStrictTransactionIn
         .map_err(|error| match error {
             crate::Error::AcceptTransaction(
                 iroha_core::tx::AcceptTransactionFail::NetworkTimeUnhealthy { .. }
-                | iroha_core::tx::AcceptTransactionFail::TransactionInTheFuture,
+                | iroha_core::tx::AcceptTransactionFail::TransactionInTheFuture { .. },
             ) => ModerationStrictIngressFailureV1::Unavailable,
             crate::Error::AcceptTransaction(_) => {
                 ModerationStrictIngressFailureV1::PermanentRejection

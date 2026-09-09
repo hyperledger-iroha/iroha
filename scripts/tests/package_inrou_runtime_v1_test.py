@@ -611,6 +611,7 @@ class InrouRuntimePackagerTests(unittest.TestCase):
                             MODULE._copy_attested_file(
                                 source,
                                 parent / f"copy-{label}",
+                                source_identity=MODULE._source_identity(source_identity),
                                 mode=0o555,
                                 owner_uid=os.getuid(),
                                 owner_gid=os.getgid(),
@@ -651,6 +652,149 @@ class InrouRuntimePackagerTests(unittest.TestCase):
             '--output "$build_context/scripts/ci/package_inrou_runtime_v1.py"',
             release_builder,
         )
+
+
+class QemuCapabilityTests(unittest.TestCase):
+    HELP = b"run-with options:\n  chroot=<str>\n  exit-with-parent=<bool (on/off)>\n  user=<str>\n"
+
+    def record(self, root):
+        source = _write(root / "qemu", b"fixed executable bytes", 0o755)
+        return MODULE.RuntimeFile(MODULE.QEMU_TARGET, source, 0o555)
+
+    def probe(self, record):
+        MODULE._validate_qemu_capability(
+            record, owner_uid=os.getuid(), owner_gid=os.getgid(),
+        )
+
+    def test_exact_parser_property_supports_help_exit_one(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            record = self.record(Path(temporary).resolve())
+            def inspect_pinned_fd(descriptor):
+                self.assertEqual(os.read(descriptor, 100), b"fixed executable bytes")
+                return (1, self.HELP)
+            with mock.patch.object(MODULE, "_qemu_parser_help", side_effect=inspect_pinned_fd):
+                self.probe(record)
+
+    def test_missing_or_ambiguous_property_is_rejected(self):
+        outputs = [
+            (1, b"run-with options:\n  user=<str>\n"),
+            (1, b"qemu: invalid parameter exit-with-parent\n"),
+            (1, self.HELP.replace(b"exit-with-parent=", b"not-exit-with-parent=")),
+            (1, self.HELP.replace(b"<bool (on/off)>", b"<str>")),
+            (2, self.HELP),
+            (1, self.HELP + b"qemu: startup failed\n"),
+            (1, self.HELP + b"\xff"),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            record = self.record(Path(temporary).resolve())
+            for response in outputs:
+                with self.subTest(response=response), mock.patch.object(MODULE, "_qemu_parser_help", return_value=response):
+                    with self.assertRaises(MODULE.PackagingError):
+                        self.probe(record)
+
+    def test_probe_rejects_changed_source_and_copy_rejects_replacement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            record = self.record(root)
+            with mock.patch.object(MODULE, "_qemu_parser_help", return_value=(1, self.HELP)):
+                self.probe(record)
+                _write(root / "replacement", b"different executable", 0o755).replace(record.source)
+                with self.assertRaisesRegex(MODULE.PackagingError, "changed before"):
+                    self.probe(record)
+                with self.assertRaisesRegex(MODULE.PackagingError, "changed after closure qualification"):
+                    MODULE._copy_attested_file(
+                        record.source, root / "copied", source_identity=record.source_identity,
+                        mode=0o555, owner_uid=os.getuid(), owner_gid=os.getgid(),
+                    )
+                self.assertFalse((root / "copied").exists())
+
+    def test_missing_source_is_a_packaging_error(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(MODULE.PackagingError, "cannot pin runtime source"):
+                MODULE.RuntimeFile(MODULE.QEMU_TARGET, Path(temporary) / "absent", 0o555)
+
+    def test_probe_rejects_source_mutation_during_help(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            record = self.record(Path(temporary).resolve())
+            def mutate(_descriptor):
+                record.source.write_bytes(b"changed during parser invocation")
+                return (1, self.HELP)
+            with mock.patch.object(MODULE, "_qemu_parser_help", side_effect=mutate):
+                with self.assertRaisesRegex(MODULE.PackagingError, "changed during"):
+                    self.probe(record)
+
+    def test_unavailable_probe_fails_with_bounded_diagnostic(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            record = self.record(Path(temporary).resolve())
+            with mock.patch.object(MODULE, "_qemu_parser_help", side_effect=OSError("sensitive excessive diagnostic")):
+                with self.assertRaisesRegex(MODULE.PackagingError, "OSError") as error:
+                    self.probe(record)
+                self.assertNotIn("sensitive", str(error.exception))
+
+    def test_collect_qualifies_same_closure_before_install(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            qemu = _write(root / "qemu", _elf64(), 0o755)
+            setpriv = _write(root / "setpriv", _elf64(), 0o755)
+            ldd = _write(root / "ldd", b"test ldd", 0o755)
+            loader = _write(root / "loader", b"test loader", 0o755)
+            collect = MODULE.collect_runtime_files
+            def resolve(path, **_kwargs):
+                return path if path in (qemu, setpriv, ldd) else loader
+            def collect_owned(qemu, setpriv, ldd):
+                return collect(qemu, setpriv, ldd, owner_uid=os.getuid(), owner_gid=os.getgid())
+            with (
+                mock.patch.object(MODULE, "validate_regular_source", side_effect=resolve),
+                mock.patch.object(MODULE, "_validate_fixed_host_tools"),
+                mock.patch.object(MODULE, "_run_ldd", return_value=()),
+                mock.patch.object(MODULE, "_qemu_parser_help", return_value=(1, b"run-with options:\n  user=<str>\n")) as probe,
+                mock.patch.object(MODULE, "collect_runtime_files", side_effect=collect_owned),
+                mock.patch.object(MODULE, "install_runtime") as install,
+                mock.patch.object(MODULE.sys, "platform", "linux"),
+                mock.patch.object(MODULE.os, "geteuid", return_value=0),
+                mock.patch.object(MODULE.os, "getegid", return_value=0),
+            ):
+                args = ["--qemu", str(qemu), "--setpriv", str(setpriv), "--ldd", str(ldd)]
+                with self.assertRaisesRegex(MODULE.PackagingError, "lacks required"):
+                    MODULE.main(args)
+                install.assert_not_called()
+                probe.return_value = (1, self.HELP)
+                self.assertEqual(MODULE.main(args), 0)
+                install.assert_called_once()
+                records = install.call_args.args[1]
+                self.assertEqual(next(r for r in records if r.target == MODULE.QEMU_TARGET).source, qemu)
+                self.assertEqual(next(r for r in records if r.target == MODULE.QEMU_TARGET).source_identity,
+                                 MODULE._source_identity(os.stat(qemu)))
+
+    def test_help_reader_bounds_cleanup_and_preserves_primary_error(self):
+        child = mock.Mock()
+        child.wait.side_effect = MODULE.subprocess.TimeoutExpired("qemu-help", 1)
+        selector = mock.MagicMock()
+        selector.__enter__.return_value.select.return_value = []
+        with (
+            mock.patch.object(MODULE.subprocess, "Popen", return_value=child),
+            mock.patch.object(MODULE.selectors, "DefaultSelector", return_value=selector),
+        ):
+            with self.assertRaisesRegex(MODULE.PackagingError, "exceeded 5 seconds;.*cleanup failed") as error:
+                MODULE._qemu_parser_help(123)
+            self.assertIsInstance(error.exception.__cause__, MODULE.PackagingError)
+            child.kill.assert_called_once_with()
+            child.wait.assert_called_once_with(timeout=1)
+            child.stdout.close.assert_called_once_with()
+
+    def test_help_reader_bounds_output_and_time(self):
+        real_popen = MODULE.subprocess.Popen
+        for code, timeout, expected in [
+            ("import os; os.write(1, b'x'*100000)", 5, "output bound"),
+            ("import time; time.sleep(10)", 0.1, "exceeded"),
+        ]:
+            def child(_command, **kwargs):
+                self.assertEqual(_command[1:], ["-run-with", "help"])
+                self.assertEqual(kwargs.pop("pass_fds"), (123,))
+                return real_popen([sys.executable, "-c", code], **kwargs)
+            with self.subTest(code=code), mock.patch.object(MODULE.subprocess, "Popen", side_effect=child), mock.patch.object(MODULE, "QEMU_PROBE_TIMEOUT_SECONDS", timeout):
+                with self.assertRaisesRegex(MODULE.PackagingError, expected):
+                    MODULE._qemu_parser_help(123)
 
 
 if __name__ == "__main__":

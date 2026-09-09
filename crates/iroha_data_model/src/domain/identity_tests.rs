@@ -1,7 +1,7 @@
 //! Domain construction, canonical wire layouts and bounded decoding contracts.
 
 use super::*;
-use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize};
+use norito::{NoritoSchema, NoritoSerialize};
 
 fn layouts() -> impl Iterator<Item = u8> {
     (0..=ncore::supported_header_flags())
@@ -63,8 +63,8 @@ fn domain_identity_preserves_captured_frame_and_schema() {
         "iroha_data_model::domain::model::DomainId"
     );
     for hash in [
-        <DomainId as NoritoSerialize>::schema_hash(),
-        <DomainId as NoritoDeserialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<DomainId>(),
+        norito::schema::identity::frame_hash::<DomainId>(),
     ] {
         assert_eq!(hex::encode(hash), "044c225b83d013da67e985809c84abcc");
     }
@@ -232,7 +232,6 @@ fn domain_binary_decoder_reserves_a_label_work_before_allocating() {
     }
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn domain_keys_roundtrip_after_binary_decoding_without_identity_collisions() {
     use std::collections::BTreeMap;

@@ -25,10 +25,14 @@ ARG CARGO_BUILD_JOBS=""
 ARG BINARIES="iroha3d iroha3d_taira sorafs_governance_dag iroha kagami attachment_sanitizer sorafs_external_software_signer"
 ARG USE_PREBUILT="0"
 ARG IROHA_GIT_COMMIT_HASH=""
+ARG VERGEN_GIT_SHA=""
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/cargo-target \
     set -eu; \
+    test "${#IROHA_GIT_COMMIT_HASH}" -eq 40; \
+    test "${IROHA_GIT_COMMIT_HASH}" = "${VERGEN_GIT_SHA}"; \
+    case "${VERGEN_GIT_SHA}" in *[!0-9a-f]*) exit 1 ;; esac; \
     export CARGO_TARGET_DIR=/cargo-target; \
     mkdir -p /outbin; \
     if [ "${USE_PREBUILT}" = "1" ]; then \
@@ -54,13 +58,13 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             for bin in ${regular_bins}; do \
                 set -- "$@" --bin "${bin}"; \
             done; \
-            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run "$@"; \
+            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" VERGEN_GIT_SHA="${VERGEN_GIT_SHA}" mold --run "$@"; \
             for bin in ${regular_bins}; do \
                 cp "/cargo-target/${cargo_target_profile_dir}/${bin}" "/outbin/${bin}"; \
             done; \
         fi; \
         if [ "${build_kagami}" = "1" ]; then \
-            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" mold --run cargo ${CARGOFLAGS} build --locked --profile "${PROFILE}" -p iroha_kagami --bin kagami; \
+            CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS}" RUSTFLAGS="${RUSTFLAGS}" IROHA_GIT_COMMIT_HASH="${IROHA_GIT_COMMIT_HASH}" VERGEN_GIT_SHA="${VERGEN_GIT_SHA}" mold --run cargo ${CARGOFLAGS} build --locked --profile "${PROFILE}" -p iroha_kagami --bin kagami; \
             cp "/cargo-target/${cargo_target_profile_dir}/kagami" /outbin/kagami; \
         fi; \
     fi; \

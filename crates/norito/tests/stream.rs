@@ -8,12 +8,28 @@ use norito::{
     stream_vec_fold_from_reader, stream_vecdeque_collect_from_reader,
 };
 use std::collections::{BTreeMap, HashMap};
-#[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.stream.BigData")]
 struct BigData(Vec<u8>);
 #[repr(align(64))]
 #[derive(
-    Clone, Copy, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.stream.AlignedWord")]
 struct AlignedWord(u128);
 #[test]
 fn stream_large_payload_no_compression() {

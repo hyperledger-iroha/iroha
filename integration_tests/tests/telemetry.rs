@@ -102,7 +102,7 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         network
             .client()
             .client()
-            .torii_url
+            .endpoint()
             .join("/metrics")
             .unwrap(),
     )
@@ -143,13 +143,12 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         let peer_client = peer.client();
         let operator_key_pair = peer_client
             .client()
-            .operator_key_pair
-            .as_ref()
+            .operator_key_pair()
             .expect("test-network clients carry the peer operator key");
         let peers_uri: iroha_torii::Uri = "/v1/peers".parse().expect("static peers URI");
         let operator_headers = iroha_torii::operator_signed_request_headers(
             operator_key_pair,
-            &peer_client.client().network_id,
+            peer_client.client().network_id(),
             &iroha_torii::Method::GET,
             &peers_uri,
             &[],
@@ -159,7 +158,7 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
         let response = http_client
-            .get(peer_client.client().torii_url.join("/v1/peers").unwrap())
+            .get(peer_client.client().endpoint().join("/v1/peers").unwrap())
             .headers(operator_headers)
             .header("Accept", "application/json")
             .send()
@@ -180,12 +179,8 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     network.ensure_blocks_with(|x| x.non_empty >= 2).await?;
-    for client in network
-        .peers()
-        .iter()
-        .map(iroha_test_network::NetworkPeer::client)
-    {
-        let status = client.client().get_status()?;
+    for peer in network.peers() {
+        let status = peer.status().await?;
         assert!(
             status.commit_time_ms > 0,
             "No peer can commit block immediately, even the leader one"
@@ -204,7 +199,7 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
     else {
         return Ok(());
     };
-    let status = network.client().client().get_status()?;
+    let status = network.client().status().get()?;
     let sumeragi = status
         .sumeragi
         .expect("sumeragi status must be present when telemetry is enabled");

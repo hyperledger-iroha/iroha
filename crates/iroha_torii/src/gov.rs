@@ -137,12 +137,13 @@ impl norito::core::SerializePayload for PlainBallotDto {
         <String as norito::core::SerializePayload>::serialize(&json, writer)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for PlainBallotDto {
+impl norito::core::NoritoDeserialize<'_> for PlainBallotDto {}
+impl<'de> norito::core::DeserializePayload<'de> for PlainBallotDto {
     fn try_deserialize(
         archived: &'de norito::core::Archived<PlainBallotDto>,
     ) -> Result<Self, norito::core::Error> {
         let archived_json: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_json)?;
+        let json = <String as norito::core::DeserializePayload>::try_deserialize(archived_json)?;
         norito::json::from_str(&json).map_err(|err| norito::core::Error::Message(err.to_string()))
     }
     fn deserialize(archived: &'de norito::core::Archived<PlainBallotDto>) -> Self {

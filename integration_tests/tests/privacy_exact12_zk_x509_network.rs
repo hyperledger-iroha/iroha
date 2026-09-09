@@ -326,14 +326,14 @@ async fn query_tip(
         Ok(read_client.client().query(FindBlocks).execute_all()?)
     })
     .await
-    .wrap_err_with(|| format!("query committed blocks from {}", client.client().torii_url))?;
+    .wrap_err_with(|| format!("query committed blocks from {}", client.client().endpoint()))?;
     let tip = blocks
         .iter()
         .max_by_key(|block| block.header().height().get())
         .ok_or_else(|| {
             eyre!(
                 "{} returned an empty committed chain",
-                client.client().torii_url
+                client.client().endpoint()
             )
         })?;
     let contains_transaction = if let Some(transaction) = transaction {
@@ -345,14 +345,14 @@ async fn query_tip(
         ensure!(
             matches <= 1,
             "{} duplicated signed transaction {} in its committed tip",
-            client.client().torii_url,
+            client.client().endpoint(),
             transaction.hash()
         );
         if matches == 1 {
             ensure!(
                 !tip.is_empty() && tip.external_entrypoint_count() > 0,
                 "{} exposed signed transaction {} through an empty or non-external tip",
-                client.client().torii_url,
+                client.client().endpoint(),
                 transaction.hash()
             );
         }
@@ -369,7 +369,7 @@ async fn query_tip(
                 |_| {
                     eyre!(
                         "{} tip timestamp does not fit u64",
-                        client.client().torii_url
+                        client.client().endpoint()
                     )
                 },
             )?,
@@ -516,8 +516,8 @@ fn instruction_transaction(
         .and_then(NonZeroU32::new)
         .ok_or_else(|| eyre!("native ZK-X509 transaction tag {tag} is not a nonzero u32 nonce"))?;
     let mut builder = TransactionBuilder::new(
-        client.client().network_id,
-        client.client().account.clone(),
+        *client.client().network_id(),
+        client.client().account().clone(),
         no_fee(),
     )
     .with_instructions([instruction.into()])
@@ -526,7 +526,7 @@ fn instruction_transaction(
     builder.set_ttl(ACTION_TTL);
     builder.set_nonce(nonce);
     builder
-        .try_sign(client.client().key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("sign exact tagged native ZK-X509 transaction")
 }
 async fn submit_signed_transaction(
@@ -1102,12 +1102,12 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         let client = all_clients[0].clone();
         let genesis_hash = canonical_genesis_hash(&client).await?;
         ensure!(
-            client.client().network_id.as_bytes() == &genesis_hash,
+            client.client().network_id().as_bytes() == &genesis_hash,
             "client network ID is not derived from the canonical genesis hash"
         );
         let (grant_transaction, _) = submit_instruction(
             &client,
-            Grant::account_permission(Permission::from(CanEnactGovernance), client.client().account.clone()),
+            Grant::account_permission(Permission::from(CanEnactGovernance), client.client().account().clone()),
             50_000,
             "grant CanEnactGovernance for native ZK-X509 release",
         )
@@ -1184,8 +1184,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         let trusted_block_timestamp_ms = latest_committed_block_timestamp_ms(&client).await?;
         let creation_time = now_duration()?;
         let action_context = PrivacyReleaseTransactionContextV1 {
-            network_id: client.client().network_id,
-            authority: client.client().account.clone(),
+            network_id: *client.client().network_id(),
+            authority: client.client().account().clone(),
             creation_time,
             time_to_live: Some(ACTION_TTL),
             nonce: NonZeroU32::new(50_002),
@@ -1193,7 +1193,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             metadata: tagged_metadata(50_002)?,
             genesis_hash,
         };
-        let signing_key = client.client().key_pair.private_key().clone();
+        let signing_key = client.client().key_pair().private_key().clone();
         let initial_resource_certificate = resource_certificate.clone();
         let build_actions = tokio::task::spawn_blocking(move || {
             build_privacy_release_zk_x509_network_actions_v1(
@@ -1217,8 +1217,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             })?
             .map_err(|error| eyre!("native ZK-X509 prover task failed: {error}"))??;
         ensure!(
-            actions.statement.wallet_account == client.client().account
-                && actions.statement.context.network_id == client.client().network_id
+            &actions.statement.wallet_account == client.client().account()
+                && actions.statement.context.network_id == *client.client().network_id()
                 && actions.statement.context.action_index == 0
                 && actions.statement.context.parameter_id == compiled.parameter_id
                 && actions.statement.context.parameter_digest == compiled.parameter_digest
@@ -1528,8 +1528,8 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             actions.crl.this_update_unix_seconds
         );
         let semantic_action_context = PrivacyReleaseTransactionContextV1 {
-            network_id: restarted_client.client().network_id,
-            authority: restarted_client.client().account.clone(),
+            network_id: *restarted_client.client().network_id(),
+            authority: restarted_client.client().account().clone(),
             creation_time: now_duration()?,
             time_to_live: Some(ACTION_TTL),
             nonce: NonZeroU32::new(50_008),
@@ -1537,7 +1537,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             metadata: tagged_metadata(50_008)?,
             genesis_hash,
         };
-        let semantic_signing_key = restarted_client.client().key_pair.private_key().clone();
+        let semantic_signing_key = restarted_client.client().key_pair().private_key().clone();
         let semantic_resource_certificate = resource_certificate.clone();
         let current_crl = actions.crl.clone();
         let build_semantic_replay = tokio::task::spawn_blocking(move || {

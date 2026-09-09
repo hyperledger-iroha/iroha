@@ -181,10 +181,11 @@ async fn wait_for_committed_success(
     let deadline = tokio::time::Instant::now() + STATUS_WAIT_TIMEOUT;
     let mut last_error: Option<String> = None;
     loop {
-        let mut polling_client = client.clone();
-        polling_client.torii_request_timeout = polling_client
+        let mut polling_builder = client.to_builder();
+        polling_builder.torii_request_timeout = polling_builder
             .torii_request_timeout
             .min(PROOF_FETCH_HTTP_TIMEOUT);
+        let polling_client = polling_builder.build()?;
         let polling_entry_hash = entry_hash.clone();
         match read_on_dedicated_thread(move || {
             Ok(query_committed_tx_outcome(
@@ -614,7 +615,10 @@ async fn wait_for_route_probe_approval(
     let entry_hash = transaction.hash_as_entrypoint();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+        submitter
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -692,7 +696,7 @@ async fn wait_for_route_probe_approval(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for route probe status"))??;
-    events.close().await;
+    events.close().await?;
     match outcome {
         RouteProbeOutcome::Approved => Ok(entry_hash),
         RouteProbeOutcome::Rejected(reason) => Err(eyre!(
@@ -721,7 +725,10 @@ async fn wait_for_route_probe_rejection(
     let hash = transaction.hash();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+        submitter
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -799,7 +806,7 @@ async fn wait_for_route_probe_rejection(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for route probe status"))??;
-    events.close().await;
+    events.close().await?;
     match outcome {
         RouteProbeOutcome::Approved => Err(eyre!(
             "{context}: route probe transaction was approved unexpectedly"
@@ -1044,7 +1051,7 @@ async fn fetch_proof_record_payload(
     observer: &Client,
     proof_id: &ProofId,
 ) -> Result<Option<(ProofRecord, Vec<u8>)>> {
-    let mut url = observer.torii_url.clone();
+    let mut url = observer.endpoint().clone();
     {
         let mut segments = url
             .path_segments_mut()
@@ -1072,8 +1079,9 @@ fn query_proof_record_via_signed_query(
     observer: &Client,
     proof_id: &ProofId,
 ) -> Result<Option<ProofRecord>> {
-    let mut client = observer.clone();
-    client.torii_request_timeout = client.torii_request_timeout.min(PROOF_FETCH_HTTP_TIMEOUT);
+    let mut builder = observer.to_builder();
+    builder.torii_request_timeout = builder.torii_request_timeout.min(PROOF_FETCH_HTTP_TIMEOUT);
+    let client = builder.build()?;
     match client.query_single(FindProofRecordById {
         id: proof_id.clone(),
     }) {

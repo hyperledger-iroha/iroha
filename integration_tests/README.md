@@ -12,6 +12,7 @@ This crate hosts cross-component tests for Iroha.
   - `consensus_and_da`
   - `nexus_and_streaming`
 - Target a harness directly with `cargo test -p integration_tests --test <harness>`.
+- The focused `taira_consensus_contracts` target requires four real validators, three public routable lanes, and the exact signed Ordinary transaction to become state-resolved Applied while all four peers advance beyond genesis. It shares the existing multi-route NPoS/DA genesis fixture, keeps production proof defaults, and fails sandbox skips. Prebuild the native `iroha3d` daemon and select it with `TEST_NETWORK_BIN_IROHAD`; set `IROHA_TEST_SKIP_BUILD=1` and run `cargo test --locked -p integration_tests --test taira_consensus_contracts four_peer_multiroute_ordinary_transaction_reaches_applied -- --exact --nocapture`. The maintained Taira release gate supplies these binaries from the same warm native build before the Linux build.
 - Target a single test with `cargo test -p integration_tests --test <harness> <filter> -- --nocapture`.
 - Exact test filters are now module-qualified inside the grouped harnesses; for example:
   `cargo test -p integration_tests --test core_api asset::client_add_asset_quantities_should_increase_asset_amounts -- --exact --nocapture`
@@ -61,7 +62,7 @@ transaction races, exact authority failures, balance conservation and matching
 finalized projections after a validator restart. Orderbook partial fills and
 expiry, elapsed rent collection, and hardware signing remain separate coverage.
 
-- IVM bytecode fixtures refresh automatically via `build.rs` when tests run.
+- `iroha_test_samples/build.rs` copies the canonical `fixtures/ivm/*.to` files listed in `crates/ivm/prebuilt_samples.txt` into that crate's Cargo `OUT_DIR`, together with the build profile. All consumers use `sample_ivm_path` and `ivm_build_profile_path`; sealed source trees remain read-only and no manual prebuild or source-tree output fallback is used. Fixture regeneration remains a separate compiler-owned task.
 - Regenerate SoraFS gateway fixtures: `cargo run -p integration_tests --features dev-tools --bin sorafs-gateway-fixtures -- --out fixtures/sorafs_gateway`.
 - Regenerate grouped `nexus_and_streaming` Norito instruction + streaming goldens:
   `cargo run -p integration_tests --features dev-tools --bin refresh_nexus_streaming_fixtures`.

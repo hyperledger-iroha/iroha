@@ -74,7 +74,11 @@ public final class ContractManifestJsonParser {
           "Option",
           "Result",
           "List",
+          "ListError",
+          "NumericError",
           "StateMap",
+          "StateCursor",
+          "StatePage",
           "Secret",
           "AccountView",
           "AssetView",
@@ -88,8 +92,12 @@ public final class ContractManifestJsonParser {
           "SoracloudRequest",
           "SoracloudResponse",
           "state_map_get",
+          "__kotodama_state_page",
+          "__kotodama_state_take",
           "__kotodama_list_len",
           "__kotodama_list_get",
+          "__kotodama_list_set",
+          "__kotodama_list_push",
           "__kotodama_list_try_set",
           "__kotodama_list_try_push",
           "__kotodama_list_pop",
@@ -97,6 +105,8 @@ public final class ContractManifestJsonParser {
           "__kotodama_list_take",
           "__kotodama_list_enumerate",
           "__kotodama_decimal_div_round",
+          "__kotodama_decimal_mul_div_round",
+          "__kotodama_quantity_mul_div_round",
           "__kotodama_quantity_div_round",
           "__kotodama_quantity_ratio_round",
           "__kotodama_decimal_to_int_trunc",
@@ -152,7 +162,7 @@ public final class ContractManifestJsonParser {
           "Name");
   private static final Set<String> DYNAMIC_ACCESS_BOUND_KINDS =
       set(
-          "range",
+          "page",
           "take");
   private static final BigInteger MAX_DYNAMIC_ACCESS_KEYS = BigInteger.valueOf(64);
   // END GENERATED: kotodama-v1-validator-policy
@@ -214,7 +224,7 @@ public final class ContractManifestJsonParser {
             "access_set_hints",
             "entrypoints",
             "states",
-            "error_codes",
+            "error_types",
             "kotoba",
             "provenance"),
         "manifest");
@@ -243,8 +253,8 @@ public final class ContractManifestJsonParser {
         optionalObjectList(root, "entrypoints", "manifest.entrypoints", ENTRYPOINT_PARSER);
     final List<ContractManifest.StateDescriptor> states =
         optionalObjectList(root, "states", "manifest.states", STATE_PARSER);
-    final List<ContractManifest.ErrorCodeDescriptor> errorCodes =
-        optionalObjectList(root, "error_codes", "manifest.error_codes", ERROR_CODE_PARSER);
+    final List<ContractManifest.ErrorTypeDescriptor> errorTypes =
+        optionalObjectList(root, "error_types", "manifest.error_types", ERROR_TYPE_PARSER);
     final List<ContractManifest.KotobaTranslationEntry> kotoba =
         optionalObjectList(root, "kotoba", "manifest.kotoba", KOTOBA_ENTRY_PARSER);
     final ContractManifest.Provenance provenance =
@@ -291,15 +301,36 @@ public final class ContractManifestJsonParser {
       unique(names, "manifest.states");
     }
     validateDynamicAccessHintStateMaps(accessSetHints, states);
-    if (errorCodes != null) {
-      final List<String> paths = new ArrayList<>();
-      final List<String> codes = new ArrayList<>();
-      for (final ContractManifest.ErrorCodeDescriptor descriptor : errorCodes) {
-        paths.add(descriptor.namespace() + "::" + descriptor.name());
-        codes.add(Long.toString(descriptor.code()));
+    final Map<String, ContractManifest.ErrorTypeDescriptor> catalog = new HashMap<>();
+    if (errorTypes != null) {
+      check(errorTypes.size() <= 256, "manifest.error_types exceeds 256 types");
+      for (final ContractManifest.ErrorTypeDescriptor descriptor : errorTypes) {
+        check(catalog.put(descriptor.identity(), descriptor) == null, "manifest.error_types contains a duplicate error identity");
       }
-      unique(paths, "manifest.error_codes");
-      unique(codes, "manifest.error_codes.code");
+    }
+    if (entrypoints != null) {
+      for (final ContractManifest.EntrypointDescriptor entrypoint : entrypoints) {
+        final List<ContractManifest.ValueTypeV1> schemas = new ArrayList<>();
+        if (entrypoint.argumentSchema() != null) {
+          for (final ContractManifest.ArgumentFieldV1 field : entrypoint.argumentSchema().fields()) schemas.add(field.valueType());
+        }
+        if (entrypoint.returnSchema() != null) schemas.add(entrypoint.returnSchema());
+        for (final ContractManifest.ValueTypeV1 schema : schemas) {
+          for (final ContractManifest.ValueTypeNodeV1 node : schema.nodes()) {
+            if (node.kind() == ContractManifest.ValueTypeNodeKindV1.ERROR) {
+              final ContractManifest.ErrorTypeDescriptor error = node.errorType();
+              final ContractManifest.ErrorTypeDescriptor declared = catalog.get(error.identity());
+              check(declared != null && sameErrorVariants(declared.variants(), error.variants()), "manifest boundary error schema does not match its error_types catalog");
+            }
+          }
+        }
+      }
+    }
+    if (states != null) {
+      for (final ContractManifest.StateDescriptor state : states) {
+        check(new StateTypeNameParser(state.typeName(), catalog.keySet()).parse(),
+            "manifest state nominal error identity is not declared in its error_types catalog");
+      }
     }
     if (kotoba != null) {
       final List<String> ids = new ArrayList<>();
@@ -317,7 +348,7 @@ public final class ContractManifestJsonParser {
         accessSetHints,
         entrypoints,
         states,
-        errorCodes,
+        errorTypes,
         kotoba,
         provenance);
   }
@@ -535,12 +566,11 @@ public final class ContractManifestJsonParser {
             ? parseValueType(object(root.get("return_schema"), "entrypoint descriptor.return_schema"))
             : null;
     check(
-        (returnType == null) == (returnSchema == null),
-        "entrypoint descriptor return_type and return_schema must be present together");
+        returnType != null && returnSchema != null,
+        "entrypoint descriptor must declare return_type and return_schema, including Unit");
     check(
-        returnSchema == null
-            || (returnSchema.wordCount() <= 13
-                && returnSchema.canonicalTypeName().equals(returnType)),
+        returnSchema.wordCount() <= 13
+            && returnSchema.canonicalTypeName().equals(returnType),
         "entrypoint descriptor return schema does not exactly match return_type");
     final String permission =
         optionalExactString(root, "permission", "entrypoint descriptor.permission");
@@ -703,36 +733,45 @@ public final class ContractManifestJsonParser {
             parseStructNode(object(root.get("value"), "entrypoint struct node")),
             null,
             null,
-            null);
+            null, null);
       case "Tuple":
         final int arity =
             unsignedInteger(root.get("value"), BigInteger.valueOf(0xffff), "entrypoint tuple arity")
                 .intValueExact();
         check(arity >= 2, "entrypoint tuple arity must be in 2..65535");
         return new ContractManifest.ValueTypeNodeV1(
-            ContractManifest.ValueTypeNodeKindV1.TUPLE, null, arity, null, null);
+            ContractManifest.ValueTypeNodeKindV1.TUPLE, null, arity, null, null, null);
       case "Option":
         check(root.get("value") == null, "entrypoint Option node.value must be null");
         return new ContractManifest.ValueTypeNodeV1(
-            ContractManifest.ValueTypeNodeKindV1.OPTION, null, null, null, null);
+            ContractManifest.ValueTypeNodeKindV1.OPTION, null, null, null, null, null);
       case "Result":
         check(root.get("value") == null, "entrypoint Result node.value must be null");
         return new ContractManifest.ValueTypeNodeV1(
-            ContractManifest.ValueTypeNodeKindV1.RESULT, null, null, null, null);
+            ContractManifest.ValueTypeNodeKindV1.RESULT, null, null, null, null, null);
       case "List":
         return new ContractManifest.ValueTypeNodeV1(
             ContractManifest.ValueTypeNodeKindV1.LIST,
             null,
             null,
             parseListNode(object(root.get("value"), "entrypoint list node")),
-            null);
+            null, null);
+      case "StateCursor":
+        ContractManifest.ValueKindV1 cursorKey = parseLeafKind(object(root.get("value"), "state cursor key kind"));
+        if (cursorKey == ContractManifest.ValueKindV1.JSON) throw new IllegalArgumentException("Json is not a state cursor key kind");
+        return new ContractManifest.ValueTypeNodeV1(ContractManifest.ValueTypeNodeKindV1.STATE_CURSOR, null, null, null, cursorKey, null);
+      case "Unit":
+        check(root.get("value") == null, "entrypoint Unit node.value must be null");
+        return new ContractManifest.ValueTypeNodeV1(ContractManifest.ValueTypeNodeKindV1.UNIT, null, null, null, null, null);
+      case "Error":
+        return new ContractManifest.ValueTypeNodeV1(ContractManifest.ValueTypeNodeKindV1.ERROR, null, null, null, null, parseErrorType(object(root.get("value"), "entrypoint error type")));
       case "Leaf":
         return new ContractManifest.ValueTypeNodeV1(
             ContractManifest.ValueTypeNodeKindV1.LEAF,
             null,
             null,
             null,
-            parseLeafKind(object(root.get("value"), "entrypoint value kind")));
+            parseLeafKind(object(root.get("value"), "entrypoint value kind")), null);
       default:
         throw new IllegalStateException("unsupported Kotodama boundary type node");
     }
@@ -747,8 +786,8 @@ public final class ContractManifestJsonParser {
         stringList(
             required(root, "fields", "entrypoint struct node"), "entrypoint struct node.fields");
     check(
-        (canonicalTypeDeclarationIdentifier(name)
-                || "QueryPage".equals(name)
+        (canonicalUserStructIdentifier(name)
+                || ("QueryPage".equals(name) || "StatePage".equals(name))
                 || isCoreQueryViewName(name))
             && !fields.isEmpty(),
         "entrypoint struct node must use canonical Kotodama identifiers");
@@ -815,7 +854,7 @@ public final class ContractManifestJsonParser {
               || node.kind() == ContractManifest.ValueTypeNodeKindV1.RESULT
               || node.kind() == ContractManifest.ValueTypeNodeKindV1.LIST;
       if (!suppressWords
-          && (handle || node.kind() == ContractManifest.ValueTypeNodeKindV1.LEAF)) {
+          && (handle || node.kind() == ContractManifest.ValueTypeNodeKindV1.LEAF || node.kind() == ContractManifest.ValueTypeNodeKindV1.UNIT || node.kind() == ContractManifest.ValueTypeNodeKindV1.ERROR || node.kind() == ContractManifest.ValueTypeNodeKindV1.STATE_CURSOR)) {
         words++;
       }
       final int children = nodeChildCount(node);
@@ -845,7 +884,12 @@ public final class ContractManifestJsonParser {
         case STRUCT:
           final ContractManifest.StructTypeNodeV1 struct =
               requiredValue(node.structValue(), "struct metadata");
-          if ("QueryPage".equals(struct.name())) {
+          if ("StatePage".equals(struct.name())) {
+            String body = children.get(0).typeName;
+            int split = body.lastIndexOf("), ");
+            check(body.startsWith("List<(") && split >= 0, "invalid StatePage items");
+            value = new RenderedType("StatePage<" + body.substring(6, split) + ", " + body.substring(split + 3), null, null);
+          } else if ("QueryPage".equals(struct.name())) {
             final String viewName =
                 children.isEmpty() ? null : children.get(0).listElementCoreViewName;
             value =
@@ -886,6 +930,15 @@ public final class ContractManifestJsonParser {
                   null,
                   element.coreViewName);
           break;
+        case STATE_CURSOR:
+          value = new RenderedType("StateCursor<" + canonicalLeafName(node.leafKind()) + ">", null, null);
+          break;
+        case UNIT:
+          value = new RenderedType("()", null, null);
+          break;
+        case ERROR:
+          value = new RenderedType(requiredValue(node.errorType(), "error type").identity(), null, null);
+          break;
         case LEAF:
           value =
               new RenderedType(
@@ -921,6 +974,9 @@ public final class ContractManifestJsonParser {
       case RESULT:
         return 2;
       case LEAF:
+      case UNIT:
+      case STATE_CURSOR:
+      case ERROR:
         return 0;
       default:
         throw new IllegalStateException("unsupported boundary type node");
@@ -1060,6 +1116,13 @@ public final class ContractManifestJsonParser {
         if (coreQueryViewRange(nodes, start) == null) {
           return false;
         }
+        continue;
+      }
+      if ("StatePage".equals(struct.name())) {
+        if (!struct.fields().equals(Arrays.asList("items", "next")) || !nodeKindAt(nodes, start + 1, ContractManifest.ValueTypeNodeKindV1.LIST) || !nodeKindAt(nodes, start + 2, ContractManifest.ValueTypeNodeKindV1.TUPLE) || !Integer.valueOf(2).equals(nodes.get(start + 2).tupleArity()) || !nodeKindAt(nodes, start + 3, ContractManifest.ValueTypeNodeKindV1.LEAF)) return false;
+        ContractManifest.ValueKindV1 key = nodes.get(start + 3).leafKind();
+        Integer end = subtreeEnd(nodes, start + 4);
+        if (key == ContractManifest.ValueKindV1.JSON || end == null || !nodeKindAt(nodes, end, ContractManifest.ValueTypeNodeKindV1.OPTION) || !nodeKindAt(nodes, end + 1, ContractManifest.ValueTypeNodeKindV1.STATE_CURSOR) || nodes.get(end + 1).leafKind() != key || !Integer.valueOf(end + 2).equals(subtreeEnd(nodes, start))) return false;
         continue;
       }
       if (!"QueryPage".equals(struct.name())) {
@@ -1213,26 +1276,35 @@ public final class ContractManifestJsonParser {
     return new ContractManifest.StateDescriptor(name, typeName);
   }
 
-  private static ContractManifest.ErrorCodeDescriptor parseErrorCode(
-      final Map<String, Object> root) {
-    exactKeys(root, set("namespace", "name", "code"), "error code descriptor");
-    final String namespace =
-        exactString(
-            required(root, "namespace", "error code descriptor"),
-            "error code descriptor.namespace");
-    final String name =
-        exactString(required(root, "name", "error code descriptor"), "error code descriptor.name");
-    check(
-        canonicalTypeDeclarationIdentifier(namespace) && canonicalSourceIdentifier(name),
-        "error code namespace and name must be canonical Kotodama identifiers");
-    final long code =
-        unsignedInteger(
-                required(root, "code", "error code descriptor"),
-                MAX_U32,
-                "error code descriptor.code")
-            .longValueExact();
-    check(code > 0, "error code descriptor.code must be a non-zero u32");
-    return new ContractManifest.ErrorCodeDescriptor(namespace, name, code);
+  private static boolean sameErrorVariants(final List<ContractManifest.ErrorVariantDescriptor> left, final List<ContractManifest.ErrorVariantDescriptor> right) {
+    if (left.size() != right.size()) return false;
+    for (int index = 0; index < left.size(); index++) {
+      if (!left.get(index).name().equals(right.get(index).name()) || left.get(index).code() != right.get(index).code()) return false;
+    }
+    return true;
+  }
+
+  private static ContractManifest.ErrorTypeDescriptor parseErrorType(final Map<String, Object> root) {
+    exactKeys(root, set("identity", "variants"), "error type descriptor");
+    final String identity = exactString(required(root, "identity", "error type descriptor"), "error type descriptor.identity");
+    check(identity.getBytes(StandardCharsets.UTF_8).length <= 1024 && identity.matches("[\\p{L}\\p{N}_:/@.-]+") && !identity.contains("__kotodama_link_"), "error type identity must be a stable package/unit/enum identity");
+    final List<ContractManifest.ErrorVariantDescriptor> variants = objectList(required(root, "variants", "error type descriptor"), "error type descriptor.variants", variant -> {
+      exactKeys(variant, set("name", "code"), "error variant");
+      final String name = exactString(required(variant, "name", "error variant"), "error variant.name");
+      check(canonicalSourceIdentifier(name) || (name.matches(".*[^\\x00-\\x7f].*") && name.matches("[\\p{L}_][\\p{L}\\p{N}_]*")), "error variant name must be a canonical identifier");
+      final long code = unsignedInteger(required(variant, "code", "error variant"), MAX_U32, "error variant.code").longValueExact();
+      check(code > 0, "error variant.code must be a non-zero u32");
+      return new ContractManifest.ErrorVariantDescriptor(name, code);
+    });
+    check(!variants.isEmpty() && variants.size() <= 256, "error type must contain 1..256 variants");
+    final Set<String> names = new HashSet<>();
+    long previous = 0;
+    for (final ContractManifest.ErrorVariantDescriptor variant : variants) {
+      check(names.add(variant.name()), "duplicate error variant name");
+      check(variant.code() > previous, "error variant codes must be strictly increasing");
+      previous = variant.code();
+    }
+    return new ContractManifest.ErrorTypeDescriptor(identity, variants);
   }
 
   private static ContractManifest.KotobaTranslationEntry parseKotobaEntry(
@@ -1294,8 +1366,8 @@ public final class ContractManifestJsonParser {
       ContractManifestJsonParser::parseTrigger;
   private static final ObjectParser<ContractManifest.StateDescriptor> STATE_PARSER =
       ContractManifestJsonParser::parseState;
-  private static final ObjectParser<ContractManifest.ErrorCodeDescriptor> ERROR_CODE_PARSER =
-      ContractManifestJsonParser::parseErrorCode;
+  private static final ObjectParser<ContractManifest.ErrorTypeDescriptor> ERROR_TYPE_PARSER =
+      ContractManifestJsonParser::parseErrorType;
   private static final ObjectParser<ContractManifest.KotobaTranslationEntry> KOTOBA_ENTRY_PARSER =
       ContractManifestJsonParser::parseKotobaEntry;
   private static final ObjectParser<ContractManifest.KotobaTranslation> KOTOBA_TRANSLATION_PARSER =
@@ -1514,15 +1586,51 @@ public final class ContractManifestJsonParser {
     return canonicalDeclarationIdentifier(value) && !RETIRED_NUMERIC_TYPE_NAMES.contains(value);
   }
 
+  private static boolean canonicalQualifiedStructIdentifier(final String value) {
+    if (value.length() > 1024 || value.contains("__kotodama_link_")) return false;
+    for (int index = 0; index < value.length(); index++) {
+      if (value.charAt(index) > 127) return false;
+    }
+    final String[] parts = value.split("::", -1);
+    if (parts.length != 3 || !canonicalTypeDeclarationIdentifier(parts[1])
+        || !canonicalTypeDeclarationIdentifier(parts[2])) return false;
+    final String[] lockedPackage = parts[0].split("@", -1);
+    if (lockedPackage.length < 1 || lockedPackage.length > 2) return false;
+    for (final String component : lockedPackage[0].split("/", -1)) {
+      if (!canonicalPackageComponent(component)) return false;
+    }
+    return lockedPackage.length == 1 || canonicalPackageComponent(lockedPackage[1]);
+  }
+
+  private static boolean canonicalPackageComponent(final String value) {
+    if (value.isEmpty() || !isTypeIdentifierPart(value.charAt(0))) return false;
+    for (int index = 1; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      if (!isTypeIdentifierPart(character) && character != '.' && character != '-') return false;
+    }
+    return true;
+  }
+
+  private static boolean canonicalUserStructIdentifier(final String value) {
+    return value.length() <= 1024
+        && (canonicalTypeDeclarationIdentifier(value) || canonicalQualifiedStructIdentifier(value));
+  }
+
   private static final class StateTypeNameParser {
     private static final String AGGREGATE_TYPE = "aggregate";
 
     private final String value;
+    private final Set<String> errorIdentities;
     private int cursor;
     private int nodes;
 
     private StateTypeNameParser(final String value) {
+      this(value, null);
+    }
+
+    private StateTypeNameParser(final String value, final Set<String> errorIdentities) {
       this.value = value;
+      this.errorIdentities = errorIdentities;
     }
 
     private boolean parse() {
@@ -1535,6 +1643,20 @@ public final class ContractManifestJsonParser {
         return null;
       }
 
+      if (consume("()")) return "unit";
+      final Matcher errorIdentity = Pattern.compile("[\\p{L}\\p{N}_:/@.-]+").matcher(value.substring(cursor));
+      final String identity = errorIdentity.lookingAt() ? errorIdentity.group() : null;
+      final String qualifiedStructName = identity != null
+          && cursor + identity.length() < value.length()
+          && value.charAt(cursor + identity.length()) == '{'
+          && canonicalQualifiedStructIdentifier(identity) ? identity : null;
+      if (qualifiedStructName != null) {
+        cursor += qualifiedStructName.length();
+      } else if (identity != null && identity.contains("::") && identity.getBytes(StandardCharsets.UTF_8).length <= 1024 && !identity.contains("__kotodama_link_")) {
+        if (errorIdentities != null && !errorIdentities.contains(identity)) return null;
+        cursor += identity.length();
+        return "error";
+      }
       if (consume("(")) {
         if (parseType(false, depth + 1) == null || !consume(", ")) {
           return null;
@@ -1550,7 +1672,7 @@ public final class ContractManifestJsonParser {
         return consume(")") ? AGGREGATE_TYPE : null;
       }
 
-      final String name = identifier();
+      final String name = qualifiedStructName != null ? qualifiedStructName : identifier();
       if (name == null) {
         return null;
       }
@@ -1583,6 +1705,11 @@ public final class ContractManifestJsonParser {
         }
         return AGGREGATE_TYPE;
       }
+      if ("StateCursor".equals(name)) {
+        if (!consume("<")) return null;
+        String key = identifier();
+        return STATE_MAP_KEY_TYPE_NAMES.contains(key) && consume(">") ? AGGREGATE_TYPE : null;
+      }
       if ("StateMap".equals(name)) {
         if (!allowStateMap || !consume("<")) {
           return null;
@@ -1600,7 +1727,15 @@ public final class ContractManifestJsonParser {
         return AGGREGATE_TYPE;
       }
 
-      if (!canonicalTypeDeclarationIdentifier(name) || !consume("{")) {
+      if ("StatePage".equals(name)) {
+        nodes += 5; // List, Tuple, scalar key, Option, StateCursor.
+        if (nodes > MAX_STATE_TYPE_NODES || depth + 3 > MAX_STATE_TYPE_DEPTH || !consume("{items: List<(")) return null;
+        final String key = identifier();
+        if (!STATE_MAP_KEY_TYPE_NAMES.contains(key) || !consume(", ") || parseType(false, depth + 3) == null
+            || !consume("), ") || !listCapacity() || !consume(">, next: Option<StateCursor<")) return null;
+        return consume(key) && consume(">>}") ? AGGREGATE_TYPE : null;
+      }
+      if (!canonicalUserStructIdentifier(name) || !consume("{")) {
         return null;
       }
       final Set<String> fields = new HashSet<>();
@@ -1689,6 +1824,13 @@ public final class ContractManifestJsonParser {
         genericDepth = Math.max(0, genericDepth - 1);
         index++;
       } else if (isTypeIdentifierStart(character)) {
+        int qualifiedEnd = index;
+        while (qualifiedEnd < value.length() && (isTypeIdentifierPart(value.charAt(qualifiedEnd))
+            || ":/@.-".indexOf(value.charAt(qualifiedEnd)) >= 0)) qualifiedEnd++;
+        if (canonicalQualifiedStructIdentifier(value.substring(index, qualifiedEnd))) {
+          index = qualifiedEnd;
+          continue;
+        }
         final int start = index++;
         while (index < value.length() && isTypeIdentifierPart(value.charAt(index))) {
           index++;
@@ -1719,9 +1861,6 @@ public final class ContractManifestJsonParser {
             isStructField || !RETIRED_NUMERIC_TYPE_NAMES.contains(identifier),
             path + " must not use retired Kotodama numeric type name `" + identifier + "`");
       } else {
-        check(
-            character <= 0x7f,
-            path + " must use ASCII Kotodama type identifiers");
         index++;
       }
     }

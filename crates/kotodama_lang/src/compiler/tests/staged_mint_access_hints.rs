@@ -81,7 +81,6 @@ fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation() {
                     dataref_kind_map.insert((func_idx, *dest), *kind);
                 }
                 if let ir::Instr::StateGet { dest, .. }
-                | ir::Instr::StateKeys { dest, .. }
                 | ir::Instr::StateMapKeyAt { dest, .. } = instr
                 {
                     dataref_kind_map.insert((func_idx, *dest), DRK::NoritoBytes);

@@ -1516,7 +1516,7 @@ impl LifecycleLedgerStoreV1 {
             .is_ok_and(|(recovered, parent, child)| {
                 parent == parent_ordinal
                     && child == child_ordinal
-                    && recovered.exactly_matches(broadcast)
+                    && broadcast.exactly_matches_durable_projection(&recovered)
             })
     }
     /// Reload and reauthenticate one control-owned Broadcast-plus-Sign pair.

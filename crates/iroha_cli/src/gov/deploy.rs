@@ -27,7 +27,7 @@ pub struct ProposeDeployArgs {
 }
 impl Run for ProposeDeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let (contract_address, contract_alias) = match (
             self.contract_address.as_deref(),
             self.contract_alias.as_deref(),
@@ -58,7 +58,7 @@ impl Run for ProposeDeployArgs {
             }
         };
         let request = iroha::client::DeployContractProposalDraftRequestV1 {
-            proposal_operator: client.account.clone(),
+            proposal_operator: client.account().clone(),
             contract_address,
             contract_alias,
             abi_version: AbiVersion::new(self.abi_version),
@@ -126,7 +126,7 @@ pub struct ProtectedApplyArgs {
 }
 impl Run for ProtectedApplyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let namespaces: Vec<String> = self
             .namespaces
             .split(',')
@@ -150,7 +150,7 @@ impl Run for ProtectedApplyArgs {
 pub struct ProtectedGetArgs {}
 impl Run for ProtectedGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_gov_protected_namespaces_json()?;
         let found = value
             .get("found")
@@ -176,7 +176,7 @@ pub struct DeployMetaArgs {
 }
 impl Run for DeployMetaArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let contract_address = resolve_contract_address_target(
             &client,
             self.contract_address.as_deref(),

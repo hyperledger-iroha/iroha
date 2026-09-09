@@ -1177,6 +1177,8 @@ pub struct ProviderIngestFinalizedCancellationV1 {
     /// Authoritative cancellation class.
     pub reason: ProviderIngestCancellationReasonV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::StoredCompletionDeliveryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletionDeliveryV1 {
     state: StoredDeliveryStateV1,

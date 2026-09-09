@@ -4,7 +4,7 @@ use crate::{CliOutputFormat, RunContext};
 use eyre::Result;
 use norito::json::Value;
 pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let value = client.get_sumeragi_status_json()?;
     match context.output_format() {
         CliOutputFormat::Text => context.println(summarize_status(&value)),
@@ -12,7 +12,7 @@ pub(crate) fn status<C: RunContext>(context: &mut C, _args: StatusArgs) -> Resul
     }
 }
 pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let diagnostics = client.get_sumeragi_diagnostics()?;
     let value = norito::json::to_value(&diagnostics)?;
     match context.output_format() {
@@ -21,7 +21,7 @@ pub(crate) fn diagnostics<C: RunContext>(context: &mut C, _args: DiagnosticsArgs
     }
 }
 pub(crate) fn leader<C: RunContext>(context: &mut C, _args: LeaderArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let value = client.get_sumeragi_leader_json()?;
     match context.output_format() {
         CliOutputFormat::Text => context.println(summarize_leader(&value)),
@@ -29,7 +29,7 @@ pub(crate) fn leader<C: RunContext>(context: &mut C, _args: LeaderArgs) -> Resul
     }
 }
 pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let value = client.get_sumeragi_params_json()?;
     match context.output_format() {
         CliOutputFormat::Text => context.println(summarize_params(&value)),
@@ -37,7 +37,7 @@ pub(crate) fn params<C: RunContext>(context: &mut C, _args: ParamsArgs) -> Resul
     }
 }
 pub(crate) fn qc<C: RunContext>(context: &mut C, _args: QcArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let value = client.get_sumeragi_qc_json()?;
     match context.output_format() {
         CliOutputFormat::Text => context.println(summarize_qc(&value)),

@@ -11,7 +11,7 @@ use super::{
     SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTonAddressV1, SccpTonSourceEmitterV1,
     SccpTronSourceEmitterV1,
 };
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId, account::AccountId, asset::AssetDefinitionId, block::consensus_v2::PROTOCOL_VERSION,
@@ -303,9 +303,22 @@ pub enum SccpRouteValidationError {
     InvalidInboundFinalityCutoff,
 }
 /// Canonical non-infinity BN254 G1 point in Solidity ABI coordinate order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -327,9 +340,22 @@ impl SccpBn254G1PointV1 {
     }
 }
 /// Canonical non-infinity BN254 G2 point in Solidity verifier limb order.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -355,9 +381,22 @@ impl SccpBn254G2PointV1 {
     }
 }
 /// Fixed Groth16 IC vector: one constant point and exactly eleven signal points.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -409,9 +448,22 @@ impl SccpGroth16Bn254IcV1 {
     }
 }
 /// Closed SCCP BN254 Groth16 verification key for exactly eleven public signals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -508,9 +560,22 @@ pub fn sccp_groth16_bn254_verifying_key_hash_v1(
 }
 /// Fixed BLS12-381 IC vector: one constant point and exactly eleven signal
 /// points, all in canonical compressed G1 form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -566,9 +631,22 @@ impl SccpGroth16Bls12381IcV1 {
 /// Points use the canonical 48-byte G1 and 96-byte G2 compressed encodings
 /// consumed by TON's BLS12-381 TVM primitives. The IC array contains one
 /// constant point followed by exactly eleven signal points.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -659,9 +737,22 @@ pub fn sccp_groth16_bls12381_verifying_key_hash_v1(
     ))
 }
 /// Immutable commitments identifying one audited semantic Groth16 circuit.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -684,9 +775,22 @@ pub struct SccpGroth16Bn254SemanticCircuitV1 {
 /// This profile is intentionally distinct from the BN254 circuit. A proof,
 /// verification key, field reduction, or public-input schema from one curve
 /// cannot be reinterpreted as the other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -705,9 +809,22 @@ pub struct SccpGroth16Bls12381SemanticCircuitV1 {
     pub public_signal_schema_hash: [u8; 32],
 }
 /// Closed semantic proof profile accepted by first-release outbound routes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "profile", content = "commitments")]
@@ -789,9 +906,22 @@ impl SccpSemanticProofProfileV1 {
     }
 }
 /// Immutable Taira checkpoint anchoring one governed outbound proof policy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -850,9 +980,22 @@ impl SccpSoraFinalityAnchorV1 {
     }
 }
 /// Mandatory immutable proof policy of one value-moving destination deployment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -911,9 +1054,21 @@ impl SccpOutboundProofPolicyV1 {
     }
 }
 /// Strict portable reference to one governance-registered IVM verification key.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -956,9 +1111,21 @@ impl SccpPortableVerifyingKeyRefV1 {
 /// Contract bytes remain outside consensus state. Governance pins their SHA-256,
 /// the portable proof-key id, exact key version and commitment, and the exact
 /// transaction gas limit consumed by the separately served route-scoped material.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -998,9 +1165,22 @@ impl SccpSoraOutboundExecutionPolicyV1 {
     }
 }
 /// Directional activation state for one complete governed SCCP route.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "activation", content = "direction")]
@@ -1080,9 +1260,22 @@ impl SccpRouteActivationV1 {
 /// so a retired emitter cannot create new claims indefinitely. `trust_anchor_hash` binds the cutoff
 /// to a complete retained checkpoint interval; the maximum must equal that anchor's successor
 /// checkpoint and an open-ended current anchor cannot be retired against.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1103,9 +1296,21 @@ impl SccpInboundFinalityCutoffV1 {
     }
 }
 /// Exact immutable lookup key for a governed SCCP route.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1163,9 +1368,22 @@ impl SccpRouteKeyV1 {
     }
 }
 /// Exact EVM verifier, bridge, and ERC-20 deployment identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1203,9 +1421,22 @@ pub struct SccpEvmDestinationDeploymentV1 {
     pub max_wrapped_supply: u128,
 }
 /// Exact TRON verifier, route, and TRC-20 deployment identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1247,9 +1478,22 @@ pub struct SccpTronDestinationDeploymentV1 {
 /// Named fields make the fixed cardinality structural in Norito JSON and the
 /// generated schema. Their numeric suffixes are also the canonical byte order
 /// used by TON StateInit and SCCP deployment hash preimages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1321,9 +1565,22 @@ impl From<SccpTonMintBreakerGuardianKeysV1> for [[u8; 32]; 5] {
 /// cannot synchronously call another verifier contract, so the verifier code
 /// is linked into the route rather than trusted through an asynchronous
 /// callback.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1370,9 +1627,22 @@ pub struct SccpTonDestinationDeploymentV1 {
     pub max_wrapped_supply: u128,
 }
 /// Closed family-specific destination deployment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "family", content = "deployment")]
@@ -1532,9 +1802,20 @@ impl SccpDestinationDeploymentV1 {
     }
 }
 /// Typed SORA-side asset and liability policy for atomic SCCP settlement.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1604,9 +1885,20 @@ pub fn sccp_v1_taira_xor_asset_definition_id() -> AssetDefinitionId {
         .expect("built-in SCCP Taira XOR asset definition id must remain valid")
 }
 /// One complete, atomic, immutable-identity SCCP route governance record.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1892,9 +2184,20 @@ impl SccpGovernedRouteV1 {
 /// finalized under an earlier checkpoint cannot be stranded while in flight.
 /// The current pointer names the last, highest checkpoint and prevents routes
 /// sharing native consensus from drifting to different active checkpoints.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -2076,9 +2379,20 @@ impl SccpGovernedLaneV1 {
     }
 }
 /// Versioned authoritative SCCP route registry payload.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(no_fast_from_json)]
 #[norito(decode_from_slice)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -3825,7 +4139,7 @@ mod tests {
             }],
         }
     }
-    #[cfg(feature = "json")]
+
     fn insert_unknown_json_field(value: &mut norito::json::Value, path: &[&str]) {
         let mut current = value;
         for field in path {
@@ -4989,7 +5303,11 @@ mod tests {
     }
     #[test]
     fn policyless_norito_destination_deployments_are_rejected() {
-        #[derive(norito::derive::NoritoSerialize)]
+        #[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::bridge::sccp_registry::PolicylessEvmDestinationDeploymentV1",
+            frame = "iroha_data_model::bridge::sccp_registry::SccpEvmDestinationDeploymentV1"
+        )]
         struct PolicylessEvmDestinationDeploymentV1 {
             token_address: [u8; 20],
             token_code_hash: [u8; 32],
@@ -5001,7 +5319,11 @@ mod tests {
             route_code_hash: [u8; 32],
             taira_to_token_multiplier: u64,
         }
-        #[derive(norito::derive::NoritoSerialize)]
+        #[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::bridge::sccp_registry::PolicylessTronDestinationDeploymentV1",
+            frame = "iroha_data_model::bridge::sccp_registry::SccpTronDestinationDeploymentV1"
+        )]
         struct PolicylessTronDestinationDeploymentV1 {
             token_address: [u8; 20],
             token_code_hash: [u8; 32],
@@ -5014,7 +5336,7 @@ mod tests {
             taira_to_token_multiplier: u64,
         }
         let evm = deployment(1);
-        let mut evm_bytes = norito::to_bytes(&PolicylessEvmDestinationDeploymentV1 {
+        let evm_bytes = norito::to_bytes(&PolicylessEvmDestinationDeploymentV1 {
             token_address: evm.token_address,
             token_code_hash: evm.token_code_hash,
             verifier_address: evm.verifier_address,
@@ -5026,15 +5348,24 @@ mod tests {
             taira_to_token_multiplier: evm.taira_to_token_multiplier,
         })
         .expect("policy-less EVM deployment encodes");
-        evm_bytes[6..22].copy_from_slice(
-            &<SccpEvmDestinationDeploymentV1 as norito::NoritoSerialize>::schema_hash(),
+        assert_eq!(
+            norito::schema::identity::frame_hash::<PolicylessEvmDestinationDeploymentV1>(),
+            norito::schema::identity::frame_hash::<SccpEvmDestinationDeploymentV1>(),
+            "malformed fixture must use the production frame identity"
+        );
+        assert_eq!(
+            norito::core::Header::read(evm_bytes.as_slice())
+                .expect("read malformed fixture header")
+                .schema,
+            norito::schema::identity::frame_hash::<SccpEvmDestinationDeploymentV1>(),
+            "malformed fixture header must reach the production decoder"
         );
         assert!(
             norito::decode_from_bytes::<SccpEvmDestinationDeploymentV1>(&evm_bytes).is_err(),
             "policy-less EVM deployment must not decode as the canonical V1 shape"
         );
         let tron = tron_deployment();
-        let mut tron_bytes = norito::to_bytes(&PolicylessTronDestinationDeploymentV1 {
+        let tron_bytes = norito::to_bytes(&PolicylessTronDestinationDeploymentV1 {
             token_address: tron.token_address,
             token_code_hash: tron.token_code_hash,
             verifier_address: tron.verifier_address,
@@ -5046,15 +5377,24 @@ mod tests {
             taira_to_token_multiplier: tron.taira_to_token_multiplier,
         })
         .expect("policy-less TRON deployment encodes");
-        tron_bytes[6..22].copy_from_slice(
-            &<SccpTronDestinationDeploymentV1 as norito::NoritoSerialize>::schema_hash(),
+        assert_eq!(
+            norito::schema::identity::frame_hash::<PolicylessTronDestinationDeploymentV1>(),
+            norito::schema::identity::frame_hash::<SccpTronDestinationDeploymentV1>(),
+            "malformed fixture must use the production frame identity"
+        );
+        assert_eq!(
+            norito::core::Header::read(tron_bytes.as_slice())
+                .expect("read malformed fixture header")
+                .schema,
+            norito::schema::identity::frame_hash::<SccpTronDestinationDeploymentV1>(),
+            "malformed fixture header must reach the production decoder"
         );
         assert!(
             norito::decode_from_bytes::<SccpTronDestinationDeploymentV1>(&tron_bytes).is_err(),
             "policy-less TRON deployment must not decode as the canonical V1 shape"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn policyless_json_destination_deployments_are_rejected() {
         let mut evm = norito::json::to_value(&deployment(1)).expect("serialize EVM deployment");
@@ -5074,7 +5414,7 @@ mod tests {
             norito::json::to_json(&tron).expect("serialize policy-less TRON deployment");
         assert!(norito::json::from_json::<SccpTronDestinationDeploymentV1>(&tron_json).is_err());
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn governed_route_json_requires_exact_sora_execution_policy_and_vk_pin() {
         let route = route(1, SccpRouteActivationV1::Staged);
@@ -5413,7 +5753,7 @@ mod tests {
             Err(SccpRouteValidationError::RoleAlias)
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn registry_json_rejects_unknown_fields_at_every_consensus_boundary() {
         let route = route(1, SccpRouteActivationV1::Staged);

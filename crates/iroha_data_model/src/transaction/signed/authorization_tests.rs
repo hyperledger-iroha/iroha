@@ -120,7 +120,7 @@ fn verify_signature_accepts_multisig_with_quorum() {
         TransactionSignatureError::NonCanonicalMultisigSignatures
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn signed_transaction_json_rejects_unknown_authorization_envelope_fields() {
     let mut single = norito::json::to_value(&sample_signed_transaction())

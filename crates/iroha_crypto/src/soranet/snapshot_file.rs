@@ -11,7 +11,7 @@ use tempfile::NamedTempFile;
 #[cfg(any(target_os = "macos", target_os = "ios"))]
 pub(super) const SNAPSHOT_O_NOFOLLOW_FLAG: i32 = 0x0000_0100;
 #[cfg(any(target_os = "linux", target_os = "android"))]
-pub(super) const SNAPSHOT_O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+pub(super) const SNAPSHOT_O_NOFOLLOW_FLAG: i32 = rustix::fs::OFlags::NOFOLLOW.bits() as i32;
 #[cfg(any(
     target_os = "freebsd",
     target_os = "netbsd",

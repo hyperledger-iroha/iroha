@@ -1,11 +1,10 @@
 //! Captured identities and complete frames for the generated governance hash wrappers.
-#![cfg(feature = "json")]
 
 use std::{collections::BTreeMap, fmt::Debug};
 
 use iroha_data_model::governance::types::*;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    NoritoDeserialize, NoritoSerialize,
     json::{self, JsonSerialize, Value},
 };
 

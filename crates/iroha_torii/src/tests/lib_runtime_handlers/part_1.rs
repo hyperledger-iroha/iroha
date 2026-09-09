@@ -1845,6 +1845,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         "default query memory pool admits one stored ordinary query"
     );
     Arc::new(AppState {
+        build_status: crate::build_identity_test_fixture::build_identity().status(),
         shutdown_signal: ShutdownSignal::new(),
         events,
         kura,
@@ -2110,7 +2111,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
         vpn_state_lock: Arc::new(std::sync::Mutex::new(vpn::VpnRuntimeState::default())),
         soracloud_runtime: None,
         #[cfg(feature = "connect")]
-        torii_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
+        torii_proxy_pending: Arc::new(parking_lot::Mutex::new(BTreeMap::new())),
         #[cfg(feature = "connect")]
         torii_proxy_completed: Arc::new(tokio::sync::Mutex::new(
             CompletedToriiProxyRequests::default(),
@@ -2419,7 +2420,10 @@ async fn torii_tx_rate_uses_config_and_queue_default() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        routing::MaybeTelemetry::disabled(),
+        crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii test fixture");
     assert!(
@@ -2485,7 +2489,10 @@ async fn torii_ram_lfe_uses_config_runtime() {
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
-        routing::MaybeTelemetry::disabled(),
+        crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            routing::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("valid Torii test fixture");
     assert!(

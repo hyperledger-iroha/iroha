@@ -59,6 +59,7 @@ pub mod error {
     // Map Norito JSON errors into the crate's generic JSON error variant.
     // This allows `?` on `norito::json` helpers inside derive-generated code
     // to convert into `iroha_version::error::Error` seamlessly.
+    #[cfg(feature = "json")]
     impl From<norito::json::Error> for Error {
         fn from(_: norito::json::Error) -> Self {
             Self::Json
@@ -126,7 +127,17 @@ pub trait Version {
     }
 }
 /// Structure describing a container content which version is not supported.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, norito::Encode, norito::Decode)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    thiserror::Error,
+    norito::Encode,
+    norito::Decode,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_version::UnsupportedVersion")]
 #[allow(unexpected_cfgs)]
 #[error(
     "Unsupported version. Expected: {}, got: {version}",
@@ -151,36 +162,28 @@ impl UnsupportedVersion {
     }
 }
 /// Raw versioned content, serialized.
-#[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_version::RawVersioned")]
 pub enum RawVersioned {
     /// In JSON format.
+    #[codec(index = 0)]
     Json(String),
     /// In Norito format.
+    #[codec(index = 1)]
     NoritoBytes(Vec<u8>),
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for RawVersioned {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        use norito::core::{DecodeFromSlice, Error};
-        let tag = *bytes.first().ok_or(Error::LengthMismatch)?;
-        let rest = &bytes[1..];
-        match tag {
-            0 => {
-                let (value, used) = <String as DecodeFromSlice>::decode_from_slice(rest)?;
-                Ok((RawVersioned::Json(value), 1 + used))
-            }
-            1 => {
-                let (value, used) = <Vec<u8> as DecodeFromSlice>::decode_from_slice(rest)?;
-                Ok((RawVersioned::NoritoBytes(value), 1 + used))
-            }
-            other => Err(Error::invalid_tag("decoding RawVersioned tag", other)),
-        }
+        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 /// Norito related versioned (de)serialization traits.
 pub mod codec {
     use super::{Version, error::Result};
     use norito::{
-        NoritoDeserialize,
+        DeserializePayload,
         codec::{DecodeAll, Encode},
         core::DecodeFromSlice,
     };
@@ -202,7 +205,8 @@ pub mod codec {
     /// Decode a leading-version Norito payload using exact-slice semantics.
     ///
     /// The input must contain the version byte followed by the exact Norito
-    /// payload for `T`. Unsupported versions preserve the original bytes in the
+    /// payload for `T`. This bare decoder requires no frame identity.
+    /// Unsupported versions preserve the original bytes in the
     /// returned [`crate::UnsupportedVersion`] payload for diagnostics.
     ///
     /// # Errors
@@ -212,7 +216,7 @@ pub mod codec {
     /// or a wrapped Norito decode error when the payload body is malformed.
     pub fn decode_exact_versioned<T>(input: &[u8]) -> Result<T>
     where
-        T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+        T: Version + for<'de> DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
     {
         decode_exact_versioned_with_raw(input, input)
     }
@@ -231,7 +235,7 @@ pub mod codec {
         raw_for_error: &[u8],
     ) -> Result<T>
     where
-        T: Version + for<'de> NoritoDeserialize<'de> + for<'de> DecodeFromSlice<'de>,
+        T: Version + for<'de> DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,
     {
         use crate::{RawVersioned, UnsupportedVersion, error::Error};
         let Some((&version, payload)) = bare_versioned.split_first() else {
@@ -382,6 +386,30 @@ mod tests {
         let decoded =
             crate::codec::decode_exact_versioned::<ExactPayload>(&encoded).expect("decode");
         assert_eq!(decoded, ExactPayload(42));
+    }
+    #[test]
+    fn versioned_payload_decoders_reject_truncation_and_trailing_bytes_without_frame_identity() {
+        let encoded = crate::codec::EncodeVersioned::encode_versioned(&ExactPayload(42));
+        for len in 0..encoded.len() {
+            assert!(crate::codec::decode_exact_versioned::<ExactPayload>(&encoded[..len]).is_err());
+            assert!(
+                crate::codec::decode_exact_versioned_with_raw::<ExactPayload>(
+                    &encoded[..len],
+                    b"original envelope",
+                )
+                .is_err()
+            );
+        }
+        let mut trailing = encoded;
+        trailing.push(0);
+        assert!(crate::codec::decode_exact_versioned::<ExactPayload>(&trailing).is_err());
+        assert!(
+            crate::codec::decode_exact_versioned_with_raw::<ExactPayload>(
+                &trailing,
+                b"original envelope",
+            )
+            .is_err()
+        );
     }
     #[test]
     fn decode_exact_versioned_with_raw_preserves_custom_error_bytes() {

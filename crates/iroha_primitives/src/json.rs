@@ -70,11 +70,7 @@ impl IntoSchema for Json {
         }
     }
 }
-impl norito::core::NoritoSerialize for Json {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::type_name_schema_hash::<Self>()
-    }
-}
+
 impl norito::core::SerializePayload for Json {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
@@ -89,10 +85,8 @@ impl norito::core::SerializePayload for Json {
         norito::core::SerializePayload::encoded_len_exact(&wire)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for Json {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::type_name_schema_hash::<Self>()
-    }
+
+impl<'a> norito::core::DeserializePayload<'a> for Json {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).unwrap_or_else(|error| {
             panic!("norito: fallible deserialize failed for Json: {error:?}")
@@ -106,7 +100,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Json {
             let (value, _) = Self::decode_wire_text(payload)?;
             return Self::try_from_canonical_string(value);
         }
-        let wire = <JsonWireOwned as norito::core::NoritoDeserialize>::try_deserialize(
+        let wire = <JsonWireOwned as norito::core::DeserializePayload>::try_deserialize(
             archived.cast::<JsonWireOwned>(),
         )?;
         let canonical = Self::require_canonical_text(&wire.value).map_err(|error| {

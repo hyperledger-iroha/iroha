@@ -69,10 +69,7 @@ mod model {
         RegistrableBuilder,
     )]
     #[registrable_builder(schema_name = "iroha_data_model::nft::model::NewNft")]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
     #[display("{id}")]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[derive(norito::NoritoSchema)]
@@ -94,16 +91,15 @@ string_id!(NftId);
 pub type NftEntry<'world> = Ref<'world, NftId, NftValue>;
 /// [`Nft`] without `id` field. Needed only for the world-state NFT map to reduce memory usage. In
 /// other places use [`Nft`] directly.
-#[derive(Clone, norito::NoritoSerialize, norito::NoritoDeserialize)]
-#[cfg_attr(
-    feature = "json",
-    derive(
-        crate::DeriveFastJson,
-        crate::DeriveJsonSerialize,
-        crate::DeriveJsonDeserialize
-    )
+#[derive(
+    Clone,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    crate :: DeriveFastJson,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(no_fast_from_json)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nft::NftData")]
 pub struct NftData {
@@ -137,16 +133,18 @@ impl FromStr for NftId {
             "Empty `name` part in `name$domain`",
             "Empty `domain` part in `name$domain`",
         )?;
-        let name = name_candidate.parse().map_err(|_| ParseError {
-            reason: "Failed to parse `name` part in `name$domain`",
-        })?;
+        let name = name_candidate
+            .parse()
+            .map_err(|_| ParseError::new("Failed to parse `name` part in `name$domain`"))?;
         let domain_id = if domain_id_candidate.contains('.') {
             crate::domain::DomainId::parse_fully_qualified(domain_id_candidate)
         } else {
             crate::domain::DomainId::try_new(domain_id_candidate, "universal")
         }
-        .map_err(|_| ParseError {
-            reason: "Failed to parse `domain` part in `name$domain` or `name$domain.dataspace`",
+        .map_err(|_| {
+            ParseError::new(
+                "Failed to parse `domain` part in `name$domain` or `name$domain.dataspace`",
+            )
         })?;
         Ok(Self::new(domain_id, name))
     }
@@ -164,7 +162,7 @@ impl IntoKeyValue for Nft {
         )
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod json_tests {
     use super::*;
     use crate::{Name, domain::prelude::DomainId, metadata::Metadata};
@@ -200,11 +198,8 @@ mod tests {
         assert_eq!(<NewNft as norito::NoritoSchema>::nominal_name(), nominal);
         assert_eq!(<NewNft as norito::NoritoSchema>::frame_name(), nominal);
         assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
-        assert_eq!(<NewNft as norito::NoritoSerialize>::schema_hash(), expected);
-        assert_eq!(
-            <NewNft as norito::NoritoDeserialize>::schema_hash(),
-            expected
-        );
+        assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
+        assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
     }
 
     #[test]

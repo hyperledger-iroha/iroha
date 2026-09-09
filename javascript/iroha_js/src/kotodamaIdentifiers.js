@@ -57,7 +57,11 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "Option",
   "Result",
   "List",
+  "ListError",
+  "NumericError",
   "StateMap",
+  "StateCursor",
+  "StatePage",
   "Secret",
   "AccountView",
   "AssetView",
@@ -71,8 +75,12 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "SoracloudRequest",
   "SoracloudResponse",
   "state_map_get",
+  "__kotodama_state_page",
+  "__kotodama_state_take",
   "__kotodama_list_len",
   "__kotodama_list_get",
+  "__kotodama_list_set",
+  "__kotodama_list_push",
   "__kotodama_list_try_set",
   "__kotodama_list_try_push",
   "__kotodama_list_pop",
@@ -80,6 +88,8 @@ export const KOTODAMA_V1_DECLARATION_RESERVED = Object.freeze([
   "__kotodama_list_take",
   "__kotodama_list_enumerate",
   "__kotodama_decimal_div_round",
+  "__kotodama_decimal_mul_div_round",
+  "__kotodama_quantity_mul_div_round",
   "__kotodama_quantity_div_round",
   "__kotodama_quantity_ratio_round",
   "__kotodama_decimal_to_int_trunc",
@@ -141,7 +151,7 @@ export const KOTODAMA_V1_STATE_MAP_KEY_TYPES = Object.freeze([
 
 /** Exact dynamic-access bound policies emitted by the V1 compiler. */
 export const KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS = Object.freeze([
-  "range",
+  "page",
   "take",
 ]);
 
@@ -178,6 +188,20 @@ export function isCanonicalKotodamaIdentifier(
       !RETIRED_TYPE_SET.has(value)
     ))
   );
+}
+
+/** Validate a locked qualified struct identity without normalizing its package or revision. */
+export function isCanonicalKotodamaStructName(value) {
+  if (typeof value !== "string" || value.length > 1024) return false;
+  if (!value.includes("::")) return isCanonicalKotodamaIdentifier(value, { typeDeclaration: true });
+  if (value.includes("__kotodama_link_")) return false;
+  const parts = value.split("::");
+  if (parts.length !== 3 || !isCanonicalKotodamaIdentifier(parts[1], { typeDeclaration: true }) ||
+      !isCanonicalKotodamaIdentifier(parts[2], { typeDeclaration: true })) return false;
+  const packageParts = parts[0].split("@");
+  const component = (text) => /^[A-Za-z0-9_][A-Za-z0-9_.-]*$/u.test(text);
+  return packageParts.length <= 2 && packageParts[0].split("/").every(component) &&
+    (packageParts.length === 1 || component(packageParts[1]));
 }
 
 const KOTODAMA_V1_STATE_SCALAR_TYPES = new Set([
@@ -217,7 +241,7 @@ export function isCanonicalKotodamaDynamicAccessBaseKey(value) {
   return isCanonicalKotodamaStateDeclarationIdentifier(value.slice("state:".length));
 }
 
-/** Return whether a dynamic-access bound policy is exactly `take` or `range`. */
+/** Return whether a dynamic-access bound policy is exactly `take` or `page`. */
 export function isKotodamaV1DynamicAccessBoundKind(value) {
   return (
     typeof value === "string" &&
@@ -232,7 +256,7 @@ export function isKotodamaV1DynamicAccessBoundKind(value) {
  * Type and struct-name positions reject retired numeric spellings, while
  * struct field positions remain ordinary value identifiers such as `amount`.
  */
-export function isCanonicalKotodamaStateTypeName(value) {
+export function isCanonicalKotodamaStateTypeName(value, errorIdentities = null) {
   if (typeof value !== "string" || value.length === 0) {
     return false;
   }
@@ -287,6 +311,13 @@ export function isCanonicalKotodamaStateTypeName(value) {
       return null;
     }
 
+    if (consume("()")) return "unit";
+    const errorIdentity = /^[\p{L}\p{N}_:/@.-]+/u.exec(value.slice(cursor))?.[0];
+    if (errorIdentity?.includes("::") && value[cursor + errorIdentity.length] !== "{" && new TextEncoder().encode(errorIdentity).byteLength <= 1024 && !errorIdentity.includes("__kotodama_link_")) {
+      if (errorIdentities !== null && !errorIdentities.has(errorIdentity)) return null;
+      cursor += errorIdentity.length;
+      return "error";
+    }
     if (consume("(")) {
       if (parseType(false, depth + 1) === null || !consume(", ")) {
         return null;
@@ -302,7 +333,9 @@ export function isCanonicalKotodamaStateTypeName(value) {
       return consume(")") ? "aggregate" : null;
     }
 
-    const name = identifier();
+    const qualifiedStruct = /^[A-Za-z0-9_./@:-]+(?=\{)/u.exec(value.slice(cursor))?.[0];
+    const name = qualifiedStruct?.includes("::") ? qualifiedStruct : identifier();
+    if (qualifiedStruct?.includes("::")) cursor += qualifiedStruct.length;
     if (name === null) {
       return null;
     }
@@ -339,6 +372,11 @@ export function isCanonicalKotodamaStateTypeName(value) {
       }
       return "aggregate";
     }
+    if (name === "StateCursor") {
+      if (!consume("<")) return null;
+      const key = identifier();
+      return isKotodamaV1StateMapKeyTypeName(key) && consume(">") ? name : null;
+    }
     if (name === "StateMap") {
       if (!allowStateMap || !consume("<")) {
         return null;
@@ -357,8 +395,18 @@ export function isCanonicalKotodamaStateTypeName(value) {
       }
       return "aggregate";
     }
+    if (name === "StatePage") {
+      nodes += 5; // List, Tuple, scalar key, Option, StateCursor.
+      if (nodes > KOTODAMA_V1_MAX_TYPE_NODES || depth + 3 > KOTODAMA_V1_MAX_TYPE_DEPTH ||
+          !consume("{items: List<(")) return null;
+      const key = identifier();
+      if (!KOTODAMA_V1_STATE_MAP_KEY_TYPE_SET.has(key) || !consume(", ") ||
+          parseType(false, depth + 3) === null || !consume("), ") || !listCapacity() ||
+          !consume(">, next: Option<StateCursor<")) return null;
+      return consume(key) && consume(">>}") ? "aggregate" : null;
+    }
     if (
-      !isCanonicalKotodamaIdentifier(name, { typeDeclaration: true }) ||
+      !isCanonicalKotodamaStructName(name) ||
       !consume("{")
     ) {
       return null;

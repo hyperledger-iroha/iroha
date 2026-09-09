@@ -97,7 +97,8 @@ The 136-query hash and complete-transfer lengths match both
 1,737,603 and 2,826,491 bytes. Full typed-transfer proving and bounded
 verification also passed at 2,826,491 bytes in
 `complete_typed_transfer_verifies_after_private_witnesses_are_dropped`, using
-an explicit 4 MiB diagnostic envelope; default 512 KiB admission still rejects.
+an explicit 4 MiB diagnostic envelope; the replay resource default still rejects
+this larger compact diagnostic.
 Other rows remain source-derived projections, not implemented profiles or
 latency evidence. For every row above and in the larger-capacity table below,
 changing the Fp4 payload from 37 to 32 bytes leaves all enclosing varint widths
@@ -125,8 +126,11 @@ envelopes; they must not replace production limits until final schema,
 security and measured resource review agree. The final accepted query count
 must be exact and profile-bound, not any prover-selected value below a cap.
 
-`FASTPQ_FINAL_V1` and `VerifyLimits` currently fix q=136, maximum trace log 16,
-LDE log 19, terminal 4, maximum 17 reductions, and 512 KiB. An implementation
+`FASTPQ_FINAL_V1` fixes q=136, maximum trace log 16, LDE log 19,
+terminal 4 and maximum 17 reductions. The replay resource defaults separately
+admit at most 256 transitions and derive 2,163,774 payload bytes and 2,372,085
+framed bytes from their opening geometry. These replay bounds do not qualify or
+activate the compact profiles discussed here. An implementation
 must change the complete profile identity/parameters, transcript binding,
 terminal rules, exact wire/preflight counts, limits and fixtures together.
 Blowup 16 alone is not a supported improvement: the diagnostic inverse rate

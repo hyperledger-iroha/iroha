@@ -312,6 +312,20 @@ const AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE: &str = "autonomous_route_latest
 const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_DATA_FILE: &str = "autonomous_blocks.norito";
 #[cfg(test)]
 const OBSOLETE_AUTONOMOUS_LANE_BLOCKS_INDEX_FILE: &str = "autonomous_blocks.index";
+/// A canonical frame decoded during this exact locked attempt read.
+///
+/// This owns no durability or payload-authentication authority. The inner reader
+/// may reuse it only after a second stable read proves identical bytes and file
+/// identity; all pointer, context, view-state and artifact checks still follow.
+struct DecodedAutonomousLaneAttemptRead {
+    read: StableSidecarRead,
+    artifact: AutonomousLaneBlockArtifact,
+}
+#[cfg(test)]
+std::thread_local! {
+    static AUTONOMOUS_ATTEMPT_FRAME_DECODES: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    static AUTONOMOUS_ARTIFACT_VALIDATIONS: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
 const AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES: usize = 4 * 1024;
 const AUTONOMOUS_LIFECYCLE_CURSOR_MAX_BYTES: usize = 8 * 1024;
 const AUTONOMOUS_LIFECYCLE_TERMINAL_OUTCOME_MAX_BYTES: usize = 8 * 1024;
@@ -587,6 +601,21 @@ mod physical_resource_initialization_tests;
 #[path = "kura/resource_inventory_snapshot_tests.rs"]
 mod resource_inventory_snapshot_tests;
 
+/// Exclusive lease over canonical Kura publication.
+///
+/// Callers may inspect the exact durable tip through this value without
+/// reopening the same non-reentrant publication lock. The lease must never be
+/// held while initiating a Kura mutation.
+pub(crate) struct KuraCanonicalPublicationLease<'a> {
+    kura: &'a Kura,
+    _guard: parking_lot::MutexGuard<'a, ()>,
+}
+impl KuraCanonicalPublicationLease<'_> {
+    /// Read the exact durable height and tip while canonical writers are excluded.
+    pub(crate) fn exact_durable_tip(&self) -> Result<(usize, Option<HashOf<BlockHeader>>)> {
+        self.kura.exact_durable_tip_under_publication_lease()
+    }
+}
 /// The interface of Kura subsystem.
 ///
 /// Merge-ledger persistence requirements are tracked in
@@ -18462,8 +18491,7 @@ impl Kura {
     }
     fn sidecar_bytes_with_historical_budget(
         store_dir: &Path,
-        historical_record_budget: &mut usize,
-        historical_byte_budget: &mut u64,
+        historical_budget: &mut HistoricalAutonomousRecoveryAccountingBudget,
     ) -> Result<u64> {
         if store_dir.as_os_str().is_empty() {
             return Ok(0);
@@ -18513,37 +18541,10 @@ impl Kura {
                     && metadata.file_type().is_dir()
                     && !metadata.file_type().is_symlink()
                 {
-                    let (records, bytes) = bounded_historical_autonomous_recovery_entries(
+                    let bytes = Self::historical_autonomous_recovery_publication_accounting_bytes(
                         &path,
-                        *historical_record_budget,
-                        *historical_byte_budget,
-                        |record_path| {
-                            let record_metadata = secure_file_metadata::from_path(record_path)
-                                .map_err(|err| Error::IO(err, record_path.to_path_buf()))?;
-                            Ok(((), record_metadata))
-                        },
+                        historical_budget,
                     )?;
-                    *historical_record_budget = historical_record_budget
-                        .checked_sub(records.len())
-                        .ok_or_else(|| {
-                            Error::IO(
-                                std::io::Error::new(
-                                    ErrorKind::InvalidData,
-                                    "historical autonomous recovery record count overflowed",
-                                ),
-                                path.clone(),
-                            )
-                        })?;
-                    *historical_byte_budget =
-                        historical_byte_budget.checked_sub(bytes).ok_or_else(|| {
-                            Error::IO(
-                                std::io::Error::new(
-                                    ErrorKind::InvalidData,
-                                    "historical autonomous recovery byte count overflowed",
-                                ),
-                                path.clone(),
-                            )
-                        })?;
                     total = total.checked_add(bytes).ok_or_else(|| {
                         Error::IO(
                             std::io::Error::new(
@@ -18582,8 +18583,7 @@ impl Kura {
     }
     fn block_store_bytes_with_historical_budget(
         blocks_dir: &Path,
-        historical_record_budget: &mut usize,
-        historical_byte_budget: &mut u64,
+        historical_budget: &mut HistoricalAutonomousRecoveryAccountingBudget,
     ) -> Result<u64> {
         if blocks_dir.as_os_str().is_empty() {
             return Ok(0);
@@ -18608,24 +18608,16 @@ impl Kura {
                 files = files.saturating_add(len);
             }
         }
-        let sidecars = Self::sidecar_bytes_with_historical_budget(
-            blocks_dir,
-            historical_record_budget,
-            historical_byte_budget,
-        )?;
+        let sidecars = Self::sidecar_bytes_with_historical_budget(blocks_dir, historical_budget)?;
         Ok(files.saturating_add(sidecars))
     }
     fn block_store_bytes_with_historical_limit(
         blocks_dir: &Path,
         historical_byte_limit: u64,
     ) -> Result<u64> {
-        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
-        let mut historical_byte_budget = historical_byte_limit;
-        Self::block_store_bytes_with_historical_budget(
-            blocks_dir,
-            &mut historical_record_budget,
-            &mut historical_byte_budget,
-        )
+        let mut historical_budget =
+            HistoricalAutonomousRecoveryAccountingBudget::new(historical_byte_limit);
+        Self::block_store_bytes_with_historical_budget(blocks_dir, &mut historical_budget)
     }
     fn blocks_root_bytes(root: &Path, historical_byte_limit: u64) -> Result<u64> {
         if root.as_os_str().is_empty() {
@@ -18637,8 +18629,8 @@ impl Kura {
             Err(err) => return Err(Error::IO(err, root.to_path_buf())),
         };
         let mut total = Self::blocks_root_debug_file_bytes(root)?;
-        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
-        let mut historical_byte_budget = historical_byte_limit;
+        let mut historical_budget =
+            HistoricalAutonomousRecoveryAccountingBudget::new(historical_byte_limit);
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
             let path = entry.path();
@@ -18648,8 +18640,7 @@ impl Kura {
             if file_type.is_dir() {
                 total = total.saturating_add(Self::block_store_bytes_with_historical_budget(
                     &path,
-                    &mut historical_record_budget,
-                    &mut historical_byte_budget,
+                    &mut historical_budget,
                 )?);
             }
         }
@@ -18710,8 +18701,8 @@ impl Kura {
         let debug_bytes = Self::blocks_root_debug_file_bytes(root)?;
         let mut enforced = debug_bytes;
         let mut total = debug_bytes;
-        let mut historical_record_budget = HISTORICAL_AUTONOMOUS_RECOVERY_MAX_RECORDS;
-        let mut historical_byte_budget = historical_byte_limit;
+        let mut historical_budget =
+            HistoricalAutonomousRecoveryAccountingBudget::new(historical_byte_limit);
         for entry in entries {
             let entry = entry.map_err(|err| Error::IO(err, root.to_path_buf()))?;
             let path = entry.path();
@@ -18719,11 +18710,8 @@ impl Kura {
                 .file_type()
                 .map_err(|err| Error::IO(err, path.clone()))?;
             if file_type.is_dir() {
-                let budgeted = Self::block_store_bytes_with_historical_budget(
-                    &path,
-                    &mut historical_record_budget,
-                    &mut historical_byte_budget,
-                )?;
+                let budgeted =
+                    Self::block_store_bytes_with_historical_budget(&path, &mut historical_budget)?;
                 enforced = enforced.saturating_add(budgeted);
                 total = total
                     .saturating_add(budgeted)
@@ -22596,6 +22584,37 @@ impl Kura {
         let count = self.block_store.lock().read_exact_durable_index_count()?;
         usize::try_from(count).map_err(Error::from)
     }
+    /// Read the exact durable height and tip under one canonical publication lease.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when canonical storage is poisoned or the durable
+    /// marker/hash journal cannot be read exactly.
+    pub(crate) fn exact_durable_tip(&self) -> Result<(usize, Option<HashOf<BlockHeader>>)> {
+        self.canonical_publication_lease().exact_durable_tip()
+    }
+    fn exact_durable_tip_under_publication_lease(
+        &self,
+    ) -> Result<(usize, Option<HashOf<BlockHeader>>)> {
+        self.ensure_canonical_storage_not_poisoned()?;
+        let mut store = self.block_store.lock();
+        let count = store.read_exact_durable_index_count()?;
+        let tip = if count == 0 {
+            None
+        } else {
+            Some(
+                store
+                    .read_block_hashes(count.saturating_sub(1), 1)?
+                    .first()
+                    .copied()
+                    .ok_or(Error::HashesFileHeightMismatch)?,
+            )
+        };
+        if store.read_exact_durable_index_count()? != count {
+            return Err(Error::HashesFileHeightMismatch);
+        }
+        Ok((usize::try_from(count)?, tip))
+    }
     /// Bind startup replay to one exact durable hash-journal image.
     ///
     /// The returned hashes are read under the same block-store lock as the
@@ -22804,11 +22823,14 @@ impl Kura {
         Ok(durable_tip == boundary.hashes.last().copied()
             && store.read_exact_durable_index_count()? == count)
     }
-    /// Exclude canonical Kura writers while a fully prevalidated replay State
-    /// receipt is published. The caller must not invoke a Kura mutation while
-    /// holding this lease because canonical mutations acquire the same lock.
-    pub(crate) fn replay_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
-        self.canonical_chain_lock.lock()
+    /// Exclude canonical Kura writers while a validated State result is
+    /// consumed. The caller must not invoke a Kura mutation while holding this
+    /// lease because canonical mutations acquire the same lock.
+    pub(crate) fn canonical_publication_lease(&self) -> KuraCanonicalPublicationLease<'_> {
+        KuraCanonicalPublicationLease {
+            kura: self,
+            _guard: self.canonical_chain_lock.lock(),
+        }
     }
     /// Return a best-effort durable count for diagnostics and telemetry only.
     ///
@@ -30683,6 +30705,26 @@ impl Kura {
         }
         Ok(Some(pointer))
     }
+    fn decode_autonomous_lane_attempt_frame(
+        bytes: &[u8],
+        path: &Path,
+        non_canonical_reason: &'static str,
+    ) -> Result<AutonomousLaneBlockArtifact> {
+        #[cfg(test)]
+        AUTONOMOUS_ATTEMPT_FRAME_DECODES.with(|count| {
+            if let Some(current) = count.get() {
+                count.set(Some(current + 1));
+            }
+        });
+        norito::decode_canonical::<AutonomousLaneBlockArtifact>(bytes).map_err(
+            |error| match error {
+                norito::Error::NonCanonicalEncoding => {
+                    Self::invalid_lane_artifact_error(path.to_path_buf(), non_canonical_reason)
+                }
+                other => Error::NoritoFrame(other),
+            },
+        )
+    }
     fn read_autonomous_lane_block_attempt_artifact_locked(
         &self,
         entry: &LaneConfigEntry,
@@ -30713,6 +30755,45 @@ impl Kura {
         expected_epoch: u64,
         view_state_mode: AutonomousLaneBlockViewStateReadMode,
     ) -> Result<AutonomousLaneBlockDurableRecord> {
+        self.read_autonomous_lane_block_attempt_artifact_with_decoded_read_locked(
+            entry,
+            pointer,
+            expected_network_id,
+            expected_epoch,
+            view_state_mode,
+            None,
+        )
+    }
+    fn read_autonomous_lane_block_attempt_artifact_with_decoded_read_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        view_state_mode: AutonomousLaneBlockViewStateReadMode,
+        decoded: Option<DecodedAutonomousLaneAttemptRead>,
+    ) -> Result<AutonomousLaneBlockDurableRecord> {
+        self.read_autonomous_lane_block_attempt_artifact_with_current_locked(
+            entry,
+            pointer,
+            expected_network_id,
+            expected_epoch,
+            view_state_mode,
+            decoded,
+        )
+        .map(|(record, _current)| record)
+    }
+    /// Keep the validated cursor local to this exact read; record-only callers
+    /// discard it before retaining records in startup or attempt inventories.
+    fn read_autonomous_lane_block_attempt_artifact_with_current_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        pointer: &AutonomousLaneBlockLatestAttemptV1,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        view_state_mode: AutonomousLaneBlockViewStateReadMode,
+        decoded: Option<DecodedAutonomousLaneAttemptRead>,
+    ) -> Result<(AutonomousLaneBlockDurableRecord, LaneBlockProposalV1)> {
         if pointer.network_id != expected_network_id || pointer.epoch != expected_epoch {
             return Err(Self::invalid_lane_artifact_error(
                 Self::autonomous_lane_block_latest_attempt_path_for_entry(
@@ -30735,8 +30816,8 @@ impl Kura {
                 "autonomous lane attempt path has no parent directory",
             )
         })?;
-        let bytes = self
-            .read_regular_sidecar_bytes(
+        let read = self
+            .read_regular_sidecar_snapshot(
                 &artifact_path,
                 parent,
                 MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
@@ -30747,14 +30828,22 @@ impl Kura {
                     "autonomous lane latest-attempt pointer references a missing payload",
                 )
             })?;
-        let mut artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
-            .map_err(|error| match error {
-                norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
-                    artifact_path.clone(),
-                    "autonomous lane attempt payload conflicts with its latest pointer",
-                ),
-                other => Error::NoritoFrame(other),
-            })?;
+        let mut artifact = match decoded {
+            Some(decoded)
+                if decoded.read.bytes == read.bytes
+                    && Self::stable_sidecar_metadata_unchanged(
+                        &decoded.read.metadata,
+                        &read.metadata,
+                    ) =>
+            {
+                decoded.artifact
+            }
+            _ => Self::decode_autonomous_lane_attempt_frame(
+                &read.bytes,
+                &artifact_path,
+                "autonomous lane attempt payload conflicts with its latest pointer",
+            )?,
+        };
         if !pointer.matches_payload(&artifact.executable_payload) {
             return Err(Self::invalid_lane_artifact_error(
                 artifact_path,
@@ -30769,30 +30858,41 @@ impl Kura {
             pointer.lane_block_height,
             pointer.proposal_height,
         );
-        let retirement = match self.read_autonomous_lane_block_view_state_locked(
-            &artifact.executable_payload,
-            &view_state_path,
-            view_state_mode,
-        )? {
-            Some(state) => {
+        let (retirement, current_proposal) = match self
+            .read_autonomous_lane_block_view_state_with_current_locked(
+                &artifact.executable_payload,
+                &view_state_path,
+                view_state_mode,
+            )? {
+            Some((state, current)) => {
+                // The selected state was validated with this exact payload and all
+                // three replacement fields. Pointer matching above already binds
+                // its network and epoch to the caller's expected context.
                 artifact.availability_certificate = state.availability_certificate;
                 artifact.view_checkpoint = state.checkpoint;
                 artifact.new_view_certificates = state.certificates;
-                state.retirement
+                (state.retirement, current)
             }
-            None => None,
+            None => {
+                let current = Self::validate_autonomous_lane_block_artifact(
+                    &artifact,
+                    expected_network_id,
+                    expected_epoch,
+                )
+                .map_err(|message| {
+                    Self::invalid_lane_artifact_error(parent.to_path_buf(), message)
+                })?;
+                (None, current)
+            }
         };
-        Self::validate_autonomous_lane_block_artifact(
-            &artifact,
-            expected_network_id,
-            expected_epoch,
-        )
-        .map_err(|message| Self::invalid_lane_artifact_error(parent.to_path_buf(), message))?;
-        Ok(AutonomousLaneBlockDurableRecord {
-            artifact,
-            retirement,
-            view_state_path,
-        })
+        Ok((
+            AutonomousLaneBlockDurableRecord {
+                artifact,
+                retirement,
+                view_state_path,
+            },
+            current_proposal,
+        ))
     }
     fn autonomous_lane_block_view_state_temp_path(path: &Path) -> PathBuf {
         path.with_extension("norito.tmp")
@@ -30827,6 +30927,17 @@ impl Kura {
         path: &Path,
         mode: AutonomousLaneBlockViewStateReadMode,
     ) -> Result<Option<AutonomousLaneBlockViewState>> {
+        self.read_autonomous_lane_block_view_state_with_current_locked(payload, path, mode)
+            .map(|selected| selected.map(|(state, _current)| state))
+    }
+    /// Return the selected state together with the cursor from its complete
+    /// artifact validation. Both values belong to this exact borrowed payload.
+    fn read_autonomous_lane_block_view_state_with_current_locked(
+        &self,
+        payload: &LaneExecutablePayloadV1,
+        path: &Path,
+        mode: AutonomousLaneBlockViewStateReadMode,
+    ) -> Result<Option<(AutonomousLaneBlockViewState, LaneBlockProposalV1)>> {
         enum Candidate {
             Absent,
             Invalid(Error),
@@ -30906,7 +31017,7 @@ impl Kura {
         let main = load_candidate(path)?;
         if mode == AutonomousLaneBlockViewStateReadMode::MainOnly {
             return match main {
-                Candidate::Valid { state, .. } => Ok(Some(state)),
+                Candidate::Valid { state, current } => Ok(Some((state, current))),
                 Candidate::Invalid(error) => Err(error),
                 Candidate::Absent => Ok(None),
             };
@@ -30915,7 +31026,7 @@ impl Kura {
             && self.durable_mutation_authorized().is_err()
         {
             return match main {
-                Candidate::Valid { state, .. } => Ok(Some(state)),
+                Candidate::Valid { state, current } => Ok(Some((state, current))),
                 Candidate::Invalid(error) => Err(error),
                 Candidate::Absent => Ok(None),
             };
@@ -30944,15 +31055,19 @@ impl Kura {
                     if recovery_rank(&temp_state, &temp_current)
                         > recovery_rank(&main_state, &main_current)
                     {
-                        temp_state
+                        (temp_state, temp_current)
                     } else {
-                        main_state
+                        (main_state, main_current)
                     },
                 )),
-                (Candidate::Invalid(_) | Candidate::Absent, Candidate::Valid { state, .. })
-                | (Candidate::Valid { state, .. }, Candidate::Invalid(_) | Candidate::Absent) => {
-                    Ok(Some(state))
-                }
+                (
+                    Candidate::Invalid(_) | Candidate::Absent,
+                    Candidate::Valid { state, current },
+                )
+                | (
+                    Candidate::Valid { state, current },
+                    Candidate::Invalid(_) | Candidate::Absent,
+                ) => Ok(Some((state, current))),
                 (Candidate::Invalid(error), Candidate::Invalid(_))
                 | (Candidate::Invalid(error), Candidate::Absent)
                 | (Candidate::Absent, Candidate::Invalid(error)) => Err(error),
@@ -31044,19 +31159,19 @@ impl Kura {
                 if recovery_rank(&temp_state, &temp_current)
                     > recovery_rank(&main_state, &main_current)
                 {
-                    promote_temp(&temp_state).map(|()| Some(temp_state))
+                    promote_temp(&temp_state).map(|()| Some((temp_state, temp_current)))
                 } else {
-                    remove_temp().map(|()| Some(main_state))
+                    remove_temp().map(|()| Some((main_state, main_current)))
                 }
             }
-            (Candidate::Invalid(_), Candidate::Valid { state, .. })
-            | (Candidate::Absent, Candidate::Valid { state, .. }) => {
-                promote_temp(&state).map(|()| Some(state))
+            (Candidate::Invalid(_), Candidate::Valid { state, current })
+            | (Candidate::Absent, Candidate::Valid { state, current }) => {
+                promote_temp(&state).map(|()| Some((state, current)))
             }
-            (Candidate::Valid { state, .. }, Candidate::Invalid(_)) => {
-                remove_temp().map(|()| Some(state))
+            (Candidate::Valid { state, current }, Candidate::Invalid(_)) => {
+                remove_temp().map(|()| Some((state, current)))
             }
-            (Candidate::Valid { state, .. }, Candidate::Absent) => Ok(Some(state)),
+            (Candidate::Valid { state, current }, Candidate::Absent) => Ok(Some((state, current))),
             (Candidate::Invalid(error), Candidate::Invalid(_))
             | (Candidate::Invalid(error), Candidate::Absent)
             | (Candidate::Absent, Candidate::Invalid(error)) => Err(error),
@@ -35919,6 +36034,30 @@ impl Kura {
         expected_epoch: u64,
         pending_canonical_bytes: Option<u64>,
     ) -> Result<Option<AutonomousLaneBlockDurableRecord>> {
+        self.read_autonomous_lane_block_attempt_record_with_current_locked(
+            entry,
+            lane_id,
+            lane_block_height,
+            proposal_height,
+            expected_network_id,
+            expected_epoch,
+            pending_canonical_bytes,
+        )
+        .map(|record| record.map(|(record, _current)| record))
+    }
+    /// Return a cursor only for the exact retired-attempt consumer; ordinary
+    /// collection callers use the record-only projection above.
+    #[allow(clippy::too_many_arguments)]
+    fn read_autonomous_lane_block_attempt_record_with_current_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        lane_id: LaneId,
+        lane_block_height: u64,
+        proposal_height: u64,
+        expected_network_id: iroha_data_model::NetworkId,
+        expected_epoch: u64,
+        pending_canonical_bytes: Option<u64>,
+    ) -> Result<Option<(AutonomousLaneBlockDurableRecord, LaneBlockProposalV1)>> {
         let attempt_path = Self::autonomous_lane_block_attempt_path_for_entry(
             entry,
             &self.store_root,
@@ -35935,8 +36074,8 @@ impl Kura {
             .regular_sidecar_metadata(&attempt_path, parent)?
             .is_some()
         {
-            let bytes = self
-                .read_regular_sidecar_bytes(
+            let read = self
+                .read_regular_sidecar_snapshot(
                     &attempt_path,
                     parent,
                     MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES,
@@ -35947,14 +36086,11 @@ impl Kura {
                         "autonomous lane attempt disappeared during exact lookup",
                     )
                 })?;
-            let artifact = norito::decode_canonical::<AutonomousLaneBlockArtifact>(&bytes)
-                .map_err(|error| match error {
-                    norito::Error::NonCanonicalEncoding => Self::invalid_lane_artifact_error(
-                        attempt_path.clone(),
-                        "autonomous lane attempt payload is not canonical Norito",
-                    ),
-                    other => Error::NoritoFrame(other),
-                })?;
+            let artifact = Self::decode_autonomous_lane_attempt_frame(
+                &read.bytes,
+                &attempt_path,
+                "autonomous lane attempt payload is not canonical Norito",
+            )?;
             let pointer =
                 AutonomousLaneBlockLatestAttemptV1::from_payload(&artifact.executable_payload);
             if pointer.lane_id != lane_id
@@ -35967,12 +36103,18 @@ impl Kura {
                 ));
             }
             return self
-                .read_autonomous_lane_block_attempt_artifact_locked(
+                .read_autonomous_lane_block_attempt_artifact_with_current_locked(
                     entry,
                     &pointer,
                     expected_network_id,
                     expected_epoch,
-                    pending_canonical_bytes,
+                    pending_canonical_bytes.map_or(
+                        AutonomousLaneBlockViewStateReadMode::MainOnly,
+                        |pending_canonical_bytes| AutonomousLaneBlockViewStateReadMode::Recover {
+                            pending_canonical_bytes,
+                        },
+                    ),
+                    Some(DecodedAutonomousLaneAttemptRead { read, artifact }),
                 )
                 .map(Some);
         }

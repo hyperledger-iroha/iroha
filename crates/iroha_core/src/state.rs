@@ -2984,9 +2984,10 @@ pub enum PendingQueuePlanAdmissionDisposition {
     Applied,
     /// No marker exists and the complete certificate is eligible for the next carrier.
     EligibleAbsent,
-    /// The certificate is authentic but its bound canonical frontier has not arrived locally yet.
+    /// The certificate is authentic but its authority frontier is not ready.
     ///
-    /// Callers must retain the bounded durable certificate and reclassify it after catch-up.
+    /// Callers must retain the bounded durable certificate and reclassify it after State catch-up
+    /// or carrier advancement. This disposition never authorizes inclusion in an earlier carrier.
     Future,
     /// The requested carrier is already committed in this coherent State view.
     ///
@@ -31349,6 +31350,11 @@ impl State {
     pub(crate) fn state_view_generation(&self) -> u64 {
         self.view_generation.load(Ordering::Acquire)
     }
+    /// Exclude committed State publication while consensus consumes a
+    /// generation-bound validation result and performs its private-key action.
+    pub(crate) fn consensus_publication_lease(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.state_commit_lock.lock()
+    }
     #[inline]
     fn note_view_generation_contention(&self, caller: &'static core::panic::Location<'static>) {
         let now = Instant::now();
@@ -35207,12 +35213,7 @@ impl State {
                                 .to_owned(),
                         )
                     })?;
-                    if carrier_height <= committed_height {
-                        // Admission can finish after State publishes H but before the H worker
-                        // hands off to H + 1. Its old carrier is not evidence that the exact
-                        // new certificate is stale; retaining it is the only safe disposition.
-                        PendingQueuePlanAdmissionDisposition::DeferredCarrier
-                    } else if admission
+                    if admission
                         .certificate
                         .binding
                         .admission_context
@@ -35243,15 +35244,40 @@ impl State {
                             &state_view.lane_incarnations,
                             &state_view.lane_incarnation_activation_heights,
                         )?;
+                        // An asynchronous Apply can publish State before the process-height
+                        // adapter rolls over. Validate the source at this same immutable State
+                        // frontier before deciding whether the caller's carrier is ready for it.
+                        // The actual carrier inclusion boundary remains strict.
+                        let current_proposal_height =
+                            committed_height.checked_add(1).ok_or_else(|| {
+                                MergeLedgerCommitError::ExecutionBatchInvalid(
+                                "current QueuePlan authority height overflows its proposal height"
+                                    .to_owned(),
+                            )
+                            })?;
                         if Self::validate_queue_plan_admissions_for_carrier_in_view(
                             state_view,
                             &encoded,
                             &active_lanes,
-                            carrier_height,
+                            carrier_height.max(current_proposal_height),
                         )
                         .is_ok()
                         {
-                            PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                            if carrier_height <= committed_height {
+                                // A lagging worker retains the authenticated current source,
+                                // but only after checking its complete State binding above.
+                                PendingQueuePlanAdmissionDisposition::DeferredCarrier
+                            } else if admission
+                                .certificate
+                                .binding
+                                .admission_context
+                                .proposal_height
+                                > carrier_height
+                            {
+                                PendingQueuePlanAdmissionDisposition::Future
+                            } else {
+                                PendingQueuePlanAdmissionDisposition::EligibleAbsent
+                            }
                         } else {
                             PendingQueuePlanAdmissionDisposition::Stale
                         }
@@ -39136,25 +39162,39 @@ impl State {
         if binding.network_id_digest != expected_network_id_digest {
             return Err("QueuePlan admission binding belongs to another network".to_owned());
         }
+        // Build and validate the caller's immutable expectation before retaining a
+        // World generation. Each stored obligation is decoded only once below.
+        let expected = Self::queue_plan_pending_obligation_from_binding(binding)
+            .map_err(|error| error.to_string())?;
         let state_view = self.view();
-        let registry_match = Self::queue_plan_admission_registry_match_in_view(
+        let Some(registry_value) = Self::queue_plan_admission_registry_value_in_view(
             &state_view,
-            binding.entrypoint_hash.clone(),
-            binding.canonical_hash(),
-        )?;
-        if registry_match == QueuePlanAdmissionRegistryMatch::Exact {
-            let expected = Self::queue_plan_pending_obligation_from_binding(binding)
-                .map_err(|error| error.to_string())?;
-            let application_state =
-                Self::queue_plan_binding_application_state(&state_view, binding, expected)
-                    .map_err(|error| error.to_string())?;
-            if application_state == QueuePlanAdmissionApplicationState::PendingStale {
-                return Err(
-                    "QueuePlan binding names a retired or recreated lane incarnation".to_owned(),
-                );
-            }
+            binding.entrypoint_hash,
+        )?
+        else {
+            return Ok(QueuePlanAdmissionRegistryMatch::Absent);
+        };
+        if registry_value.binding_hash != expected.binding_hash {
+            // A different registry hash is a definitive conflict only if its own
+            // pending or terminal application evidence is coherent.
+            Self::queue_plan_registry_owner_application_state_in_view(
+                &state_view,
+                binding.network_id_digest,
+                binding.entrypoint_hash,
+                registry_value.binding_hash,
+            )
+            .map_err(|error| error.to_string())?;
+            return Ok(QueuePlanAdmissionRegistryMatch::Conflict);
         }
-        Ok(registry_match)
+        let application_state =
+            Self::queue_plan_binding_application_state(&state_view, binding, expected)
+                .map_err(|error| error.to_string())?;
+        if application_state == QueuePlanAdmissionApplicationState::PendingStale {
+            return Err(
+                "QueuePlan binding names a retired or recreated lane incarnation".to_owned(),
+            );
+        }
+        Ok(QueuePlanAdmissionRegistryMatch::Exact)
     }
     /// Read the exact pending QueuePlan binding authorizing an immutable execution plan.
     ///
@@ -39273,6 +39313,31 @@ impl State {
         {
             return Err("QueuePlan admission registry lookup contains a zero identity".to_owned());
         }
+        let Some(value) =
+            Self::queue_plan_admission_registry_value_in_view(state_view, entrypoint_hash)?
+        else {
+            return Ok((QueuePlanAdmissionRegistryMatch::Absent, None));
+        };
+        let application_state = Self::queue_plan_registry_owner_application_state_in_view(
+            state_view,
+            crate::torii_proxy::queue_plan_admission_network_id_digest(state_view.network_id()),
+            entrypoint_hash,
+            value.binding_hash,
+        )
+        .map_err(|error| error.to_string())?;
+        let registry_match = if value.binding_hash == expected_binding_hash {
+            QueuePlanAdmissionRegistryMatch::Exact
+        } else {
+            QueuePlanAdmissionRegistryMatch::Conflict
+        };
+        Ok((registry_match, Some(application_state)))
+    }
+    /// Read one canonical registry owner without decoding its application evidence.
+    /// Callers must validate the returned owner's pending or terminal state.
+    fn queue_plan_admission_registry_value_in_view(
+        state_view: &impl StateReadOnlyWithTransactions,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> Result<Option<crate::torii_proxy::QueuePlanAdmissionRegistryValueV1>, String> {
         let registry_key = crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1 {
             version: crate::torii_proxy::QUEUE_PLAN_ADMISSION_BINDING_VERSION_V1,
             network_id_digest: crate::torii_proxy::queue_plan_admission_network_id_digest(
@@ -39299,23 +39364,11 @@ impl State {
                         .to_owned(),
                 );
             }
-            return Ok((QueuePlanAdmissionRegistryMatch::Absent, None));
+            return Ok(None);
         };
         let value = Self::decode_exact_queue_plan_admission_registry_marker(&key, payload)
             .map_err(|error| error.to_string())?;
-        let application_state = Self::queue_plan_registry_owner_application_state_in_view(
-            state_view,
-            registry_key.network_id_digest,
-            registry_key.entrypoint_hash,
-            value.binding_hash,
-        )
-        .map_err(|error| error.to_string())?;
-        let registry_match = if value.binding_hash == expected_binding_hash {
-            QueuePlanAdmissionRegistryMatch::Exact
-        } else {
-            QueuePlanAdmissionRegistryMatch::Conflict
-        };
-        Ok((registry_match, Some(application_state)))
+        Ok(Some(value))
     }
     fn queue_plan_admission_registry_marker_key(
         registry_key: &crate::torii_proxy::QueuePlanAdmissionRegistryKeyV1,
@@ -39820,34 +39873,15 @@ impl State {
         }
         Ok((key, marker))
     }
+    /// Check only the members owned by one already validated obligation.
+    /// Whole-roster validation belongs to mutation, capacity and drain boundaries;
+    /// repeating it for each admission or FIFO candidate makes same-route work quadratic.
     fn queue_plan_pending_exact_route_member_state_in_storage(
         storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
         obligation: &QueuePlanPendingObligationV1,
     ) -> Result<QueuePlanPendingRouteMemberState, MergeLedgerCommitError> {
-        let prevalidated_routes = Self::prevalidate_queue_plan_pending_route_rosters(
-            storage,
-            obligation.routes.iter().copied(),
-        )?;
-        Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
-            storage,
-            obligation,
-            &prevalidated_routes,
-        )
-    }
-    fn queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
-        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
-        obligation: &QueuePlanPendingObligationV1,
-        prevalidated_routes: &BTreeSet<QueuePlanPendingObligationRouteV1>,
-    ) -> Result<QueuePlanPendingRouteMemberState, MergeLedgerCommitError> {
         let mut present = 0usize;
         for route in &obligation.routes {
-            if !prevalidated_routes.contains(route) {
-                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
-                    "QueuePlan route roster for lane `{}` dataspace `{}` was not prevalidated",
-                    route.lane_id.as_u32(),
-                    route.dataspace_id.as_u64(),
-                )));
-            }
             let expected =
                 Self::queue_plan_pending_route_member_from_obligation(obligation, *route)?;
             let key =
@@ -39872,6 +39906,22 @@ impl State {
                 "QueuePlan pending obligation has a partial exact route-member set".to_owned(),
             ))
         }
+    }
+    fn queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
+        storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
+        obligation: &QueuePlanPendingObligationV1,
+        prevalidated_routes: &BTreeSet<QueuePlanPendingObligationRouteV1>,
+    ) -> Result<QueuePlanPendingRouteMemberState, MergeLedgerCommitError> {
+        for route in &obligation.routes {
+            if !prevalidated_routes.contains(route) {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "QueuePlan route roster for lane `{}` dataspace `{}` was not prevalidated",
+                    route.lane_id.as_u32(),
+                    route.dataspace_id.as_u64(),
+                )));
+            }
+        }
+        Self::queue_plan_pending_exact_route_member_state_in_storage(storage, obligation)
     }
     fn prevalidate_queue_plan_pending_route_rosters(
         storage: &impl StorageReadOnly<StatePath, Vec<u8>>,
@@ -40485,6 +40535,15 @@ impl State {
                         "QueuePlan pending-obligation marker `{key}` conflicts with its immutable admission"
                     )));
                 }
+                let terminal_key = Self::queue_plan_signed_alias_terminal_marker_key_from_claim(
+                    expected.network_id_digest,
+                    expected.entrypoint_hash,
+                )?;
+                if storage.get(&terminal_key).is_some() {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan pending obligation `{key}` conflicts with terminal marker `{terminal_key}`"
+                    )));
+                }
                 Self::require_queue_plan_pending_signed_alias_member_marker(storage, &current)?;
                 let route_state = Self::queue_plan_pending_exact_route_member_state_in_storage(
                     storage, &current,
@@ -40514,6 +40573,17 @@ impl State {
                 }
             }
             None => {
+                // Direct application excludes terminal aliases even when this
+                // entrypoint has no signed-transaction alias of its own.
+                let terminal_key = Self::queue_plan_signed_alias_terminal_marker_key_from_claim(
+                    expected.network_id_digest,
+                    expected.entrypoint_hash,
+                )?;
+                if outer_committed && storage.get(&terminal_key).is_some() {
+                    return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                        "QueuePlan directly applied admission `{key}` retains a signed-alias marker"
+                    )));
+                }
                 for route in &expected.routes {
                     let member =
                         Self::queue_plan_pending_route_member_from_obligation(&expected, *route)?;
@@ -40677,8 +40747,15 @@ impl State {
                     )));
                 }
             }
-            if Self::queue_plan_pending_exact_route_member_state_in_storage(storage, &current)?
-                != QueuePlanPendingRouteMemberState::AllPresent
+            let prevalidated_routes = Self::prevalidate_queue_plan_pending_route_rosters(
+                storage,
+                current.routes.iter().copied(),
+            )?;
+            if Self::queue_plan_pending_exact_route_member_state_after_roster_prevalidation(
+                storage,
+                &current,
+                &prevalidated_routes,
+            )? != QueuePlanPendingRouteMemberState::AllPresent
             {
                 return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                     "QueuePlan terminal pending obligation cannot be staged again: `{obligation_key}`"
@@ -51128,6 +51205,11 @@ impl<'state> StateBlock<'state> {
     pub(crate) fn add_committed_fragments(&mut self, additional: usize) {
         self.committed_fragments = self.committed_fragments.saturating_add(additional);
     }
+    /// Record successful routing lanes after their shared transaction overlay is applied.
+    /// Rejected entries and dropped overlays must not contribute lanes to this set.
+    pub(crate) fn record_applied_batch_lanes(&mut self, lanes: BTreeSet<LaneId>) {
+        self.touched_lanes.extend(lanes);
+    }
     fn record_da_shard_cursor_issue(
         &self,
         _reason: &'static str,
@@ -51365,10 +51447,6 @@ impl<'state> StateBlock<'state> {
     pub(crate) fn set_fastpq_tx_set_hash(&mut self, tx_set_hash: [u8; 32]) {
         self.fastpq_tx_set_hash = Some(tx_set_hash);
     }
-    /// Cache per-entry dataspace ids for FASTPQ public inputs.
-    pub(crate) fn set_fastpq_entry_dataspaces(&mut self, entries: BTreeMap<Hash, DataSpaceId>) {
-        self.fastpq_entry_dataspaces = entries;
-    }
     /// Capture the execution witness only while its execution-owned source seal remains valid.
     /// Authenticated replay retains its separate path and creates no local source inventory.
     /// Call while holding the exclusive execution-witness guard, after all execution workers
@@ -51481,7 +51559,7 @@ impl<'state> StateBlock<'state> {
                     public_inputs,
                     tx_set_hash,
                     entry_dataspaces: entry_dsid_bytes,
-                    source_inventory: Some(source_inventory),
+                    _source_inventory: Some(source_inventory),
                 });
             self.exec_witness = Some(witness);
         } else {
@@ -61385,7 +61463,7 @@ fn publish_replay_receipt(
     bundle.verify_kura_boundary(kura.as_ref())?;
     let tiered_before = state.tiered_backend.lock().clone();
     apply_replay_geometry_receipts(state, &receipt.geometry)?;
-    let kura_publication_lease = kura.replay_publication_lease();
+    let kura_publication_lease = kura.canonical_publication_lease();
     if let Err(error) = bundle.verify_kura_boundary(kura.as_ref()) {
         drop(kura_publication_lease);
         return match rollback_replay_geometry(state, &receipt.geometry, &tiered_before) {

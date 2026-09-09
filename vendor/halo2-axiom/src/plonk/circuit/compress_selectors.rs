@@ -1,4 +1,4 @@
-use super::Expression;
+use super::{Assigned, Expression, FixedColumnModeAccumulator, FixedColumnModeCounts};
 use ff::Field;
 
 /// This describes a selector and where it is activated.
@@ -123,8 +123,47 @@ fn plan(selectors: &[SelectorDescription], max_degree: usize) -> Vec<Vec<usize>>
 ///
 /// Unlike [`process`], this retains selector assignments in their bit-packed representation and
 /// therefore lets callers enforce resource limits before allocating degree-sized field vectors.
+#[cfg(test)]
 pub fn combination_count(selectors: &[SelectorDescription], max_degree: usize) -> usize {
     plan(selectors, max_degree).len()
+}
+
+/// Classifies the exact fixed columns produced by the existing selector plan.
+///
+/// Only bitmaps, scalar roots, and counts are inspected. Roots with no activated rows do not
+/// contribute values, but still advance the root in exactly the order used by [`process`].
+/// Uncovered rows contribute zero. Actual field equality, rather than a numeric root index,
+/// determines each mode even if field addition wraps a root to zero or one.
+pub(super) fn combination_modes<F: Field>(
+    selectors: &[SelectorDescription],
+    max_degree: usize,
+) -> FixedColumnModeCounts {
+    let n = selectors
+        .first()
+        .map_or(0, |selector| selector.activations.len());
+    let mut modes = FixedColumnModeCounts::default();
+    for combination in plan(selectors, max_degree) {
+        let mut column = FixedColumnModeAccumulator::new();
+        let mut covered = 0;
+        let mut assigned_root = F::ONE;
+        for selector_index in combination {
+            let active = selectors[selector_index]
+                .activations
+                .iter()
+                .filter(|&&active| active)
+                .count();
+            column.observe(Assigned::Trivial(assigned_root), active);
+            covered += active;
+            assigned_root += F::ONE;
+        }
+        // The existing plan guarantees that selectors in one combination are disjoint.
+        column.observe(
+            Assigned::Zero,
+            n.checked_sub(covered).expect("disjoint selector rows"),
+        );
+        modes.add(column.finish());
+    }
+    modes
 }
 
 /// This function takes a vector that defines each selector as well as a closure
@@ -214,9 +253,105 @@ where
 mod tests {
     use super::*;
     use crate::{plonk::FixedQuery, poly::Rotation};
-    use halo2curves::pasta::Fp;
+    use halo2curves::pasta::{Fp, Fq};
     use proptest::collection::{SizeRange, vec};
     use proptest::prelude::*;
+
+    fn materialized_modes<F: Field>(columns: &[Vec<F>]) -> FixedColumnModeCounts {
+        let mut modes = FixedColumnModeCounts::default();
+        for values in columns {
+            if values.iter().all(|value| value == &values[0]) {
+                modes.constant += 1;
+            } else if values
+                .iter()
+                .all(|value| *value == F::ZERO || *value == F::ONE)
+            {
+                modes.binary += 1;
+            } else {
+                modes.raw += 1;
+            }
+        }
+        modes
+    }
+
+    fn exact_root_cases<F: Field>() {
+        let selector = |selector, activations, max_degree| SelectorDescription {
+            selector,
+            activations,
+            max_degree,
+        };
+        let cases = [
+            (
+                vec![
+                    selector(7, vec![false; 4], 1),
+                    selector(2, vec![false; 4], 1),
+                ],
+                vec![vec![F::ZERO; 4]],
+                (1, 0, 0),
+            ),
+            (
+                vec![
+                    selector(7, vec![false; 4], 1),
+                    selector(2, vec![true; 4], 1),
+                ],
+                vec![vec![F::ONE + F::ONE; 4]],
+                (1, 0, 0),
+            ),
+            (
+                vec![
+                    selector(7, vec![false; 4], 1),
+                    selector(2, vec![true, false, false, false], 1),
+                ],
+                vec![vec![F::ONE + F::ONE, F::ZERO, F::ZERO, F::ZERO]],
+                (0, 0, 1),
+            ),
+            (
+                vec![
+                    selector(2, vec![true, false, false, false], 1),
+                    selector(7, vec![false; 4], 1),
+                ],
+                vec![vec![F::ONE, F::ZERO, F::ZERO, F::ZERO]],
+                (0, 1, 0),
+            ),
+            (
+                vec![
+                    selector(7, vec![true, false, false, false], 1),
+                    selector(2, vec![true, true, false, false], 1),
+                ],
+                vec![
+                    vec![F::ONE, F::ZERO, F::ZERO, F::ZERO],
+                    vec![F::ONE, F::ONE, F::ZERO, F::ZERO],
+                ],
+                (0, 2, 0),
+            ),
+            (
+                vec![
+                    selector(7, vec![true; 4], 1),
+                    selector(2, vec![false; 4], 0),
+                ],
+                vec![vec![F::ZERO; 4], vec![F::ONE; 4]],
+                (2, 0, 0),
+            ),
+        ];
+        for (selectors, expected_values, expected_modes) in cases {
+            let modes = combination_modes::<F>(&selectors, 3);
+            let (values, _) = process(selectors, 3, || Expression::Constant(F::ONE));
+            assert_eq!(values, expected_values);
+            assert_eq!((modes.constant, modes.binary, modes.raw), expected_modes);
+            assert_eq!(modes, materialized_modes(&values));
+            assert_eq!(modes.total(), values.len());
+        }
+        assert_eq!(
+            combination_modes::<F>(&[], 3),
+            FixedColumnModeCounts::default()
+        );
+    }
+
+    #[test]
+    fn combination_modes_respect_inactive_roots_overlap_and_order_in_both_fields() {
+        exact_root_cases::<Fp>();
+        exact_root_cases::<Fq>();
+    }
 
     prop_compose! {
         fn arb_selector(assignment_size: usize, max_degree: usize)
@@ -276,6 +411,15 @@ mod tests {
                 combination_count(&selectors, max_degree),
                 combination_assignments.len(),
                 "count-only planning must exactly match materialization"
+            );
+            assert_eq!(
+                combination_modes::<Fp>(&selectors, max_degree),
+                materialized_modes(&combination_assignments),
+            );
+            let (fq_assignments, _) = process::<Fq, _>(selectors.clone(), max_degree, || Expression::Constant(Fq::ONE));
+            assert_eq!(
+                combination_modes::<Fq>(&selectors, max_degree),
+                materialized_modes(&fq_assignments),
             );
 
             {

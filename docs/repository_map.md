@@ -31,8 +31,9 @@ boundaries and where to make changes.
 | `iroha_sccp`, `settlement_router`, `kaigi_zk` | Cross-chain protocol handling, settlement, and capability-specific proof support. |
 | `iroha_p2p`, `iroha_logger`, `iroha_telemetry` | Node networking, logging, and runtime metrics. Shared wire records belong below these implementations. |
 | `iroha_zkp_halo2`, `fastpq_prover`, `zk_ace_prover` | Proof primitives or execution engines according to their feature-resolved graph. Shipping SDK checks reject node proof-execution features. |
-| `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI artifacts explicitly. |
-| [`mochi`](../mochi), [`xtask`](../xtask), [`tools`](../tools) | Local applications, repository automation, fixture generation, and deployment/service tools. Their manifests declare their actual runtime dependencies. |
+| `iroha_test_network`, [`integration_tests`](../integration_tests), `izanami` | Real network test consumers. CI supplies the daemon and CLI explicitly; the first two also receive a separately compiled message-control daemon. Qualified corridors retain their own binary/provenance runners. |
+| [`mochi`](../mochi) | Local sandbox application using account-bound SDK streams. The supervisor coordinates generation and peer lifecycles; [genesis artifacts](../mochi/mochi-core/src/supervisor/genesis_material.rs) and [snapshot transactions/recovery](../mochi/mochi-core/src/supervisor/snapshot_restore.rs) have distinct runtime owners. Node orchestration dependencies stay with the application. |
+| [`xtask`](../xtask), [`tools`](../tools) | Repository automation, fixture generation, and deployment/service tools. Their manifests declare their actual runtime dependencies. |
 
 The approved `iroha_model_base` and `iroha_privacy_model` physical extractions
 remain pending and are tracked in

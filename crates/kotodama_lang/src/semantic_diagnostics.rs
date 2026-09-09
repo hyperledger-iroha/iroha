@@ -31,7 +31,7 @@ pub(crate) enum SemanticFix {
         target: SourceRange,
         index: SourceRange,
     },
-    ListTrySet {
+    ListSet {
         target: SourceRange,
         index: SourceRange,
         value: SourceRange,
@@ -108,17 +108,14 @@ fn materialize_fix(
             let index = safe_slice(source, index)?;
             format!("{target}.get({index})")
         }
-        SemanticFix::ListTrySet {
+        SemanticFix::ListSet {
             target,
             index,
             value,
         } => {
-            // V1 has no executable unchecked-write form to preserve. Rewriting
-            // one complete simple assignment to `try_set` gives it the defined
-            // migration semantics: attempt the mutation once and safely ignore
-            // an out-of-range `false`. The semantic producer never emits this
-            // recipe for compound writes, while these range/comment checks make
-            // partial or trivia-moving rewrites fail closed.
+            // Rewriting a complete simple assignment to checked `set` preserves
+            // failure visibility. Compound writes and trivia-moving rewrites
+            // do not receive an automatic replacement.
             if safe_slice(source, primary).is_none()
                 || !strict_child(primary, target)
                 || !strict_child(primary, index)
@@ -131,7 +128,7 @@ fn materialize_fix(
             let target = safe_slice(source, target)?;
             let index = safe_slice(source, index)?;
             let value = safe_slice(source, value)?;
-            format!("{target}.try_set(index: {index}, value: {value});")
+            format!("{target}.set(index: {index}, value: {value});")
         }
         SemanticFix::Replace { replacement } => {
             safe_slice(source, primary)?;
@@ -220,6 +217,9 @@ pub(crate) fn from_semantic_failures(
                         .fix
                         .and_then(|fix| materialize_fix(source, semantic.primary, fix));
                 }
+                if let Some(source) = source {
+                    diagnostic.capture_source(source);
+                }
                 diagnostic
             })
             .collect(),
@@ -305,7 +305,7 @@ mod tests {
             "K2002",
             "E_DUPLICATE_DECLARATION",
             "E_RESERVED_DECLARATION",
-            "E_DUPLICATE_ERROR_CODE",
+            "E_CONFLICTING_ERROR_TYPE",
             "E_INTERNAL_RESOLUTION",
         ] {
             assert_eq!(phase_for_semantic_failure(code), DiagnosticPhase::Resolve);
@@ -393,17 +393,17 @@ mod tests {
         let fix = materialize_fix(
             &source,
             primary,
-            SemanticFix::ListTrySet {
+            SemanticFix::ListSet {
                 target: range(source_id, text, "values"),
                 index: range(source_id, text, "offset"),
                 value: range(source_id, text, "replacement"),
             },
         )
-        .expect("safe List.try_set fix");
+        .expect("safe List.set fix");
         assert_eq!(fix.span.byte_range, Some(primary.range));
         assert_eq!(
             fix.replacement,
-            "values.try_set(index: offset, value: replacement);"
+            "values.set(index: offset, value: replacement);"
         );
     }
     #[test]

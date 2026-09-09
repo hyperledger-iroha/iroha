@@ -138,7 +138,6 @@ pub(crate) fn validate_builtin_call(
         Builtin::StateGet
         | Builtin::StateSet
         | Builtin::StateDel
-        | Builtin::StateKeys
         | Builtin::StateHas
         | Builtin::StateLen
         | Builtin::StateCount
@@ -494,7 +493,8 @@ fn validate_expr(expr: &TypedExpr, functions: &HashSet<String>) -> Result<(), Se
             reject_secret_key(index)?;
             validate_expr(index, functions)
         }
-        ExprKind::IntLiteral(_)
+        ExprKind::ErrorValue(_)
+        | ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
@@ -590,7 +590,8 @@ fn expression_contains_secret(expr: &TypedExpr) -> bool {
         ExprKind::Index { target, index } => {
             expression_contains_secret(target) || expression_contains_secret(index)
         }
-        ExprKind::IntLiteral(_)
+        ExprKind::ErrorValue(_)
+        | ExprKind::IntLiteral(_)
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
@@ -761,22 +762,30 @@ mod tests {
     }
     #[test]
     fn flat_crypto_spellings_are_rejected() {
-        for call in [
-            "poseidon2(left: 1, right: 2)",
-            "poseidon6(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6)",
-            "pubkgen(1)",
-            "valcom(left: 1, right: 2)",
+        for (call, code) in [
+            ("poseidon2(left: 1, right: 2)", "E_INTERNAL_BUILTIN"),
+            (
+                "poseidon6(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6)",
+                "E_INTERNAL_BUILTIN",
+            ),
+            ("pubkgen(1)", "E_INTERNAL_BUILTIN"),
+            ("valcom(left: 1, right: 2)", "E_NON_CANONICAL_BUILTIN"),
         ] {
             let source = format!("seiyaku Privacy {{ fn rejected() {{ let _value = {call}; }} }}");
             let error = analyze_error(&source);
-            assert_eq!(error.code, "E_NON_CANONICAL_BUILTIN", "{call}");
-            assert!(
-                error
-                    .message
-                    .contains("legacy or non-canonical builtin spelling")
-                    && error.message.contains("crypto::"),
-                "{call}: {error:?}"
-            );
+            assert_eq!(error.code, code, "{call}");
+            if code == "E_INTERNAL_BUILTIN" {
+                assert!(
+                    error.message.contains("compiler-internal"),
+                    "{call}: {error:?}"
+                );
+            } else {
+                assert!(
+                    error.message.contains("non-canonical builtin spelling")
+                        && error.message.contains("crypto::"),
+                    "{call}: {error:?}"
+                );
+            }
         }
     }
 }

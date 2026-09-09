@@ -18,6 +18,7 @@ pub mod compiler;
 pub mod diagnostic;
 mod doc_consistency;
 pub mod driver;
+pub mod editor;
 pub mod formatter;
 pub mod i18n;
 pub mod ir;
@@ -28,6 +29,7 @@ pub mod parser;
 pub mod policy;
 pub mod regalloc;
 pub mod resolved;
+mod result_use;
 mod secret;
 pub mod semantic;
 mod semantic_diagnostics;
@@ -36,6 +38,7 @@ pub mod source;
 pub mod spanned_ast;
 mod ssa;
 pub mod syntax;
+pub mod testing;
 pub use ivm_abi::{
     Perm, SyscallPolicy, VMError, axt, dev_env, encoding, instruction, metadata, pointer_abi,
     syscalls,

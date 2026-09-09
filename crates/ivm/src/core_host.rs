@@ -9,9 +9,8 @@ use crate::{
     gas,
     host::{
         AccessLog, IVMHost, TLV_ENVELOPE_OVERHEAD, canonical_state_map_key_at,
-        canonical_typed_state_map_path, checked_state_keys_limit, common_syscall_gas_quote,
-        conservative_syscall_gas_quote, debug_log_gas, is_sm_syscall,
-        preflight_reserved_state_keys_page, preflight_reserved_syscall_gas,
+        canonical_typed_state_map_path, common_syscall_gas_quote, conservative_syscall_gas_quote,
+        debug_log_gas, is_sm_syscall, preflight_reserved_syscall_gas,
         quote_canonical_state_map_path_lengths, quote_tlv_payload_len_at,
         require_host_syscall_metering_spec, reserve_available_syscall_gas_at_least,
         validate_declared_state_map_base, validate_declared_state_map_key,
@@ -106,6 +105,7 @@ impl CachedProofEntry {
 }
 #[derive(Clone)]
 pub struct CoreHost {
+    state_instance: String,
     // Simple in-memory state for STATE_{GET,SET,DEL} syscalls keyed by path.
     state: DurableStateOverlay,
     schema: Arc<dyn SchemaRegistry + Send + Sync>,
@@ -143,8 +143,20 @@ struct CoreHostSnapshot {
     access_log: AccessLog,
 }
 impl CoreHost {
+    /// Bind this isolated development host to a deterministic contract instance.
+    /// Persist and reuse the same binding with a local state overlay; distinct
+    /// instances must use distinct bindings. Production hosts derive it from
+    /// the authenticated contract address.
+    pub fn set_state_instance(&mut self, instance: String) -> Result<(), VMError> {
+        if instance.is_empty() || instance.len() > 1024 {
+            return Err(VMError::NoritoInvalid);
+        }
+        self.state_instance = instance;
+        Ok(())
+    }
     pub fn new() -> Self {
         Self {
+            state_instance: "local".to_owned(),
             state: DurableStateOverlay::in_memory(),
             schema: Arc::new(DefaultRegistry::new()),
             axt_state: None,
@@ -167,6 +179,7 @@ impl CoreHost {
     /// Construct a CoreHost with a specific schema registry implementation.
     pub fn new_with_registry(reg: Box<dyn SchemaRegistry + Send + Sync>) -> Self {
         Self {
+            state_instance: "local".to_owned(),
             state: DurableStateOverlay::in_memory(),
             schema: Arc::from(reg),
             axt_state: None,
@@ -301,31 +314,19 @@ impl CoreHost {
                 .strip_prefix(prefix)
                 .is_some_and(|suffix| suffix.starts_with('/'))
     }
-    fn state_keys_page_with_prefix(
+    fn state_count_with_prefix(
         &self,
         vm: &IVM,
         prefix: &StatePath,
         path_len: usize,
-        offset: u64,
-        limit: u64,
-    ) -> Result<(Vec<StatePath>, u64, u64), VMError> {
+    ) -> Result<(u64, u64), VMError> {
         #[cfg(test)]
         self.state_scan_examined.store(0, Ordering::Relaxed);
         let prefix = prefix.as_ref();
-        let take = checked_state_keys_limit(limit)?;
-        let mut selected = Vec::new();
-        let mut selected_element_bytes = 0_usize;
         let mut total = 0_u64;
         let mut scan_work_gas = u64::try_from(path_len).unwrap_or(u64::MAX);
-        let mut response_tail_gas = crate::host::state_keys_prepare_minimum(path_len, limit)?
-            .saturating_sub(crate::host::state_path_gas(path_len));
         for key in self.state.keys_with_text_prefix(prefix) {
-            crate::host::preflight_reserved_state_scan_work_with_tail(
-                vm,
-                scan_work_gas,
-                key.as_ref().len(),
-                response_tail_gas,
-            )?;
+            crate::host::preflight_reserved_state_scan_work(vm, scan_work_gas, key.as_ref().len())?;
             crate::host::validate_state_path(key)?;
             #[cfg(test)]
             self.state_scan_examined.fetch_add(1, Ordering::Relaxed);
@@ -333,27 +334,10 @@ impl CoreHost {
                 .saturating_add(1)
                 .saturating_add(u64::try_from(key.as_ref().len()).unwrap_or(u64::MAX));
             if Self::state_key_matches_prefix(key.as_ref(), prefix) {
-                if total >= offset && selected.len() < take {
-                    let (next_elements, next_response_tail) =
-                        crate::host::state_keys_response_tail_after_item(
-                            selected.len(),
-                            selected_element_bytes,
-                            key.as_ref(),
-                        )?;
-                    preflight_reserved_syscall_gas(
-                        vm,
-                        STATE_QUERY_GAS_BASE
-                            .saturating_add(scan_work_gas)
-                            .saturating_add(u64::try_from(next_response_tail).unwrap_or(u64::MAX)),
-                    )?;
-                    selected_element_bytes = next_elements;
-                    response_tail_gas = u64::try_from(next_response_tail).unwrap_or(u64::MAX);
-                    selected.push(key.clone());
-                }
                 total = total.saturating_add(1);
             }
         }
-        Ok((selected, total, scan_work_gas))
+        Ok((total, scan_work_gas))
     }
     /// Borrow the raw Norito payload stored under `path`, if present.
     pub fn state_bytes(&self, path: &str) -> Option<Vec<u8>> {
@@ -1189,13 +1173,8 @@ impl IVMHost for CoreHost {
                 )?;
                 reserve_available_syscall_gas_at_least(vm, crate::host::state_path_gas(path_len))?
             }
-            syscalls::SYSCALL_STATE_KEYS => {
-                let path_len = crate::host::quote_state_path_payload_len_at(
-                    vm,
-                    Self::resolve_code_tlv_addr(vm, vm.register(10)),
-                )?;
-                let minimum = crate::host::state_keys_prepare_minimum(path_len, vm.register(12))?;
-                reserve_available_syscall_gas_at_least(vm, minimum)?
+            syscalls::SYSCALL_STATE_SCAN => {
+                reserve_available_syscall_gas_at_least(vm, crate::state_scan::prepare_minimum(vm)?)?
             }
             syscalls::SYSCALL_STATE_SET => {
                 let path_len = crate::host::quote_state_path_payload_len_at(
@@ -1357,32 +1336,26 @@ impl IVMHost for CoreHost {
                 self.log_write_key(path.as_ref());
                 Ok(gas)
             }
-            syscalls::SYSCALL_STATE_KEYS => {
-                let (prefix, path_len) = self.decode_state_scan_path_tlv(vm, vm.register(10))?;
-                let (selected, total, scan_work_gas) = self.state_keys_page_with_prefix(
-                    vm,
-                    &prefix,
-                    path_len,
-                    vm.register(11),
-                    vm.register(12),
-                )?;
-                preflight_reserved_state_keys_page(
-                    vm,
-                    &selected,
-                    scan_work_gas,
-                    0,
-                    u64::try_from(selected.len()).unwrap_or(u64::MAX),
-                )?;
-                self.log_read_key(prefix.as_ref());
-                let payload = encode_canonical_norito(&selected)?;
-                let gas = STATE_QUERY_GAS_BASE
-                    .saturating_add(scan_work_gas)
-                    .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
-                preflight_reserved_syscall_gas(vm, gas)?;
-                let out = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, out);
-                vm.set_register(11, total);
-                vm.set_register(12, u64::try_from(selected.len()).unwrap_or(u64::MAX));
+            syscalls::SYSCALL_STATE_SCAN => {
+                let request =
+                    crate::state_scan::StateScanRequest::decode(vm, &self.state_instance)?;
+                let map = request.map.clone();
+                let prefix = format!("{}/", map.as_ref());
+                let after = request.after.clone();
+                let mut page = crate::state_scan::StateScanPage::new(request);
+                for key in self
+                    .state
+                    .keys_after_with_text_prefix(&prefix, after.as_ref().map(|path| path.as_ref()))
+                {
+                    if page
+                        .examine(vm, key.as_ref(), key.as_ref().len(), true)?
+                        .is_break()
+                    {
+                        break;
+                    }
+                }
+                let gas = page.publish(vm)?;
+                self.log_read_key(map.as_ref());
                 Ok(gas)
             }
             syscalls::SYSCALL_STATE_HAS => {
@@ -1413,8 +1386,7 @@ impl IVMHost for CoreHost {
             }
             syscalls::SYSCALL_STATE_COUNT => {
                 let (prefix, path_len) = self.decode_state_scan_path_tlv(vm, vm.register(10))?;
-                let (_, total, scan_work_gas) =
-                    self.state_keys_page_with_prefix(vm, &prefix, path_len, u64::MAX, 0)?;
+                let (total, scan_work_gas) = self.state_count_with_prefix(vm, &prefix, path_len)?;
                 let gas = STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
                 preflight_reserved_syscall_gas(vm, gas)?;
                 self.log_read_key(prefix.as_ref());
@@ -1691,27 +1663,8 @@ impl IVMHost for CoreHost {
                 let input_len = v_tlv.payload.len();
                 if let Some(bytes) = self.schema.encode_json(&schema, json.get().as_bytes()) {
                     if crate::dev_env::decode_trace_enabled() {
-                        // Try immediate roundtrip for known schemas to validate encoding
-                        let roundtrip_ok = match schema.as_str() {
-                            "Order" => {
-                                #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                                struct Order {
-                                    qty: i64,
-                                    side: String,
-                                }
-                                norito::decode_from_bytes::<Order>(&bytes).is_ok()
-                            }
-                            "OrderByTime" => {
-                                #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                                struct OrderByTime {
-                                    qty: i64,
-                                    side: String,
-                                    tif: u32,
-                                }
-                                norito::decode_from_bytes::<OrderByTime>(&bytes).is_ok()
-                            }
-                            _ => true,
-                        };
+                        // Trace through the same registered owner that produced this frame.
+                        let roundtrip_ok = self.schema.decode_to_json(&schema, &bytes).is_some();
                         eprintln!(
                             "[CoreHost] SCHEMA_ENCODE immediate_roundtrip schema={schema} ok={roundtrip_ok} len={len}",
                             len = bytes.len()
@@ -1982,10 +1935,10 @@ impl IVMHost for CoreHost {
                 vm.request_abort();
                 Ok(DEBUG_GAS)
             }
-            syscalls::SYSCALL_CONTRACT_ABORT => {
-                vm.request_contract_abort(vm.register(10));
-                Ok(DEBUG_GAS)
-            }
+            syscalls::SYSCALL_CONTRACT_ABORT => crate::host::request_nominal_contract_abort(
+                vm,
+                crate::core_host::CoreHost::resolve_code_tlv_addr,
+            ),
             syscalls::SYSCALL_DEBUG_LOG => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
@@ -2328,8 +2281,10 @@ mod tests {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -2342,7 +2297,7 @@ mod tests {
                 name: name.to_owned(),
                 ty,
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
         }
     }
     fn state_map_interface(name: &str, key: EmbeddedStateType) -> EmbeddedContractInterfaceV1 {
@@ -2682,7 +2637,7 @@ mod tests {
         );
     }
     #[test]
-    fn state_keys_syscall_returns_sorted_prefix_page() {
+    fn state_count_has_and_len_respect_component_prefix() {
         let mut host = CoreHost::new();
         host.insert_state_value("orders/2", b"two");
         host.insert_state_value("orders/1", b"one");
@@ -2696,46 +2651,9 @@ mod tests {
             ))
             .expect("alloc prefix");
         vm.set_register(10, prefix_ptr);
-        vm.set_register(11, 1);
-        vm.set_register(12, 1);
-        let gas = host
-            .syscall(syscalls::SYSCALL_STATE_KEYS, &mut vm)
-            .expect("STATE_KEYS");
-        assert!(gas > 0);
-        assert_eq!(vm.register(11), 2);
-        assert_eq!(vm.register(12), 1);
-        let tlv = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("state keys tlv");
-        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-        let keys: Vec<StatePath> = norito::decode_from_bytes(tlv.payload).expect("decode keys");
-        assert_eq!(
-            keys,
-            vec!["orders/2".parse::<StatePath>().expect("second key")]
-        );
-        vm.set_register(10, prefix_ptr);
-        vm.set_register(11, 0);
-        vm.set_register(12, 0);
-        host.syscall(syscalls::SYSCALL_STATE_KEYS, &mut vm)
-            .expect("zero-sized state page");
-        assert_eq!(vm.register(12), 0);
-        let empty_page = vm
-            .memory
-            .validate_tlv(vm.register(10))
-            .expect("empty state keys page");
-        assert!(
-            norito::decode_from_bytes::<Vec<StatePath>>(empty_page.payload)
-                .expect("decode empty page")
-                .is_empty()
-        );
-        vm.set_register(10, prefix_ptr);
-        vm.set_register(11, 0);
-        vm.set_register(12, syscalls::STATE_KEYS_MAX_ITEMS + 1);
-        assert!(matches!(
-            host.syscall(syscalls::SYSCALL_STATE_KEYS, &mut vm),
-            Err(VMError::NoritoInvalid)
-        ));
+        host.syscall(syscalls::SYSCALL_STATE_COUNT, &mut vm)
+            .expect("count prefix");
+        assert_eq!(vm.register(10), 2);
         let key: StatePath = "orders/2".parse().expect("state key");
         let key_ptr = vm
             .alloc_input_tlv(&make_pointer_tlv(
@@ -2991,11 +2909,11 @@ mod tests {
             "STATE_SET must not conflate a map collection with one map value"
         );
         assert!(host.state_paths().is_empty());
-        for syscall in [syscalls::SYSCALL_STATE_KEYS, syscalls::SYSCALL_STATE_COUNT] {
+        for syscall in [syscalls::SYSCALL_STATE_SCAN, syscalls::SYSCALL_STATE_COUNT] {
             let path_ptr = alloc_state_path(&mut vm, &base);
             vm.set_register(10, path_ptr);
             vm.set_register(11, 0);
-            vm.set_register(12, 0);
+            vm.set_register(12, 1);
             host.syscall(syscall, &mut vm).unwrap_or_else(|error| {
                 panic!("scan syscall {syscall:#x} rejected map base: {error}")
             });
@@ -3066,7 +2984,7 @@ mod tests {
         );
     }
     #[test]
-    fn empty_state_keys_limit_sixty_four_fits_default_gas() {
+    fn empty_state_scan_limit_sixty_four_fits_default_gas() {
         let mut host = CoreHost::new();
         let mut vm = IVM::new(1_000_000);
         let prefix: StatePath = "empty".parse().expect("prefix");
@@ -3076,7 +2994,7 @@ mod tests {
             .expect("allocate prefix");
         vm.load_program(&assemble_state_map_read_program(
             &[
-                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
+                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_SCAN),
                 encoding::wide::encode_halt(),
             ],
             prefix.as_ref(),
@@ -3084,9 +3002,9 @@ mod tests {
         .expect("load program");
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
-        vm.set_register(12, syscalls::STATE_KEYS_MAX_ITEMS);
+        vm.set_register(12, syscalls::STATE_SCAN_MAX_ITEMS_V1);
         assert!(
-            host.prepare_syscall(syscalls::SYSCALL_STATE_KEYS, &vm)
+            host.prepare_syscall(syscalls::SYSCALL_STATE_SCAN, &vm)
                 .is_ok(),
             "the empty-page minimum must fit the V1 default"
         );
@@ -3102,7 +3020,7 @@ mod tests {
         );
     }
     #[test]
-    fn state_keys_quote_minus_one_fails_before_selected_key_materialization() {
+    fn state_count_quote_minus_one_fails_before_key_materialization() {
         let key_text = "pick/0000";
         let mut host = CoreHost::new();
         host.insert_state_value(key_text, b"value");
@@ -3114,7 +3032,7 @@ mod tests {
             .expect("allocate prefix");
         vm.load_program(&assemble_state_map_read_program(
             &[
-                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
+                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_COUNT),
                 encoding::wide::encode_halt(),
             ],
             prefix.as_ref(),
@@ -3123,23 +3041,19 @@ mod tests {
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, 0);
         vm.set_register(12, 1);
-        let (_, response_tail) = crate::host::state_keys_response_tail_after_item(0, 0, key_text)
-            .expect("response tail");
         let scan_work =
             u64::try_from(prefix_payload.len() + 1 + key_text.len()).expect("scan work fits");
-        let combined = STATE_QUERY_GAS_BASE
-            .saturating_add(scan_work)
-            .saturating_add(u64::try_from(response_tail).expect("response fits"));
+        let combined = STATE_QUERY_GAS_BASE.saturating_add(scan_work);
         vm.set_gas_limit(combined.saturating_add(4));
         assert_eq!(vm.run_with_host(&mut host), Err(VMError::OutOfGas));
-        assert_eq!(host.state_scan_examined.load(Ordering::Relaxed), 1);
+        assert_eq!(host.state_scan_examined.load(Ordering::Relaxed), 0);
         assert!(host.access_log.read_keys.is_empty());
         assert_eq!(vm.register(10), prefix_ptr);
         assert_eq!(vm.register(11), 0);
         assert_eq!(vm.register(12), 1);
     }
     #[test]
-    fn hostile_state_scan_stops_before_the_unaffordable_nth_key() {
+    fn hostile_state_count_stops_before_the_unaffordable_nth_key() {
         const FAILING_ITEM: u64 = 8;
         let mut host = CoreHost::new();
         for index in 0..64 {
@@ -3153,7 +3067,7 @@ mod tests {
             .expect("allocate prefix");
         vm.load_program(&assemble_state_map_read_program(
             &[
-                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_KEYS),
+                encoding::wide::encode_syscallx(syscalls::SYSCALL_STATE_COUNT),
                 encoding::wide::encode_halt(),
             ],
             prefix.as_ref(),
@@ -3161,13 +3075,7 @@ mod tests {
         .expect("load program");
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, u64::MAX);
-        vm.set_register(12, syscalls::STATE_KEYS_MAX_ITEMS);
-        let empty_tail = crate::host::state_keys_prepare_minimum(
-            prefix_payload.len(),
-            syscalls::STATE_KEYS_MAX_ITEMS,
-        )
-        .expect("empty page minimum")
-        .saturating_sub(crate::host::state_path_gas(prefix_payload.len()));
+        vm.set_register(12, syscalls::STATE_SCAN_MAX_ITEMS_V1);
         let key_len = "scan/0000".len();
         let failing_work = u64::try_from(prefix_payload.len())
             .expect("prefix fits")
@@ -3176,7 +3084,6 @@ mod tests {
             );
         let reserve = STATE_QUERY_GAS_BASE
             .saturating_add(failing_work)
-            .saturating_add(empty_tail)
             .saturating_sub(1);
         vm.set_gas_limit(reserve.saturating_add(5));
         assert_eq!(vm.run_with_host(&mut host), Err(VMError::OutOfGas));
@@ -3187,7 +3094,7 @@ mod tests {
         assert!(host.access_log.read_keys.is_empty());
         assert_eq!(vm.register(10), prefix_ptr);
         assert_eq!(vm.register(11), u64::MAX);
-        assert_eq!(vm.register(12), syscalls::STATE_KEYS_MAX_ITEMS);
+        assert_eq!(vm.register(12), syscalls::STATE_SCAN_MAX_ITEMS_V1);
     }
     #[test]
     fn state_get_quote_minus_one_observes_no_state_or_guest_output() {

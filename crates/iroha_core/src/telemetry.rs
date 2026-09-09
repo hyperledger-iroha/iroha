@@ -8049,7 +8049,18 @@ mod tests {
             0,
             0,
         );
-        let status = telemetry.status_snapshot();
+        let status = telemetry.status_snapshot(
+            &crate::release_identity::BuildIdentity::from_compiled_parts(
+                "test-executable",
+                Some("1111111111111111111111111111111111111111"),
+                None,
+                None,
+                Some("telemetry"),
+                Some("test-target"),
+            )
+            .expect("explicit executable identity")
+            .status(),
+        );
         let alpha = status
             .tx_gossip
             .targets
@@ -10517,12 +10528,13 @@ mod tests {
             .with_instructions(instructions)
             .sign(self.account_keypair.private_key());
             let crypto_cfg = self.state.crypto();
-            AcceptedTransaction::accept(
+            AcceptedTransaction::accept_with_time_source(
                 tx,
                 &self.network_id,
                 max_clock_drift,
                 tx_limits,
                 crypto_cfg.as_ref(),
+                &self.time_source,
             )
             .unwrap()
         }

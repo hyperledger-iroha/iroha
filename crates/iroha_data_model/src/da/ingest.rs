@@ -1,6 +1,5 @@
-#[cfg(feature = "json")]
 use crate::parameter::CustomParameter;
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     NetworkId,
@@ -14,7 +13,7 @@ use crate::{
     sorafs::pin_registry::{ManifestDigest, StorageClass},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
-#[cfg(feature = "json")]
+
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -32,8 +31,17 @@ pub const MAX_DA_INGEST_ADMISSION_LANES_V1: usize = 1_024;
 /// Consensus-wide ceiling for producer identities retained by DA admission.
 pub const MAX_DA_INGEST_ADMISSION_PRODUCERS_V1: usize = 4_096;
 /// One incarnation-bound lane entry in the governed DA ingest policy.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaIngestAdmissionLaneV1")]
@@ -74,8 +82,17 @@ impl DaIngestAdmissionLaneV1 {
 /// entries are never dropped: an empty producer list acts as a bounded durable
 /// tombstone, preventing an old signed epoch from becoming valid again after a
 /// lane id is retired and later reused.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaIngestAdmissionPolicyV1")]
@@ -302,7 +319,7 @@ impl DaIngestAdmissionPolicyV1 {
     }
 
     /// Convert this policy into the reserved custom parameter.
-    #[cfg(feature = "json")]
+
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(Self::parameter_id(), Json::new(self))
@@ -316,7 +333,7 @@ impl DaIngestAdmissionPolicyV1 {
     ///
     /// Returns [`norito::json::Error`] for malformed, unsupported, unbounded,
     /// or non-canonical payloads.
-    #[cfg(feature = "json")]
+
     pub fn from_custom_parameter(
         custom: &CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {
@@ -470,8 +487,20 @@ pub enum DaIngestAdmissionPolicyError {
     },
 }
 /// One canonical account-controller signature over a DA ingest authorization.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaIngestSignatureV1")]
@@ -482,8 +511,20 @@ pub struct DaIngestSignatureV1 {
     pub signature: Signature,
 }
 /// One canonical account-controller signature over an exact DA pin scope.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaPinScopeSignatureV1")]
@@ -497,8 +538,20 @@ pub struct DaPinScopeSignatureV1 {
 ///
 /// The request-content commitment keeps the consensus payload compact while the
 /// signed quota identity remains independently verifiable by every validator.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaIngestAuthorizationV1")]
@@ -566,8 +619,20 @@ impl DaIngestAuthorizationV1 {
 /// scope exists. The producer signs the returned scope and retries the same
 /// ingest request with those witnesses, preventing a block proposer from
 /// substituting any index-bearing pin field.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaPinScopeV1")]
@@ -657,8 +722,20 @@ impl DaPinScopeV1 {
     }
 }
 /// Producer authorization over one exact durable DA pin scope.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaPinScopeAuthorizationV1")]
@@ -730,9 +807,20 @@ impl DaPinScopeAuthorizationV1 {
 }
 /// Summary of the 2D erasure layout captured in DA manifests/receipts.
 #[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, Default,
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -751,8 +839,17 @@ pub struct DaStripeLayout {
     pub row_parity_stripes: u16,
 }
 /// Norito payload accepted by the Torii `/v1/da/ingest` endpoint.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -762,6 +859,8 @@ pub struct DaStripeLayout {
     ffi_type(opaque)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestRequest")]
 pub struct DaIngestRequest {
     /// Exact genesis-derived network identity authorising this request.
     pub network_id: NetworkId,
@@ -792,14 +891,11 @@ pub struct DaIngestRequest {
     /// Compression applied to the payload.
     pub compression: Compression,
     /// Optional pre-generated Norito manifest supplied by the caller.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::base64_vec::option")
-    )]
+    #[norito(json = "crate::json_helpers::base64_vec::option")]
     #[norito(required)]
     pub norito_manifest: Option<Vec<u8>>,
     /// Raw payload bytes to be chunked and replicated.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     pub payload: Vec<u8>,
     /// Additional metadata entries for governance/analytics.
     pub metadata: ExtraMetadata,
@@ -818,8 +914,17 @@ pub struct DaIngestRequest {
 /// Signer witnesses live on [`DaIngestRequest`] so every controller key signs
 /// one identical digest. Every request field that can affect admission,
 /// storage, accounting, or the resulting manifest is committed.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::da::ingest::DaIngestRequestIntentV1")]
@@ -1155,8 +1260,17 @@ impl DaIngestRequest {
     }
 }
 /// Ingest receipt returned once Torii accepts the blob.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -1166,6 +1280,8 @@ impl DaIngestRequest {
     ffi_type(opaque)
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::ingest::DaIngestReceipt")]
 pub struct DaIngestReceipt {
     /// Caller-supplied blob identifier echoed back to the submitter.
     pub client_blob_id: BlobDigest,
@@ -1182,10 +1298,7 @@ pub struct DaIngestReceipt {
     /// Storage ticket identifier issued by the orchestrator.
     pub storage_ticket: StorageTicketId,
     /// Norito-encoded PDP commitment derived from the accepted payload.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::base64_vec::option")
-    )]
+    #[norito(json = "crate::json_helpers::base64_vec::option")]
     #[norito(required)]
     pub pdp_commitment: Option<Vec<u8>>,
     /// Erasure layout summary for the admitted manifest.
@@ -1256,7 +1369,7 @@ mod pin_scope_tests {
                 norito::to_bytes(&decoded).expect("re-encode pin scope"),
                 frame
             );
-            #[cfg(feature = "json")]
+
             {
                 let json = norito::json::to_json(&scope).expect("encode pin scope JSON");
                 let decoded: DaPinScopeV1 = norito::json::from_str(&json)
@@ -1323,7 +1436,7 @@ mod pin_scope_tests {
     }
 }
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod admission_policy_tests {
     use super::*;
     use iroha_crypto::Algorithm;

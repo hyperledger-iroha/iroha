@@ -20,7 +20,7 @@ fn via_norito(status: &Status, tail: &str) -> Value {
 }
 fn bench_status_tail(c: &mut Criterion) {
     let metrics = Metrics::default();
-    let status = metrics.status_snapshot();
+    let status = metrics.status_snapshot(&build_identity_test_fixture::build_identity().status());
     let tail = "peers";
     c.bench_function("status_peers_direct", |b| {
         b.iter(|| direct(std::hint::black_box(&status), std::hint::black_box(tail)))
@@ -35,3 +35,6 @@ fn main() {
     bench_status_tail(&mut c);
     c.final_summary();
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

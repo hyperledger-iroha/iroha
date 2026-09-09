@@ -10,6 +10,7 @@ pub mod dev_env;
 pub mod encoding;
 pub mod entrypoint;
 pub mod error;
+pub mod error_types;
 pub mod host_payload;
 pub mod instruction;
 pub mod json;
@@ -18,6 +19,7 @@ pub mod metadata;
 pub mod numeric;
 pub mod pointer_abi;
 pub mod private_input;
+pub mod state_cursor;
 pub mod state_value;
 pub mod sum;
 pub mod syscalls;
@@ -28,3 +30,6 @@ pub enum SyscallPolicy {
     /// ABI surface for version 1 programs.
     AbiV1,
 }
+
+#[cfg(test)]
+mod captured_identity_tests;

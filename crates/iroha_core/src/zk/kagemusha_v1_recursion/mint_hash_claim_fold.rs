@@ -726,9 +726,9 @@ impl<F: KagemushaPoseidonFieldV1> KagemushaClaimCarrierRlcMachineV1<F> {
                                 if let Some(physical_cells) = &physical_cells {
                                     let virtual_cell =
                                         virtual_value.cell.ok_or(PlonkError::Synthesis)?;
-                                    let physical = *physical_cells
+                                    let physical = physical_cells
                                         .assigned_advices
-                                        .get(&virtual_cell)
+                                        .resolve(&virtual_cell)
                                         .ok_or(PlonkError::Synthesis)?;
                                     region.constrain_equal(bus, physical);
                                 }
@@ -5639,20 +5639,29 @@ mod tests {
                             |_circuit, profile| Ok::<_, String>(profile),
                         )
                     }
-                    .expect("compact full-range RLC proving key");
+                    .expect("structured full-range RLC proving key");
                     let vk_bytes = key.get_vk().to_bytes(halo2_proofs::SerdeFormat::Processed).len();
                     let table_commitment = key.get_vk().fixed_commitments()[base_table];
                     assert_eq!(table_commitment, key.get_vk().fixed_commitments()[rlc_table]);
-                    let mut compact = Vec::new();
-                    key.write_compact_v1_consuming(&mut compact)
-                        .expect("serialize actual compact RLC key");
-                    let pk_bytes = compact.len();
+                    let mut structured = Vec::new();
+                    key.write_structured_v1_consuming(&mut structured)
+                        .expect("serialize actual structured RLC key");
+                    let pk_bytes = structured.len();
                     let fixed = profile.configured_fixed_columns + profile.materialized_selector_columns;
                     let permutation = profile.permutation_columns;
                     let predicted_vk = 10 + 32 * (fixed + permutation)
                         + profile.selector_columns * profile.domain_rows.div_ceil(8);
+                    assert_eq!(
+                        profile.constant_fixed_columns + profile.binary_fixed_columns
+                            + profile.raw_fixed_columns,
+                        fixed,
+                    );
                     let predicted_pk = 56 + predicted_vk + 8
-                        + (fixed + permutation + 3) * (32 * profile.domain_rows + 4);
+                        + 3 * (32 * profile.domain_rows + 4)
+                        + 4 * profile.domain_rows * permutation
+                        + 33 * profile.constant_fixed_columns
+                        + (1 + profile.domain_rows.div_ceil(8)) * profile.binary_fixed_columns
+                        + (1 + 32 * profile.domain_rows) * profile.raw_fixed_columns;
                     assert_eq!(vk_bytes, predicted_vk);
                     assert_eq!(pk_bytes, predicted_pk);
 
@@ -5670,7 +5679,11 @@ mod tests {
                 assert_eq!(owned.permutation_columns, shared.permutation_columns);
                 assert_eq!(owned.configured_fixed_columns, shared.configured_fixed_columns + 1);
                 assert_eq!(owned_vk - shared_vk, 32);
-                assert_eq!(owned_pk - shared_pk, 2_097_188);
+                assert_eq!(owned.constant_fixed_columns, shared.constant_fixed_columns);
+                assert_eq!(owned.binary_fixed_columns, shared.binary_fixed_columns);
+                assert_eq!(owned.raw_fixed_columns, shared.raw_fixed_columns + 1);
+                // One raw k16 table tag/payload plus its Processed VK commitment is removed.
+                assert_eq!(owned_pk - shared_pk, 2_097_185);
                 eprintln!(
                     "KAGEMUSHA shared RLC range {} owned_pk={owned_pk} shared_pk={shared_pk} owned_vk={owned_vk} shared_vk={shared_vk}",
                     stringify!($curve)

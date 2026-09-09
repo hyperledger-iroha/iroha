@@ -1,3 +1,4 @@
+import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { Buffer } from "buffer";
 import { analyzeEntrypointValueTypeV1 } from "./entrypointSchema.js";
 import { assertString } from "./instructionBuilderPrimitives.js";
@@ -112,9 +113,9 @@ export function createContractManifestNormalizer(
       ),
       entrypoints: normalizeEntrypoints(entrypoints, "manifest.entrypoints"),
       states: normalizeManifestStates(source.states, "manifest.states"),
-      error_codes: normalizeManifestErrorCodes(
-        source.error_codes ?? source.errorCodes,
-        "manifest.errorCodes",
+      error_types: normalizeManifestErrorTypes(
+        source.error_types ?? source.errorTypes,
+        "manifest.errorTypes",
       ),
       kotoba:
         source.kotoba === undefined || source.kotoba === null
@@ -125,6 +126,7 @@ export function createContractManifestNormalizer(
           ? null
           : normalizeManifestProvenance(source.provenance, "manifest.provenance"),
     };
+    validateManifestErrorTypeBindingsV1(normalized);
     validateManifestDynamicAccessHintStateMaps(normalized);
     return normalized;
   }
@@ -458,7 +460,7 @@ export function createContractManifestNormalizer(
         );
       }
     }
-    if ((returnType === null) !== (returnSchema === null)) {
+    if (returnType === null || returnSchema === null) {
       fail(
         V_CODE_INVALID_OBJECT,
         `${name}.return_type and return_schema${TEXT_MUST_BE}present together`,
@@ -648,6 +650,7 @@ export function createContractManifestNormalizer(
       }
       case "Tuple":
         return { kind, value: normalizeU16(source.value, `${name}.value`) };
+      case "Unit":
       case "Option":
       case "Result":
         requireManifestNull(source.value, `${name}.value`);
@@ -675,6 +678,8 @@ export function createContractManifestNormalizer(
           value: { capacity },
         };
       }
+      case "Error":
+        return { kind, value: normalizeContractErrorTypeV1(source.value, `${name}.value`) };
       case "Leaf":
         return {
           kind,
@@ -770,32 +775,8 @@ export function createContractManifestNormalizer(
     });
   }
 
-  function normalizeManifestErrorCodes(value, name) {
-    if (value === undefined || value === null) {
-      return null;
-    }
-    if (!Array.isArray(value)) {
-      fail(V_CODE_INVALID_OBJECT, `${name}${TEXT_MUST_BE_AN}array`, name);
-    }
-    return value.map((errorCode, index) => {
-      const source = assertPlainObject(errorCode, `${name}[${index}]`);
-      const code = asNonNegativeInteger(source.code, `${name}[${index}].code`);
-      if (code > 0xffff_ffff) {
-        fail(
-          V_CODE_VALUE_OUT_OF_RANGE,
-          `${name}[${index}].code must fit in u32`,
-          `${name}[${index}].code`,
-        );
-      }
-      return {
-        namespace: normalizeManifestTypeDeclarationIdentifier(
-          source.namespace,
-          `${name}[${index}].namespace`,
-        ),
-        name: normalizeRequiredManifestString(source.name, `${name}[${index}].name`),
-        code,
-      };
-    });
+  function normalizeManifestErrorTypes(value, context) {
+    return normalizeContractErrorTypesV1(value, context);
   }
 
   function normalizeManifestTriggers(value, name) {

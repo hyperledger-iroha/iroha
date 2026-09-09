@@ -139,6 +139,21 @@ async fn wait_for_invoice_status(
     {
         Ok(result) => result,
         Err(elapsed) => {
+            let status = client
+                .client()
+                .status()
+                .get()
+                .await
+                .map(|status| {
+                    format!(
+                        "blocks={}, blocks_non_empty={}, txs_approved={}, txs_rejected={}",
+                        status.blocks,
+                        status.blocks_non_empty,
+                        status.txs_approved,
+                        status.txs_rejected
+                    )
+                })
+                .unwrap_or_else(|err| format!("status query failed: {err}"));
             let diagnostics = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
@@ -161,18 +176,6 @@ async fn wait_for_invoice_status(
                                 .unwrap_or_else(|| "missing".to_string())
                         })
                         .unwrap_or_else(|err| format!("trigger query failed: {err}"));
-                    let status = client
-                        .client().get_status()
-                        .map(|status| {
-                            format!(
-                                "blocks={}, blocks_non_empty={}, txs_approved={}, txs_rejected={}",
-                                status.blocks,
-                                status.blocks_non_empty,
-                                status.txs_approved,
-                                status.txs_rejected
-                            )
-                        })
-                        .unwrap_or_else(|err| format!("status query failed: {err}"));
                     let latest_block = client
                         .client().query(FindBlockHeaders)
                         .execute_all()

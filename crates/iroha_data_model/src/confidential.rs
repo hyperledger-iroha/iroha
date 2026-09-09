@@ -4,7 +4,7 @@
 //! verifier metadata together with Pedersen and Poseidon parameter sets. These structures model the
 //! governance state transitions (publish → activate → deprecate → withdraw) and advertise the
 //! hashes that wallets and validators must verify before accepting an upgrade.
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer, json_helpers::fixed_bytes,
@@ -72,21 +72,26 @@ const _: () = {
 };
 
 /// Closed KEM/DEM suite used by one padded confidential-memo recipient slot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(
-    feature = "json",
-    norito(tag = "suite", content = "value", deny_unknown_fields)
-)]
+#[norito(tag = "suite", content = "value", deny_unknown_fields)]
 pub enum ConfidentialMemoSuiteV1 {
     /// ML-KEM-768 key encapsulation with XChaCha20-Poly1305 key wrapping.
-    #[cfg_attr(feature = "json", norito(rename = "ml-kem-768-xchacha20-poly1305-v1"))]
+    #[norito(rename = "ml-kem-768-xchacha20-poly1305-v1")]
     MlKem768XChaCha20Poly1305,
     /// ML-KEM-1024 key encapsulation with XChaCha20-Poly1305 key wrapping.
-    #[cfg_attr(feature = "json", norito(rename = "ml-kem-1024-xchacha20-poly1305-v1"))]
+    #[norito(rename = "ml-kem-1024-xchacha20-poly1305-v1")]
     MlKem1024XChaCha20Poly1305,
 }
 
@@ -160,22 +165,28 @@ impl ConfidentialMemoSuiteV1 {
 /// XChaCha20-Poly1305 wrap of the memo key. Wallets try their local secret keys
 /// against every slot; the wire carries no recipient identifier or real-slot
 /// count.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 pub struct ConfidentialMemoRecipientSlotV1 {
     suite: ConfidentialMemoSuiteV1,
     /// Exact suite-sized ML-KEM encapsulation.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     encapsulation: Vec<u8>,
     /// XChaCha20-Poly1305 nonce for this slot's memo-key wrap.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     wrap_nonce: [u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
     /// Encrypted 32-byte memo key followed by its Poly1305 tag.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     wrapped_memo_key: [u8; CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1],
 }
 
@@ -271,12 +282,18 @@ impl Default for ConfidentialMemoRecipientSlotV1 {
 /// `slot_0` through `slot_7`. A named object is intentional: Norito does not
 /// treat a variable-length JSON sequence as a candidate representation, so
 /// seven-slot, nine-slot, and unknown-field inputs all fail decoding.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
 pub struct ConfidentialMemoRecipientSlotsV1 {
     slot_0: ConfidentialMemoRecipientSlotV1,
     slot_1: ConfidentialMemoRecipientSlotV1,
@@ -422,19 +439,27 @@ impl Default for ConfidentialMemoRecipientSlotsV1 {
 /// The independent body key is wrapped into all eight slots. Unused slots are
 /// populated with fresh dummy ML-KEM keys and otherwise indistinguishable
 /// ciphertexts; a sender never transmits a recipient count or empty slot.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
-#[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::ConfidentialMemoEnvelopeV1")]
 pub struct ConfidentialMemoEnvelopeV1 {
     slots: ConfidentialMemoRecipientSlotsV1,
     /// XChaCha20-Poly1305 nonce for the encrypted memo body.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     payload_nonce: [u8; CONFIDENTIAL_MEMO_XCHACHA_NONCE_BYTES_V1],
     /// Encrypted memo body followed by its Poly1305 tag.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::base64_vec"))]
+    #[norito(json = "crate::json_helpers::base64_vec")]
     ciphertext: Vec<u8>,
 }
 fn varint_len(len: usize) -> usize {
@@ -727,7 +752,6 @@ impl Default for ConfidentialMemoEnvelopeV1 {
     }
 }
 
-impl norito::NoritoSerialize for ConfidentialMemoEnvelopeV1 {}
 impl norito::SerializePayload for ConfidentialMemoEnvelopeV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         writer.write_all(&self.encode_wire()?)?;
@@ -743,7 +767,7 @@ impl norito::SerializePayload for ConfidentialMemoEnvelopeV1 {
     }
 }
 
-impl<'de> norito::NoritoDeserialize<'de> for ConfidentialMemoEnvelopeV1 {
+impl<'de> norito::DeserializePayload<'de> for ConfidentialMemoEnvelopeV1 {
     fn deserialize(archived: &'de norito_core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("ConfidentialMemoEnvelopeV1 deserialization must succeed for valid archives")
@@ -893,7 +917,7 @@ impl<'a> DecodeFromSlice<'a> for ConfidentialStatus {
         ConfidentialStatus::from_u8(raw).map(|status| (status, used))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonSerialize for ConfidentialStatus {
     fn json_serialize(&self, out: &mut String) {
         let label = match self {
@@ -915,7 +939,7 @@ impl norito::json::JsonSerialize for ConfidentialStatus {
         norito::json::write_json_string_to(label, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ConfidentialStatus {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -932,15 +956,12 @@ impl norito::json::JsonDeserialize for ConfidentialStatus {
 /// Digest advertising the active confidential feature set (verifier keys, parameters, and policy).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+#[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
 pub struct ConfidentialFeatureDigest {
     /// Optional hash summarizing the set of active verifying keys.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub vk_set_hash: Option<[u8; 32]>,
     /// Poseidon parameter set identifier expected by the node.
     pub poseidon_params_id: Option<u32>,
@@ -949,10 +970,7 @@ pub struct ConfidentialFeatureDigest {
     /// Version of the confidential ruleset encoded in manifests and policies.
     pub conf_rules_version: Option<u32>,
     /// Hash of the ZK consensus policy that affects proof admission and verification.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub zk_policy_hash: Option<[u8; 32]>,
 }
 impl ConfidentialFeatureDigest {
@@ -1000,9 +1018,22 @@ pub const DEFAULT_CONFIDENTIAL_FEATURE_DIGEST: ConfidentialFeatureDigest =
         Some(DEFAULT_GENESIS_CONFIDENTIAL_POLICY_HASH),
     );
 /// Identifier for confidential parameter registries (Pedersen/Poseidon).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSer,
+    DeriveJsonDe,
+    DeriveFast,
+)]
+#[norito(no_fast_from_json)]
 pub struct ConfidentialParamsId {
     value: u32,
 }
@@ -1036,16 +1067,18 @@ impl Display for ConfidentialParamsId {
 /// Descriptor for a Pedersen parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+#[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::PedersenParams")]
 pub struct PedersenParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
     /// Hash of the curve generators used by the Pedersen commitment scheme.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub generators_hash: [u8; 32],
     /// Hash of auxiliary constants (domain separators, blinding hints, etc.).
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub constants_hash: [u8; 32],
     /// Optional URI (CID) pointing to the canonical parameter bundle documentation.
     pub metadata_uri_cid: Option<String>,
@@ -1075,16 +1108,18 @@ impl PedersenParams {
 /// Descriptor for a Poseidon parameter set tracked on-ledger.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
 #[norito(reuse_archived)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(DeriveJsonSer, DeriveJsonDe, DeriveFast)]
+#[norito(no_fast_from_json)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::confidential::PoseidonParams")]
 pub struct PoseidonParams {
     /// Identifier referenced by shielded assets and proofs.
     pub params_id: ConfidentialParamsId,
     /// Hash of the Poseidon round constants.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub round_constants_hash: [u8; 32],
     /// Hash of the Poseidon MDS matrix.
-    #[cfg_attr(feature = "json", norito(json = "fixed_bytes"))]
+    #[norito(json = "fixed_bytes")]
     pub mds_matrix_hash: [u8; 32],
     /// Optional URI (CID) pointing to the canonical parameter bundle documentation.
     pub metadata_uri_cid: Option<String>,
@@ -1202,7 +1237,7 @@ mod tests {
     #[test]
     fn confidential_memo_roundtrips_with_exactly_eight_slots() {
         let payload = memo_envelope();
-        #[cfg(feature = "json")]
+
         {
             let ordinary = norito::json::to_json(&payload).expect("serialize payload JSON");
             assert_eq!(
@@ -1374,3 +1409,18 @@ mod tests {
 
 #[cfg(test)]
 mod captured_confidential_schema_tests;
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::confidential::PedersenParams,
+        >("iroha_data_model::confidential::PedersenParams");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::confidential::PoseidonParams,
+        >("iroha_data_model::confidential::PoseidonParams");
+    }
+}

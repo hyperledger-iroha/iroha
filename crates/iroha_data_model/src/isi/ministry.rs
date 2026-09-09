@@ -7,12 +7,20 @@ use crate::ministry::AgendaProposalV1;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// Submit a citizen agenda proposal to the Ministry intake ledger.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::isi::ministry::SubmitAgendaProposal")]
 pub struct SubmitAgendaProposal {
     /// Canonical agenda proposal payload.

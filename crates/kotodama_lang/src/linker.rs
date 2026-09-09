@@ -25,6 +25,7 @@ use std::{
     fmt,
     sync::{Arc, Mutex},
 };
+mod editor;
 const LINKED_SYMBOL_PREFIX: &str = "__kotodama_link_";
 const MAX_PARSED_CACHE_ENTRIES: usize = 64;
 const MAX_PARSED_CACHE_SOURCE_BYTES: usize = 4 * 1024 * 1024;
@@ -1100,6 +1101,7 @@ fn validate_source_package_metadata<'a>(
     let mut identities = BTreeSet::new();
     let mut canonical_sources = Vec::with_capacity(packages.len());
     for package in &packages {
+        validate_package_identity(&package.identity)?;
         if !identities.insert(package.identity.as_str()) {
             return Err(LinkError::DuplicatePackage {
                 package: package.identity.clone(),
@@ -1428,10 +1430,10 @@ pub enum LinkError {
         /// Rejected declaration category.
         item: String,
     },
-    /// A module error code collided with another linked error code.
-    DuplicateErrorCode {
-        /// Repeated stable error code.
-        code: u32,
+    /// One nominal error identity was assigned conflicting finite schemas.
+    ConflictingErrorType {
+        /// Stable nominal error identity.
+        identity: String,
     },
     /// A module localization key collided with another linked key.
     DuplicateMessage {
@@ -1468,7 +1470,7 @@ impl LinkError {
             Self::InvalidIdentifier { .. } => "E_INVALID_IDENTIFIER",
             Self::ReservedSymbol { .. } => "E_RESERVED_DECLARATION",
             Self::InvalidModuleItem { .. } => "E_INVALID_MODULE_ITEM",
-            Self::DuplicateErrorCode { .. } => "E_DUPLICATE_ERROR_CODE",
+            Self::ConflictingErrorType { .. } => "E_CONFLICTING_ERROR_TYPE",
             Self::DuplicateMessage { .. } => "E_DUPLICATE_MESSAGE",
             Self::Semantic { diagnostics } | Self::Diagnostics(diagnostics) => diagnostics
                 .diagnostics
@@ -1572,9 +1574,9 @@ impl LinkError {
                 "E_INVALID_MODULE_ITEM",
                 format!("module `{source}` contains deployable-only {item}"),
             ),
-            Self::DuplicateErrorCode { code } => diagnostic(
-                "E_DUPLICATE_ERROR_CODE",
-                format!("linked modules assign duplicate seiyaku error code {code}"),
+            Self::ConflictingErrorType { identity } => diagnostic(
+                "E_CONFLICTING_ERROR_TYPE",
+                format!("linked modules assign conflicting schemas to error type `{identity}`"),
             ),
             Self::DuplicateMessage { key } => diagnostic(
                 "E_DUPLICATE_MESSAGE",
@@ -1602,11 +1604,28 @@ impl TypedLinker {
     }
     /// Resolve and link one seiyaku plus its locked module graph.
     pub fn link(&self, request: LinkRequest) -> Result<TypedProgram, LinkError> {
-        crate::session::run_with_compiler_stack(move || self.link_inner(request)).map_err(|_| {
-            LinkError::Semantic {
+        let sources = std::iter::once(request.root.program.source_file().clone())
+            .chain(request.packages.iter().flat_map(|package| {
+                package
+                    .modules
+                    .iter()
+                    .map(|module| module.program.source_file().clone())
+            }))
+            .collect::<Vec<_>>();
+        crate::session::run_with_compiler_stack(move || self.link_inner(request))
+            .map_err(|_| LinkError::Semantic {
                 diagnostics: crate::session::compiler_worker_unavailable_diagnostic(None),
-            }
-        })?
+            })?
+            .map_err(|mut error| {
+                if let LinkError::Semantic { diagnostics } | LinkError::Diagnostics(diagnostics) =
+                    &mut error
+                {
+                    for source in &sources {
+                        diagnostics.capture_source(source);
+                    }
+                }
+                error
+            })
     }
     fn link_inner(&self, mut request: LinkRequest) -> Result<TypedProgram, LinkError> {
         validate_linker_options(self.options)?;
@@ -1640,12 +1659,17 @@ impl TypedLinker {
             )));
         }
         let root_external = external_signatures(&root_imports, &resolved_packages);
+        let root_types = external_types(&root_imports, &resolved_packages);
         let semantic = semantic::SemanticContext::with_capabilities(
             self.options.zk_enabled,
             self.options.test_builtins_enabled,
         );
         let mut root = semantic
-            .analyze_resolved_with_external_functions(&request.root.program, &root_external)
+            .analyze_resolved_with_external_types(
+                &request.root.program,
+                &root_external,
+                &root_types,
+            )
             .map_err(|failures| semantic_link_error(&request.root, failures))?;
         let root_external_names = external_linked_names(&root_imports, &resolved_packages);
         rename_program_calls(&mut root, &BTreeMap::new(), &root_external_names);
@@ -1714,6 +1738,7 @@ struct ResolvedExport {
 struct ResolvedModule<'request> {
     source: &'request ModuleUnit,
     signatures: BTreeMap<String, FunctionSignature>,
+    types: BTreeMap<String, Type>,
     linked_names: BTreeMap<String, String>,
     local_structs: HashSet<String>,
     type_prefix: String,
@@ -1723,6 +1748,7 @@ struct ResolvedPackage<'request> {
     imports: BTreeMap<String, usize>,
     modules: Vec<ResolvedModule<'request>>,
     exports: BTreeMap<String, ResolvedExport>,
+    type_exports: BTreeMap<String, Type>,
 }
 fn package_interface_fingerprint(package: &ResolvedPackage<'_>) -> Hash {
     let mut transcript = b"kotodama-package-interface-v1\0".to_vec();
@@ -1734,11 +1760,19 @@ fn package_interface_fingerprint(package: &ResolvedPackage<'_>) -> Hash {
         for parameter in &signature.params {
             interface_field(&mut transcript, parameter.name.as_bytes());
             transcript.push(u8::from(parameter.is_state));
+            transcript.push(match parameter.call_mode {
+                crate::ast::ParameterCallMode::Named => 0,
+                crate::ast::ParameterCallMode::Positional => 1,
+            });
             interface_type(&mut transcript, &parameter.ty);
         }
         interface_type(&mut transcript, &signature.return_type);
-        transcript.push(u8::from(signature.requires_named_arguments));
         interface_modifiers(&mut transcript, &signature.modifiers);
+    }
+    interface_count(&mut transcript, package.type_exports.len());
+    for (name, ty) in &package.type_exports {
+        interface_field(&mut transcript, name.as_bytes());
+        interface_type(&mut transcript, ty);
     }
     Hash::new(transcript)
 }
@@ -1800,6 +1834,15 @@ fn interface_type(transcript: &mut Vec<u8>, ty: &Type) {
         Type::Name => transcript.push(17),
         Type::Json => transcript.push(18),
         Type::Unit => transcript.push(19),
+        Type::ErrorEnum(descriptor) => {
+            transcript.push(28);
+            interface_field(transcript, descriptor.identity.as_bytes());
+            interface_field(transcript, &descriptor.schema_hash());
+        }
+        Type::StateCursor(key) => {
+            transcript.push(29);
+            interface_type(transcript, key);
+        }
         Type::Secret(inner) => {
             transcript.push(20);
             interface_type(transcript, inner);
@@ -1855,16 +1898,6 @@ fn semantic_link_error(module: &ModuleUnit, failures: semantic::SemanticFailures
         ),
     }
 }
-fn function_declaration_span(module: &ResolvedModule<'_>, name: &str) -> Option<SourceSpan> {
-    module
-        .source
-        .program
-        .symbols()
-        .find(|symbol| {
-            symbol.kind == crate::resolved::ResolvedSymbolKind::Function && symbol.name == name
-        })
-        .and_then(|symbol| module.source.program.source_span(symbol.source))
-}
 fn validate_linker_options(options: LinkerOptions) -> Result<(), LinkError> {
     if options.include_tests != options.test_builtins_enabled {
         return Err(LinkError::Semantic {
@@ -1885,6 +1918,7 @@ fn resolve_packages<'request>(
     packages.sort_by(|left, right| left.identity.cmp(&right.identity));
     let mut package_identities = HashSet::new();
     for package in packages.iter_mut() {
+        validate_package_identity(&package.identity)?;
         if !package_identities.insert(package.identity.clone()) {
             return Err(LinkError::DuplicatePackage {
                 package: package.identity.clone(),
@@ -1933,18 +1967,48 @@ fn resolve_packages<'request>(
         .map(|package| package.identity.clone())
         .collect::<Vec<_>>();
     validate_acyclic_package_imports(&package_identities, &resolved_imports)?;
-    let mut resolved_packages = Vec::with_capacity(packages.len());
+    let mut resolved_packages: Vec<Option<ResolvedPackage<'request>>> =
+        (0..packages.len()).map(|_| None).collect();
+    let mut remaining = (0..packages.len()).collect::<BTreeSet<_>>();
     let mut export_diagnostics = Vec::new();
-    for (package_index, (package, imports)) in packages.iter().zip(resolved_imports).enumerate() {
+    while !remaining.is_empty() {
+        let package_index = remaining
+            .iter()
+            .copied()
+            .find(|index| {
+                resolved_imports[*index]
+                    .values()
+                    .all(|dependency| resolved_packages[*dependency].is_some())
+            })
+            .expect("validated acyclic package imports have a ready dependency");
+        remaining.remove(&package_index);
+        let package = &packages[package_index];
+        let imports = resolved_imports[package_index].clone();
+        let mut imported_types = BTreeMap::new();
+        for (alias, dependency) in &imports {
+            for (name, ty) in &resolved_packages[*dependency]
+                .as_ref()
+                .expect("dependency resolved")
+                .type_exports
+            {
+                imported_types.insert(format!("{alias}::{name}"), ty.clone());
+            }
+        }
         let mut modules = Vec::with_capacity(package.modules.len());
         for (module_index, module) in package.modules.iter().enumerate() {
             let semantic = semantic::SemanticContext::with_capabilities(
                 options.zk_enabled,
                 options.test_builtins_enabled,
             );
+            semantic.set_package_identity(package.identity.clone());
             let mut signatures = semantic
-                .resolve_resolved_function_signatures_all(&module.program)
+                .resolve_resolved_function_signatures_with_types(&module.program, &imported_types)
                 .map_err(|failures| semantic_link_error(module, failures))?;
+            let mut types = semantic
+                .declared_nominal_types(module.ast())
+                .map_err(|error| {
+                    semantic_link_error(module, semantic::SemanticFailures::from(error))
+                })?;
             let local_structs = module
                 .ast()
                 .items
@@ -1954,9 +2018,12 @@ fn resolve_packages<'request>(
                     _ => None,
                 })
                 .collect::<HashSet<_>>();
-            let type_prefix = format!("{LINKED_SYMBOL_PREFIX}p{package_index}_m{module_index}_t");
+            let type_prefix = format!("{}::{}", package.identity, module.ast().unit.name);
             for signature in signatures.values_mut() {
                 qualify_signature(signature, &local_structs, &type_prefix);
+            }
+            for ty in types.values_mut() {
+                qualify_type(ty, &local_structs, &type_prefix);
             }
             let linked_names = signatures
                 .keys()
@@ -1973,80 +2040,95 @@ fn resolve_packages<'request>(
             modules.push(ResolvedModule {
                 source: module,
                 signatures,
+                types,
                 linked_names,
                 local_structs,
                 type_prefix,
             });
         }
         let mut exports = BTreeMap::new();
+        let mut type_exports = BTreeMap::new();
         for export in &package.exports {
             validate_identifier("package export", export)?;
             let candidates = modules
                 .iter()
-                .filter_map(|module| {
-                    module.signatures.get(export).map(|signature| {
-                        (
-                            module,
-                            ResolvedExport {
-                                linked_name: module
-                                    .linked_names
-                                    .get(export)
-                                    .expect("every signature receives a linked name")
-                                    .clone(),
-                                signature: signature.clone(),
-                            },
-                        )
-                    })
+                .filter(|module| {
+                    module.signatures.contains_key(export) || module.types.contains_key(export)
                 })
                 .collect::<Vec<_>>();
-            let resolved = match candidates.as_slice() {
+            let module = match candidates.as_slice() {
                 [] => {
                     export_diagnostics.push(Diagnostic::error(
                         "E_MISSING_EXPORT",
                         DiagnosticPhase::Resolve,
                         format!(
-                            "package `{}` exports missing function `{export}`",
+                            "package `{}` exports missing declaration `{export}`",
                             package.identity
                         ),
                         None,
                     ));
                     continue;
                 }
-                [(_, resolved)] => resolved.clone(),
+                [module] => *module,
                 _ => {
-                    let mut spans = candidates
-                        .iter()
-                        .filter_map(|(module, _)| function_declaration_span(module, export));
+                    let mut spans = candidates.iter().filter_map(|module| {
+                        module
+                            .source
+                            .program
+                            .symbols()
+                            .find(|symbol| symbol.name == *export)
+                            .and_then(|symbol| module.source.program.source_span(symbol.source))
+                    });
                     let primary_span = spans.next();
                     let mut diagnostic = Diagnostic::error(
                         "E_AMBIGUOUS_EXPORT",
                         DiagnosticPhase::Resolve,
                         format!(
-                            "package `{}` exports ambiguous function `{export}` from multiple modules",
+                            "package `{}` exports ambiguous declaration `{export}` from multiple modules",
                             package.identity
                         ),
                         primary_span,
                     );
-                    diagnostic.labels.extend(spans.map(|span| DiagnosticLabel {
-                        span,
-                        message:
-                            "another exported function with this name is declared here".to_owned(),
+                    diagnostic.labels.extend(spans.map(|span| {
+                        DiagnosticLabel {
+                            span,
+                            message: "another exported declaration with this name is declared here"
+                                .to_owned(),
+                        }
                     }));
                     export_diagnostics.push(diagnostic);
                     continue;
                 }
             };
-            exports.insert(export.clone(), resolved);
+            if let Some(signature) = module.signatures.get(export) {
+                exports.insert(
+                    export.clone(),
+                    ResolvedExport {
+                        linked_name: module
+                            .linked_names
+                            .get(export)
+                            .expect("every signature receives a linked name")
+                            .clone(),
+                        signature: signature.clone(),
+                    },
+                );
+            } else if let Some(ty) = module.types.get(export) {
+                type_exports.insert(export.clone(), ty.clone());
+            }
         }
-        resolved_packages.push(ResolvedPackage {
+        resolved_packages[package_index] = Some(ResolvedPackage {
             identity: package.identity.clone(),
             imports,
             modules,
             exports,
+            type_exports,
         });
     }
     if export_diagnostics.is_empty() {
-        Ok(resolved_packages)
+        Ok(resolved_packages
+            .into_iter()
+            .map(|package| package.expect("all packages resolved"))
+            .collect())
     } else {
         Err(LinkError::Diagnostics(DiagnosticBundle::new(
             export_diagnostics,
@@ -2112,38 +2194,57 @@ fn link_resolved_packages(
     packages: &[ResolvedPackage<'_>],
     mut linked: Option<TypedProgram>,
 ) -> Result<TypedProgram, LinkError> {
-    let mut seen_error_codes = linked
-        .iter()
-        .flat_map(|program| program.error_codes.iter())
-        .map(|error| error.code)
-        .collect::<HashSet<_>>();
+    let mut seen_error_types = BTreeMap::new();
+    if let Some(root) = &mut linked {
+        for error in std::mem::take(&mut root.error_types) {
+            let hash = error.schema_hash();
+            if let Some(previous) = seen_error_types.get(&error.identity) {
+                if previous != &hash {
+                    return Err(LinkError::ConflictingErrorType {
+                        identity: error.identity,
+                    });
+                }
+            } else {
+                seen_error_types.insert(error.identity.clone(), hash);
+                root.error_types.push(error);
+            }
+        }
+    }
     let mut seen_messages = linked
         .iter()
         .flat_map(|program| program.message_entries.iter())
         .map(|entry| entry.msg_id.clone())
         .collect::<HashSet<_>>();
-    for (package_index, package) in packages.iter().enumerate() {
+    for package in packages {
         let external = external_signatures(&package.imports, packages);
+        let types = external_types(&package.imports, packages);
         let external_names = external_linked_names(&package.imports, packages);
-        for (module_index, module) in package.modules.iter().enumerate() {
+        for module in &package.modules {
             let semantic = semantic::SemanticContext::with_capabilities(
                 options.zk_enabled,
                 options.test_builtins_enabled,
             );
+            semantic.set_package_identity(package.identity.clone());
             let mut typed = semantic
-                .analyze_resolved_with_external_functions(&module.source.program, &external)
+                .analyze_resolved_with_external_types(&module.source.program, &external, &types)
                 .map_err(|failures| semantic_link_error(module.source, failures))?;
             qualify_typed_program(&mut typed, &module.local_structs, &module.type_prefix);
             rename_program_calls(&mut typed, &module.linked_names, &external_names);
-            for error in &mut typed.error_codes {
-                if !seen_error_codes.insert(error.code) {
-                    return Err(LinkError::DuplicateErrorCode { code: error.code });
+            let mut new_error_types = Vec::new();
+            for error in std::mem::take(&mut typed.error_types) {
+                let hash = error.schema_hash();
+                if let Some(previous) = seen_error_types.get(&error.identity) {
+                    if previous != &hash {
+                        return Err(LinkError::ConflictingErrorType {
+                            identity: error.identity,
+                        });
+                    }
+                } else {
+                    seen_error_types.insert(error.identity.clone(), hash);
+                    new_error_types.push(error);
                 }
-                error.namespace = format!(
-                    "{LINKED_SYMBOL_PREFIX}p{package_index}_m{module_index}_{}",
-                    error.namespace
-                );
             }
+            typed.error_types = new_error_types;
             for message in &typed.message_entries {
                 if !seen_messages.insert(message.msg_id.clone()) {
                     return Err(LinkError::DuplicateMessage {
@@ -2189,7 +2290,7 @@ fn link_resolved_packages(
                 }
                 program.items.extend(typed.items);
                 program.states.extend(typed.states);
-                program.error_codes.extend(typed.error_codes);
+                program.error_types.extend(typed.error_types);
                 program.triggers.extend(typed.triggers);
                 program.message_entries.extend(typed.message_entries);
                 program.test_support_enabled |= typed.test_support_enabled;
@@ -2293,6 +2394,27 @@ fn external_linked_names(
     }
     names
 }
+fn external_types(
+    imports: &BTreeMap<String, usize>,
+    packages: &[ResolvedPackage<'_>],
+) -> BTreeMap<String, Type> {
+    let mut external = BTreeMap::new();
+    for (alias, package_index) in imports {
+        for (symbol, ty) in &packages[*package_index].type_exports {
+            external.insert(format!("{alias}::{symbol}"), ty.clone());
+        }
+    }
+    external
+}
+fn validate_package_identity(identity: &str) -> Result<(), LinkError> {
+    if !ivm_abi::entrypoint::is_canonical_kotodama_package_identity(identity) {
+        return Err(LinkError::InvalidIdentifier {
+            context: "locked package identity".to_owned(),
+            name: identity.to_owned(),
+        });
+    }
+    Ok(())
+}
 fn validate_identifier(context: &str, name: &str) -> Result<(), LinkError> {
     let mut chars = name.chars();
     let first = chars.next();
@@ -2369,6 +2491,39 @@ fn imported_call_diagnostics(
     packages: &[ResolvedPackage<'_>],
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
+    for ty in module.program.types() {
+        if ty.target != crate::resolved::ResolvedTypeTarget::ExternalType {
+            continue;
+        }
+        let Some((alias, symbol)) = ty.name.split_once("::") else {
+            continue;
+        };
+        let error = match imports.get(alias) {
+            None => Some((
+                "E_UNKNOWN_IMPORT_ALIAS",
+                format!(
+                    "source `{}` uses unknown import alias `{alias}`",
+                    module.source_name
+                ),
+            )),
+            Some(index) if !packages[*index].type_exports.contains_key(symbol) => Some((
+                "E_UNEXPORTED_TYPE",
+                format!(
+                    "source `{}` cannot use unexported type `{}`",
+                    module.source_name, ty.name
+                ),
+            )),
+            Some(_) => None,
+        };
+        if let Some((code, message)) = error {
+            diagnostics.push(Diagnostic::error(
+                code,
+                DiagnosticPhase::Resolve,
+                message,
+                module.program.source_span(ty.source),
+            ));
+        }
+    }
     for call in module.program.calls() {
         if call.target != crate::resolved::ResolvedCallTarget::External {
             continue;
@@ -2441,14 +2596,14 @@ fn qualify_type(ty: &mut Type, local_structs: &HashSet<String>, prefix: &str) {
         }
         Type::Struct { name, fields } => {
             if local_structs.contains(name) {
-                *name = format!("{prefix}_{name}");
+                *name = format!("{prefix}::{name}");
             }
             for (_, field) in Arc::make_mut(fields) {
                 qualify_type(field, local_structs, prefix);
             }
         }
         Type::NamedStruct(name) if local_structs.contains(name) => {
-            *name = format!("{prefix}_{name}");
+            *name = format!("{prefix}::{name}");
         }
         Type::Int
         | Type::Decimal
@@ -2470,6 +2625,8 @@ fn qualify_type(ty: &mut Type, local_structs: &HashSet<String>, prefix: &str) {
         | Type::Name
         | Type::Json
         | Type::Unit
+        | Type::ErrorEnum(_)
+        | Type::StateCursor(_)
         | Type::NamedStruct(_) => {}
     }
 }
@@ -2668,6 +2825,7 @@ fn qualify_expr(expr: &mut TypedExpr, local_structs: &HashSet<String>, prefix: &
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
+        | ExprKind::ErrorValue(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
         | ExprKind::Ident(_) => {}
@@ -2870,6 +3028,7 @@ fn rename_expr_calls(
         | ExprKind::DecimalLiteral { .. }
         | ExprKind::OptionNone
         | ExprKind::Bool(_)
+        | ExprKind::ErrorValue(_)
         | ExprKind::String(_)
         | ExprKind::Bytes(_)
         | ExprKind::Ident(_) => {}
@@ -2949,7 +3108,9 @@ mod tests {
                 source: "module.ko".to_owned(),
                 item: "state declaration".to_owned(),
             },
-            LinkError::DuplicateErrorCode { code: 7 },
+            LinkError::ConflictingErrorType {
+                identity: "example@1::Module::Error".into(),
+            },
             LinkError::DuplicateMessage {
                 key: "errors.failed".to_owned(),
             },
@@ -3034,6 +3195,341 @@ mod tests {
             packages: vec![package],
         }
     }
+    #[test]
+    fn locked_graph_order_preserves_complete_nominal_error_identity_and_schema() {
+        let mut expected = None;
+        // Change every independent input order; identities must not depend on the
+        // linker's traversal or allocation of internal symbol names.
+        for order in 0..8 {
+            let mut packages = ["left", "right"]
+                .into_iter()
+                .map(|name| {
+                    let mut modules = vec![
+                        source_module(
+                            "errors.ko",
+                            "module Errors { error enum Fault { Denied = 1; Missing = 2; } }",
+                        ),
+                        source_module(
+                            "more.ko",
+                            "module MoreErrors { error enum OtherFault { Denied = 1; Missing = 2; } }",
+                        ),
+                    ];
+                    if order & 2 != 0 {
+                        modules.reverse();
+                    }
+                    SourcePackageUnit {
+                        identity: format!("std/{name}@1.0.0"),
+                        modules,
+                        exports: ["Fault", "OtherFault"]
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect(),
+                        imports: Vec::new(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            if order & 1 != 0 {
+                packages.reverse();
+            }
+            let mut imports = ["left", "right"]
+                .into_iter()
+                .map(|name| ImportBinding {
+                    alias: name.to_owned(),
+                    package: format!("std/{name}@1.0.0"),
+                })
+                .collect::<Vec<_>>();
+            if order & 4 != 0 {
+                imports.reverse();
+            }
+            let linked = ModuleBuildGraph::default()
+                    .link(
+                        SourceLinkRequest {
+                            root: source_module("app.ko", "seiyaku App { view fn run() -> (left::Fault, right::Fault, left::OtherFault, right::OtherFault) { (left::Fault::Denied, right::Fault::Missing, left::OtherFault::Missing, right::OtherFault::Denied) } }"),
+                            imports,
+                            packages,
+                        },
+                        LinkerOptions::default(),
+                    )
+                    .expect("all locked graph orders resolve the same nominal values");
+            let catalog = linked
+                .program
+                .error_types
+                .iter()
+                .filter(|error| error.identity.starts_with("std/"))
+                .map(|error| (error.identity.clone(), error.clone()))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(
+                catalog.keys().map(String::as_str).collect::<Vec<_>>(),
+                [
+                    "std/left@1.0.0::Errors::Fault",
+                    "std/left@1.0.0::MoreErrors::OtherFault",
+                    "std/right@1.0.0::Errors::Fault",
+                    "std/right@1.0.0::MoreErrors::OtherFault",
+                ],
+                "the locked package, source unit and enum define each identity",
+            );
+            let variant_schema = catalog.values().next().unwrap().schema_hash();
+            for descriptor in catalog.values() {
+                assert!(descriptor.validate());
+                assert_eq!(descriptor.variant(1).unwrap().name, "Denied");
+                assert_eq!(descriptor.variant(2).unwrap().name, "Missing");
+                assert_eq!(descriptor.schema_hash(), variant_schema);
+            }
+            let output = crate::compiler::Compiler::new()
+                .compile_typed_program_with_manifest_and_report_diagnostics(
+                    linked.program,
+                    Some("app.ko"),
+                )
+                .unwrap_or_else(|diagnostics| panic!("{}", diagnostics.render_human()));
+            let interface = crate::metadata::ProgramMetadata::parse(&output.artifact)
+                .expect("parse the reordered graph's artifact")
+                .contract_interface
+                .expect("the exact nominal catalog reaches the embedded interface");
+            let embedded = interface
+                .error_types
+                .iter()
+                .filter(|error| error.identity.starts_with("std/"))
+                .map(|error| (error.identity.clone(), error.clone()))
+                .collect::<BTreeMap<_, _>>();
+            assert_eq!(embedded, catalog);
+            let result = interface
+                .entrypoints
+                .iter()
+                .find(|entrypoint| entrypoint.name == "run")
+                .unwrap()
+                .return_schema
+                .clone()
+                .expect("all four nominal return values have a public schema");
+            if let Some((expected_catalog, expected_result)) = &expected {
+                assert_eq!(&catalog, expected_catalog, "graph order {order}");
+                assert_eq!(&result, expected_result, "graph order {order}");
+            } else {
+                expected = Some((catalog, result));
+            }
+        }
+    }
+
+    #[test]
+    fn imported_nominal_types_support_construction_patterns_and_error_values() {
+        let linked = ModuleBuildGraph::default().link(SourceLinkRequest {
+            root: source_module("app.ko", "seiyaku App { view fn run() -> int { let arith::Receipt receipt = arith::Receipt { amount: 7, ignored: 9 }; let arith::Receipt { amount, .. } = receipt; let arith::Fault failure = arith::Fault::Denied; let result = match failure { arith::Fault::Denied => amount }; arith::read(receipt: arith::Receipt { amount: result, ignored: 0 }) } }"),
+            imports: vec![ImportBinding { alias: "arith".into(), package: "std/math@1.0.0".into() }],
+            packages: vec![SourcePackageUnit {
+                identity: "std/math@1.0.0".into(),
+                modules: vec![source_module("math.ko", "module Math { struct Receipt { int ignored; int amount; } error enum Fault { Denied = 1; } fn read(Receipt receipt) -> int { let Receipt { amount, .. } = receipt; amount } }")],
+                exports: ["Receipt", "Fault", "read"].into_iter().map(str::to_owned).collect(),
+                imports: Vec::new(),
+            }],
+        }, LinkerOptions::default()).expect("exported nominal types link across aliases");
+        assert!(
+            linked
+                .program
+                .error_types
+                .iter()
+                .any(|ty| ty.identity == "std/math@1.0.0::Math::Fault")
+        );
+        let read = linked
+            .program
+            .items
+            .iter()
+            .find_map(|item| {
+                let TypedItem::Function(function) = item;
+                (function.param_types.len() == 1).then_some(function)
+            })
+            .expect("read function");
+        assert!(
+            matches!(&read.param_types[0].ty, Type::Struct { name, .. } if name == "std/math@1.0.0::Math::Receipt")
+        );
+    }
+    #[test]
+    fn imported_structs_keep_locked_identity_in_public_and_durable_schemas() {
+        fn compile(alias: &str, package_identity: &str) -> crate::session::CompileOutput {
+            let root = format!(
+                r#"seiyaku App {{
+                    state {alias}::Receipt saved;
+                    hajimari() {{
+                        saved = {alias}::Receipt {{
+                            amount: 0, marker: (), outcome: Result::err({alias}::Fault::Denied)
+                        }};
+                    }}
+                    kotoage fn echo({alias}::Receipt value) -> {alias}::Receipt authorize("Writer") {{
+                        saved = value;
+                        return saved;
+                    }}
+                    view fn readback() -> {alias}::Receipt {{ saved }}
+                }}"#
+            );
+            let linked = ModuleBuildGraph::default()
+                .link(
+                    SourceLinkRequest {
+                        root: source_module("app.ko", &root),
+                        imports: vec![ImportBinding {
+                            alias: alias.into(),
+                            package: package_identity.into(),
+                        }],
+                        packages: vec![SourcePackageUnit {
+                            identity: package_identity.into(),
+                            modules: vec![source_module(
+                                "math.ko",
+                                "module Math { error enum Fault { Denied = 7; } struct Receipt { () marker; int amount; Result<(), Fault> outcome; } }",
+                            )],
+                            exports: ["Receipt", "Fault"]
+                                .into_iter()
+                                .map(str::to_owned)
+                                .collect(),
+                            imports: Vec::new(),
+                        }],
+                    },
+                    LinkerOptions::default(),
+                )
+                .expect("link public imported value types");
+            crate::compiler::Compiler::new()
+                .compile_typed_program_with_manifest_and_report_diagnostics(
+                    linked.program,
+                    Some("app.ko"),
+                )
+                .unwrap_or_else(|diagnostics| panic!("{}", diagnostics.render_human()))
+        }
+
+        use ivm_abi::entrypoint::EntrypointValueTypeNodeV1 as Node;
+        let mut schemas = Vec::new();
+        for (alias, package_identity) in [
+            ("arith", "std/math@1.0.0"),
+            ("renamed", "std/math@1.0.0"),
+            ("arith", "std/math@2.0.0"),
+        ] {
+            let output = compile(alias, package_identity);
+            let interface = crate::metadata::ProgramMetadata::parse(&output.artifact)
+                .expect("parse final imported-struct artifact")
+                .contract_interface
+                .expect("embedded signed interface");
+            let expected_name = format!("{package_identity}::Math::Receipt");
+            let expected_error = format!("{package_identity}::Math::Fault");
+            let echo = interface
+                .entrypoints
+                .iter()
+                .find(|entry| entry.name == "echo")
+                .expect("public echo");
+            let arguments = echo
+                .argument_schema
+                .as_ref()
+                .expect("record argument schema");
+            let result = echo.return_schema.as_ref().expect("record return schema");
+            assert!(result.validate());
+            assert_eq!(arguments.fields[0].ty, *result);
+            assert!(matches!(&result.nodes[0], Node::Struct(node) if node.name == expected_name));
+            assert!(result.nodes.iter().any(|node| {
+                matches!(node, Node::Error(error) if error.identity == expected_error)
+            }));
+            let saved = interface
+                .states
+                .iter()
+                .find(|state| state.name == "saved")
+                .expect("durable imported struct");
+            assert!(matches!(
+                &saved.ty,
+                crate::metadata::EmbeddedStateType::Struct { name, .. } if name == &expected_name
+            ));
+            assert_eq!(
+                interface
+                    .entrypoints
+                    .iter()
+                    .find(|entry| entry.name == "readback")
+                    .unwrap()
+                    .return_schema
+                    .as_ref(),
+                Some(result)
+            );
+            schemas.push(result.clone());
+        }
+        assert_eq!(
+            schemas[0], schemas[1],
+            "source import aliases do not define identity"
+        );
+        assert_ne!(
+            schemas[0], schemas[2],
+            "the locked package identity defines nominal types"
+        );
+    }
+    #[test]
+    fn imported_types_resolve_dependency_signatures_before_identity_order() {
+        let base = SourcePackageUnit {
+            identity: "z/base@1.0.0".into(),
+            modules: vec![source_module(
+                "base.ko",
+                "module Base { struct Value { int amount; } }",
+            )],
+            exports: ["Value".to_owned()].into_iter().collect(),
+            imports: Vec::new(),
+        };
+        let derived = SourcePackageUnit {
+            identity: "a/derived@1.0.0".into(),
+            modules: vec![source_module(
+                "derived.ko",
+                "module Derived { fn read(base::Value value) -> int { let base::Value { amount } = value; amount } }",
+            )],
+            exports: ["read".to_owned()].into_iter().collect(),
+            imports: vec![ImportBinding {
+                alias: "base".into(),
+                package: base.identity.clone(),
+            }],
+        };
+        ModuleBuildGraph::default().link(SourceLinkRequest {
+            root: source_module("app.ko", "seiyaku App { view fn run() -> int { derived::read(value: base::Value { amount: 7 }) } }"),
+            imports: vec![ImportBinding { alias: "derived".into(), package: derived.identity.clone() }, ImportBinding { alias: "base".into(), package: base.identity.clone() }],
+            packages: vec![derived, base],
+        }, LinkerOptions::default()).expect("dependency canonical type identities agree in signatures and bodies");
+    }
+    #[test]
+    fn same_named_imported_errors_remain_nominally_distinct() {
+        let packages = ["left", "right"]
+            .into_iter()
+            .map(|name| SourcePackageUnit {
+                identity: format!("std/{name}@1.0.0"),
+                modules: vec![source_module(
+                    "errors.ko",
+                    "module Errors { error enum Fault { Denied = 1; } }",
+                )],
+                exports: ["Fault".to_owned()].into_iter().collect(),
+                imports: Vec::new(),
+            })
+            .collect::<Vec<_>>();
+        let imports = packages
+            .iter()
+            .zip(["left", "right"])
+            .map(|(package, alias)| ImportBinding {
+                alias: alias.into(),
+                package: package.identity.clone(),
+            })
+            .collect();
+        let error = ModuleBuildGraph::default().link(SourceLinkRequest {
+            root: source_module("app.ko", "seiyaku App { view fn run() -> int { let left::Fault failure = left::Fault::Denied; match failure { right::Fault::Denied => 1 } } }"),
+            imports, packages,
+        }, LinkerOptions::default()).expect_err("equal variant names and codes do not erase nominal identity");
+        assert_eq!(error.diagnostic_code(), "E_PATTERN_FAMILY");
+    }
+    #[test]
+    fn package_interface_fingerprint_tracks_declared_call_modes() {
+        let validate = |source: &str| {
+            ModuleBuildGraph::default()
+                .validate_package(
+                    SourcePackageGraphRequest {
+                        package: publish_package(
+                            vec![source_module("src/lib.ko", source)],
+                            &["quote"],
+                        ),
+                        dependencies: Vec::new(),
+                    },
+                    LinkerOptions::default(),
+                )
+                .expect("typed package")
+                .interface_fingerprint
+        };
+        assert_ne!(
+            validate("module Quotes { fn quote(int value) -> int { value } }"),
+            validate("module Quotes { fn quote(int _ value) -> int { value } }")
+        );
+    }
     fn transitive_source_request(base_source: &str) -> SourceLinkRequest {
         let base_identity = "std/base@1.0.0".to_owned();
         let derived_identity = "std/derived@1.0.0".to_owned();
@@ -3112,7 +3608,7 @@ mod tests {
         assert_eq!(name, &module.name);
     }
     #[test]
-    fn imported_repeated_parameter_types_remain_named_only() {
+    fn imported_parameters_preserve_declared_named_call_mode() {
         let dependency = || {
             package(
                 vec![source(
@@ -3130,7 +3626,7 @@ mod tests {
                 ),
                 dependency(),
             ))
-            .expect_err("an imported repeated-type signature must remain named-only");
+            .expect_err("an imported named parameter requires its declaration label");
         assert_eq!(positional.diagnostic_code(), "E_NAMED_ARGUMENTS_REQUIRED");
         let positional = positional.into_diagnostics();
         assert_eq!(

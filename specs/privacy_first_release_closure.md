@@ -2,8 +2,12 @@
 
 This ledger records the implementation and qualification work for the final V1
 privacy stack. It is not an audit certificate or permission to activate an
-unqualified protocol. Source observations below were checked on 2026-09-06–08 in a
+unqualified protocol. Source observations below were checked on 2026-09-06–09 in a
 shared working tree; they do not identify a sealed release candidate.
+
+The [2026-09-09 validation checkpoint](../docs/history/2026-09-09/privacy-validation-checkpoint.md)
+records the retained native23 four-validator failure, completed SDK20 Apple
+build, failed whole Swift suite and integrated corrections awaiting execution.
 
 ## Final interface contracts
 
@@ -85,6 +89,15 @@ implementation markers must not be substituted for the qualification record in
 | Release and deployment | Clean signed source/lock/toolchain identity, complete independent audit classes and finding dispositions, real 48-stage/54-artifact evidence, exact four-validator quorum, staged restart/canary/convergence and authenticated endpoint readback. |
 
 ## Verification discipline
+
+Core protocol fixtures bind the runtime `NetworkId` to their synthetic committed
+genesis. Native payment and FCMP state tests exercise the shared submission
+preparation and execution stages with an exact compiled activation; the shipping
+instruction handler separately requires registered Exact12 qualification before
+entering execution. A missing-qualification regression checks that an active
+profile alone cannot mutate payment state or budgets. X.509 governance coverage
+keeps block overlays in separate lifecycle stages to bound the default test-stack
+footprint while retaining the complete atomicity and terminal-state assertions.
 
 Focused regressions distinguish malformed geometry, layout-dependent transcripts,
 noncanonical field representatives, invalid AIR stride, incomplete evidence and

@@ -6,6 +6,22 @@ import {
   contractPayloadDigestHex,
 } from "../src/contractPayload.js";
 
+test("tagged Option payloads retain Unit and nested presence in their signed digest", () => {
+  const values = [
+    { some: null },
+    { none: true },
+    { some: { none: true } },
+    { some: { some: null } },
+  ];
+  const digests = values.map((value) => {
+    const payload = { value };
+    assert.deepEqual(JSON.parse(canonicalContractPayloadJson(payload)), payload);
+    return contractPayloadDigestHex(payload);
+  });
+  assert.equal(new Set(digests).size, values.length);
+  assert.ok(!digests.includes(contractPayloadDigestHex({ value: null })));
+});
+
 test("contract payload digest matches Torii's absent-payload preimage", () => {
   const expected = "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262";
   assert.equal(canonicalContractPayloadJson(undefined), null);

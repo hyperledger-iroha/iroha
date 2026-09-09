@@ -28,16 +28,6 @@ pub(super) struct TerminalShaInventoryV1<'a, F: KagemushaPoseidonFieldV1> {
 }
 
 impl<'a, F: KagemushaPoseidonFieldV1> TerminalShaInventoryV1<'a, F> {
-    /// Exact per-message block counts retained from the original queue.
-    pub(super) fn job_block_counts(&self) -> Vec<u32> {
-        self.jobs.iter().map(|job| job.compression_blocks).collect()
-    }
-
-    /// Consume the temporary inventory without exposing or serializing private messages.
-    pub(super) fn into_messages(self) -> Vec<Vec<u8>> {
-        self.messages
-    }
-
     /// Borrow the original assigned queue and retain its exact ordered planning messages.
     ///
     /// The paired semantic planner supplies the shared production queue, including its final

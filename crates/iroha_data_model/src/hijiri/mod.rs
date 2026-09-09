@@ -62,10 +62,8 @@ const HIJIRI_FEE_QUOTE_DIGEST_DOMAIN_V1: &[u8] = b"iroha:hijiri:fee-quote:v1\0";
     Deref,
     Default,
     IntoSchema,
-)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[repr(transparent)]
 #[derive(norito::NoritoSchema)]
@@ -275,11 +273,8 @@ impl TryFrom<PositiveAttestationIncentiveWire> for PositiveAttestationIncentive 
         )
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for PositiveAttestationIncentive {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
 
+impl<'de> norito::core::DeserializePayload<'de> for PositiveAttestationIncentive {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("positive attestation incentive must be valid")
     }
@@ -288,7 +283,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for PositiveAttestationIncentive 
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let wire =
-            <PositiveAttestationIncentiveWire as norito::core::NoritoDeserialize>::try_deserialize(
+            <PositiveAttestationIncentiveWire as norito::core::DeserializePayload>::try_deserialize(
                 archived.cast(),
             )?;
         Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
@@ -410,11 +405,8 @@ impl TryFrom<EvidenceFieldCommitmentWire> for EvidenceFieldCommitment {
         )
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for EvidenceFieldCommitment {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
 
+impl<'de> norito::core::DeserializePayload<'de> for EvidenceFieldCommitment {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("evidence field commitment path must be valid")
     }
@@ -423,7 +415,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for EvidenceFieldCommitment {
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let wire =
-            <EvidenceFieldCommitmentWire as norito::core::NoritoDeserialize>::try_deserialize(
+            <EvidenceFieldCommitmentWire as norito::core::DeserializePayload>::try_deserialize(
                 archived.cast(),
             )?;
         Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
@@ -484,11 +476,8 @@ impl TryFrom<EvidenceHashBundleWire> for EvidenceHashBundle {
         })
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for EvidenceHashBundle {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
 
+impl<'de> norito::core::DeserializePayload<'de> for EvidenceHashBundle {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("evidence hash bundle must be valid")
     }
@@ -496,7 +485,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for EvidenceHashBundle {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let wire = <EvidenceHashBundleWire as norito::core::NoritoDeserialize>::try_deserialize(
+        let wire = <EvidenceHashBundleWire as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
         Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
@@ -601,10 +590,16 @@ pub enum EvidenceHashError {
     PathTooLong,
 }
 /// Band describing the fee multiplier applied to a given Hijiri risk range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -628,11 +623,8 @@ impl TryFrom<FeeMultiplierBandWire> for FeeMultiplierBand {
         Self::new(wire.max_risk, wire.multiplier)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for FeeMultiplierBand {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
 
+impl<'de> norito::core::DeserializePayload<'de> for FeeMultiplierBand {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("fee multiplier band must be valid")
     }
@@ -640,7 +632,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for FeeMultiplierBand {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let wire = <FeeMultiplierBandWire as norito::core::NoritoDeserialize>::try_deserialize(
+        let wire = <FeeMultiplierBandWire as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
         Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
@@ -670,10 +662,15 @@ impl FeeMultiplierBand {
     }
 }
 /// Deterministic fee policy mapping risk scores to fee multipliers.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -697,11 +694,8 @@ impl TryFrom<HijiriFeePolicyWire> for HijiriFeePolicy {
         Self::new(wire.bands, wire.penalty_cap)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for HijiriFeePolicy {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
 
+impl<'de> norito::core::DeserializePayload<'de> for HijiriFeePolicy {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Hijiri fee policy must be valid")
     }
@@ -709,7 +703,7 @@ impl<'de> norito::core::NoritoDeserialize<'de> for HijiriFeePolicy {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let wire = <HijiriFeePolicyWire as norito::core::NoritoDeserialize>::try_deserialize(
+        let wire = <HijiriFeePolicyWire as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
         Self::try_from(wire).map_err(|error| norito::core::Error::Message(error.to_string()))
@@ -820,10 +814,16 @@ pub enum FeePolicyError {
 /// global policy small prevents every fee-bearing transaction and parameter-change event from
 /// decoding or copying a whole-ledger account table. Both record types form digest-linked revision
 /// sequences and there is no second node-local Hijiri policy authority.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -834,10 +834,7 @@ pub struct HijiriParametersV1 {
     /// Strictly increasing registry revision, beginning at one.
     pub revision: u64,
     /// Digest of the immediately preceding parameter revision.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub previous_digest: Option<[u8; 32]>,
     /// Fee multiplier policy applied by validation-fee admission.
     pub fee_policy: HijiriFeePolicy,
@@ -1113,10 +1110,16 @@ pub fn hijiri_fee_quote_hash_from_digests_v1(
 }
 
 /// Versioned, bounded risk record for one canonical universal account.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
@@ -1129,10 +1132,7 @@ pub struct HijiriAccountRiskV1 {
     /// Strictly increasing record revision, beginning at one.
     pub revision: u64,
     /// Digest of the immediately preceding record revision.
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::option")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::option")]
     pub previous_digest: Option<[u8; 32]>,
     /// Governed risk score in the inclusive Q16 range `[0, 1]`.
     pub risk: Q16,

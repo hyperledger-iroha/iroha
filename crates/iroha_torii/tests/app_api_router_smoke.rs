@@ -56,6 +56,7 @@ async fn app_api_router_smoke() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new(
+        build_identity_test_fixture::build_identity(),
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -468,6 +469,7 @@ async fn contract_routes_honor_api_token_requirement() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new(
+        build_identity_test_fixture::build_identity(),
         ChainId::from("test-chain"),
         iroha_torii::test_utils::signed_query_network_id(),
         kiso,
@@ -552,3 +554,6 @@ async fn contract_routes_honor_api_token_requirement() {
     .await;
     runtime.shutdown().await;
 }
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

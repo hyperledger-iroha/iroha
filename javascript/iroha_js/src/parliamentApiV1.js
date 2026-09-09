@@ -100,6 +100,7 @@ export const PARLIAMENT_PUBLIC_TRANSITIONS_V1 = Object.freeze([
   [18, "RegisterBallotParticipant", true, 21],
   [19, "RecordBallotDropout", true, 22],
   [20, "FailPublicFindingNoResult", true, 23],
+  [21, "RegisterInitialSortition", false, 24],
 ].map(([noritoIndex, jsonTag, jsonPayloadRequired, eventKindIndex]) =>
   Object.freeze({ noritoIndex, jsonTag, jsonPayloadRequired, eventKindIndex }),
 ));

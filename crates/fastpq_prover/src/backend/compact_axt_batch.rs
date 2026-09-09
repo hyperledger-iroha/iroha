@@ -14,7 +14,6 @@
 use iroha_data_model::nexus::{AxtFastpqBinding, AxtRemoteSpendClaimV1};
 use norito::{NoritoSerialize, codec::Encode};
 
-#[cfg(test)]
 use super::compact_protocol::PreparedAir;
 use super::compact_value_domain::CompactTransferValue;
 use super::{
@@ -39,8 +38,11 @@ use crate::{
 #[cfg(test)]
 const IDENTITY: &str = <u64 as CompactTransferValue>::AXT_BATCH_IDENTITY;
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::AxtTransferBatchContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_axt_batch::BoundAxtBatchContext",
+    frame = "fastpq_prover::compact_v1::AxtTransferBatchContextV1"
+)]
 struct BoundAxtBatchContext {
     version: u16,
     segment_count: u32,
@@ -51,8 +53,11 @@ struct BoundAxtBatchContext {
     remote_spend_claims: Option<Vec<AxtRemoteSpendClaimV1>>,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::AxtTransferSegmentContextV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_axt_batch::BoundAxtSegmentContext",
+    frame = "fastpq_prover::compact_v1::AxtTransferSegmentContextV1"
+)]
 struct BoundAxtSegmentContext {
     version: u16,
     segment_count: u32,
@@ -168,7 +173,6 @@ impl AxtTransferBatch {
         &self.context
     }
     /// Public ports derived using the whole batch's scale and key allocation.
-    #[cfg(test)]
     pub(super) fn statements(&self) -> &[PublicStatement] {
         &self.statements
     }
@@ -235,7 +239,6 @@ impl FixedAir for AxtTransferSegmentAir {
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.inner.evaluate(point, current, next)
     }
-    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
         self.inner.prepare_prover()
     }

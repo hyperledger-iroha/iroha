@@ -4,10 +4,7 @@ use crate::rwa::RwaId;
 use iroha_primitives::numeric::{Numeric, Quantity};
 isi! {
     /// Submit a solver-fillable `DeFi` intent.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::SubmitDefiIntent")]
     pub struct SubmitDefiIntent {
         /// Caller-selected intent identifier.
@@ -30,11 +27,8 @@ isi! {
 }
 isi! {
     /// Record a solver fill or terminal settlement for an intent.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-        norito(tag = "kind", content = "value")
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+#[norito (tag = "kind" , content = "value")]
     #[norito_schema(name = "iroha_data_model::isi::defi::SettleDefiIntent")]
     pub struct SettleDefiIntent {
         /// Intent owner.
@@ -53,10 +47,7 @@ isi! {
 }
 isi! {
     /// Register a `DeFi` tokenized or async vault.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiVault")]
     pub struct RegisterDefiVault {
         /// Vault identifier.
@@ -73,10 +64,7 @@ isi! {
 }
 isi! {
     /// Record a vault deposit or redemption request.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::RecordDefiVaultRequest")]
     pub struct RecordDefiVaultRequest {
         /// Vault identifier.
@@ -95,10 +83,7 @@ isi! {
 }
 isi! {
     /// Register a bonded `DeFi` service operator.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiOperator")]
     pub struct RegisterDefiOperator {
         /// Operator account.
@@ -113,10 +98,7 @@ isi! {
 }
 isi! {
     /// Record service health and accrued fees for an operator.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::RecordDefiOperatorHeartbeat")]
     pub struct RecordDefiOperatorHeartbeat {
         /// Operator account.
@@ -133,10 +115,7 @@ isi! {
 }
 isi! {
     /// Configure an AMM hook policy for a pool.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::ConfigureDefiAmmHook")]
     pub struct ConfigureDefiAmmHook {
         /// Pool identifier.
@@ -155,10 +134,7 @@ isi! {
 }
 isi! {
     /// Record an AMM hook execution result.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::RecordDefiHookExecution")]
     pub struct RecordDefiHookExecution {
         /// Pool identifier.
@@ -179,10 +155,7 @@ isi! {
 }
 isi! {
     /// Register a portfolio-margin market.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiMarginMarket")]
     pub struct RegisterDefiMarginMarket {
         /// Market identifier.
@@ -199,10 +172,7 @@ isi! {
 }
 isi! {
     /// Record a portfolio-margin account update.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::UpdateDefiMarginAccount")]
     pub struct UpdateDefiMarginAccount {
         /// Account whose margin ledger is updated.
@@ -221,10 +191,7 @@ isi! {
 }
 isi! {
     /// Register an RWA-backed `DeFi` market.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::RegisterDefiRwaMarket")]
     pub struct RegisterDefiRwaMarket {
         /// Market identifier.
@@ -241,10 +208,7 @@ isi! {
 }
 isi! {
     /// Record an RWA NAV or redemption checkpoint.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
     #[norito_schema(name = "iroha_data_model::isi::defi::ReportDefiRwaNav")]
     pub struct ReportDefiRwaNav {
         /// Market identifier.
@@ -354,11 +318,8 @@ impl crate::seal::Instruction for RegisterDefiRwaMarket {}
 impl crate::seal::Instruction for ReportDefiRwaNav {}
 isi_box! {
     /// Grouping enum for DeFi-native instructions.
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize),
-        norito(tag = "kind", content = "value")
-    )]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+#[norito (tag = "kind" , content = "value")]
     #[norito_schema(name = "iroha_data_model::isi::defi::DeFiInstructionBox")]
     pub enum DeFiInstructionBox {
         /// Submit a solver intent.
@@ -603,7 +564,7 @@ mod tests {
         let decoded = norito::decode_from_bytes::<T>(&bytes).expect("decode");
         assert_eq!(decoded, value);
     }
-    #[cfg(feature = "json")]
+
     fn assert_json_roundtrip<T>(value: T)
     where
         T: Clone
@@ -719,7 +680,7 @@ mod tests {
         assert_norito_roundtrip(DeFiInstructionBox::ReportRwaNav(rwa_nav()));
     }
     #[test]
-    #[cfg(feature = "json")]
+
     fn defi_json_roundtrips() {
         assert_json_roundtrip(submit_intent());
         assert_json_roundtrip(settle_intent());

@@ -74,13 +74,23 @@ pub use payload::{BlockPayload as Payload, BlockPayload, BlockResult};
 mod model {
     use super::*;
     /// Block collecting signatures from validators.
-    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema, Decode)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Encode,
+        IntoSchema,
+        Decode,
+        crate :: DeriveJsonSerialize,
+        crate :: DeriveJsonDeserialize,
     )]
     #[norito(decode_from_slice)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::block::model::SignedBlock")]
     pub struct SignedBlock {
         /// Signatures of validators who approved this block.
         pub(super) signatures: BTreeSet<BlockSignature>,
@@ -1039,7 +1049,7 @@ pub mod stream {
     use iroha_schema::IntoSchema;
     use norito::{
         codec::{Decode, Encode},
-        core::{Error as NoritoError, NoritoSerialize, SerializePayload},
+        core::{Error as NoritoError, SerializePayload},
     };
     use std::{num::NonZeroU64, sync::Arc};
     #[model]
@@ -1047,20 +1057,29 @@ pub mod stream {
         use super::*;
         use std::num::NonZeroU64;
         /// Request sent to subscribe to blocks stream starting from the given height.
-        #[derive(Debug, Clone, Copy, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            Copy,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[repr(transparent)]
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = "iroha_data_model::block::stream::model::BlockSubscriptionRequest")]
         pub struct BlockSubscriptionRequest(pub NonZeroU64);
         /// Message sent by the stream producer containing block.
-        #[derive(Debug, Clone, Decode, Encode, IntoSchema)]
-        #[cfg_attr(
-            feature = "json",
-            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        #[derive(
+            Debug,
+            Clone,
+            Decode,
+            Encode,
+            IntoSchema,
+            crate :: DeriveJsonSerialize,
+            crate :: DeriveJsonDeserialize,
         )]
         #[repr(transparent)]
         #[derive(norito::NoritoSchema)]
@@ -1085,11 +1104,7 @@ pub mod stream {
             <BlockMessage as norito::NoritoSchema>::frame_name()
         }
     }
-    impl NoritoSerialize for BlockMessageSend {
-        fn schema_hash() -> [u8; 16] {
-            <BlockMessage as NoritoSerialize>::schema_hash()
-        }
-    }
+
     impl SerializePayload for BlockMessageSend {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
             // Serialize as a BlockMessage wrapper to keep schema and layout consistent
@@ -1181,7 +1196,7 @@ pub mod error {
             SccpCommitmentRootMismatch,
         }
     }
-    #[cfg(feature = "json")]
+
     impl BlockRejectionReason {
         fn json_label(self) -> &'static str {
             match self {
@@ -1212,7 +1227,7 @@ pub mod error {
             }
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::FastJsonWrite for BlockRejectionReason {
         fn write_json(&self, out: &mut String) {
             norito::json::write_json_string(self.json_label(), out);
@@ -1224,7 +1239,7 @@ pub mod error {
             norito::json::write_json_string_to(self.json_label(), out)
         }
     }
-    #[cfg(feature = "json")]
+
     impl norito::json::JsonDeserialize for BlockRejectionReason {
         fn json_deserialize(
             parser: &mut norito::json::Parser<'_>,
@@ -1463,7 +1478,7 @@ fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), No
     out.extend_from_slice(MAGIC.as_slice());
     out.push(VERSION_MAJOR);
     out.push(VERSION_MINOR);
-    out.extend_from_slice(&<SignedBlock as norito::NoritoSerialize>::schema_hash());
+    out.extend_from_slice(&norito::schema::identity::frame_hash::<SignedBlock>());
     out.push(Compression::None as u8);
     let len = u64::try_from(payload.len()).map_err(|_| NoritoFrameError::LengthMismatch)?;
     out.extend_from_slice(&len.to_le_bytes());
@@ -1504,7 +1519,7 @@ fn validate_signed_block_header(payload: &[u8]) -> Result<(), NoritoFrameError> 
     }
     let mut schema_bytes = [0u8; 16];
     schema_bytes.copy_from_slice(&payload[6..22]);
-    if schema_bytes != <SignedBlock as norito::NoritoSerialize>::schema_hash() {
+    if schema_bytes != norito::schema::identity::frame_hash::<SignedBlock>() {
         return Err(NoritoFrameError::SchemaMismatch);
     }
     let compression = payload[22];
@@ -1816,7 +1831,7 @@ mod tests {
         alternate.extend_from_slice(&encode_default_norito_fields(&block));
         alternate
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn block_rejection_reason_json_has_closed_output_bound() {
         let reason = error::BlockRejectionReason::SccpCommitmentRootMismatch;

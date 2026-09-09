@@ -1,7 +1,7 @@
 // Metadata's tuple-sequence wire and checked-decoder error contracts.
 mod wire_contract_tests {
     use super::*;
-    use ncore::{DecodeFlagsGuard, NoritoDeserialize, PayloadCtxGuard};
+    use ncore::{DecodeFlagsGuard, DeserializePayload, PayloadCtxGuard};
 
     fn layouts() -> Vec<u8> {
         let flags: Vec<_> = (0..=u8::MAX)

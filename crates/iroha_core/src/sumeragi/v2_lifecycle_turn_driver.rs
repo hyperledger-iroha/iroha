@@ -666,7 +666,7 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
         Err(error) => {
             iroha_logger::error!(
                 ?error,
-                "Certified-Serve Ready-Producer ledger census failed closed"
+                "Certified-Serve pre-admission ledger census failed closed"
             );
             services
                 .lifecycle_output_guard()
@@ -679,12 +679,16 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
             );
         }
     };
-    match owner.registry.registry().attest_ready_producer_turn_census(
-        &owner.verified,
-        &owner.coordinator,
-        &ready_ledger,
-    ) {
-        Ok(Some(_attestation)) => {
+    match owner
+        .registry
+        .registry()
+        .certified_serve_ingress_has_competing_ready_work(
+            &owner.verified,
+            &owner.coordinator,
+            &ready_ledger,
+            &authenticated,
+        ) {
+        Ok(true) => {
             drop(target);
             drop(dequeue);
             drop(runner);
@@ -692,11 +696,11 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
                 ProductionLifecycleIngressSelectionV1::CertifiedServeCompetingReady,
             );
         }
-        Ok(None) => {}
+        Ok(false) => {}
         Err(error) => {
             iroha_logger::error!(
                 ?error,
-                "Certified-Serve Ready-Producer census failed closed"
+                "Certified-Serve pre-admission Ready census failed closed"
             );
             services
                 .lifecycle_output_guard()
@@ -750,7 +754,8 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
     let admission = owner.admit_selected_certified_serve(target, &local_signer, &authenticated);
     let continuation = match admission.into_safe_continuation() {
         Ok(continuation) => continuation,
-        Err(_restart) => {
+        Err(restart) => {
+            iroha_logger::error!(failure = ?restart.failure(), "Certified-Serve durable admission requires restart");
             drop(reservation);
             drop(dequeue);
             drop(runner);
@@ -760,6 +765,7 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
         }
     };
     let decision = continuation.decision();
+    let admission_failure = continuation.failure();
     let failed_before_publication = continuation.failure().is_some() && decision.is_none();
     let (target, terminal_replay) = continuation.into_target_and_terminal_replay();
     if reservation
@@ -850,6 +856,11 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
         decision,
         Some(AdmissionDecision::Admitted { .. } | AdmissionDecision::Retry { .. })
     ) {
+        iroha_logger::error!(
+            ?decision,
+            ?admission_failure,
+            "Certified-Serve admission returned no dispatchable decision"
+        );
         drop(reservation);
         drop(dequeue);
         drop(runner);
@@ -860,7 +871,12 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
 
     let ledger = match LifecycleLedgerV1::from_coordinator(&owner.coordinator) {
         Ok(ledger) => ledger,
-        Err(_) => {
+        Err(error) => {
+            iroha_logger::error!(
+                ?error,
+                ?decision,
+                "Certified-Serve admitted ledger projection failed"
+            );
             drop(reservation);
             drop(dequeue);
             drop(runner);
@@ -876,7 +892,12 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
         &authenticated,
     ) {
         Ok(attestation) => attestation,
-        Err(_) => {
+        Err(error) => {
+            iroha_logger::error!(
+                ?error,
+                ?decision,
+                "Certified-Serve exact Ready attestation failed"
+            );
             drop(reservation);
             drop(dequeue);
             drop(runner);
@@ -898,7 +919,8 @@ fn prepare_and_dispatch_current_certified_serve<'cursor>(
         vec![observation],
     ) {
         Ok(dispatch) => dispatch,
-        Err(_) => {
+        Err(error) => {
+            iroha_logger::error!(?error, ?decision, "Certified-Serve scheduler claim failed");
             drop(reservation);
             drop(dequeue);
             drop(runner);

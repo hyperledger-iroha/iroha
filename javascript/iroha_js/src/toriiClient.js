@@ -1,3 +1,4 @@
+import { normalizeContractErrorTypeV1, normalizeContractErrorTypesV1, validateManifestErrorTypeBindingsV1 } from "./contractErrorTypes.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { chacha20orig } from "@noble/ciphers/chacha";
@@ -20235,7 +20236,7 @@ function assertExactManifestResponseShape(value, context) {
       "access_set_hints",
       "entrypoints",
       "states",
-      "error_codes",
+      "error_types",
       "kotoba",
       "provenance",
     ],
@@ -20358,15 +20359,7 @@ function assertExactManifestResponseShape(value, context) {
       );
     });
   }
-  if (Array.isArray(manifest.error_codes)) {
-    manifest.error_codes.forEach((errorCode, index) => {
-      exactManifestResponseRecord(
-        errorCode,
-        ["namespace", "name", "code"],
-        `${context}.error_codes[${index}]`,
-      );
-    });
-  }
+  normalizeContractErrorTypesV1(manifest.error_types, `${context}.error_types`);
   if (Array.isArray(manifest.kotoba)) {
     manifest.kotoba.forEach((entry, index) => {
       const entryContext = `${context}.kotoba[${index}]`;
@@ -20416,8 +20409,8 @@ function normalizeManifestPayload(manifest, context) {
     "entrypoints",
     "entryPoints",
     "states",
-    "error_codes",
-    "errorCodes",
+    "error_types",
+    "errorTypes",
     "kotoba",
     "provenance",
   ]);
@@ -20445,7 +20438,7 @@ function normalizeManifestPayload(manifest, context) {
     access_set_hints: null,
     entrypoints: null,
     states: null,
-    error_codes: null,
+    error_types: null,
     kotoba: null,
     provenance: null,
   };
@@ -20522,12 +20515,12 @@ function normalizeManifestPayload(manifest, context) {
     normalized.states =
       states === null ? null : normalizeManifestStatesPayload(states, `${context}.states`);
   }
-  if (hasField("error_codes", "errorCodes")) {
-    const errorCodes = getField("error_codes", "errorCodes");
-    normalized.error_codes =
-      errorCodes === null
+  if (hasField("error_types", "errorTypes")) {
+    const errorTypes = getField("error_types", "errorTypes");
+    normalized.error_types =
+      errorTypes === null
         ? null
-        : normalizeManifestErrorCodesPayload(errorCodes, `${context}.error_codes`);
+        : normalizeManifestErrorTypesPayload(errorTypes, `${context}.error_types`);
   }
   if (hasField("kotoba")) {
     const kotoba = getField("kotoba");
@@ -20608,16 +20601,7 @@ function validateNormalizedManifestPayload(manifest, context) {
     `${context}.access_set_hints`,
   );
 
-  const errorPaths = new Set();
-  const errorNumbers = new Set();
-  for (const errorCode of manifest.error_codes ?? []) {
-    const path = `${errorCode.namespace}::${errorCode.name}`;
-    if (errorPaths.has(path) || errorNumbers.has(errorCode.code)) {
-      rejectType(`${context}.error_codes contains a duplicate path or numeric code`);
-    }
-    errorPaths.add(path);
-    errorNumbers.add(errorCode.code);
-  }
+  validateManifestErrorTypeBindingsV1(manifest, context);
 
   const messageIds = new Set();
   for (const [entryIndex, entry] of (manifest.kotoba ?? []).entries()) {
@@ -20842,7 +20826,7 @@ function normalizeAccessSetHintsPayload(payload, context) {
         `${hintContext}.bound_kind`,
       );
       if (!isKotodamaV1DynamicAccessBoundKind(boundKind)) {
-        rejectType(`${hintContext}.bound_kind must be exactly take or range`);
+        rejectType(`${hintContext}.bound_kind must be exactly take or page`);
       }
       return {
         base_key: baseKey,
@@ -20945,7 +20929,7 @@ function normalizeManifestEntrypointPayload(value, context) {
     record.return_schema ?? record.returnSchema,
     `${context}.return_schema`,
   );
-  if ((returnType === null) !== (returnSchema === null)) {
+  if (returnType === null || returnSchema === null) {
     rejectType(`${context} must declare return_type and return_schema together`);
   }
   if (
@@ -21108,6 +21092,7 @@ function normalizeManifestValueTypeNode(value, context) {
       }
       return { kind, value: arity };
     }
+    case "Unit":
     case "Option":
     case "Result":
       requireManifestNull(record.value, `${context}.value`);
@@ -21131,6 +21116,8 @@ function normalizeManifestValueTypeNode(value, context) {
         value: { capacity },
       };
     }
+    case "Error":
+      return { kind, value: normalizeContractErrorTypeV1(record.value, `${context}.value`) };
     case "Leaf":
       return {
         kind,
@@ -21233,36 +21220,8 @@ function normalizeManifestStatesPayload(value, context) {
   });
 }
 
-function normalizeManifestErrorCodesPayload(value, context) {
-  if (!Array.isArray(value)) {
-    rejectType(`${context} must be an array`);
-  }
-  return value.map((errorCode, index) => {
-    const record = ensureRecord(errorCode, `${context}[${index}]`);
-    const code = ToriiClient._normalizeUnsignedInteger(
-      record.code,
-      `${context}[${index}].code`,
-      { allowZero: true },
-    );
-    if (code > 0xffff_ffff) {
-      rejectType(`${context}[${index}].code must fit in u32`);
-    }
-    if (code === 0) {
-      rejectType(`${context}[${index}].code must be non-zero`);
-    }
-    return {
-      namespace: requireCanonicalKotodamaIdentifier(
-        record.namespace,
-        `${context}[${index}].namespace`,
-        { typeDeclaration: true },
-      ),
-      name: requireCanonicalKotodamaIdentifier(
-        record.name,
-        `${context}[${index}].name`,
-      ),
-      code,
-    };
-  });
+function normalizeManifestErrorTypesPayload(value, context) {
+  return normalizeContractErrorTypesV1(value, context);
 }
 
 function normalizeManifestTriggersPayload(value, context) {

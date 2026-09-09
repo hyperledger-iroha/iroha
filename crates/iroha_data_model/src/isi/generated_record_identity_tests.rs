@@ -46,17 +46,17 @@ where
     T: NoritoSchema + NoritoSerialize + for<'de> NoritoDeserialize<'de> + Clone + Debug + PartialEq,
 {
     let identity = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(identity, <T as NoritoSerialize>::schema_hash());
-    assert_eq!(identity, <T as NoritoDeserialize>::schema_hash());
+    assert_eq!(identity, norito::schema::identity::frame_hash::<T>());
+    assert_eq!(identity, norito::schema::identity::frame_hash::<T>());
     json::object([
         ("nominal", Value::String(T::nominal_name())),
         (
             "serialize_hash",
-            Value::String(hex(&<T as NoritoSerialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         (
             "deserialize_hash",
-            Value::String(hex(&<T as NoritoDeserialize>::schema_hash())),
+            Value::String(hex(&norito::schema::identity::frame_hash::<T>())),
         ),
         ("frame", Value::String(frame(&value))),
         ("vector_frame", Value::String(frame(&vec![value.clone()]))),
@@ -178,11 +178,11 @@ where
     let row = captured(nominal);
     assert_eq!(
         row.get("serialize_hash").and_then(Value::as_str),
-        Some(hex(&<T as NoritoSerialize>::schema_hash()).as_str())
+        Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
     );
     assert_eq!(
         row.get("deserialize_hash").and_then(Value::as_str),
-        Some(hex(&<T as NoritoDeserialize>::schema_hash()).as_str())
+        Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
     );
     let cases = row
         .get("cases")

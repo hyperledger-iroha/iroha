@@ -8,15 +8,15 @@
 //! mode flags, an optional logical vector length, and a cycle limit.
 use crate::error::VMError;
 use iroha_data_model::smart_contract::manifest::{
-    AccessSetHints, ContractErrorCodeDescriptor, EntryPointKind, EntrypointDescriptor,
+    AccessSetHints, ContractErrorTypeDescriptor, EntryPointKind, EntrypointDescriptor,
     KotobaTranslationEntry, TriggerDescriptor,
 };
 pub use iroha_data_model::smart_contract::{CONTRACT_CODE_HASH_DOMAIN, contract_code_hash};
 use norito::{
     Decode, Encode,
     core::{
-        Archived, DecodeFromSlice, DecodeLimits, Error as NoritoError, NoritoDeserialize,
-        NoritoSerialize, SerializePayload, serialize_to_buffer,
+        Archived, DecodeFromSlice, DecodeLimits, DeserializePayload, Error as NoritoError,
+        SerializePayload, serialize_to_buffer,
     },
 };
 use std::io::Write;
@@ -113,7 +113,8 @@ pub const CONTRACT_FEATURE_KNOWN_BITS: u64 = CONTRACT_FEATURE_BIT_ZK | CONTRACT_
 const CONTRACT_INTERFACE_SECTION_HEADER_SIZE: usize = 8;
 const CONTRACT_DEBUG_SECTION_HEADER_SIZE: usize = 8;
 /// Artifact-local entrypoint metadata carried inside the required `CNTR` section.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedEntrypointDescriptor")]
 pub struct EmbeddedEntrypointDescriptor {
     pub name: String,
     pub kind: EntryPointKind,
@@ -122,7 +123,8 @@ pub struct EmbeddedEntrypointDescriptor {
     /// Zero-parameter entrypoints have no record and therefore no schema.
     pub argument_schema: Option<crate::entrypoint::EntrypointArgumentSchemaV1>,
     pub return_type: Option<String>,
-    /// Exact recursive schema for a non-unit public return value.
+    /// Exact recursive schema for every public return value, including one zero scalar Unit.
+    /// Public entrypoint admission rejects an absent schema.
     pub return_schema: Option<crate::entrypoint::EntrypointValueTypeV1>,
     pub permission: Option<String>,
     pub read_keys: Vec<String>,
@@ -153,7 +155,8 @@ impl EmbeddedEntrypointDescriptor {
     }
 }
 /// Field descriptor for embedded durable state record types.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedStateFieldDescriptor")]
 pub struct EmbeddedStateFieldDescriptor {
     pub name: String,
     pub ty: EmbeddedStateType,
@@ -164,8 +167,18 @@ pub struct EmbeddedStateFieldDescriptor {
 /// budget remains safe on constrained runtime stacks. `Clone` and `Debug` remain recursively
 /// derived for tooling; production boundary code must borrow rather than clone or format an
 /// untrusted maximum-depth tree.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, norito::NoritoSchema)]
+#[norito_schema(
+    name = "ivm_abi::metadata::EmbeddedStateType",
+    frame = "iroha.kotodama.EmbeddedStateTypeV1"
+)]
 pub enum EmbeddedStateType {
+    /// Unit value represented by one zero scalar.
+    Unit,
+    /// A nominal finite error type with an exact canonical variant schema.
+    Error(ContractErrorTypeDescriptor),
+    /// Opaque cursor bound to one scalar durable-map key kind.
+    StateCursor(iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1),
     Int,
     Decimal,
     Quantity,
@@ -205,7 +218,10 @@ impl PartialEq for EmbeddedStateType {
         let mut pending = vec![(self, other)];
         while let Some((left, right)) = pending.pop() {
             match (left, right) {
-                (Self::Int, Self::Int)
+                (Self::StateCursor(left), Self::StateCursor(right)) if left == right => {}
+                (Self::Error(left), Self::Error(right)) if left == right => {}
+                (Self::Unit, Self::Unit)
+                | (Self::Int, Self::Int)
                 | (Self::Decimal, Self::Decimal)
                 | (Self::Quantity, Self::Quantity)
                 | (Self::Bool, Self::Bool)
@@ -322,7 +338,10 @@ fn move_embedded_state_type_children(
                 EmbeddedStateType::Bool,
             ));
         }
-        EmbeddedStateType::Int
+        EmbeddedStateType::Unit
+        | EmbeddedStateType::StateCursor(_)
+        | EmbeddedStateType::Error(_)
+        | EmbeddedStateType::Int
         | EmbeddedStateType::Decimal
         | EmbeddedStateType::Quantity
         | EmbeddedStateType::Bool
@@ -352,6 +371,9 @@ impl EmbeddedStateType {
     #[must_use]
     pub const fn wire_tag(&self) -> u8 {
         match self {
+            Self::Unit => EMBEDDED_STATE_TYPE_TAG_UNIT,
+            Self::Error(_) => EMBEDDED_STATE_TYPE_TAG_ERROR,
+            Self::StateCursor(_) => EMBEDDED_STATE_TYPE_TAG_STATE_CURSOR,
             Self::Int => EMBEDDED_STATE_TYPE_TAG_INT,
             Self::Decimal => EMBEDDED_STATE_TYPE_TAG_DECIMAL,
             Self::Quantity => EMBEDDED_STATE_TYPE_TAG_QUANTITY,
@@ -395,6 +417,9 @@ const EMBEDDED_STATE_TYPE_TAG_STATE_MAP: u8 = 16;
 const EMBEDDED_STATE_TYPE_TAG_OPTION: u8 = 17;
 const EMBEDDED_STATE_TYPE_TAG_RESULT: u8 = 18;
 const EMBEDDED_STATE_TYPE_TAG_LIST: u8 = 19;
+const EMBEDDED_STATE_TYPE_TAG_UNIT: u8 = 20;
+const EMBEDDED_STATE_TYPE_TAG_ERROR: u8 = 21;
+const EMBEDDED_STATE_TYPE_TAG_STATE_CURSOR: u8 = 22;
 /// Maximum recursive depth accepted by the first-release CNTR state-type codec.
 pub const MAX_EMBEDDED_STATE_TYPE_DEPTH_V1: usize = 256;
 fn embedded_state_type_depth_error(operation: &str) -> NoritoError {
@@ -414,6 +439,23 @@ fn validate_embedded_state_type_iterative(
         let child_depth = depth
             .checked_add(1)
             .ok_or_else(|| embedded_state_type_depth_error(operation))?;
+        if matches!(
+            value,
+            EmbeddedStateType::StateCursor(
+                iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Json
+            )
+        ) {
+            return Err(NoritoError::Message(
+                "Json is not a state cursor key kind".into(),
+            ));
+        }
+        if let EmbeddedStateType::Error(error) = value
+            && !error.validate()
+        {
+            return Err(NoritoError::Message(
+                "invalid nominal error descriptor".to_owned(),
+            ));
+        }
         match value {
             EmbeddedStateType::Tuple(items) => {
                 pending.extend(
@@ -455,7 +497,10 @@ fn validate_embedded_state_type_iterative(
                 }
                 pending.push((element, child_depth, true));
             }
-            EmbeddedStateType::Int
+            EmbeddedStateType::Unit
+            | EmbeddedStateType::StateCursor(_)
+            | EmbeddedStateType::Error(_)
+            | EmbeddedStateType::Int
             | EmbeddedStateType::Decimal
             | EmbeddedStateType::Quantity
             | EmbeddedStateType::Bool
@@ -652,7 +697,10 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                     EmbeddedStateType::List { element, .. } => {
                         pending.push(Event::Enter(element));
                     }
-                    EmbeddedStateType::Int
+                    EmbeddedStateType::Unit
+                    | EmbeddedStateType::StateCursor(_)
+                    | EmbeddedStateType::Error(_)
+                    | EmbeddedStateType::Int
                     | EmbeddedStateType::Decimal
                     | EmbeddedStateType::Quantity
                     | EmbeddedStateType::Bool
@@ -674,7 +722,10 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                     EmbeddedStateType::Struct { fields, .. } => fields.len(),
                     EmbeddedStateType::StateMap { .. } | EmbeddedStateType::Result { .. } => 2,
                     EmbeddedStateType::Option(_) | EmbeddedStateType::List { .. } => 1,
-                    EmbeddedStateType::Int
+                    EmbeddedStateType::Unit
+                    | EmbeddedStateType::StateCursor(_)
+                    | EmbeddedStateType::Error(_)
+                    | EmbeddedStateType::Int
                     | EmbeddedStateType::Decimal
                     | EmbeddedStateType::Quantity
                     | EmbeddedStateType::Bool
@@ -702,6 +753,17 @@ fn encode_embedded_state_type_payload(value: &EmbeddedStateType) -> Result<Vec<u
                 let mut child = children.into_iter();
                 let mut payload = Vec::new();
                 match value {
+                    EmbeddedStateType::StateCursor(key) => {
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_STATE_CURSOR, &mut payload)?;
+                        serialize_to_buffer(key, &mut payload)?;
+                    }
+                    EmbeddedStateType::Unit => {
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_UNIT, &mut payload)?
+                    }
+                    EmbeddedStateType::Error(error) => {
+                        serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_ERROR, &mut payload)?;
+                        serialize_to_buffer(error, &mut payload)?;
+                    }
                     EmbeddedStateType::Int => {
                         serialize_to_buffer(&EMBEDDED_STATE_TYPE_TAG_INT, &mut payload)?
                     }
@@ -876,8 +938,43 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                     .ok_or_else(|| embedded_state_type_depth_error("decoding"))?;
                 let (tag, tag_used) = <u8 as DecodeFromSlice>::decode_from_slice(encoded)?;
                 let payload = &encoded[tag_used..];
+                if tag == EMBEDDED_STATE_TYPE_TAG_STATE_CURSOR {
+                    let (key, used) = iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::decode_from_slice(payload)?;
+                    expect_payload_consumed(used, payload.len(), "StateCursor")?;
+                    if key
+                        == iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Json
+                    {
+                        return Err(NoritoError::Message(
+                            "Json is not a state cursor key kind".into(),
+                        ));
+                    }
+                    push_embedded_decode_item(
+                        &mut decoded_values,
+                        DecodedValue {
+                            value: EmbeddedStateType::StateCursor(key),
+                            contains_resource_handle: false,
+                        },
+                    )?;
+                    continue;
+                }
+                if tag == EMBEDDED_STATE_TYPE_TAG_ERROR {
+                    let (error, used) = ContractErrorTypeDescriptor::decode_from_slice(payload)?;
+                    expect_payload_consumed(used, payload.len(), "error descriptor")?;
+                    if !error.validate() {
+                        return Err(NoritoError::Message("invalid error descriptor".into()));
+                    }
+                    push_embedded_decode_item(
+                        &mut decoded_values,
+                        DecodedValue {
+                            value: EmbeddedStateType::Error(error),
+                            contains_resource_handle: false,
+                        },
+                    )?;
+                    continue;
+                }
                 let (constructor, children, consumed) = match tag {
-                    EMBEDDED_STATE_TYPE_TAG_INT
+                    EMBEDDED_STATE_TYPE_TAG_UNIT
+                    | EMBEDDED_STATE_TYPE_TAG_INT
                     | EMBEDDED_STATE_TYPE_TAG_DECIMAL
                     | EMBEDDED_STATE_TYPE_TAG_QUANTITY
                     | EMBEDDED_STATE_TYPE_TAG_BOOL
@@ -893,6 +990,7 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
                     | EMBEDDED_STATE_TYPE_TAG_JSON => {
                         expect_payload_consumed(0, payload.len(), "EmbeddedStateType")?;
                         let value = match tag {
+                            EMBEDDED_STATE_TYPE_TAG_UNIT => EmbeddedStateType::Unit,
                             EMBEDDED_STATE_TYPE_TAG_INT => EmbeddedStateType::Int,
                             EMBEDDED_STATE_TYPE_TAG_DECIMAL => EmbeddedStateType::Decimal,
                             EMBEDDED_STATE_TYPE_TAG_QUANTITY => EmbeddedStateType::Quantity,
@@ -1147,19 +1245,20 @@ fn decode_embedded_state_type_payload(encoded: &[u8]) -> Result<EmbeddedStateTyp
         .map(|decoded| decoded.value)
         .ok_or(NoritoError::LengthMismatch)
 }
-impl NoritoSerialize for EmbeddedStateFieldDescriptor {}
+
 impl SerializePayload for EmbeddedStateFieldDescriptor {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_field_payload(self)?;
         encoded.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for EmbeddedStateFieldDescriptor {
+
+impl<'a> DeserializePayload<'a> for EmbeddedStateFieldDescriptor {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateFieldDescriptor decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
+        let encoded = <Vec<u8> as DeserializePayload>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_field_payload(&encoded)
     }
 }
@@ -1170,26 +1269,20 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateFieldDescriptor {
         Ok((value, used))
     }
 }
-impl NoritoSerialize for EmbeddedStateType {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
-    }
-}
+
 impl SerializePayload for EmbeddedStateType {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
         let encoded = encode_embedded_state_type_payload(self)?;
         encoded.serialize(writer)
     }
 }
-impl<'a> NoritoDeserialize<'a> for EmbeddedStateType {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
-    }
+
+impl<'a> DeserializePayload<'a> for EmbeddedStateType {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("EmbeddedStateType decode")
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, NoritoError> {
-        let encoded = <Vec<u8> as NoritoDeserialize>::try_deserialize(archived.cast::<Vec<u8>>())?;
+        let encoded = <Vec<u8> as DeserializePayload>::try_deserialize(archived.cast::<Vec<u8>>())?;
         decode_embedded_state_type_payload(&encoded)
     }
 }
@@ -1201,14 +1294,18 @@ impl<'a> DecodeFromSlice<'a> for EmbeddedStateType {
     }
 }
 /// Seiyaku-level durable state declaration descriptor.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedStateDescriptor")]
 pub struct EmbeddedStateDescriptor {
     pub name: String,
     pub ty: EmbeddedStateType,
 }
 /// Decoded payload of the required `CNTR` section carried by contract artifacts.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kotodama.EmbeddedContractInterfaceV1")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "ivm_abi::metadata::EmbeddedContractInterfaceV1",
+    frame = "iroha.kotodama.EmbeddedContractInterfaceV1"
+)]
 pub struct EmbeddedContractInterfaceV1 {
     /// Canonical source-level seiyaku identity.
     pub seiyaku_name: String,
@@ -1230,10 +1327,11 @@ pub struct EmbeddedContractInterfaceV1 {
     pub entrypoints: Vec<EmbeddedEntrypointDescriptor>,
     pub states: Vec<EmbeddedStateDescriptor>,
     /// Stable application error codes accepted by `require`.
-    pub error_codes: Vec<ContractErrorCodeDescriptor>,
+    pub error_types: Vec<ContractErrorTypeDescriptor>,
 }
 /// Exact source location emitted for hash-keyed compiler debug sidecars.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedSourceLocation")]
 pub struct EmbeddedSourceLocation {
     #[norito(default)]
     pub source_path: Option<String>,
@@ -1247,7 +1345,8 @@ pub struct EmbeddedSourceLocation {
     pub column: u32,
 }
 /// One exact bytecode/source segment in compiler debug metadata.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedSourceMapEntryV1")]
 pub struct EmbeddedSourceMapEntryV1 {
     pub function_name: String,
     /// Function start PC relative to the executable instruction stream.
@@ -1257,7 +1356,8 @@ pub struct EmbeddedSourceMapEntryV1 {
     pub source: EmbeddedSourceLocation,
 }
 /// Function-level budget summary emitted inside the optional `DBG1` section.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedFunctionBudgetReportV1")]
 pub struct EmbeddedFunctionBudgetReportV1 {
     pub function_name: String,
     pub pc_start: u64,
@@ -1270,7 +1370,8 @@ pub struct EmbeddedFunctionBudgetReportV1 {
     pub source: Option<EmbeddedSourceLocation>,
 }
 /// Decoded payload of the optional `DBG1` section carried by contract artifacts.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "ivm_abi::metadata::EmbeddedContractDebugInfoV1")]
 pub struct EmbeddedContractDebugInfoV1 {
     pub source_map: Vec<EmbeddedSourceMapEntryV1>,
     pub budget_report: Vec<EmbeddedFunctionBudgetReportV1>,
@@ -1995,6 +2096,11 @@ mod tests {
                 element: Box::new(EmbeddedStateType::Quantity),
                 capacity: 64,
             },
+            EmbeddedStateType::Unit,
+            EmbeddedStateType::Error(crate::error_types::list_error_type()),
+            EmbeddedStateType::StateCursor(
+                iroha_data_model::smart_contract::entrypoint::EntrypointValueKindV1::Int,
+            ),
         ];
         for (expected_tag, value) in (0_u8..).zip(variants) {
             assert_eq!(value.wire_tag(), expected_tag);
@@ -2003,11 +2109,11 @@ mod tests {
             assert_eq!(payload.first(), Some(&expected_tag));
         }
         assert_eq!(
-            <EmbeddedStateType as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<EmbeddedStateType>(),
             norito::core::schema_hash_for_name(EMBEDDED_STATE_TYPE_SCHEMA_NAME_V1)
         );
         assert_eq!(
-            <EmbeddedContractInterfaceV1 as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<EmbeddedContractInterfaceV1>(),
             norito::core::schema_hash_for_name(CONTRACT_INTERFACE_SCHEMA_NAME_V1)
         );
     }
@@ -2253,8 +2359,10 @@ mod tests {
                 kind: EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(crate::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![crate::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -2263,10 +2371,14 @@ mod tests {
                 triggers: Vec::new(),
                 entry_pc: 0,
             }],
-            error_codes: vec![ContractErrorCodeDescriptor {
-                namespace: "PaymentError".to_owned(),
-                name: "Unauthorized".to_owned(),
-                code: 1001,
+            error_types: vec![ContractErrorTypeDescriptor {
+                identity: "PaymentError".to_owned(),
+                variants: vec![
+                    iroha_data_model::smart_contract::manifest::ContractErrorVariantDescriptor {
+                        name: "Unauthorized".to_owned(),
+                        code: 1001,
+                    },
+                ],
             }],
             states: vec![EmbeddedStateDescriptor {
                 name: "wallet".to_owned(),
@@ -2346,6 +2458,49 @@ mod tests {
             parse_contract_debug_section(&alternate, 0)
                 .expect_err("alternate-layout DBG1 payload must be rejected"),
             VMError::InvalidMetadata
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedEntrypointDescriptor>(
+            "ivm_abi::metadata::EmbeddedEntrypointDescriptor",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedStateDescriptor>(
+            "ivm_abi::metadata::EmbeddedStateDescriptor",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedContractInterfaceV1>(
+            "ivm_abi::metadata::EmbeddedContractInterfaceV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedSourceLocation>(
+            "ivm_abi::metadata::EmbeddedSourceLocation",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedSourceMapEntryV1>(
+            "ivm_abi::metadata::EmbeddedSourceMapEntryV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedFunctionBudgetReportV1>(
+            "ivm_abi::metadata::EmbeddedFunctionBudgetReportV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<super::EmbeddedContractDebugInfoV1>(
+            "ivm_abi::metadata::EmbeddedContractDebugInfoV1",
+        );
+    }
+    #[test]
+    fn observed_manual_frames() {
+        use super::*;
+        crate::captured_identity_tests::assert_manual::<EmbeddedStateFieldDescriptor>(
+            "EmbeddedStateFieldDescriptor",
+            &(EmbeddedStateFieldDescriptor {
+                name: "balance".to_owned(),
+                ty: EmbeddedStateType::Quantity,
+            }),
+        );
+        crate::captured_identity_tests::assert_manual::<EmbeddedStateType>(
+            "EmbeddedStateType",
+            &(EmbeddedStateType::Option(Box::new(EmbeddedStateType::Bool))),
         );
     }
 }

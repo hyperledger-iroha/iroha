@@ -1,0 +1,5 @@
+error: invalid path `Self::validate()`: unexpected token
+ --> tests/ui_fail/malformed_binary_validation_hook.rs:4:10
+  |
+4 | #[norito(validate = "Self::validate()")]
+  |          ^^^^^^^^

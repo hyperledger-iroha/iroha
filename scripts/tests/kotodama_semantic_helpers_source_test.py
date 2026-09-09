@@ -21,12 +21,15 @@ BASELINE_RUST_LINES = 20_976
 MINIMUM_RUST_LINE_REDUCTION = 1_500
 MAXIMUM_RUST_LINES = BASELINE_RUST_LINES - MINIMUM_RUST_LINE_REDUCTION
 
+# First-release V1 pins include explicit labels, nominal errors, named patterns,
+# exact rejection selectors and bounded map scanning. Executable semantics are
+# covered by the compiler suite; these hashes detect unreviewed source drift.
 TEST_MARKER = "#[cfg(test)]\nmod tests {"
 TEST_SUFFIX_SHA256 = (
-    "62a477ecf7a62a35a5dd789523784582c10a64a7fc1ac94a19547b6b835a2a8f"
+    "e768aab893125104d704338f5f1ef37a1db7d1502ef54463ea2f8cf7c931ad83"
 )
 TEST_RECORDS_SHA256 = (
-    "8b55006a0617100b980197e989f795b6dfc68f1a9f4beb6adc5c6ce29a20ee5c"
+    "7d1f725bd23d36b28e4b2746917519d2dc2548cb398789f79451e2b882ca985b"
 )
 TEST_LEAVES = (
     (
@@ -37,7 +40,7 @@ TEST_LEAVES = (
     ),
     (
         Path("crates/kotodama_lang/src/semantic/tests/trigger_semantics_tests.rs"),
-        "146542c9722ecbc62596e95913212e8ce87d1c1aa8b7f3e0c7c0f2ef05269399",
+        "d6ee5192a815e9b52cc60518610d87f16837f9d22c5f1daab159e4b8af8389d2",
         13,
         "c9e496eff35dca6bdec40e87651766d71f3dc5d511abdfc58f26938165e21cfc",
     ),
@@ -47,30 +50,36 @@ TEST_LEAVES = (
         1,
         "60c30af0f8ef4a55f1004d351c8a4fa24c4d78aa6d30c61b712c4e5cefa9b42b",
     ),
+    (
+        Path("crates/kotodama_lang/src/semantic/tests/call_labels_and_patterns.rs"),
+        "9a6dd091acca75f14c030600d7a57b175724038587f7cc521b1affb28f1bfe8c",
+        15,
+        "4670b929d5ceb05df2edefd79b9256743f46b12cd3581e6bb81e85b1270eddc7",
+    ),
 )
 BUILTIN_SET_SHA256 = (
-    "18433d73f89518b4a8fadb0c5daf5bbdabc2886e75c8f73f4381b696a4771adf"
+    "75cbaa9e9484e0e13066a0ba4ca2b04844f171dc2d65f7c53bfb63e56ecb2157"
 )
 DIAGNOSTIC_CODE_SET_SHA256 = (
-    "cffaa6bf6bbf0c476a09dcce01d67aed0c4bc5b18b9fbe509d315f3df22bb351"
+    "0bc55f7619e6b0298976b22a5fa2a1939e39c46823c336d11dc4e12a014b4d79"
 )
 ORDERED_DIAGNOSTIC_CODES_SHA256 = (
-    "6d7bf1486233b98ca03ea7a166dfb8e10f62ffbdb4cd2d8eb970938756da67dc"
+    "05ff7160457dcf3550049c1903af8b56171c13f05b02617ad87650285ce0104b"
 )
 HELPER_REGION_SHA256 = (
-    "7720a2615e0fd7804aa80a93aa6c53115e8aa0999dd950c1510aa06978815dad"
+    "033b87af0a45f0cbcf147c19a7117d9239259ce7a0a9af4ac992b13bcf1ed964"
 )
 EFFECT_REGION_SHA256 = (
-    "dc24b3f3c7efcfb2df3cfc7401562bf5004d9b9ec0a1e2333dbc85a0036aa761"
+    "b50a1543f0c038c504ad9ceafe2431342fc6f9ee9c313bb936afc2849cf4cda8"
 )
 DEFINITE_INIT_REGION_SHA256 = (
-    "e9a07b008ec37f2d1a4be95fde94d3683b9d64281d4495d2d28b24a5d79272cd"
+    "e7a9b1c8fba713da180748af056b40947f87e616fd394932fee58c0173bb501a"
 )
 FIXED_BUILTINS_SHA256 = (
-    "c317b32df8632fe6646956ed223cbda5a8945caa2d8a486a5f05709b7982a988"
+    "e4c8510f457b3d5fd17cf477bad25f585ced471f451e151cbb16c131fa7cc582"
 )
 CUSTOM_BUILTINS_SHA256 = (
-    "14b4a2df246f5eb996915880d2aff3084141470113ec6e1ab3d543048d8edf0c"
+    "4e37cc9a546a5b9d1ad4b23b33fecbc16fdec65b3ddea7e2d4e36a9307c6cc87"
 )
 
 RETIRED_BUILTINS = (
@@ -211,12 +220,12 @@ def validate_source(source: str) -> None:
         "production Builtin variants changed",
     )
     codes = _diagnostic_codes(production)
-    _require(len(set(codes)) == 140, "diagnostic identity set changed")
+    _require(len(set(codes)) == 148, "diagnostic identity set changed")
     _require(
         _json_sha256(sorted(set(codes))) == DIAGNOSTIC_CODE_SET_SHA256,
         "diagnostic identities changed",
     )
-    _require(len(codes) == 453, "diagnostic site count changed")
+    _require(len(codes) == 472, "diagnostic site count changed")
     _require(
         _json_sha256(codes) == ORDERED_DIAGNOSTIC_CODES_SHA256,
         "diagnostic identity order changed",
@@ -263,8 +272,8 @@ def validate_source(source: str) -> None:
     custom_region = helper_region[helper_region.index(custom_start) :]
     fixed_builtins = _builtin_variants(fixed_region)
     custom_builtins = _builtin_variants(custom_region)
-    _require(len(fixed_builtins) == 157, "fixed Builtin partition changed")
-    _require(len(custom_builtins) == 70, "custom Builtin partition changed")
+    _require(len(fixed_builtins) == 156, "fixed Builtin partition changed")
+    _require(len(custom_builtins) == 71, "custom Builtin partition changed")
     _require(
         not set(fixed_builtins).intersection(custom_builtins),
         "fixed and custom Builtin partitions overlap",

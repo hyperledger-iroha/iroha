@@ -29,3 +29,8 @@ norito = { path = "../norito", default-features = false, features = ["node-codec
 [[test]]
 name = "strict_json"
 path = "tests/strict_json.rs"
+
+[[test]]
+name = "ui"
+path = "tests/ui.rs"
+required-features = ["trybuild-tests"]

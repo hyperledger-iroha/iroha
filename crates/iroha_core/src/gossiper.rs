@@ -37,7 +37,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -3080,7 +3080,8 @@ impl SerializePayload for TransactionGossip {
         gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
     }
 }
-impl<'a> NoritoDeserialize<'a> for TransactionGossip {
+impl NoritoDeserialize<'_> for TransactionGossip {}
+impl<'a> DeserializePayload<'a> for TransactionGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode transaction gossip")
     }
@@ -3531,7 +3532,8 @@ impl SerializePayload for GossipTransaction {
             .checked_add(certificate_len)
     }
 }
-impl<'a> NoritoDeserialize<'a> for GossipTransaction {
+impl NoritoDeserialize<'_> for GossipTransaction {}
+impl<'a> DeserializePayload<'a> for GossipTransaction {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode gossip transaction")
     }

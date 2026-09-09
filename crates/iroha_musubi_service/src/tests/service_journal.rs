@@ -671,7 +671,7 @@ fn control_service_fixture(
     )
     .expect("broker key");
     let broker = AccountId::new(broker_key.public_key().clone());
-    let network_id = client.network_id;
+    let network_id = *client.network_id();
     let commitment = control_commitment();
     let semantic_release_digest = MusubiSemanticReleaseDigestV1::new([0x9a; 32]);
     let verification_lock_digest = MusubiVerificationLockDigestV1::new([0x9b; 32]);
@@ -739,7 +739,7 @@ fn control_service_fixture(
     .expect("canonical provider attestation set");
     let binding = MusubiSeedIngressReceiptBindingV1 {
         network_id,
-        publisher: client.account.clone(),
+        publisher: client.account().clone(),
         ingress_broker: broker.clone(),
         seed_provider: provider,
         semantic_release_manifest_digest: semantic_release_digest,
@@ -772,7 +772,7 @@ fn control_service_fixture(
         archive_id: commitment.archive_id(),
         commitment: commitment.clone(),
         staging_receipt: receipt,
-        registered_by: client.account.clone(),
+        registered_by: client.account().clone(),
         registered_at_height: 50,
         location_revision: 1,
         location_ids: Vec::new(),
@@ -783,7 +783,7 @@ fn control_service_fixture(
         generation: 1,
         prior_location_ids: Vec::new(),
         network_id,
-        publisher: client.account.clone(),
+        publisher: client.account().clone(),
         commitment: commitment.clone(),
         verification_lock_digest,
         staging_receipt: archive.staging_receipt.clone(),
@@ -833,7 +833,7 @@ fn control_service_fixture(
         version: 1,
         operation_id,
         network_id,
-        publisher: client.account.clone(),
+        publisher: client.account().clone(),
         location,
         provider,
         commitment: commitment.clone(),
@@ -1066,8 +1066,8 @@ fn private_service_fixture(fail_first: bool) -> PrivateServiceFixture {
         version: 1,
         operation_id: [0x61; 32],
         binding: MusubiSeedIngressReceiptBindingV1 {
-            network_id: regressing_client.network_id,
-            publisher: regressing_client.account.clone(),
+            network_id: *regressing_client.network_id(),
+            publisher: regressing_client.account().clone(),
             ingress_broker: broker.clone(),
             seed_provider: ProviderId::new([0x63; 32]),
             semantic_release_manifest_digest: semantic_release.semantic_digest(),
@@ -1283,7 +1283,7 @@ fn client() -> (Client, KeyPair) {
     )
     .expect("derive fixture key");
     let account = AccountId::new(key_pair.public_key().clone());
-    let client = Client::new(Config {
+    let client = Client::builder(Config {
         chain: ChainId::from("musubi-runtime-test"),
         network_id: test_network_id(0xA5),
         account_chain_discriminant: 1,
@@ -1307,7 +1307,7 @@ fn client() -> (Client, KeyPair) {
         ),
         sorafs_anonymity_policy: iroha_service_model::soranet::AnonymityPolicy::default(),
         sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
-    });
+    }).build().expect("valid test client configuration");
     (client, key_pair)
 }
 fn threshold_authorization_runtime(

@@ -72,11 +72,11 @@ where
     for row in [historical, current] {
         assert_eq!(
             row.get("serialize_hash").and_then(Value::as_str),
-            Some(hex(&<T as NoritoSerialize>::schema_hash()).as_str())
+            Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
         );
         assert_eq!(
             row.get("deserialize_hash").and_then(Value::as_str),
-            Some(hex(&<T as NoritoDeserialize>::schema_hash()).as_str())
+            Some(hex(&norito::schema::identity::frame_hash::<T>()).as_str())
         );
     }
     let cases = historical

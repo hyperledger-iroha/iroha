@@ -17,8 +17,10 @@
                             let bool non_negative = index >= 0;
                             let bool below_length = index < length;
                             let bool present = non_negative && below_length;
+                            let Result<(), ListError> outcome = Result::err(ListError::IndexOutOfBounds);
+                            let _ = outcome;
                             if present {
-                                values.try_set(
+                                let _ = values.try_set(
                                     index: 0,
                                     value: control_poison,
                                 );
@@ -26,8 +28,8 @@
                         } else if values.try_set(
                             index: index,
                             value: replacement,
-                        ) {
-                            values.try_set(
+                        ).is_ok() {
+                            let _ = values.try_set(
                                 index: 0,
                                 value: failure_poison,
                             );
@@ -41,8 +43,12 @@
                     ];
                     let Pair replacement = Pair { first: 90, second: 91 };
                     let Pair failure_poison = Pair { first: -3, second: -3 };
-                    if operation == 3 && values.try_push(replacement) {
-                        values.try_set(
+                    if operation == 2 {
+                        let Result<(), ListError> outcome = Result::err(ListError::CapacityExceeded);
+                        let _ = outcome;
+                    }
+                    if operation == 3 && values.try_push(replacement).is_ok() {
+                        let _ = values.try_set(
                             index: 0,
                             value: failure_poison,
                         );

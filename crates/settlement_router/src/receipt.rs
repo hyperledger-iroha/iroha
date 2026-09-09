@@ -15,8 +15,17 @@ pub enum SettlementReceiptError {
 }
 /// Receipt produced once a transaction has been admitted with an associated shadow price.
 #[derive(
-    Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "settlement_router::receipt::SettlementReceipt")]
 pub struct SettlementReceipt {
     /// Identifier emitted by the caller (for example, a transaction hash).
     pub source_id: [u8; 32],

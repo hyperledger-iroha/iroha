@@ -1,0 +1,79 @@
+// Actual compiler observations for existing owners in sorafs_manifest::orderbook.
+// This is a private include fragment; owning suites retain all payload controls.
+
+/// Verify every captured concrete identity in this ownership scope.
+#[test]
+fn captured_concrete_owner_identities() {
+    crate::captured_owner_identity_support::check_both::<self::OrderSideV1>(
+        "sorafs_manifest::orderbook::OrderSideV1",
+        "sorafs_manifest::orderbook::OrderSideV1",
+        "e6d97c87963a72ae85fd0cbb7334d05a",
+        "e6d97c87963a72ae85fd0cbb7334d05a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::OrderTierV1>(
+        "sorafs_manifest::orderbook::OrderTierV1",
+        "sorafs_manifest::orderbook::OrderTierV1",
+        "d43bafabe9f0bcbf50708575fa25dc8c",
+        "d43bafabe9f0bcbf50708575fa25dc8c",
+    );
+    crate::captured_owner_identity_support::check_both::<self::OrderCancelReasonV1>(
+        "sorafs_manifest::orderbook::OrderCancelReasonV1",
+        "sorafs_manifest::orderbook::OrderCancelReasonV1",
+        "3231e9c2ae86016405649de2640ecbf4",
+        "3231e9c2ae86016405649de2640ecbf4",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SettlementChannelStatusV1>(
+        "sorafs_manifest::orderbook::SettlementChannelStatusV1",
+        "sorafs_manifest::orderbook::SettlementChannelStatusV1",
+        "be1201c788b003f9822f95d0d6343625",
+        "be1201c788b003f9822f95d0d6343625",
+    );
+    crate::captured_owner_identity_support::check_both::<self::OrderbookSignatureV1>(
+        "sorafs_manifest::orderbook::OrderbookSignatureV1",
+        "sorafs_manifest::orderbook::OrderbookSignatureV1",
+        "bd0c00a682d236292904e489418a1f3a",
+        "bd0c00a682d236292904e489418a1f3a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::OrderRequestV1>(
+        "sorafs_manifest::orderbook::OrderRequestV1",
+        "sorafs_manifest::orderbook::OrderRequestV1",
+        "150cb9ed470d1b5791f7e9680d23be48",
+        "150cb9ed470d1b5791f7e9680d23be48",
+    );
+    crate::captured_owner_identity_support::check_both::<self::OrderCancelV1>(
+        "sorafs_manifest::orderbook::OrderCancelV1",
+        "sorafs_manifest::orderbook::OrderCancelV1",
+        "2c685d81ffda19e3a36d4e8398a22cb8",
+        "2c685d81ffda19e3a36d4e8398a22cb8",
+    );
+    crate::captured_owner_identity_support::check_both::<self::TradeEventV1>(
+        "sorafs_manifest::orderbook::TradeEventV1",
+        "sorafs_manifest::orderbook::TradeEventV1",
+        "55cc8dfce6d4d6939181d2d1063b1df3",
+        "55cc8dfce6d4d6939181d2d1063b1df3",
+    );
+    crate::captured_owner_identity_support::check_both::<self::OrderBookEntryV1>(
+        "sorafs_manifest::orderbook::OrderBookEntryV1",
+        "sorafs_manifest::orderbook::OrderBookEntryV1",
+        "f6e48804443383a7af764db699e790c1",
+        "f6e48804443383a7af764db699e790c1",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ByteRangeV1>(
+        "sorafs_manifest::orderbook::ByteRangeV1",
+        "sorafs_manifest::orderbook::ByteRangeV1",
+        "007beb7eb1388994c59bdbff411e707a",
+        "007beb7eb1388994c59bdbff411e707a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SettlementChannelV1>(
+        "sorafs_manifest::orderbook::SettlementChannelV1",
+        "sorafs_manifest::orderbook::SettlementChannelV1",
+        "738efdc9687a062895fa60eb0108dd9e",
+        "738efdc9687a062895fa60eb0108dd9e",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SettlementReceiptV1>(
+        "sorafs_manifest::orderbook::SettlementReceiptV1",
+        "sorafs_manifest::orderbook::SettlementReceiptV1",
+        "d3ffc06f49431b4a02606e4bcdba43a5",
+        "d3ffc06f49431b4a02606e4bcdba43a5",
+    );
+}

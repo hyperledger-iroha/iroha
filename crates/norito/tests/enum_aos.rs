@@ -1,7 +1,7 @@
 //! Targeted AoS enum roundtrip tests for Norito derives.
 #![allow(clippy::size_of_ref)]
 use iroha_schema::IntoSchema;
-use norito::{NoritoDeserialize, from_bytes, to_bytes};
+use norito::{DeserializePayload, from_bytes, to_bytes};
 #[derive(
     IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
 )]
@@ -18,8 +18,14 @@ struct StructPayload {
     tag: [u8; 4],
 }
 #[derive(
-    IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
+    IntoSchema,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    PartialEq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.enum_aos.AoSEnum")]
 enum AoSEnum {
     Unit,
     Tuple(TuplePayload),
@@ -27,6 +33,8 @@ enum AoSEnum {
 }
 #[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.enum_aos.AoSNamedEnum")]
 enum AoSNamedEnum {
     StructLike {
         label: String,
@@ -36,8 +44,14 @@ enum AoSNamedEnum {
     Unit,
 }
 #[derive(
-    IntoSchema, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq,
+    IntoSchema,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    PartialEq,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.enum_aos.AoSU8ArrayEnum")]
 enum AoSU8ArrayEnum {
     Unit,
     Bytes([u8; 12]),
@@ -46,7 +60,14 @@ enum AoSU8ArrayEnum {
 enum NamedArrayEnum {
     Raw { prefix: i32, bytes: [u8; 32] },
 }
-#[derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize, Debug, PartialEq)]
+#[derive(
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    Debug,
+    PartialEq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.enum_aos.NestedNamedArray")]
 struct NestedNamedArray {
     first: String,
     value: NamedArrayEnum,
@@ -57,7 +78,7 @@ fn aos_enum_roundtrip_unit() {
     let v = AoSEnum::Unit;
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSEnum>(&bytes).unwrap();
-    let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]
@@ -68,7 +89,7 @@ fn aos_enum_roundtrip_tuple() {
     });
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSEnum>(&bytes).unwrap();
-    let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]
@@ -80,7 +101,7 @@ fn aos_enum_roundtrip_struct() {
     });
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSEnum>(&bytes).unwrap();
-    let back = <AoSEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]
@@ -101,7 +122,7 @@ fn aos_enum_roundtrip_u8_array_unpacked() {
     let v = AoSU8ArrayEnum::Bytes([0xAB; 12]);
     let bytes = to_bytes(&v).unwrap();
     let arch = from_bytes::<AoSU8ArrayEnum>(&bytes).unwrap();
-    let back = <AoSU8ArrayEnum as NoritoDeserialize>::deserialize(arch);
+    let back = <AoSU8ArrayEnum as DeserializePayload>::deserialize(arch);
     assert_eq!(v, back);
 }
 #[test]

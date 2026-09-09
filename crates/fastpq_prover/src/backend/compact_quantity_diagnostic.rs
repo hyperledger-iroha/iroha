@@ -447,9 +447,12 @@ fn assert_retained_single(
         Err(Error::Encode(norito::Error::TotalAllocationExceeded { attempted, limit }))
             if limit == 32 * 1024 * 1024 && attempted > limit
     ));
-    // Check each actual production byte ceiling separately from allocation.
-    assert_eq!(VerifyLimits::default().max_proof_bytes, 512 * 1024);
-    for max in [512 * 1024, 1024 * 1024] {
+    // Check the replay, compact target and AXT byte policies separately from allocation.
+    for max in [
+        VerifyLimits::default().max_proof_bytes,
+        512 * 1024,
+        1024 * 1024,
+    ] {
         assert!(matches!(
             SharedVerifier {
                 max_decode_allocation_charges: 80 * 1024 * 1024,

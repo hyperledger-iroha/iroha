@@ -18,15 +18,9 @@ pub fn split_nonempty<'a>(
     empty_right_err: &'static str,
 ) -> Result<(&'a str, &'a str), ParseError> {
     match s.rsplit_once(delimiter) {
-        None => Err(ParseError {
-            reason: no_delim_err,
-        }),
-        Some(("", _)) => Err(ParseError {
-            reason: empty_left_err,
-        }),
-        Some((_, "")) => Err(ParseError {
-            reason: empty_right_err,
-        }),
+        None => Err(ParseError::new(no_delim_err)),
+        Some(("", _)) => Err(ParseError::new(empty_left_err)),
+        Some((_, "")) => Err(ParseError::new(empty_right_err)),
         Some((left, right)) => Ok((left, right)),
     }
 }
@@ -75,7 +69,7 @@ impl<T> Owned<T> {
         self.0
     }
 }
-#[cfg(feature = "json")]
+
 impl<T> norito::json::FastJsonWrite for Owned<T>
 where
     T: norito::json::JsonSerialize,
@@ -90,7 +84,7 @@ where
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl<T> norito::json::JsonDeserialize for Owned<T>
 where
     T: norito::json::JsonDeserialize,
@@ -101,17 +95,7 @@ where
         T::json_deserialize(parser).map(Owned)
     }
 }
-impl<T> norito::core::NoritoSerialize for Owned<T>
-where
-    T: norito::core::NoritoSerialize,
-{
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        <T as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<T> norito::core::SerializePayload for Owned<T>
 where
     T: norito::core::NoritoSerialize,
@@ -126,19 +110,17 @@ where
         <T as norito::core::SerializePayload>::encoded_len_exact(&self.0)
     }
 }
-impl<'de, T> norito::core::NoritoDeserialize<'de> for Owned<T>
+
+impl<'de, T> norito::core::DeserializePayload<'de> for Owned<T>
 where
-    T: norito::core::NoritoDeserialize<'de>,
+    T: norito::core::DeserializePayload<'de>,
 {
-    fn schema_hash() -> [u8; 16] {
-        <T as norito::core::NoritoDeserialize>::schema_hash()
-    }
     fn deserialize(archived: &'de Archived<Self>) -> Self {
-        let inner = <T as norito::core::NoritoDeserialize>::deserialize(archived.cast());
+        let inner = <T as norito::core::DeserializePayload>::deserialize(archived.cast());
         Self(inner)
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, NoritoCodecError> {
-        <T as norito::core::NoritoDeserialize>::try_deserialize(archived.cast()).map(Owned)
+        <T as norito::core::DeserializePayload>::try_deserialize(archived.cast()).map(Owned)
     }
 }
 /// Reference to an entity identified by `Id` with associated `Value`.
@@ -173,7 +155,7 @@ impl<Id, Value> core::ops::Deref for Ref<'_, Id, Value> {
         self.value
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod owned_identity_tests;
 
 #[cfg(test)]

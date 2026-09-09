@@ -5,7 +5,6 @@ edition.workspace = true
 version.workspace = true
 authors.workspace = true
 
-build = "../build-support/script.rs"
 
 license.workspace = true
 
@@ -66,7 +65,7 @@ iroha_config = { workspace = true }
 iroha_logger = { workspace = true, optional = true }
 iroha_futures = { workspace = true, optional = true }
 iroha_torii_shared = { workspace = true }
-iroha_data_model = { workspace = true, default-features = false, features = ["json"] }
+iroha_data_model = { workspace = true, default-features = false }
 
 async-trait = { workspace = true }
 chrono = { version = "0.4.38", optional = true }
@@ -82,9 +81,6 @@ reqwest = { version = "0.12.24", default-features = false, features = ["json", "
 blake3 = { workspace = true }
 thiserror = { workspace = true }
 hex = { workspace = true }
-
-[build-dependencies]
-build-support = { path = "../build-support", default-features = false }
 
 [dev-dependencies]
 expect-test = { workspace = true }

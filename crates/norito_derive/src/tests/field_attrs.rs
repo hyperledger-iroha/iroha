@@ -31,7 +31,9 @@ fn bounded_with_attribute_is_parsed_and_duplicate_is_rejected() {
         )]
         demo: u32
     };
-    let error = FieldAttr::parse(&duplicate.attrs).expect_err("duplicate path must reject");
+    let Err(error) = FieldAttr::parse(&duplicate.attrs) else {
+        panic!("duplicate path must reject");
+    };
     assert_eq!(error.to_string(), "duplicate `bounded_with` attribute");
 }
 #[test]
@@ -61,7 +63,9 @@ fn json_attribute_expands_the_checked_module_writer() {
         #[norito(with = "legacy", json = "checked")]
         demo: u32
     };
-    let error = FieldAttr::parse(&conflicting.attrs).expect_err("mixed helper modes must reject");
+    let Err(error) = FieldAttr::parse(&conflicting.attrs) else {
+        panic!("mixed helper modes must reject");
+    };
     assert_eq!(
         error.to_string(),
         "`json` cannot be combined with `with` or `bounded_with`"
@@ -70,7 +74,9 @@ fn json_attribute_expands_the_checked_module_writer() {
         #[norito(json = "checked", bounded_with = "legacy::serialize")]
         demo: u32
     };
-    let error = FieldAttr::parse(&reversed.attrs).expect_err("reversed helper mix must reject");
+    let Err(error) = FieldAttr::parse(&reversed.attrs) else {
+        panic!("reversed helper mix must reject");
+    };
     assert_eq!(
         error.to_string(),
         "`json` cannot be combined with `with` or `bounded_with`"
@@ -88,7 +94,9 @@ fn required_attribute_is_parsed_and_duplicate_is_rejected() {
         #[norito(required, required)]
         demo: Option<u32>
     };
-    let error = FieldAttr::parse(&duplicate.attrs).expect_err("duplicate required must reject");
+    let Err(error) = FieldAttr::parse(&duplicate.attrs) else {
+        panic!("duplicate required must reject");
+    };
     assert_eq!(error.to_string(), "duplicate `required` attribute");
 }
 #[test]
@@ -97,7 +105,9 @@ fn required_attribute_rejects_value_and_incompatible_uses() {
         #[norito(required = true)]
         demo: Option<u32>
     };
-    let error = FieldAttr::parse(&valued.attrs).expect_err("valued required must reject");
+    let Err(error) = FieldAttr::parse(&valued.attrs) else {
+        panic!("valued required must reject");
+    };
     assert_eq!(error.to_string(), "`required` does not take a value");
     let cases: Vec<(syn::Field, &str)> = vec![
         (
@@ -148,7 +158,9 @@ fn malformed_and_unknown_field_attributes_are_rejected() {
         #[norito(transparant)]
         unknown: u32
     };
-    let error = FieldAttr::parse(&unknown.attrs).expect_err("unknown key must reject");
+    let Err(error) = FieldAttr::parse(&unknown.attrs) else {
+        panic!("unknown key must reject");
+    };
     assert_eq!(error.to_string(), "unknown `norito` field attribute");
 }
 #[test]

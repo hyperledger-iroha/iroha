@@ -13,12 +13,14 @@ use crate::{
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_data_model::{
+    account::{AccountController, AccountId, MultisigMember, MultisigPolicy},
     peer::PeerId,
     query::{
         QueryOutputBatchBox, QueryOutputBatchBoxTuple, dsl::CompoundPredicate,
         error::QueryExecutionFail as Error, parameters::QueryParams,
     },
 };
+use mv::storage::StorageReadOnly as _;
 use norito::{
     core::NoritoSerialize,
     json::{JsonSerialize, Value},
@@ -32,11 +34,11 @@ use std::{
 };
 /// The world-state producer count admitted through a source-specific adapter.
 #[cfg(test)]
-pub(super) const ADMITTED_WORLD_PRODUCERS: usize = 1;
+pub(super) const ADMITTED_WORLD_PRODUCERS: usize = 2;
 /// The world-state producer count still awaiting source-specific bounded
 /// ownership and exact predicate parity.
 #[cfg(test)]
-pub(super) const WORLD_PRODUCER_RESIDUALS: usize = 36;
+pub(super) const WORLD_PRODUCER_RESIDUALS: usize = 35;
 /// The Kura producer count awaiting an authenticated bounded reader/projection.
 #[cfg(test)]
 pub(super) const KURA_PRODUCER_RESIDUALS: usize = 3;
@@ -69,14 +71,31 @@ where
             drop(predicate);
             let (rows, stats) = collect_peers(params, limits, state)?;
             return Ok((
-                OrdinaryIterable::Peers(cast_owned_exact::<
+                OrdinaryIterable::Owned(cast_owned_exact::<
                     ExactOwnedRows<PeerId>,
                     ExactOwnedRows<T>,
                 >(rows)?),
                 stats,
             ));
         }
-        // TODO: Route each of the remaining 36 world producers through a query-specific
+        if TypeId::of::<Q>()
+            == TypeId::of::<iroha_data_model::query::account::prelude::FindAccountIds>()
+            && TypeId::of::<T>() == TypeId::of::<AccountId>()
+            && params.pagination.offset_value() == 0
+            && params.sorting.sort_by_metadata_key.is_none()
+            && predicate.is_pass()
+        {
+            drop(predicate);
+            let (rows, stats) = collect_account_ids(params, mode, limits, state)?;
+            return Ok((
+                OrdinaryIterable::Owned(cast_owned_exact::<
+                    ExactOwnedRows<AccountId>,
+                    ExactOwnedRows<T>,
+                >(rows)?),
+                stats,
+            ));
+        }
+        // TODO: Route each of the remaining 35 world producers through a query-specific
         // borrowed scan which preserves its synthetic-field predicate rules,
         // owns only the requested prefix/top-K through fallible exact storage,
         // and performs bounded selector projection. The three Kura producers
@@ -92,7 +111,7 @@ where
 }
 enum OrdinaryIterable<I, T> {
     Legacy(I),
-    Peers(ExactOwnedRows<T>),
+    Owned(ExactOwnedRows<T>),
 }
 impl<I, T> Iterator for OrdinaryIterable<I, T>
 where
@@ -102,13 +121,13 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         match self {
             Self::Legacy(iter) => iter.next(),
-            Self::Peers(iter) => iter.next(),
+            Self::Owned(iter) => iter.next(),
         }
     }
     fn size_hint(&self) -> (usize, Option<usize>) {
         match self {
             Self::Legacy(iter) => iter.size_hint(),
-            Self::Peers(iter) => iter.size_hint(),
+            Self::Owned(iter) => iter.size_hint(),
         }
     }
 }
@@ -359,6 +378,147 @@ fn clone_peer_for_admission(
         usage.total_allocated_bytes(),
     ))
 }
+/// Copy a canonical account identity with exact, fallible member/key ownership.
+/// The key and member-vector charges share the enclosing Norito allocation budget.
+fn clone_account_for_admission(
+    account: &AccountId,
+    maximum_allocated_bytes: usize,
+) -> Result<(AccountId, usize), Error> {
+    let limits = norito::DecodeLimits::new(0, 0, 0, maximum_allocated_bytes, 0);
+    let (cloned, usage) =
+        norito::core::with_decode_limits_measured(limits, || match account.controller() {
+            AccountController::Single(key) => key
+                .try_clone_for_admission()
+                .map(AccountId::new)
+                .map_err(|_| Error::CapacityLimit),
+            AccountController::Multisig(policy) => {
+                let bytes = exact_slot_bytes::<MultisigMember>(policy.members().len())?;
+                norito::core::reserve_decode_allocation(
+                    usize::try_from(bytes).map_err(|_| Error::CapacityLimit)?,
+                )
+                .map_err(|_| Error::CapacityLimit)?;
+                let mut members = ExactOwnedRows::new(policy.members().len(), bytes)?;
+                for member in policy.members() {
+                    let key = member
+                        .public_key()
+                        .try_clone_for_admission()
+                        .map_err(|_| Error::CapacityLimit)?;
+                    members.push(
+                        MultisigMember::new(key, member.weight())
+                            .map_err(|_| Error::CapacityLimit)?,
+                    )?;
+                }
+                let policy = MultisigPolicy::from_serialized(
+                    policy.version(),
+                    policy.threshold(),
+                    members.finish()?.into_vec()?,
+                )
+                .map_err(|_| Error::CapacityLimit)?;
+                Ok(AccountId::new_multisig(policy))
+            }
+        });
+    Ok((cloned?, usage.total_allocated_bytes()))
+}
+fn account_prefix_target(
+    fetch: u64,
+    limit: Option<u64>,
+    mode: OrdinaryCursorMode,
+    retained: u64,
+) -> Result<u64, Error> {
+    let keep = match mode {
+        OrdinaryCursorMode::Ephemeral => fetch,
+        OrdinaryCursorMode::Stored => fetch.checked_add(retained).ok_or(Error::CapacityLimit)?,
+    };
+    let probe = keep.checked_add(1).ok_or(Error::CapacityLimit)?;
+    Ok(limit.map_or(probe, |limit| limit.min(probe)))
+}
+/// Bound the borrowed controller graph before encoding can traverse every member.
+fn ensure_account_source_graph(account: &AccountId, maximum: usize) -> Result<(), Error> {
+    let graph_limit = maximum
+        .checked_sub(core::mem::size_of::<AccountId>())
+        .ok_or(Error::CapacityLimit)?;
+    let mut total = match account.controller() {
+        AccountController::Single(_) => 0,
+        AccountController::Multisig(policy) => policy
+            .members()
+            .len()
+            .checked_mul(core::mem::size_of::<MultisigMember>())
+            .ok_or(Error::CapacityLimit)?,
+    };
+    // Reject an oversized member vector before walking its keys.
+    if total > graph_limit {
+        return Err(Error::CapacityLimit);
+    }
+    let mut key = |key: &iroha_crypto::PublicKey| -> Result<(), Error> {
+        let (_, bytes) = key.try_to_bytes().map_err(|_| Error::CapacityLimit)?;
+        total = total
+            .checked_add(bytes.len())
+            .and_then(|n| n.checked_add(1))
+            .ok_or(Error::CapacityLimit)?;
+        if total > graph_limit {
+            return Err(Error::CapacityLimit);
+        }
+        Ok(())
+    };
+    match account.controller() {
+        AccountController::Single(public_key) => key(public_key),
+        AccountController::Multisig(policy) => {
+            for member in policy.members() {
+                key(member.public_key())?;
+            }
+            Ok(())
+        }
+    }
+}
+fn collect_account_ids(
+    params: &QueryParams,
+    mode: OrdinaryCursorMode,
+    limits: OrdinaryQueryExecutionLimits,
+    state: &impl StateReadOnly,
+) -> Result<(ExactOwnedRows<AccountId>, QueryExecutionStats), Error> {
+    let fetch = params
+        .fetch_size
+        .fetch_size
+        .unwrap_or(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE)
+        .get();
+    if fetch > limits.max_page_items() {
+        return Err(Error::CapacityLimit);
+    }
+    let maximum_rows = usize::try_from(account_prefix_target(
+        fetch,
+        params.pagination.limit_value().map(|limit| limit.get()),
+        mode,
+        limits.max_cursor_retained_items(),
+    )?)
+    .map_err(|_| Error::CapacityLimit)?;
+    let maximum =
+        usize::try_from(limits.max_source_item_bytes()).map_err(|_| Error::CapacityLimit)?;
+    let work = limits
+        .max_source_item_bytes()
+        .checked_mul(3)
+        .ok_or(Error::CapacityLimit)?;
+    let budget = Some(limits.execution_budget());
+    let mut stats = QueryExecutionStats::default();
+    let mut selected = 0_usize;
+    for (account, _) in state.world().accounts().iter().take(maximum_rows) {
+        stats.record_preflighted_item(work, budget)?;
+        ensure_account_source_graph(account, maximum)?;
+        drop(encode_bounded_frame(account, maximum)?);
+        selected = selected.checked_add(1).ok_or(Error::CapacityLimit)?;
+    }
+    let (mut graph, slot_bytes) =
+        RetainedDecodeBudget::new::<AccountId>(selected, limits.max_source_item_bytes())?;
+    let mut rows = ExactOwnedRows::new(selected, slot_bytes)?;
+    for (account, _) in state.world().accounts().iter().take(selected) {
+        stats.record_preflighted_item(work, budget)?;
+        ensure_account_source_graph(account, maximum)?;
+        drop(encode_bounded_frame(account, maximum)?);
+        let (owned, allocated) = clone_account_for_admission(account, graph.next_limit()?)?;
+        graph.record_decoded(allocated)?;
+        rows.push(owned)?;
+    }
+    Ok((rows.finish()?, stats))
+}
 fn collect_peers(
     params: &QueryParams,
     limits: OrdinaryQueryExecutionLimits,
@@ -549,13 +709,104 @@ mod tests {
     use super::*;
     #[test]
     fn residual_inventory_is_explicit_and_exhaustive() {
-        assert_eq!(ADMITTED_WORLD_PRODUCERS, 1);
-        assert_eq!(WORLD_PRODUCER_RESIDUALS, 36);
+        assert_eq!(ADMITTED_WORLD_PRODUCERS, 2);
+        assert_eq!(WORLD_PRODUCER_RESIDUALS, 35);
         assert_eq!(KURA_PRODUCER_RESIDUALS, 3);
         assert_eq!(
             ADMITTED_WORLD_PRODUCERS + WORLD_PRODUCER_RESIDUALS + KURA_PRODUCER_RESIDUALS,
             40
         );
+    }
+    #[test]
+    fn account_prefix_target_bounds_each_cursor_mode_and_explicit_limit() {
+        assert_eq!(
+            account_prefix_target(2, None, OrdinaryCursorMode::Ephemeral, 8).unwrap(),
+            3
+        );
+        assert_eq!(
+            account_prefix_target(2, None, OrdinaryCursorMode::Stored, 8).unwrap(),
+            11
+        );
+        assert_eq!(
+            account_prefix_target(2, Some(2), OrdinaryCursorMode::Stored, 8).unwrap(),
+            2
+        );
+        assert_eq!(
+            account_prefix_target(2, Some(10), OrdinaryCursorMode::Stored, 8).unwrap(),
+            10
+        );
+        assert!(account_prefix_target(u64::MAX, None, OrdinaryCursorMode::Stored, 1).is_err());
+    }
+    #[test]
+    fn account_graph_preflight_bounds_large_keys_before_encoding() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        for algorithm in [Algorithm::Ed25519, Algorithm::BlsNormal, Algorithm::MlDsa] {
+            let key = KeyPair::try_from_seed(vec![0x94; 32], algorithm)
+                .unwrap()
+                .public_key()
+                .clone();
+            let graph = key.try_to_bytes().unwrap().1.len() + 1;
+            let account = AccountId::new(key);
+            let maximum = core::mem::size_of::<AccountId>() + graph;
+            ensure_account_source_graph(&account, maximum).expect("exact graph");
+            assert!(matches!(
+                ensure_account_source_graph(&account, maximum - 1),
+                Err(Error::CapacityLimit)
+            ));
+            let (copy, allocated) =
+                clone_account_for_admission(&account, graph).expect("exact large key copy");
+            assert_eq!(allocated, graph);
+            assert_eq!(copy, account);
+        }
+    }
+    #[test]
+    fn account_clone_admission_preserves_single_and_multisig_identity_at_exact_graph_limit() {
+        use iroha_crypto::{Algorithm, KeyPair};
+        let keys: Vec<_> = [0x91_u8, 0x92, 0x93]
+            .into_iter()
+            .map(|seed| {
+                KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                    .expect("key")
+                    .public_key()
+                    .clone()
+            })
+            .collect();
+        let single = AccountId::new(keys[0].clone());
+        let members = keys
+            .into_iter()
+            .map(|key| MultisigMember::new(key, 1).unwrap())
+            .collect();
+        let multi = AccountId::new_multisig(MultisigPolicy::new(2, members).unwrap());
+        for (id, graph) in [
+            (single, 33),
+            (multi, 3 * core::mem::size_of::<MultisigMember>() + 3 * 33),
+        ] {
+            let (copy, allocated) =
+                clone_account_for_admission(&id, graph).expect("exact graph allowance");
+            assert_eq!(copy, id);
+            assert_eq!(allocated, graph);
+            ensure_account_source_graph(&id, core::mem::size_of::<AccountId>() + graph).unwrap();
+            assert!(
+                ensure_account_source_graph(&id, core::mem::size_of::<AccountId>() + graph - 1)
+                    .is_err()
+            );
+            assert_eq!(
+                norito::to_bytes(&copy).unwrap(),
+                norito::to_bytes(&id).unwrap()
+            );
+            assert!(matches!(
+                clone_account_for_admission(&id, graph - 1),
+                Err(Error::CapacityLimit)
+            ));
+            let outer = norito::DecodeLimits::new(0, 0, 0, graph - 1, 0);
+            assert!(
+                norito::core::with_decode_limits_measured(outer, || clone_account_for_admission(
+                    &id, graph
+                ))
+                .0
+                .is_err()
+            );
+        }
     }
     #[test]
     fn bounded_peer_prefix_matches_ephemeral_pagination_probe() {

@@ -1351,7 +1351,8 @@ fn failed_exit_maps_to_internal_server_error() {
 fn contract_rejection_maps_to_unprocessable_entity() {
     let rejection = iroha_data_model::executor::ContractRejection {
         contract: "BoiFiLiquidity".to_owned(),
-        namespace: "FiLiquidityError".to_owned(),
+        error_type: "FiLiquidityError".to_owned(),
+        schema_hash: [0; 32],
         name: "BelowMinimum".to_owned(),
         code: 18,
     };

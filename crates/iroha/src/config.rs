@@ -17,7 +17,7 @@ use url::Url;
 mod user;
 use crate::secrecy::SecretString;
 pub use user::{
-    MusubiFetch as MusubiFetchConfig,
+    AliasCache, MusubiFetch as MusubiFetchConfig,
     MusubiFetchProviderGateway as MusubiFetchProviderGatewayConfig,
     MusubiPublication as MusubiPublicationConfig,
     MusubiPublicationProviderGateway as MusubiPublicationProviderGatewayConfig, ParseError,

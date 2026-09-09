@@ -76,6 +76,10 @@ RUN --mount=type=cache,target=/root/.cargo/git/db \
     --mount=type=cache,target=/root/.cargo/registry/cache \
     --mount=type=cache,target=/root/.cargo/registry/index \
     --mount=type=cache,target=/app/target \
+    set -eu; \
+    test "${#IROHA_GIT_COMMIT_HASH}" -eq 40; \
+    test "${IROHA_GIT_COMMIT_HASH}" = "${VERGEN_GIT_SHA}"; \
+    case "${VERGEN_GIT_SHA}" in *[!0-9a-f]*) exit 1 ;; esac; \
     if [ -n "${CARGO_BUILD_JOBS}" ]; then export CARGO_BUILD_JOBS; fi; \
     RUSTFLAGS="${RUSTFLAGS}" mold --run \
     xx-cargo build ${CARGOFLAGS} \

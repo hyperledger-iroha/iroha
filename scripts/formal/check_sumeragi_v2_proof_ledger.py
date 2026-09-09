@@ -19414,15 +19414,24 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                     "from_durable",
                     "on_resume_after_replay",
                     "on_retransmit_elapsed",
+                    "ensure_missing_body_work",
                     "ensure_body_fetch",
                 )
             }
             _require_rust_token_sequence(
                 reducer_path,
                 reducer_items["recover"],
-                "let durable = DurableState::replay(&context, local_validator, entries)?; "
+                "let mut durable = DurableState::new(&context); "
+                "for entry in entries { "
+                "let next_generation = match entry.record() { "
+                "WalRecord::InstallTimeout(certificate) => { "
+                "Self::generation_after_timeout_install(&durable, generation, certificate) } "
+                "_ => Some(generation), }; "
+                "durable.apply(&context, local_validator, &entry)?; "
+                "generation = next_generation.ok_or(ReducerError::GenerationOverflow)?; } "
                 "Self::from_durable(context, local_validator, generation, durable, false)",
-                "WAL recovery must pass the exact replayed durable state forward",
+                "WAL recovery must validate each exact ordered frame once before "
+                "committing its shared checked generation and durable state",
                 errors,
             )
             _require_rust_token_sequence(
@@ -19431,6 +19440,30 @@ def _progress_witness_source_fidelity_errors(formal_dir: Path) -> list[str]:
                 "if let Some(certificate) = durable.locked() { "
                 "known_prepare.insert(certificate.reference(), certificate.clone()); }",
                 "recovery must retain the exact pre-existing durable locked QC",
+                errors,
+            )
+            _require_rust_token_sequence(
+                reducer_path,
+                reducer_items["from_durable"],
+                "if durable.decision().is_none() && let Some(locked) = durable.locked() { "
+                "Self::ensure_missing_body_work(&mut body_work, locked.round(), locked.subject()); }",
+                "recovery must seed only the exact undecided durable lock body "
+                "without inventing startup effects or historical Prepare authority",
+                errors,
+            )
+            _require_rust_token_sequence(
+                reducer_path,
+                reducer_items["ensure_missing_body_work"],
+                "body_work.entry((round, subject)).or_insert(BodyWork { "
+                "manifest: None, state: BodyState::Missing, });",
+                "shared body seeding must preserve an existing exact body stage and manifest",
+                errors,
+            )
+            _require_rust_token_sequence(
+                reducer_path,
+                reducer_items["ensure_body_fetch"],
+                "Self::ensure_missing_body_work(&mut self.body_work, round, subject);",
+                "live certified fetch must share recovery's non-overwriting exact body seed",
                 errors,
             )
             _require_rust_token_sequence(

@@ -159,8 +159,9 @@ The scoped witness recorder clears/deactivates its owned overlay on errors;
 repeated capture checks retained contents without reading another block's
 recorder. Authenticated replay does not invent local source ownership.
 
-`prepare_owned_fastpq_d7_capture` retains the inventory allocation, exact header
-milliseconds, saturating nanosecond slot, permission root, manifest and limits.
+The test-only qualification helper `prepare_owned_fastpq_d7_capture` retains the
+inventory allocation, exact header milliseconds, saturating nanosecond slot,
+permission root, manifest and limits.
 Subsequent checks reject context drift, including timestamps that saturate to the
 same slot. The helper does not insert the D7 write or confer finality. Permission
 scans and repeated context checks require their own resource accounting; account

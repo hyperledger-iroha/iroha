@@ -3,7 +3,7 @@ mod allocation_tests {
     use super::*;
     use ncore::{
         Archived, ArchivedRef, DecodeAllocationUsage, DecodeFlagsGuard, DecodeLimits,
-        NoritoDeserialize, PayloadCtxGuard, with_decode_limits_measured,
+        DeserializePayload, PayloadCtxGuard, with_decode_limits_measured,
     };
 
     const GENEROUS_ALLOCATION: usize = 16 * 1024 * 1024;

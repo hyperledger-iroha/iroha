@@ -60,6 +60,8 @@ const EMPTY_TRIE_ROOT: H256 = [
     norito::derive::JsonDeserialize,
 )]
 #[norito(tag = "fork", content = "detail", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeForkV1")]
 pub enum EthereumNativeForkV1 {
     /// Altair.
     Altair,
@@ -108,7 +110,9 @@ impl From<EthereumFork> for EthereumNativeForkV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeForkActivationV1")]
 pub struct EthereumNativeForkActivationV1 {
     /// First epoch at which the fork is active.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -127,7 +131,9 @@ pub struct EthereumNativeForkActivationV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeForkScheduleV1")]
 pub struct EthereumNativeForkScheduleV1 {
     /// Network genesis validators root.
     #[norito(with = "crate::json_utils::hex32")]
@@ -156,7 +162,9 @@ pub struct EthereumNativeForkScheduleV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeBeaconHeaderV1")]
 pub struct EthereumNativeBeaconHeaderV1 {
     /// Beacon slot.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -184,7 +192,9 @@ pub struct EthereumNativeBeaconHeaderV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeCapellaExecutionHeaderV1")]
 pub struct EthereumNativeCapellaExecutionHeaderV1 {
     /// Parent execution block hash.
     #[norito(with = "crate::json_utils::hex32")]
@@ -242,7 +252,9 @@ pub struct EthereumNativeCapellaExecutionHeaderV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeDenebExecutionHeaderV1")]
 pub struct EthereumNativeDenebExecutionHeaderV1 {
     /// Capella-compatible header fields.
     pub base: EthereumNativeCapellaExecutionHeaderV1,
@@ -265,6 +277,8 @@ pub struct EthereumNativeDenebExecutionHeaderV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(tag = "layout", content = "header", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeExecutionHeaderV1")]
 pub enum EthereumNativeExecutionHeaderV1 {
     /// Capella layout.
     Capella(EthereumNativeCapellaExecutionHeaderV1),
@@ -281,7 +295,9 @@ pub enum EthereumNativeExecutionHeaderV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeLightClientHeaderV1")]
 pub struct EthereumNativeLightClientHeaderV1 {
     /// Closed fork layout used by this header.
     pub fork: EthereumNativeForkV1,
@@ -303,7 +319,9 @@ pub struct EthereumNativeLightClientHeaderV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeSyncCommitteeV1")]
 pub struct EthereumNativeSyncCommitteeV1 {
     /// Compressed 48-byte min-pk public keys in positional order.
     #[norito(with = "crate::json_utils::vec_bytes_hex")]
@@ -322,7 +340,9 @@ pub struct EthereumNativeSyncCommitteeV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeLightClientBootstrapV1")]
 pub struct EthereumNativeLightClientBootstrapV1 {
     /// Trusted light-client header.
     pub header: EthereumNativeLightClientHeaderV1,
@@ -342,7 +362,9 @@ pub struct EthereumNativeLightClientBootstrapV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeLightClientUpdateV1")]
 pub struct EthereumNativeLightClientUpdateV1 {
     /// Sync-committee-attested header.
     pub attested_header: EthereumNativeLightClientHeaderV1,
@@ -376,7 +398,9 @@ pub struct EthereumNativeLightClientUpdateV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeTrustedAnchorV1")]
 pub struct EthereumNativeTrustedAnchorV1 {
     /// Anchor schema version; exactly `1` is accepted.
     pub version: u8,
@@ -403,7 +427,9 @@ pub struct EthereumNativeTrustedAnchorV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeMptProofV1")]
 pub struct EthereumNativeMptProofV1 {
     /// Raw canonical RLP nodes. Inline children are embedded in their parent
     /// and must not be repeated as separate proof elements.
@@ -421,7 +447,9 @@ pub struct EthereumNativeMptProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeFinalizedExecutionV1")]
 pub struct EthereumNativeFinalizedExecutionV1 {
     /// Fork of the finalized light-client header.
     pub fork: EthereumNativeForkV1,
@@ -454,7 +482,9 @@ pub struct EthereumNativeFinalizedExecutionV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::ethereum_source::EthereumNativeSourceProofV1")]
 pub struct EthereumNativeSourceProofV1 {
     /// Proof schema version; exactly `1` is accepted.
     pub version: u8,

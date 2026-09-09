@@ -60,7 +60,7 @@ fn npos_network_produces_blocks() -> Result<()> {
         // choose a connected submit peer on each attempt to avoid queue-timeout flakiness
         // right after startup on slower grouped runs.
         let probe_client = network.client();
-        let status_before = probe_client.client().get_status()?;
+        let status_before = probe_client.status().get()?;
         let target_height = status_before.blocks + 5;
         let observed_heights = rt
             .block_on(async {
@@ -356,18 +356,14 @@ fn ordered_submit_peer_indices(
 }
 async fn submit_peer_indices_for_network(network: &Network, probe: &Client) -> Vec<usize> {
     let peer_count = network.peers().len();
-    let (status, sumeragi) = tokio::task::spawn_blocking({
+    let status = probe.client().status().get().await.ok();
+    let sumeragi = tokio::task::spawn_blocking({
         let client = probe.clone();
-        move || {
-            (
-                client.client().get_status(),
-                client.client().get_sumeragi_status(),
-            )
-        }
+        move || client.client().get_sumeragi_status()
     })
     .await
-    .map(|(status, sumeragi)| (status.ok(), sumeragi.ok()))
-    .unwrap_or((None, None));
+    .ok()
+    .and_then(Result::ok);
     let leader_index = sumeragi
         .as_ref()
         .map(|status| status.leader)
@@ -450,16 +446,15 @@ async fn drive_network_to_height(
     let deadline = Instant::now() + timeout;
     let mut attempt = 0_u64;
     let mut last_error = None;
-    let mut next_height = tokio::task::spawn_blocking({
-        let client = probe.clone();
-        move || client.client().get_status()
-    })
-    .await
-    .ok()
-    .and_then(Result::ok)
-    .map(|status| status.blocks.saturating_add(1))
-    .unwrap_or(1)
-    .min(target_height);
+    let mut next_height = probe
+        .client()
+        .status()
+        .get()
+        .await
+        .ok()
+        .map(|status| status.blocks.saturating_add(1))
+        .unwrap_or(1)
+        .min(target_height);
     let connectivity_timeout = timeout.min(Duration::from_secs(30));
     wait_for_submit_connectivity(network, connectivity_timeout)
         .await

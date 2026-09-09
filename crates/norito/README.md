@@ -25,6 +25,24 @@ norito = { version = "*", default-features = false }
 # norito = { version = "*", default-features = false, features = ["compression"] }
 ```
 
+The payload traits are independent of typed frames. `SerializePayload` owns
+bare serialization and size methods; `DeserializePayload<'a>` owns reconstruction
+within a bounded archived payload context. Their derives emit payload codecs.
+`NoritoSerialize` and `NoritoDeserialize` are blanket implementations for owners
+that implement the corresponding payload trait and `NoritoSchema`.
+
+Declare each frame identity once with `#[derive(NoritoSchema)]` and
+`#[norito_schema(name = "protocol.name")]`. An optional `frame = "protocol.root"`
+projects a borrowed root to an owned record's frame. The fixed
+`schema::identity::frame_hash` selects the same header digest for both directions.
+Schema inspection features do not alter it; codec derives reject the retired
+`#[norito(schema_name = "...")]` attribute.
+
+Bare `Encode` requires `SerializePayload`; bare `Decode` requires
+`for<'de> DeserializePayload<'de> + SerializePayload`. Field and container
+reconstruction uses those payload contracts. Generic frame callers explicitly
+require `NoritoSerialize`/`NoritoDeserialize`; bare codec bounds do not imply them.
+
 ### Derive attributes
 
 Norito helper attributes form a closed set. Every derive validates container,
@@ -60,10 +78,18 @@ The supported field-level attributes are:
 - `#[norito(flatten)]` flattens a named field into its enclosing JSON object.
 - `#[norito(needs_size)]` forces an explicit packed-struct size entry.
 
-Container-level options are `rename_all`, `schema_name`,
-`deny_unknown_fields`, `decode_from_slice`, `reuse_archived`,
+Container-level options are `rename_all`,
+`deny_unknown_fields`, `decode_from_slice`, `reuse_archived`, `validate`,
 `no_fast_from_json`, `tag`, and `content`. Enum variants support only
 `#[norito(rename = "other")]`.
+
+`#[norito(validate = "path::to::function")]` applies fallible validation after
+binary reconstruction. The function consumes the owner and returns
+`Result<Self, norito::Error>`; errors propagate unchanged. `Decode`,
+`NoritoDeserialize` and `DeserializePayload` derives invoke it once per
+successful reconstruction, including generated slice decoders and unit records.
+Serializers and JSON decoders do not invoke it. The hook must preserve canonical
+fields rather than normalize input; it can call the owner's checked constructor.
 
 Attributes accepted for coordination between different Norito derives are
 still validated even when a particular derive does not consume their value.
@@ -146,7 +172,7 @@ Every Norito payload begins with a compact header followed by the archived paylo
 
 - magic: 4 bytes, ASCII `NRT0`
 - version: 1 byte major, 1 byte minor (current: 0.0; v1 minor is fixed to 0x00)
-- schema_hash: 16 bytes (type-name based by default; structural with `schema-structural`)
+- schema_hash: 16 bytes (fixed digest of the declared `NoritoSchema` root identity)
 - compression: 1 byte (`0 = None`, `1 = Zstd`)
 - length: 8 bytes little-endian (uncompressed payload length in bytes)
 - checksum: 8 bytes little-endian (CRC64-XZ of the uncompressed payload)
@@ -519,7 +545,7 @@ Norito derives now implement an optional `encoded_len_hint(&self) -> Option<usiz
 
 For hot paths that already hold a complete bare payload in memory, use
 `norito::codec::decode_exact_from_slice::<T>(&bytes)` when `T` implements
-`DecodeFromSlice`.
+`for<'de> DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>`.
 
 - It avoids the `Read::read_to_end` copy used by the generic streaming
   `Decode` facade.

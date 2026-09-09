@@ -1,4 +1,140 @@
 #[test]
+fn queue_plan_exact_lookup_is_bounded_to_its_own_route_members() {
+    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (binding, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(&state),
+        0x63,
+    );
+    let (sibling, sibling_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(&state),
+        0x64,
+    );
+    seed_exact_queue_plan_admission_state_for_test(&state, &certificate);
+    seed_exact_queue_plan_admission_state_for_test(&state, &sibling_certificate);
+    let obligation = State::queue_plan_pending_obligation_from_binding(&binding)
+        .expect("fixture exact obligation");
+    let sibling_obligation = State::queue_plan_pending_obligation_from_binding(&sibling)
+        .expect("fixture sibling obligation");
+    let route = obligation.routes[0];
+    let sibling_member =
+        State::queue_plan_pending_route_member_from_obligation(&sibling_obligation, route)
+            .expect("fixture sibling member");
+    let sibling_key =
+        State::queue_plan_pending_route_member_marker_key(route, sibling_member.member_identity)
+            .expect("fixture sibling member key");
+    {
+        let mut storage = state.world.smart_contract_state.block();
+        storage.insert(sibling_key, vec![0xFF]);
+        storage.commit();
+    }
+    // A targeted lookup must not decode any sibling's member or full obligation.
+    assert_eq!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .expect("exact immutable binding is independent of sibling payloads"),
+        QueuePlanAdmissionRegistryMatch::Exact
+    );
+    assert_eq!(
+        queue_plan_admission_registry_match(
+            &state.view(),
+            binding.entrypoint_hash,
+            binding.canonical_hash()
+        )
+        .expect("Queue selection checks only its candidate's exact members"),
+        QueuePlanAdmissionRegistryMatch::Exact
+    );
+    assert!(
+        state
+            .queue_plan_admission_binding_registry_match(&sibling)
+            .is_err()
+    );
+    let mut storage = state.world.smart_contract_state.block();
+    assert!(State::queue_plan_pending_route_members_from_storage(&storage, route).is_err());
+    assert!(
+        State::stage_queue_plan_pending_obligation_marker_in_storage(&mut storage, obligation)
+            .is_err(),
+        "even idempotent roster staging must reject a corrupt sibling"
+    );
+    assert!(
+        State::resolve_queue_plan_pending_obligation_in_storage(
+            &mut storage,
+            binding.network_id_digest,
+            binding.entrypoint_hash,
+        )
+        .is_err(),
+        "roster resolution must prevalidate every sibling before removing members"
+    );
+}
+#[test]
+fn queue_plan_direct_application_without_signed_alias_rejects_terminal_marker() {
+    let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (mut binding, _) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        queue_plan_authority_height_for_state_test(&state),
+        0x62,
+    );
+    binding.signed_transaction_hash = None;
+    let registry_key = State::queue_plan_admission_registry_marker_key(&binding.registry_key())
+        .expect("fixture registry key");
+    let terminal_key = State::queue_plan_signed_alias_terminal_marker_key_from_claim(
+        binding.network_id_digest,
+        binding.entrypoint_hash,
+    )
+    .expect("fixture terminal marker key");
+    {
+        let mut storage = state.world.smart_contract_state.block();
+        storage.insert(
+            registry_key,
+            State::queue_plan_admission_registry_marker_payload(&binding.registry_value())
+                .expect("fixture registry value"),
+        );
+        storage.commit();
+    }
+    state
+        .transactions
+        .record_committed_entrypoint_membership_for_tests(
+            [binding.entrypoint_hash],
+            nonzero!(1_usize),
+        );
+    assert_eq!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .expect("directly applied unsigned entrypoint"),
+        QueuePlanAdmissionRegistryMatch::Exact
+    );
+    {
+        let mut storage = state.world.smart_contract_state.block();
+        storage.insert(terminal_key, vec![0xFF]);
+        storage.commit();
+    }
+    assert!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .is_err()
+    );
+    let expected = State::queue_plan_pending_obligation_from_binding(&binding)
+        .expect("fixture expected obligation");
+    assert!(
+        State::queue_plan_binding_application_state(&state.view(), &binding, expected).is_err()
+    );
+}
+#[test]
 #[expect(
     clippy::too_many_lines,
     reason = "one linear test covers participant, incarnation, corrupt conflict, and malformed durable evidence"
@@ -112,6 +248,40 @@ fn pending_queue_plan_evidence_blocks_every_bound_route_and_classifies_losers() 
         QueuePlanAdmissionRegistryMatch::Exact
     );
     let_row! { obligation = State::queue_plan_pending_obligation_from_binding(&binding) .expect("fixture exact pending obligation") };
+    // Exact-binding lookup validates the obligation once and must still reject
+    // simultaneous pending and terminal ownership, even with malformed terminal bytes.
+    let terminal_key = State::queue_plan_signed_alias_terminal_marker_key_from_claim(
+        binding.network_id_digest,
+        binding.entrypoint_hash,
+    )
+    .expect("fixture terminal marker key");
+    {
+        let mut storage = state.world.smart_contract_state.block();
+        storage.insert(terminal_key.clone(), vec![0xFF]);
+        storage.commit();
+    }
+    assert!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .is_err(),
+        "a pending owner cannot coexist with a terminal marker"
+    );
+    assert!(
+        State::queue_plan_binding_application_state(&state.view(), &binding, obligation.clone())
+            .is_err(),
+        "application validation must enforce the same pending/terminal exclusion"
+    );
+    {
+        let mut storage = state.world.smart_contract_state.block();
+        storage.remove(terminal_key);
+        storage.commit();
+    }
+    assert_eq!(
+        state
+            .queue_plan_admission_binding_registry_match(&binding)
+            .expect("exact pending owner after terminal corruption is removed"),
+        QueuePlanAdmissionRegistryMatch::Exact
+    );
     let_row! { participant_route = *obligation .routes .iter() .find(|route| route.lane_id == participant_lane) .expect("fixture exact participant route") };
     let_row! { participant_member_identity = State::queue_plan_pending_route_member_identity(&obligation, participant_route) .expect("fixture exact participant member identity") };
     let_row! { incarnation_a_member_key = State::queue_plan_pending_route_member_marker_key( participant_route, participant_member_identity, ) .expect("fixture incarnation-A member key") };

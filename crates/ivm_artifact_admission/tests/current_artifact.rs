@@ -280,6 +280,58 @@ fn stale_header_and_cntr_abi_hashes_are_rejected() {
 }
 
 #[test]
+fn every_public_entrypoint_requires_an_explicit_unit_return_descriptor() {
+    let artifact = kotodama_lang::compiler::Compiler::new()
+        .compile_source("seiyaku UnitBoundary { view fn inspect() { () } }")
+        .expect("compile implicit Unit source return");
+    verify_contract_artifact(&artifact).expect("explicit Unit descriptor is admitted");
+    let parsed = ProgramMetadata::parse(&artifact).expect("parse Unit fixture");
+    assert!(
+        parsed
+            .literal_section
+            .as_ref()
+            .is_none_or(|section| section.count == 0),
+        "Unit fixture must not reference pointer or scalar literals"
+    );
+    for (remove_type, remove_schema) in [(true, false), (false, true), (true, true)] {
+        let mut interface = parsed
+            .contract_interface
+            .clone()
+            .expect("Unit CNTR interface");
+        {
+            let entrypoint = interface
+                .entrypoints
+                .iter_mut()
+                .find(|entrypoint| entrypoint.name == "inspect")
+                .expect("inspect descriptor");
+            assert_eq!(entrypoint.return_type.as_deref(), Some("()"));
+            assert_eq!(
+                entrypoint.return_schema.as_ref().unwrap().nodes,
+                vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit]
+            );
+            if remove_type {
+                entrypoint.return_type = None;
+            }
+            if remove_schema {
+                entrypoint.return_schema = None;
+            }
+        }
+        // An absent descriptor changes the CNTR frame length. This literal-free
+        // program has relative entry PCs, so preserve its exact code stream
+        // while rebuilding the header and changed interface without LTLB padding.
+        let mut mutated = artifact[..parsed.header_len].to_vec();
+        mutated.extend_from_slice(&interface.encode_section());
+        mutated.extend_from_slice(&artifact[parsed.code_offset..]);
+        let error =
+            verify_contract_artifact(&mutated).expect_err("missing return descriptor is invalid");
+        assert!(
+            error.to_string().contains("missing its exact return"),
+            "{error}"
+        );
+    }
+}
+
+#[test]
 fn cntr_return_type_schema_mismatch_is_rejected() {
     let source = r#"
         seiyaku SchemaBound {
@@ -515,6 +567,7 @@ fn hash_valid_noncanonical_integer_literal_is_rejected() {
 }
 #[test]
 fn hash_valid_noncanonical_decimal_literal_is_rejected() {
+    verify_contract_artifact(DECIMAL_FIXTURE).expect("canonical decimal fixture must be admitted");
     let mut mutated = DECIMAL_FIXTURE.to_vec();
     let envelope = pointer_literal_range(&mutated, PointerType::Decimal);
     let payload = pointer_payload_range(&mutated, &envelope);
@@ -525,10 +578,12 @@ fn hash_valid_noncanonical_decimal_literal_is_rejected() {
                 .try_into()
                 .expect("decimal mantissa length")
         ),
-        2
+        1
     );
-    mutated[body_start + 4..body_start + 6].copy_from_slice(&1000_i16.to_le_bytes());
-    mutated[body_start + 6] = 1;
+    // Ten at scale one must normalize to one at scale zero. Preserve the
+    // current one-byte mantissa and complete literal geometry while mutating it.
+    mutated[body_start + 4] = 10;
+    mutated[body_start + 5] = 1;
     reseal_numeric_checksum_and_pointer_hash(&mut mutated, &envelope);
     assert_eq!(
         decode_numeric_payload(&mutated, &envelope, PointerType::Decimal),

@@ -215,7 +215,7 @@ fn canonical_completion_box_rejects_prior_inner_layout_under_current_schema() {
     let header = norito::core::Header::read(prior_inner.as_slice()).unwrap();
     assert_eq!(
         header.schema,
-        <Box<StoredCompletionDeliveryV1> as norito::core::NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<Box<StoredCompletionDeliveryV1>>(),
     );
     let error = norito::decode_canonical::<Box<StoredCompletionDeliveryV1>>(&prior_inner)
         .expect_err("V1 has exactly one owned completion layout");

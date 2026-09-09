@@ -559,7 +559,7 @@ fn set_no_follow(options: &mut OpenOptions) {
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 const fn platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,

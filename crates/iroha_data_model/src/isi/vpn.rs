@@ -19,7 +19,7 @@ isi! {
     #[norito_schema(name = "iroha_data_model::isi::vpn::SettleVpnLease")]
     pub struct SettleVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito (json = "crate::json_helpers::fixed_bytes")]
         pub lease_id: [u8; 32],
         /// Relay receipt describing final session counters.
         pub relay_receipt: crate::soranet::vpn::VpnSignedSessionReceiptV1,
@@ -47,7 +47,7 @@ isi! {
     #[norito_schema(name = "iroha_data_model::isi::vpn::RefundExpiredVpnLease")]
     pub struct RefundExpiredVpnLease {
         /// Lease identifier opened by [`OpenVpnLeaseEscrow`].
-        #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+        #[norito (json = "crate::json_helpers::fixed_bytes")]
         pub lease_id: [u8; 32],
     }
 }

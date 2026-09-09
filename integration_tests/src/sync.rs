@@ -1,6 +1,6 @@
 //! Synchronization helpers for integration tests.
 use eyre::{Result, WrapErr};
-use iroha::{blocking::Client, client::Client as AsyncClient};
+use iroha::{blocking::Client, client::ClientBuilder};
 use iroha_test_network::{BlockHeight, Network};
 use iroha_torii_shared::status::Status;
 use std::{
@@ -9,28 +9,30 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
-use tokio::task::spawn_blocking;
 // Integration submissions occasionally need more time to commit under DA-enabled consensus;
 // give the network a bounded window before failing. Keep bounded to avoid long hangs when
 // Torii is unreachable, but allow env overrides for slower hosts.
 const STATUS_RETRY_DELAY: Duration = Duration::from_millis(100);
 const STATUS_RETRY_DEFAULT: Duration = Duration::from_secs(120);
-/// Create a fresh blocking context after explicitly updating a cloned async context.
+/// Create a fresh blocking context from an explicitly configured client builder.
 ///
 /// This keeps integration-test configuration changes from mutating or escaping
 /// through the blocking facade while preserving its account-binding validation.
 #[must_use]
-pub fn rebind_blocking_client(client: &Client, configure: impl FnOnce(&mut AsyncClient)) -> Client {
+pub fn rebind_blocking_client(
+    client: &Client,
+    configure: impl FnOnce(&mut ClientBuilder),
+) -> Client {
     try_rebind_blocking_client(client, configure)
         .expect("reconfigured integration-test client must remain valid")
 }
 fn try_rebind_blocking_client(
     client: &Client,
-    configure: impl FnOnce(&mut AsyncClient),
+    configure: impl FnOnce(&mut ClientBuilder),
 ) -> Result<Client> {
-    let mut inner = client.client().clone();
+    let mut inner = client.client().to_builder();
     configure(&mut inner);
-    Client::from_client(inner)
+    Client::from_client(inner.build()?)
 }
 /// Poll `/status` with a bounded retry budget to tolerate startup jitter.
 ///
@@ -54,7 +56,7 @@ pub fn get_status_with_retry_at_least(client: &Client, minimum_blocks: u64) -> R
     let deadline = Instant::now() + retry_budget;
     let mut last_observation = None;
     while Instant::now() < deadline {
-        match client.client().get_status() {
+        match client.status().get().map_err(eyre::Report::from) {
             Ok(status) => {
                 if status_reaches_height(&status, minimum_blocks) {
                     return Ok(status);
@@ -83,7 +85,7 @@ pub fn get_status_with_retry_at_least(client: &Client, minimum_blocks: u64) -> R
         format!(
             "status retry budget exhausted after {:?} hitting {}",
             retry_budget,
-            client.client().torii_url
+            client.client().endpoint()
         )
     })
 }
@@ -120,25 +122,82 @@ fn apply_storage_fallback(
                 Err(err).wrap_err_with(|| {
                     format!(
                         "status retry failed and no storage snapshot available ({context}); torii={}",
-                        client.client().torii_url
+                        client.client().endpoint()
                     )
                 })
             }
         }
     }
 }
-/// Async wrapper around [`get_status_with_retry`] to avoid blocking async runtimes.
+/// Poll the status endpoint asynchronously with the same bounded retry policy
+/// as the synchronous status helper.
 ///
 /// # Errors
 ///
-/// Returns the same errors as [`get_status_with_retry`], or a join error if the
-/// blocking task panics.
+/// Returns the final status error when retries are exhausted or a sandbox denial is detected.
 pub async fn get_status_with_retry_async(client: &Client) -> Result<Status> {
-    let client = client.clone();
-    let status = spawn_blocking(move || get_status_with_retry(&client))
-        .await
-        .wrap_err("status retry task panicked")??;
-    Ok(status)
+    get_status_with_retry_at_least_async(client.client().endpoint().as_str(), 0, || async {
+        client
+            .client()
+            .status()
+            .get()
+            .await
+            .map_err(eyre::Report::from)
+    })
+    .await
+}
+/// Poll asynchronously until the authoritative applied height reaches the target.
+///
+/// # Errors
+/// Returns the final request error, below-height exhaustion, or sandbox denial.
+pub(crate) async fn get_status_with_retry_at_least_async<F, Fut>(
+    endpoint: &str,
+    minimum_blocks: u64,
+    mut read_status: F,
+) -> Result<Status>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Status>>,
+{
+    enum LastObservation {
+        BelowHeight(u64),
+        Error(eyre::Report),
+    }
+    let retry_budget = status_retry_budget_env();
+    let deadline = Instant::now() + retry_budget;
+    let mut last_observation = None;
+    while Instant::now() < deadline {
+        match read_status().await {
+            Ok(status) => {
+                if status_reaches_height(&status, minimum_blocks) {
+                    return Ok(status);
+                }
+                last_observation = Some(LastObservation::BelowHeight(status.blocks));
+            }
+            Err(err) => {
+                if let Some(reason) = crate::sandbox::sandbox_reason(&err) {
+                    return Err(eyre::eyre!(
+                        "sandboxed network restriction detected while polling /status: {reason}"
+                    ));
+                }
+                last_observation = Some(LastObservation::Error(err));
+            }
+        }
+        tokio::time::sleep(STATUS_RETRY_DELAY).await;
+    }
+    let terminal = match last_observation {
+        Some(LastObservation::BelowHeight(height)) => eyre::eyre!(
+            "authoritative status remained at block height {height}, below required height {minimum_blocks}"
+        ),
+        Some(LastObservation::Error(err)) => err,
+        None => eyre::eyre!("status retry budget exhausted"),
+    };
+    Err(terminal).wrap_err_with(|| {
+        format!(
+            "status retry budget exhausted after {:?} hitting {}",
+            retry_budget, endpoint
+        )
+    })
 }
 /// Wait for the next non-empty block and return the refreshed status, tolerating timeouts.
 ///
@@ -168,7 +227,7 @@ pub fn sync_after_submission(
         format!(
             "failed to refresh status after submission ({context}); target height={}, torii={}",
             target_height,
-            client.client().torii_url
+            client.client().endpoint()
         )
     })
 }
@@ -221,9 +280,9 @@ fn read_env_duration(var: &str, default: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha::config::Config;
     use iroha::crypto::{Hash, HashOf};
     use iroha::data_model::{ChainId, NetworkId};
+    use iroha::{client::Client as AsyncClient, config::Config};
     use iroha_service_model::soranet::AnonymityPolicy;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use sorafs_manifest::alias_cache::AliasCachePolicy;
@@ -293,30 +352,31 @@ mod tests {
             sorafs_anonymity_policy: AnonymityPolicy::default(),
             sorafs_rollout_phase: iroha_service_model::soranet::RolloutPhase::default(),
         };
-        let mut client = AsyncClient::new(config);
-        client.headers = HashMap::new();
-        Client::from_client(client).expect("blocking status fixture client")
+        let mut builder = AsyncClient::builder(config);
+        builder.headers = HashMap::new();
+        Client::from_client(builder.build().expect("valid status fixture"))
+            .expect("blocking status fixture client")
     }
     #[test]
     fn rebind_blocking_client_isolates_configuration_and_rebinds_account() {
         let original = dummy_client();
-        let original_timeout = original.client().torii_request_timeout;
+        let original_timeout = original.client().torii_request_timeout();
         let updated_timeout = original_timeout + Duration::from_millis(1);
         let rebound = rebind_blocking_client(&original, |client| {
             client.torii_request_timeout = updated_timeout;
             client.account = BOB_ID.clone();
             client.key_pair = BOB_KEYPAIR.clone();
         });
-        assert_eq!(original.client().torii_request_timeout, original_timeout);
-        assert_eq!(&original.client().account, &*ALICE_ID);
+        assert_eq!(original.client().torii_request_timeout(), original_timeout);
+        assert_eq!(original.client().account(), &*ALICE_ID);
         assert_eq!(
-            original.client().key_pair.public_key(),
+            original.client().key_pair().public_key(),
             ALICE_KEYPAIR.public_key()
         );
-        assert_eq!(rebound.client().torii_request_timeout, updated_timeout);
+        assert_eq!(rebound.client().torii_request_timeout(), updated_timeout);
         assert_eq!(rebound.account_client().authority(), &*BOB_ID);
         assert_eq!(
-            rebound.client().key_pair.public_key(),
+            rebound.client().key_pair().public_key(),
             BOB_KEYPAIR.public_key()
         );
 
@@ -327,10 +387,10 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("failed to bind blocking account authority"),
+                .contains("account authority does not match the configured signing key"),
             "unexpected mismatched-key error: {error:#}"
         );
-        assert_eq!(&original.client().account, &*ALICE_ID);
+        assert_eq!(original.client().account(), &*ALICE_ID);
     }
     #[test]
     fn status_retry_budget_env_parses_ms_suffix() {
@@ -364,15 +424,77 @@ mod tests {
         assert!(status_reaches_height(&height_one, 1));
         assert!(!status_reaches_height(&height_one, 2));
     }
-    #[tokio::test]
-    async fn status_retry_async_returns_error_for_unreachable_host() {
-        let env_guard = lock_env_guard();
+    #[test]
+    fn status_retry_async_returns_error_for_unreachable_host() {
+        let _env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "5ms");
         let client = dummy_client();
-        drop(env_guard);
-        let result = get_status_with_retry_async(&client).await;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("unreachable status test runtime");
+        let result = runtime.block_on(get_status_with_retry_async(&client));
         assert!(result.is_err());
+        let error = result.expect_err("unreachable status endpoint must fail");
+        assert!(
+            matches!(
+                error.downcast_ref::<iroha::Error>(),
+                Some(iroha::Error::Transport { .. } | iroha::Error::Timeout { .. })
+            ),
+            "async polling must retain the network error rather than enter the blocking facade: {error:#}"
+        );
+    }
+    #[test]
+    fn status_retry_source_preserves_height_barrier_and_sandbox_rejection() {
+        let _env_guard = lock_env_guard();
+        let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
+        set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "2");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("status source test runtime");
+        let mut attempts = 0;
+        let status = runtime
+            .block_on(get_status_with_retry_at_least_async(
+                "http://status-source.invalid/",
+                1,
+                || {
+                    let blocks = attempts;
+                    attempts += 1;
+                    std::future::ready(Ok(Status {
+                        blocks,
+                        ..Status::default()
+                    }))
+                },
+            ))
+            .expect("source must reach the applied-height barrier");
+        assert_eq!(status.blocks, 1);
+        assert_eq!(
+            attempts, 2,
+            "height zero is not an applied genesis observation"
+        );
+        let mut denied_attempts = 0;
+        let error = runtime
+            .block_on(get_status_with_retry_at_least_async(
+                "http://status-source.invalid/",
+                1,
+                || {
+                    denied_attempts += 1;
+                    std::future::ready(Err(eyre::Report::from(iroha::Error::Transport {
+                        operation: "diagnostic.status",
+                        kind: iroha::TransportErrorKind::Io(std::io::ErrorKind::PermissionDenied),
+                        details: "opaque transport failure".to_owned(),
+                    })))
+                },
+            ))
+            .expect_err("sandbox denials must terminate the source retry loop");
+        assert_eq!(denied_attempts, 1);
+        assert!(
+            error
+                .to_string()
+                .contains("sandboxed network restriction detected")
+        );
     }
     #[test]
     fn best_effort_status_is_none_without_storage_heights() {

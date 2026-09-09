@@ -2,6 +2,10 @@
 pub mod lane;
 mod quantity_statement;
 mod source_capture;
+#[cfg(test)]
+mod source_prefix_lengths;
+#[cfg(test)]
+mod source_reservation;
 pub(crate) use source_capture::preflight_fastpq_source_transcripts;
 mod source_context;
 pub use quantity_statement::{
@@ -96,9 +100,10 @@ pub(crate) struct FastpqWitnessContext {
     pub(crate) tx_set_hash: Option<[u8; 32]>,
     /// Per-source dataspaces keyed by execution-call or typed native-purpose identity.
     pub(crate) entry_dataspaces: BTreeMap<Hash, [u8; 16]>,
-    /// Validator-owned local inventory retained across background queue submission.
-    /// This is not source finality or compact admission authority.
-    pub(crate) source_inventory: Option<std::sync::Arc<crate::state::FastpqSourceInventoryV1>>,
+    /// Keep the validator-owned inventory alive through background queue processing.
+    /// Ownership retention is the purpose of this field; batch construction uses the
+    /// already-verified projections above. This grants no source-finality or admission authority.
+    pub(crate) _source_inventory: Option<std::sync::Arc<crate::state::FastpqSourceInventoryV1>>,
 }
 impl FastpqPublicInputsTemplate {
     /// Build full public inputs using a precomputed transaction set hash.

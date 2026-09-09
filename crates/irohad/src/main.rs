@@ -17,6 +17,7 @@ mod panic_recovery;
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
 /// Root-custodied immutable no-replace artifact publication.
+#[cfg(all(test, unix))]
 #[path = "main/root_owned_artifact_publication.rs"]
 mod root_owned_artifact_publication;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
@@ -1028,6 +1029,8 @@ include!("main/runtime_deps.rs");
 /// Error(s) that might occur while starting [`Iroha`]
 #[derive(Debug, Copy, Clone)]
 pub enum StartError {
+    /// Invalid or contradictory executable build metadata.
+    BuildIdentity,
     /// Failed to start the P2P network layer
     StartP2p,
     /// Failed to initialize block storage (Kura)
@@ -1067,6 +1070,7 @@ impl std::error::Error for MainError {}
 impl std::fmt::Display for StartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key = match self {
+            StartError::BuildIdentity => return f.write_str("invalid executable build identity"),
             StartError::StartP2p => "error.start_p2p",
             StartError::InitKura => "error.init_kura",
             StartError::ListenOsSignal => "error.listen_os_signal",
@@ -7391,6 +7395,8 @@ impl Iroha {
         ),
         StartError,
     > {
+        let build_identity = compiled_build_identity()
+            .map_err(|error| Report::new(StartError::BuildIdentity).attach(error))?;
         // Compile and validate immutable privacy profiles before any public
         // service begins accepting requests. In particular, the ZK-X.509
         // profile validates six fixed algebraic schedules; doing that work in
@@ -8780,7 +8786,6 @@ impl Iroha {
         #[cfg(feature = "dag-recovery-verify")]
         if !emergency_fast {
             use iroha_core::pipeline::access::{IvmStrategy, derive_for_transaction};
-            use nonzero_ext::nonzero;
             use sha2::{Digest, Sha256};
             // Choose strategy based on configured pipeline prepass
             let view = state.query_view();
@@ -9210,6 +9215,48 @@ impl Iroha {
             prepared_sorafs_reputation_archive.is_some(),
         )
         .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
+        let soracloud_runtime_mutation_signer =
+            runtime_deps.soracloud_runtime_mutation_signer.clone();
+        let soracloud_local_validator_account_id =
+            soracloud_runtime_mutation_signer.as_ref().map_or_else(
+                || {
+                    AccountId::new(
+                        config
+                            .common
+                            .trusted_peers
+                            .value()
+                            .myself
+                            .id()
+                            .public_key()
+                            .clone(),
+                    )
+                },
+                |signer| signer.authority(),
+            );
+        let soracloud_local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
+        // A failed host prerequisite must not leave newly emitted consensus WAL.
+        let prepared_soracloud_runtime = if emergency_fast {
+            None
+        } else {
+            Some(
+                SoracloudRuntimeManager::new(
+                    soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
+                        &config.soracloud_runtime,
+                    )
+                    .with_local_host_identity(
+                        soracloud_local_validator_account_id.clone(),
+                        soracloud_local_peer_id.clone(),
+                    ),
+                    Arc::clone(&state),
+                )
+                .preflight_startup()
+                .map_err(|error| {
+                    Report::new(StartError::StartTorii).attach(format!(
+                        "failed to qualify Soracloud host prerequisites before consensus: {error:#}"
+                    ))
+                })?,
+            )
+        };
         let sumeragi = if emergency_fast {
             drop(v2_replay_plan);
             drop(startup_replay_inventory_guard);
@@ -9235,6 +9282,7 @@ impl Iroha {
             .map_err(|message| Report::new(StartError::StartP2p).attach(message))?;
             log_startup_trace("irohad.sumeragi.starting", startup_trace_started_at);
             let (sumeragi, child) = SumeragiStartArgs {
+                build_identity,
                 config: config.sumeragi.clone(),
                 common_config: config.common.clone(),
                 events_sender: events_sender.clone(),
@@ -9373,25 +9421,6 @@ impl Iroha {
             runtime_deps.sorafs_reserve_transaction_signer.clone();
         let sorafs_orderbook_transaction_signer =
             runtime_deps.sorafs_orderbook_transaction_signer.clone();
-        let soracloud_runtime_mutation_signer =
-            runtime_deps.soracloud_runtime_mutation_signer.clone();
-        let soracloud_local_validator_account_id =
-            soracloud_runtime_mutation_signer.as_ref().map_or_else(
-                || {
-                    AccountId::new(
-                        config
-                            .common
-                            .trusted_peers
-                            .value()
-                            .myself
-                            .id()
-                            .public_key()
-                            .clone(),
-                    )
-                },
-                |signer| signer.authority(),
-            );
-        let soracloud_local_peer_id = config.common.trusted_peers.value().myself.id().to_string();
         let soracloud_operator_preseed_store = if !emergency_fast
             && config.soracloud_runtime.inrou.enabled
             && !sorafs_storage_config.enabled()
@@ -10034,21 +10063,14 @@ impl Iroha {
             );
             None
         } else {
-            let local_validator_account_id = soracloud_local_validator_account_id;
-            let local_peer_id = soracloud_local_peer_id;
-            let runtime_manager = SoracloudRuntimeManager::new(
-                soracloud_runtime::SoracloudRuntimeManagerConfig::from_runtime_config(
-                    &config.soracloud_runtime,
-                )
-                .with_local_host_identity(local_validator_account_id, local_peer_id),
-                Arc::clone(&state),
-            )
-            .with_sorafs_node(sorafs_node::NodeHandle::clone(
-                sorafs_node
-                    .as_ref()
-                    .expect("Soracloud is disabled during emergency Fast startup"),
-            ))
-            .with_remote_stream_token_operator_from_config(&config);
+            let runtime_manager = prepared_soracloud_runtime
+                .expect("normal startup qualified the same manager before consensus")
+                .with_sorafs_node(sorafs_node::NodeHandle::clone(
+                    sorafs_node
+                        .as_ref()
+                        .expect("Soracloud is disabled during emergency Fast startup"),
+                ))
+                .with_remote_stream_token_operator_from_config(&config);
             let runtime_manager = if let Some((store, qualified_manifest_digests)) =
                 soracloud_operator_preseed_store
             {
@@ -10216,7 +10238,7 @@ impl Iroha {
             .transpose()
             .map_err(|error| Report::new(StartError::StartTorii).attach(error))?
             .map(Arc::new);
-        let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
+        let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(build_identity, torii_telemetry)
             .with_parliament_tle_release_coordinator(parliament_tle_release_coordinator)
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_relay_trust(vpn_relay_trust);
@@ -16096,7 +16118,7 @@ mod tests {
             )
             .expect("private publication context construction");
         let torii_runtime_deps = startup_source
-            .find("letruntime_deps=iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)")
+            .find("letruntime_deps=iroha_torii::ToriiRuntimeDeps::new(")
             .expect("Torii runtime dependency construction");
         let signal_setup = startup_source
             .find("supervisor.setup_shutdown_on_os_signals()")
@@ -19214,7 +19236,6 @@ mod tests {
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
         use iroha_primitives::addr::socket_addr;
-        use path_absolutize::Absolutize as _;
 
         fn config_test_args(config_path: PathBuf, genesis_manifest_json: Option<PathBuf>) -> Args {
             Args {
@@ -19508,6 +19529,12 @@ mod tests {
 }
 /// Result type returned by daemon launcher and startup operations.
 pub type ReportResult<T, E> = core::result::Result<T, Report<E>>;
+fn compiled_build_identity() -> core::result::Result<
+    iroha_core::release_identity::BuildIdentity,
+    iroha_core::release_identity::BuildIdentityError,
+> {
+    iroha_core::compiled_build_identity!()
+}
 const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
     Some(value) => value,
     None => "unknown",

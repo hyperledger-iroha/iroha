@@ -330,7 +330,7 @@ def check_source_contracts(overrides=None):
         found=re.search(r"\bstruct\s+"+name+r"\s*\{([^}]*)\}",shared,re.S)
         assert found, name
         assert re.sub(r"\s+","",found.group(1))==re.sub(r"\s+","",fields), name
-    assert 'schema_name = "fastpq_prover::compact_v1::SharedProofV1"' in shared
+    assert 'frame = "fastpq_prover::compact_v1::SharedProofV1"' in shared
     protocol=read("crates/fastpq_prover/src/backend/compact_protocol.rs")
     assert "use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;" in protocol
     field_source=read("crates/fastpq_prover/src/field.rs")
@@ -398,8 +398,8 @@ def check_source_contracts(overrides=None):
     }.items():
         found=re.search(r"\bstruct\s+"+name+r"\s*\{([^}]*)\}",compact,re.S)
         assert found and normal(found.group(1))==fields,name
-    assert 'schema_name = "fastpq_prover::compact_v1::ProfileContextV1"' in compact
-    assert 'schema_name = "fastpq_prover::compact_v1::BodyV1"' in compact
+    assert 'frame = "fastpq_prover::compact_v1::ProfileContextV1"' in compact
+    assert 'frame = "fastpq_prover::compact_v1::BodyV1"' in compact
     for fragment in [
         'geometry.schema.trace_rows != 65_536', 'geometry.schema.width != 342',
         'geometry.schema.constraints != 923', 'geometry.lde_rows != 524_288',

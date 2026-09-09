@@ -659,8 +659,28 @@ fn internal_proxy_http_envelope_accounts_decode_shared_frame_local_clone_and_scr
         .expect("exact proxy HTTP phase boundary should fit");
     assert_eq!(
         envelope.working_set_bytes,
-        fixed + TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1 + 5 * 17
+        fixed
+            + TORII_PROXY_RETRYABLE_RETAINED_BODY_BYTES_V1
+            + torii_proxy_strict_response_working_set_bytes().unwrap()
+            + 5 * 17
     );
+    #[cfg(feature = "connect")]
+    {
+        let strict = torii_proxy_strict_response_working_set_bytes().unwrap();
+        assert!(
+            strict
+                >= QUEUE_PLAN_SYNCED_MAX_INFLIGHT_ATTEMPTS
+                    * QUEUE_PLAN_SYNCED_CERTIFICATE_MAX_BODY_BYTES_V1
+        );
+        let omitted = ToriiProxyHttpIngressEnvelope {
+            working_set_bytes: envelope.working_set_bytes - strict,
+            ..envelope
+        };
+        assert!(
+            !omitted.phases_fit(),
+            "omitting the strict response reservation must fail admission"
+        );
+    }
     assert_eq!(envelope.body_bytes, 17);
     assert_eq!(envelope.decode_allocated_bytes, 17);
     assert_eq!(envelope.forwarded_request_bytes, 17);
@@ -672,7 +692,7 @@ fn internal_proxy_http_envelope_accounts_decode_shared_frame_local_clone_and_scr
     };
     assert!(
         !undersized.phases_fit(),
-        "the strict local clone must be charged to the admitted envelope"
+        "the local clone, fixed response window and reduction scratch must all be charged"
     );
 }
 #[test]
@@ -817,9 +837,8 @@ fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation()
         calls: &'a AtomicUsize,
         payload: [u8; 32],
     }
-    impl norito::core::NoritoSerialize for BadExact<'_> {
-}
-impl norito::core::SerializePayload for BadExact<'_> {
+    impl norito::core::NoritoSerialize for BadExact<'_> {}
+    impl norito::core::SerializePayload for BadExact<'_> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,

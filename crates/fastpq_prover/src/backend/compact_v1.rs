@@ -81,12 +81,6 @@ impl Round {
         }
     }
 
-    /// Return the one-based verifier-message ordinal.
-    #[cfg(test)]
-    pub(super) const fn ordinal(self) -> u8 {
-        self.0
-    }
-
     /// Fixed whole raw-tape length, including unused samples and suffix bytes.
     pub(super) const fn tape_bytes(self) -> usize {
         match self.0 {
@@ -169,16 +163,22 @@ struct AbsorbedPrefix {
 // The complete context and every protocol-tape word remain in the logical input.
 // The profile field here is a typed complete profile-context descriptor, not
 // the public short metadata profile ID. See specs/fastpq_compact_v1_framing.md.
-#[derive(Clone, Debug, NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::ProfileContextV1")]
+#[derive(Clone, Debug, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_v1::PrefixFrame",
+    frame = "fastpq_prover::compact_v1::ProfileContextV1"
+)]
 struct PrefixFrame {
     version: u16,
     identity: Vec<u8>,
     context: Vec<u8>,
 }
 
-#[derive(Clone, Debug, NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::BodyV1")]
+#[derive(Clone, Debug, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_v1::Frame",
+    frame = "fastpq_prover::compact_v1::BodyV1"
+)]
 struct Frame {
     kind: u8,
     oracle: u8,

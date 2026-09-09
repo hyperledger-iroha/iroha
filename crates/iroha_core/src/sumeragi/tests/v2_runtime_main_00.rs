@@ -1557,23 +1557,6 @@ pub(in crate::sumeragi) fn preowned_leader_wire_ownerships(
         None,
     )
 }
-fn preowned_leader_wire_ownerships_at_shared_cut(
-    context: &wire::HeightContext,
-    messages: &[(wire::ConsensusMessageV2, PeerId)],
-    lifecycle_ordinals: RuntimeLifecycleOrdinalSource,
-) -> (
-    TempDir,
-    Arc<super::super::FairV2Ingress>,
-    Vec<FairV2IngressOwnershipEvidence>,
-) {
-    preowned_leader_wire_ownerships_with_dequeue_mode(
-        context,
-        messages,
-        lifecycle_ordinals,
-        true,
-        None,
-    )
-}
 fn preowned_runtime_wal_ownerships(
     runtime: &SerializedV2Runtime<SumeragiV2Adapter>,
     runtime_directory: &TempDir,

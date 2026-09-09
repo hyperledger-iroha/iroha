@@ -529,7 +529,7 @@ fn resign_replaced_envelope(
     let adversarial = TransactionBuilder::from_payload(valid.payload().clone())
         .wrap_err_with(|| format!("{context}: reopen canonical payload"))?
         .with_instructions([SubmitPrivacyProofV1::new(envelope)])
-        .try_sign(client.client().key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err_with(|| format!("{context}: independently sign adversarial transaction"))?;
     adversarial
         .verify_signature()
@@ -583,7 +583,7 @@ fn independently_sign_two_submit_transaction(
     let adversarial = TransactionBuilder::from_payload(canonical.payload().clone())
         .wrap_err("reopen canonical payload for two-submit adversary")?
         .with_instructions([submission.clone(), submission.clone()])
-        .try_sign(client.client().key_pair.private_key())
+        .try_sign(client.client().key_pair().private_key())
         .wrap_err("independently sign two-submit adversary")?;
     adversarial
         .verify_signature()
@@ -737,8 +737,8 @@ fn action_context(
     nonce: u32,
 ) -> PrivacyReleaseTransactionContextV1 {
     PrivacyReleaseTransactionContextV1 {
-        network_id: *client.account_client().network_id(),
-        authority: client.account_client().authority().clone(),
+        network_id: *client.client().network_id(),
+        authority: client.client().account().clone(),
         creation_time,
         time_to_live: Some(ACTION_TTL),
         nonce: NonZeroU32::new(nonce),
@@ -898,7 +898,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
             vec![
                 Grant::account_permission(
                     Permission::from(CanEnactGovernance),
-                    client.account_client().authority().clone(),
+                    client.client().account().clone(),
                 )
                 .into(),
             ],
@@ -946,7 +946,7 @@ async fn canonical_retained_exact12_actions_survive_four_peer_adversarial_replay
         let creation_time = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .wrap_err("system clock is before the Unix epoch")?;
-        let signing_key = client.client().key_pair.private_key().clone();
+        let signing_key = client.client().key_pair().private_key().clone();
         let zk_context = action_context(
             &client,
             genesis_hash,

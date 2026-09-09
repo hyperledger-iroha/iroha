@@ -1,5 +1,4 @@
 //! Captured frames for generated privacy and spentness digest carriers.
-#![cfg(feature = "json")]
 
 use iroha_data_model::{
     confidential::spentness::{
@@ -8,7 +7,7 @@ use iroha_data_model::{
     privacy::*,
 };
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    NoritoDeserialize, NoritoSerialize,
     json::{self, JsonDeserialize, JsonSerialize, Value},
 };
 use std::{collections::BTreeMap, fmt::Debug};

@@ -922,7 +922,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for NetworkMessage {
         let archived = norito::core::archived_from_slice::<Self>(decode_bytes.as_ref())?;
         let _guard = norito::core::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
         let value =
-            <Self as norito::core::NoritoDeserialize>::try_deserialize(archived.archived())?;
+            <Self as norito::core::DeserializePayload>::try_deserialize(archived.archived())?;
         Ok((value, bytes.len()))
     }
 }

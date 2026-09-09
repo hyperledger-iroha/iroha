@@ -699,7 +699,7 @@ fn transfer_static_state_syscall(
             .and_then(|name| {
                 if !matches!(
                     number,
-                    crate::syscalls::SYSCALL_STATE_KEYS | crate::syscalls::SYSCALL_STATE_COUNT
+                    crate::syscalls::SYSCALL_STATE_COUNT | crate::syscalls::SYSCALL_STATE_SCAN
                 ) {
                     return Some(format!("state:{name}"));
                 }
@@ -1265,8 +1265,8 @@ seiyaku IndirectStateAnalysis {
         let literal_pointer_envelopes = vec![None];
         let literal_norito_payloads = vec![None];
         for syscall in [
-            crate::syscalls::SYSCALL_STATE_KEYS,
             crate::syscalls::SYSCALL_STATE_COUNT,
+            crate::syscalls::SYSCALL_STATE_SCAN,
         ] {
             let mut facts = StaticStateFacts::entrypoint();
             facts.paths[10] = Some(StaticStatePath::Literal(0));

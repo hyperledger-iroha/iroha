@@ -3,7 +3,7 @@
 //! A content bundle is a hashed tar archive with a precomputed file index. The
 //! hash of the raw tar bytes serves as the bundle identifier and is used as the
 //! HTTP `ETag` when serving files through Torii.
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
@@ -21,9 +21,18 @@ use std::collections::BTreeMap;
 /// Identifier for a content bundle (`Hash` of the tar archive).
 pub type ContentBundleId = Hash;
 /// Entry in a content bundle file index.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::content::ContentFileEntry")]
 pub struct ContentFileEntry {
     /// Normalised POSIX path inside the tar archive.
@@ -33,7 +42,7 @@ pub struct ContentFileEntry {
     /// Length of the file payload in bytes.
     pub length: u64,
     /// Blake2b-256 hash of the file payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub file_hash: [u8; 32],
 }
 impl ContentFileEntry {
@@ -47,9 +56,21 @@ impl ContentFileEntry {
 ///
 /// Protected bundles always disable storage at the HTTP boundary so a shared
 /// cache cannot bypass current role or sponsor authorization.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::content::ContentCachePolicy")]
 pub struct ContentCachePolicy {
     /// Maximum public-cache lifetime in seconds (used for `Cache-Control` max-age).
@@ -67,8 +88,19 @@ impl ContentCachePolicy {
     }
 }
 /// Authentication/authorisation guard for bundle reads.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(tag = "mode", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::content::ContentAuthMode")]
@@ -81,15 +113,26 @@ pub enum ContentAuthMode {
     Sponsor(UniversalAccountId),
 }
 /// Bundle-level manifest describing cache/auth/placement metadata.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::content::ContentBundleManifest")]
 pub struct ContentBundleManifest {
     /// Stable identifier of the tar archive (BLAKE2b-256).
     pub bundle_id: ContentBundleId,
     /// Deterministic hash of the file index (Norito encoding of [`ContentFileEntry`] list).
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub index_hash: [u8; 32],
     /// Dataspace the bundle is scoped to.
     pub dataspace: DataSpaceId,
@@ -126,9 +169,18 @@ impl ContentBundleManifest {
     }
 }
 /// Metadata and chunk layout for a published content bundle.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::content::ContentBundleRecord")]
 pub struct ContentBundleRecord {
     /// Stable identifier derived from the tar bytes.
@@ -140,24 +192,18 @@ pub struct ContentBundleRecord {
     /// Chunk size used when ingesting the tar archive.
     pub chunk_size: u32,
     /// Ordered list of chunk hashes (BLAKE3-256).
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::fixed_bytes::vec")
-    )]
+    #[norito(json = "crate::json_helpers::fixed_bytes::vec")]
     pub chunk_hashes: Vec<[u8; 32]>,
     /// Merkle-style root derived from the ordered chunk hashes.
     #[norito(default)]
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub chunk_root: [u8; 32],
     /// Erasure layout used when chunking the tarball.
     #[norito(default)]
     pub stripe_layout: DaStripeLayout,
     /// Optional PDP/IPA commitment tied to the bundle payload.
     #[norito(default)]
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::base64_vec::option")
-    )]
+    #[norito(json = "crate::json_helpers::base64_vec::option")]
     pub pdp_commitment: Option<Vec<u8>>,
     /// File index entries (offsets relative to the tar archive start).
     pub files: Vec<ContentFileEntry>,
@@ -169,9 +215,18 @@ pub struct ContentBundleRecord {
     pub expires_at_height: Option<u64>,
 }
 /// Chunk payload stored in the content lane store with a reference counter.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::content::ContentChunk")]
 pub struct ContentChunk {
     /// Raw chunk bytes (at most `chunk_size` bytes).
@@ -200,9 +255,19 @@ impl ContentChunk {
     }
 }
 /// Range of bytes served for a content file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::content::ContentRange")]
 pub struct ContentRange {
     /// Inclusive start offset (bytes) within the file.
@@ -211,9 +276,18 @@ pub struct ContentRange {
     pub end: u64,
 }
 /// Receipt attached to content responses carrying DA evidence and served range metadata.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_data_model::content::ContentDaReceipt")]
 pub struct ContentDaReceipt {
     /// Identifier of the bundle that contained the served file.
@@ -221,7 +295,7 @@ pub struct ContentDaReceipt {
     /// File path inside the bundle.
     pub path: String,
     /// Blake2b-256 hash of the served file payload.
-    #[cfg_attr(feature = "json", norito(json = "crate::json_helpers::fixed_bytes"))]
+    #[norito(json = "crate::json_helpers::fixed_bytes")]
     pub file_hash: [u8; 32],
     /// Bytes returned to the caller (range-aware).
     pub served_bytes: u64,
@@ -234,10 +308,7 @@ pub struct ContentDaReceipt {
     pub stripe_layout: DaStripeLayout,
     /// Optional PDP/IPA commitment derived from the bundle payload.
     #[norito(default)]
-    #[cfg_attr(
-        feature = "json",
-        norito(json = "crate::json_helpers::base64_vec::option")
-    )]
+    #[norito(json = "crate::json_helpers::base64_vec::option")]
     pub pdp_commitment: Option<Vec<u8>>,
     /// Unix timestamp when the receipt was produced.
     pub served_at_unix: u64,

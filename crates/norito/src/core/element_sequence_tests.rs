@@ -4,7 +4,6 @@ use super::*;
 
 struct CountedScalar<'a>(&'a u16, &'a Cell<usize>);
 
-impl NoritoSerialize for CountedScalar<'_> {}
 impl SerializePayload for CountedScalar<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.1.set(self.1.get() + 1);
@@ -18,7 +17,6 @@ impl SerializePayload for CountedScalar<'_> {
 
 struct ProjectedEntry<'a>(&'a (u16, u16), &'a Cell<usize>);
 
-impl NoritoSerialize for ProjectedEntry<'_> {}
 impl SerializePayload for ProjectedEntry<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         write_len_prefixed(writer, &CountedScalar(&self.0.0, self.1))?;
@@ -28,7 +26,6 @@ impl SerializePayload for ProjectedEntry<'_> {
 
 struct ProjectedSequence<'a>(&'a [(u16, u16)], &'a Cell<usize>);
 
-impl NoritoSerialize for ProjectedSequence<'_> {}
 impl SerializePayload for ProjectedSequence<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         write_element_sequence::<ProjectedEntry<'_>, _>(
@@ -228,7 +225,6 @@ struct ChangingPayload<'a> {
     fail_on: Option<usize>,
 }
 
-impl NoritoSerialize for ChangingPayload<'_> {}
 impl SerializePayload for ChangingPayload<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let visit = self.visits.get() + 1;
@@ -245,7 +241,6 @@ impl SerializePayload for ChangingPayload<'_> {
 
 struct PayloadView<'a>(&'a ChangingPayload<'a>);
 
-impl NoritoSerialize for PayloadView<'_> {}
 impl SerializePayload for PayloadView<'_> {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         self.0.serialize(writer)

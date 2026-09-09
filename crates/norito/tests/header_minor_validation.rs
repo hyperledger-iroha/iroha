@@ -4,7 +4,8 @@ use norito::{
     core::{Compression, Error, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, header_flags},
     decode_from_bytes,
 };
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.header_minor_validation.FixedFields")]
 struct FixedFields {
     tag: u8,
     digest: [u8; 32],
@@ -14,7 +15,7 @@ fn frame_payload<T: NoritoSerialize>(minor: u8, flags: u8, payload: &[u8]) -> Ve
     bytes.extend_from_slice(b"NRT0");
     bytes.push(VERSION_MAJOR);
     bytes.push(minor);
-    bytes.extend_from_slice(&T::schema_hash());
+    bytes.extend_from_slice(&norito::schema::identity::frame_hash::<T>());
     bytes.push(Compression::None as u8);
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
     let mut digest = Digest::new();

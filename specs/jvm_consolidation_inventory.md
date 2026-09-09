@@ -53,6 +53,27 @@ attestation checks and shared onboarding response validation remain. This
 records SDK ownership and focused coverage; release qualification remains
 separate.
 
+## Canonical custom-instruction bytes (2026-09-09)
+
+Kotlin's custom JSON instruction adapter added a redundant field-length prefix,
+producing a different multisig hash from Rust. The adapter now writes the one
+canonical nested JSON field. A [shared Rust-produced fixture](../fixtures/multisig/README.md)
+binds the complete 79-byte instruction vector, nested custom frame and its
+independently checked hash. Rust asserts both bytes and hash. Three Kotlin tests
+cover exact bytes/hash, truncation and extra-prefix rejection, and compact-length
+boundaries; one Java consumer calls Kotlin's public codec API. The four tests
+reproduce two failures before the correction and all pass afterward, with JDK 8
+API enforcement retained and 678 qualification inputs unchanged during each run.
+
+The wider 19-test selection passes nine and fails ten while requiring the missing
+ABI-23 `connect_norito_bridge` address validator. Those native-dependent controls
+remain unverified; no address-validation fallback or test bypass is introduced.
+The duplicate Java codec and its conflicting older fixture are still pending
+capability/consumer retirement. This focused correction does not establish full
+JVM, JNI, Android or publication qualification. Frozen patch, original failures,
+source seals and runtime reports are retained under ignored
+`target/architecture-redesign/norito-identity-cutover/multisig-custom-json-correction-v1/`.
+
 ## Capabilities and invariants still needing migration
 
 Signer, verified Nearby and immutable Nexus migrations have focused and full JVM

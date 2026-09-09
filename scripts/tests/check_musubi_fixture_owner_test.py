@@ -112,6 +112,8 @@ def test_owner_is_registered_for_the_exact_two_outputs() -> None:
         "crates/iroha_data_model/src/isi/mod.rs",
         "crates/iroha_data_model/src/isi/musubi.rs",
         "crates/iroha_data_model/src/musubi.rs",
+        "crates/iroha_data_model/src/musubi/archive_validation.rs",
+        "crates/iroha_data_model/src/musubi/publication_validation.rs",
         "crates/iroha_data_model/src/musubi/query_models.rs",
         "crates/iroha_data_model/src/sorafs/pin_registry.rs",
     }
@@ -131,7 +133,6 @@ def test_owner_command_is_argument_free() -> None:
     assert set(command[command.index("--features") + 1].split(",")) == {
         "dev-tools",
         "test-fixtures",
-        "json",
         "transparent_api",
     }
     assert "--locked" in command

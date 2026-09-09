@@ -2,10 +2,10 @@
 use crate::name::Name;
 use getset::Getters;
 use iroha_primitives::json::Json;
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use std::collections::BTreeMap;
-#[cfg(feature = "json")]
+
 pub mod json_helpers {
     //! JSON helper utilities for serializing and deserializing custom parameters.
     use super::*;
@@ -113,6 +113,8 @@ mod model {
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     /// Id of a custom parameter
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::custom::model::CustomParameterId")]
     #[derive(
         Debug,
         Display,
@@ -131,6 +133,8 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct CustomParameterId(pub Name);
     /// A custom blockchain parameter
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::custom::model::CustomParameter")]
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Getters)]
     #[getset(get = "pub")]
     pub struct CustomParameter {
@@ -164,7 +168,7 @@ impl crate::Identifiable for CustomParameter {
         &self.id
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for CustomParameterId {
     fn json_serialize(&self, out: &mut String) {
         self.0.json_serialize(out);
@@ -176,26 +180,25 @@ impl JsonSerialize for CustomParameterId {
         self.0.json_serialize_to(out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for CustomParameterId {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         Name::json_deserialize(parser).map(Self)
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonObjectKey for CustomParameterId {
     fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
         json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
     }
 }
-#[cfg(feature = "json")]
+
 impl json::JsonObjectKeyOwned for CustomParameterId {
     fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
         <Name as json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
     }
 }
 
-#[cfg(feature = "json")]
 impl JsonSerialize for CustomParameter {
     fn json_serialize(&self, out: &mut String) {
         out.push('{');
@@ -222,7 +225,7 @@ impl JsonSerialize for CustomParameter {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for CustomParameter {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = json::Value::json_deserialize(parser)?;

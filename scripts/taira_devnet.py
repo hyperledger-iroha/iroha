@@ -6638,6 +6638,35 @@ def _validate_faucet_claim_v1(value: Any, context: str) -> None:
     )
 
 
+def _validate_public_prepared_binding_v1(
+    value: Any,
+    context: str,
+    root_binding: dict[str, Any],
+    semantic_hash_hex: str,
+    receipt_valid_until_ms: int | None = None,
+) -> None:
+    """Check the public projection of native-verified private operation custody.
+
+    Native prepare/submit authenticates the semantic receipt or faucet claim;
+    this structural boundary never serializes reset authority into a public DTO.
+    """
+    _exact_v1_lower_hex(semantic_hash_hex, f"{context}.semantic_hash_hex", exact_bytes=32)
+    deadline = root_binding["execution_expires_at_unix_ms"]
+    if receipt_valid_until_ms is not None:
+        deadline = min(deadline, receipt_valid_until_ms)
+    expected = {
+        "schema": "iroha.prepared-operation.binding.v1",
+        "kind": root_binding["kind"],
+        "semantic_hash_hex": semantic_hash_hex,
+        "request_id": root_binding["idempotency_key"],
+        "execution_expires_at_unix_ms": deadline,
+    }
+    public = _exact_v1_object(value, frozenset(expected), context)
+    _exact_v1_u64(public["execution_expires_at_unix_ms"], f"{context}.execution_expires_at_unix_ms", positive=True)
+    if public != expected:
+        fail(f"{context} has a substituted public operation binding")
+
+
 def _validate_prepared_onboarding_v1(
     value: Any,
     context: str,
@@ -6665,12 +6694,19 @@ def _validate_prepared_onboarding_v1(
         context,
     )
     if (
-        prepared["schema"] != "iroha.taira.prepared-transaction.v1"
+        prepared["schema"] != "iroha.prepared-transaction.v1"
         or prepared["operation"] != "onboarding"
-        or prepared["binding"] != root_binding
     ):
         fail(f"{context} has a substituted prepared-onboarding identity")
     _validate_onboarding_receipt_v1(prepared["receipt"], f"{context}.receipt")
+    receipt = prepared["receipt"]
+    semantic_hash = receipt["plan_hash"][5:69].lower()
+    if prepared["semantic_hash_hex"] != semantic_hash:
+        fail(f"{context} has a substituted onboarding semantic hash")
+    _validate_public_prepared_binding_v1(
+        prepared["binding"], f"{context}.binding", root_binding,
+        semantic_hash, receipt["body"]["valid_until_ms"],
+    )
     for field in (
         "semantic_hash_hex",
         "transaction_hash_hex",
@@ -6719,7 +6755,6 @@ def _validate_prepared_onboarding_proof_required_v1(
     )
     if (
         result["schema"] != "iroha.accounts.onboard.prepare-proof-required.v1"
-        or result["binding"] != root_binding
         or result["operation"] != "onboarding"
         or result["outcome"] != "ProofRequired"
         or result["proof_kind"] != "account_alias_current_state"
@@ -6727,6 +6762,14 @@ def _validate_prepared_onboarding_proof_required_v1(
         fail(f"{context}.result has a substituted proof-required identity")
     _exact_v1_lower_hex(
         result["semantic_hash_hex"], f"{context}.result.semantic_hash_hex", exact_bytes=32
+    )
+    receipt = wrapper["receipt"]
+    semantic_hash = receipt["plan_hash"][5:69].lower()
+    if result["semantic_hash_hex"] != semantic_hash:
+        fail(f"{context}.result has a substituted onboarding semantic hash")
+    _validate_public_prepared_binding_v1(
+        result["binding"], f"{context}.result.binding", root_binding,
+        semantic_hash, receipt["body"]["valid_until_ms"],
     )
     _exact_v1_string(result["account_id"], f"{context}.result.account_id")
     _exact_v1_string(result["alias"], f"{context}.result.alias")
@@ -6766,12 +6809,15 @@ def _validate_prepared_faucet_v1(
         context,
     )
     if (
-        prepared["schema"] != "iroha.taira.prepared-transaction.v1"
+        prepared["schema"] != "iroha.prepared-transaction.v1"
         or prepared["operation"] != "faucet"
-        or prepared["binding"] != root_binding
     ):
         fail(f"{context} has a substituted prepared-faucet identity")
     _validate_faucet_claim_v1(prepared["claim"], f"{context}.claim")
+    _validate_public_prepared_binding_v1(
+        prepared["binding"], f"{context}.binding", root_binding,
+        prepared["semantic_hash_hex"],
+    )
     for field in (
         "semantic_hash_hex",
         "transaction_hash_hex",

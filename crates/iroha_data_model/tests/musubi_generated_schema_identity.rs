@@ -1,11 +1,10 @@
 //! Captured wire identities for the generated Musubi digest, text and page families.
-#![cfg(feature = "json")]
 
 use std::{collections::BTreeMap, fmt::Debug};
 
 use iroha_data_model::{account::address::ChainDiscriminantGuard, musubi::*};
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    NoritoDeserialize, NoritoSerialize,
     json::{self, JsonSerialize, Value},
 };
 

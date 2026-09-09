@@ -276,7 +276,7 @@ merkle_schema_identity! {
     MerkleProof => "iroha_crypto::merkle::MerkleProof",
     CompactMerkleProof => "iroha_crypto::merkle::CompactMerkleProof",
 }
-impl<T> norito::core::NoritoSerialize for MerkleTree<T> {}
+
 impl<T> norito::core::SerializePayload for MerkleTree<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (hash_scheme, leaves) = self
@@ -308,7 +308,8 @@ impl MerkleTree<[u8; 32]> {
     /// Explicit empty‑tree root for a fixed height `depth` (binary tree).
     ///
     /// Construction:
-    /// - Base leaf L0 = Hash(tag || `[0u8; 32]`)
+    /// - Shielded commitment C0 = Hash(shield-domain || `[0u8; 32]`)
+    /// - Base leaf L0 = Hash(leaf-domain || C0)
     /// - For each level, parent = Hash(internal-domain || prev || prev)
     ///
     /// Returns the raw 32‑byte digest underlying `Hash` (LSB set by `Hash`).
@@ -323,7 +324,8 @@ impl MerkleTree<[u8; 32]> {
         h.into()
     }
 }
-impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleTree<T> {
+
+impl<'de, T> norito::core::DeserializePayload<'de> for MerkleTree<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("MerkleTree decode")
     }
@@ -524,7 +526,7 @@ impl<T: norito::core::SerializePayload> norito::core::SerializePayload for Norit
         norito::core::SerializePayload::encoded_len_exact(self.0)
     }
 }
-impl<T> norito::core::NoritoSerialize for MerkleProof<T> {}
+
 impl<T> norito::core::SerializePayload for MerkleProof<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(
@@ -545,7 +547,8 @@ impl<T> norito::core::SerializePayload for MerkleProof<T> {
         ))
     }
 }
-impl<'de, T> norito::core::NoritoDeserialize<'de> for MerkleProof<T> {
+
+impl<'de, T> norito::core::DeserializePayload<'de> for MerkleProof<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("MerkleProof decode")
     }
@@ -2144,7 +2147,7 @@ mod tests {
         let tree: MerkleTree<_> = test_hashes(3).into_iter().collect();
         let bytes = norito::to_bytes(&tree).expect("encode");
         let archived = norito::from_bytes::<MerkleTree<()>>(&bytes).expect("failed to decode");
-        let decoded = norito::core::NoritoDeserialize::deserialize(archived);
+        let decoded = norito::core::DeserializePayload::deserialize(archived);
         assert_eq!(tree, decoded);
     }
     #[test]
@@ -2154,17 +2157,21 @@ mod tests {
         let proof = tree.get_proof(1).unwrap();
         let bytes = norito::to_bytes(&proof).expect("encode");
         let archived = norito::from_bytes::<MerkleProof<()>>(&bytes).expect("failed to decode");
-        let decoded = norito::core::NoritoDeserialize::deserialize(archived);
+        let decoded = norito::core::DeserializePayload::deserialize(archived);
         assert_eq!(proof, decoded);
     }
     #[test]
     fn merkle_proof_try_deserialize_rejects_malformed_archive_without_panicking() {
         struct MalformedMerkleProof;
-        impl norito::core::NoritoSerialize for MalformedMerkleProof {
-            fn schema_hash() -> [u8; 16] {
-                <MerkleProof<()> as norito::core::NoritoSerialize>::schema_hash()
+        impl norito::NoritoSchema for MalformedMerkleProof {
+            fn nominal_name() -> String {
+                "test::iroha_crypto::malformed_merkle_proof".to_owned()
+            }
+            fn frame_name() -> String {
+                <MerkleProof<()> as norito::NoritoSchema>::frame_name()
             }
         }
+
         impl norito::core::SerializePayload for MalformedMerkleProof {
             fn serialize(
                 &self,
@@ -2181,7 +2188,7 @@ mod tests {
         let archived =
             norito::from_bytes::<MerkleProof<()>>(&bytes).expect("validate outer archive");
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            <MerkleProof<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            <MerkleProof<()> as norito::core::DeserializePayload>::try_deserialize(archived)
         }));
         let error = outcome
             .expect("fallible Merkle proof decoding must not unwind")

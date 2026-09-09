@@ -52,6 +52,24 @@ fn genesis_block_builder_example() -> Result<()> {
     let Executable::Instructions(instructions) = instructions else {
         panic!("Expected instructions");
     };
+    let parameter_count = instructions
+        .iter()
+        .take_while(|instruction| instruction.as_any().is::<SetParameter>())
+        .count();
+    assert!(
+        parameter_count > 0,
+        "genesis must install its parameter snapshot"
+    );
+    let registrations = &instructions[parameter_count..];
+    assert_eq!(registrations.len(), 8 + 4);
+    let (instructions, topology) = registrations.split_at(8);
+    let expected_topology: Vec<InstructionBox> = deterministic_test_genesis_topology_entries()
+        .into_iter()
+        .map(|entry| {
+            RegisterPeerWithPop::new(entry.peer.clone(), entry.pop_bytes().unwrap().unwrap()).into()
+        })
+        .collect();
+    assert_eq!(topology, expected_topology);
     {
         let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         assert_eq!(

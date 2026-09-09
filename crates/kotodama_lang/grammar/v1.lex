@@ -54,6 +54,7 @@ operator	->	Arrow
 operator	=>	FatArrow
 operator	::	ColonColon
 operator	.	Dot
+operator	..	DotDot
 operator	,	Comma
 operator	:	Colon
 operator	;	Semicolon

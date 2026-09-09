@@ -18,7 +18,7 @@ seiyaku NftDemo {
     kotoage fn create() authorize("NftAuthority") {
         let owner = owner_id();
         let nft = dragon_nft();
-        ledger::nft::mint(nft, owner);
+        ledger::nft::mint(nft: nft, owner: owner);
     }
 
     kotoage fn transfer() authorize("NftAuthority") {

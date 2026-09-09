@@ -1,0 +1,4 @@
+client/*.test.cjs
+package-lock.json
+*.vsix
+.gitignore

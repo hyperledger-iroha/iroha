@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.math.BigInteger
+import java.io.IOException
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -13,6 +14,8 @@ import java.util.Base64
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import kotlin.test.Test
@@ -1415,6 +1418,40 @@ class HttpClientTransportTest {
     }
 
     @Test
+    fun contractCallPreservesUnitAndNestedOptionTags() {
+        val fixture = loadSharedFixture("fixtures/kotodama/entrypoint_argument_record_v1.json")
+        val boundary = obj(fixture, "torii_boundary")
+        val invocation = ContractInvocation(
+            "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw",
+            ByteArray(32) { 0x11 },
+            string(boundary, "entrypoint"),
+            hexToBytes(string(obj(fixture, "entrypoint_argument_record_v1"), "norito_hex")),
+        )
+        for (value in listOf(
+            """{"some":null}""",
+            """{"none":true}""",
+            """{"some":{"none":true}}""",
+            """{"some":{"some":null}}""",
+        )) {
+            val payload = mapOf("value" to JsonParser.parse(value))
+            val executor = StubResponseExecutor(503, "boundary reached".toByteArray(StandardCharsets.UTF_8))
+            val transport = HttpClientTransport(executor, signedClientConfig("https://fixture.invalid"))
+            assertFailsWith<CompletionException> {
+                transport.prepareContractCall(
+                    authority = string(boundary, "authority"),
+                    feePayment = FeePaymentJson.parse(boundary["fee_payment"], "fee_payment"),
+                    contractAlias = string(boundary, "contract_alias"),
+                    entrypoint = string(boundary, "entrypoint"),
+                    payload = payload,
+                    draftIntent = ContractCallDraftIntent(invocation, emptyMap()),
+                ).join()
+            }
+            val sent = JsonParser.parse(readBody(executor.lastRequest)) as Map<*, *>
+            assertEquals(payload, sent["payload"], value)
+        }
+    }
+
+    @Test
     fun proposeMultisigPostsNativeNoritoInstructionPayloadsAndParsesResponse() {
         val instructionBytes = NoritoJavaCodecAdapter.encodeInstructionBox(
             InstructionBox.fromWirePayload(
@@ -2167,6 +2204,47 @@ class HttpClientTransportTest {
                 multisigResponse(canonical, evenMarker),
             )
         }
+    }
+
+    @Test
+    fun parserFailureCompletesHttpFuture() {
+        val body = ramLfeProgramPoliciesJson().replace(
+            "ed25519:ed01203B6A27BCCEB6A42D62A3A8D02A6F0D73653215771DE243A63AC048A18B59DA29",
+            "invalid-public-key",
+        )
+        val transport = HttpClientTransport(
+            executor = StubResponseExecutor(200, body.toByteArray(StandardCharsets.UTF_8)),
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        val error = assertFailsWith<ExecutionException> {
+            transport.listRamLfeProgramPolicies().get(2, TimeUnit.SECONDS)
+        }
+        assertIs<IllegalStateException>(error.cause)
+        transport.close()
+    }
+
+    @Test
+    fun checkedObserverFailureCompletesHttpFutureAndRetainsOriginalCause() {
+        val original = IOException("response observer failed")
+        val secondary = IllegalStateException("failure observer failed")
+        val transport = HttpClientTransport(
+            executor = StubResponseExecutor(200, "{\"total\":0,\"items\":[]}".toByteArray(StandardCharsets.UTF_8)),
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example"))
+                .addObserver(object : ClientObserver {
+                    override fun onResponse(request: TransportRequest, response: ClientResponse) {
+                        throw original
+                    }
+                    override fun onFailure(request: TransportRequest, error: Throwable) {
+                        throw secondary
+                    }
+                }).build(),
+        )
+        val error = assertFailsWith<ExecutionException> {
+            transport.listRamLfeProgramPolicies().get(2, TimeUnit.SECONDS)
+        }
+        assertTrue(error.cause === original)
+        assertTrue(original.suppressed.single() === secondary)
+        transport.close()
     }
 
     @Test
@@ -5325,7 +5403,7 @@ class HttpClientTransportTest {
     private data class AtomicOnboardingProofFixture(
         val request: AccountOnboardingPlanRequestV1,
         val receipt: AccountOnboardingPlanReceiptV1,
-        val binding: TairaPublicResetMutationBindingV1,
+        val binding: PreparedOperationBindingV1,
         val proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
         val authority: String,
         val accountId: String,
@@ -5372,13 +5450,11 @@ class HttpClientTransportTest {
             guard.validUntilMs,
         )
         val receipt = signedOnboardingReceipt(body, privateKey)
-        val binding = TairaPublicResetMutationBindingV1(
-            authorizationSha256 = "11".repeat(32),
-            authorizationNonce = "onboarding-fixture-nonce-0000001",
-            kind = TairaPublicResetMutationBindingV1.ONBOARDING,
-            phase = "onboarding",
-            idempotencyKey = "22".repeat(32),
-            executionExpiresAtUnixMs = 4_102_444_800_000L,
+        val binding = PreparedOperationBindingV1(
+            semanticHashHex = receipt.planHash.lowercase(),
+            kind = PreparedOperationBindingV1.ONBOARDING,
+            requestId = "22".repeat(32),
+            executionExpiresAtUnixMs = receipt.body.validUntilMs,
         )
         val unsigned = AccountOnboardingProofRequiredPrepareResponseV1(
             binding,

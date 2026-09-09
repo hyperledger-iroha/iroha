@@ -2133,8 +2133,9 @@ fn submit_leakage_carrier_with_event(
         let mut events = tokio::time::timeout(
             FAULT_CONTROL_TIMEOUT,
             client
-                .client()
-                .listen_for_events([TransactionEventFilter::default().for_hash(transaction_hash)]),
+                .account_client()
+                .events()
+                .subscribe([TransactionEventFilter::default().for_hash(transaction_hash)]),
         )
         .await
         .map_err(|_| eyre!("timed out opening leakage carrier event stream"))??;
@@ -2183,7 +2184,7 @@ fn submit_leakage_carrier_with_event(
         })
         .await
         .map_err(|_| eyre!("timed out waiting for leakage carrier event"))??;
-        events.close().await;
+        events.close().await?;
         Ok(record)
     })
 }
@@ -2230,9 +2231,9 @@ fn leakage_telemetry_records(
     let sources = network
         .all_peers()
         .map(|peer| {
-            let status = peer.client().client().get_status()?;
+            let status = peer.client().status().get()?;
             let status = norito::encode_canonical(&status)?;
-            let metrics_url = peer.client().client().torii_url.join("metrics")?;
+            let metrics_url = peer.client().client().endpoint().join("metrics")?;
             let metrics = runtime.block_on(async {
                 let response = reqwest::get(metrics_url)
                     .await
@@ -2393,7 +2394,7 @@ fn collect_process_inventory(
             pid,
             executable_sha256: actual_sha,
             revision: revision.to_owned(),
-            health_observed: peer.is_running() && peer.client().client().get_status().is_ok(),
+            health_observed: peer.is_running() && peer.client().status().get().is_ok(),
         });
     }
     ensure!(
@@ -2556,7 +2557,7 @@ fn smoke_process_inventory(
         ensure!(
             pids.insert(pid)
                 && peers.insert(peer.id().clone())
-                && peer.client().client().get_status().is_ok()
+                && peer.client().status().get().is_ok()
                 && sha256_regular_file(&executable_for_pid(pid)?)? == expected_sha,
             "smoke process inventory has duplicate, unhealthy or substituted validators"
         );
@@ -2807,29 +2808,29 @@ fn read_owner_only_bounded(path: &Path) -> Result<Vec<u8>> {
 fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     let client = client.client();
     let domain = iroha::data_model::domain::DomainId::try_new("default", "universal")?;
-    let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair.private_key().clone());
+    let private_key = iroha_crypto::ExposedPrivateKey(client.key_pair().private_key().clone());
     let mut root = Table::new();
     root.insert(
         "chain".to_owned(),
-        TomlValue::String(client.chain.to_string()),
+        TomlValue::String(client.chain().to_string()),
     );
     root.insert(
         "network_id".to_owned(),
-        TomlValue::String(client.network_id.to_string()),
+        TomlValue::String(client.network_id().to_string()),
     );
     root.insert(
         "torii_url".to_owned(),
-        TomlValue::String(client.torii_url.to_string()),
+        TomlValue::String(client.endpoint().to_string()),
     );
     root.insert(
         "torii_request_timeout_ms".to_owned(),
-        TomlValue::Integer(i64::try_from(client.torii_request_timeout.as_millis())?),
+        TomlValue::Integer(i64::try_from(client.torii_request_timeout().as_millis())?),
     );
     let mut account = Table::new();
     account.insert("domain".to_owned(), TomlValue::String(domain.to_string()));
     account.insert(
         "public_key".to_owned(),
-        TomlValue::String(client.key_pair.public_key().to_string()),
+        TomlValue::String(client.key_pair().public_key().to_string()),
     );
     account.insert(
         "private_key".to_owned(),
@@ -2841,7 +2842,7 @@ fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
         "time_to_live_ms".to_owned(),
         TomlValue::Integer(i64::try_from(
             client
-                .transaction_ttl
+                .transaction_ttl()
                 .unwrap_or(Duration::from_secs(60))
                 .as_millis(),
         )?),
@@ -2849,12 +2850,12 @@ fn coordinator_client_config(client: &Client) -> Result<Vec<u8>> {
     transaction.insert(
         "status_timeout_ms".to_owned(),
         TomlValue::Integer(i64::try_from(
-            client.transaction_status_timeout.as_millis(),
+            client.transaction_status_timeout().as_millis(),
         )?),
     );
     transaction.insert(
         "nonce".to_owned(),
-        TomlValue::Boolean(client.add_transaction_nonce),
+        TomlValue::Boolean(client.add_transaction_nonce()),
     );
     root.insert("transaction".to_owned(), TomlValue::Table(transaction));
     Ok(toml::to_string(&root)?.into_bytes())
@@ -4742,17 +4743,24 @@ fn prepare_fault_bundle(
         .client()
         .get_privacy_capabilities()?
         .committed_height;
-    let authority_context_height = current_height
-        .checked_add(1)
-        .ok_or_else(|| eyre!("fault authority height overflow"))?;
-    let expiry_height = authority_context_height
+    let expiry_height = current_height
         .checked_add(FAULT_BUNDLE_EXPIRY_BLOCKS)
         .ok_or_else(|| eyre!("fault expiry height overflow"))?;
     let governed = fault_governed_legs(
         request,
         bundle_ordinal,
         routes,
-        authority_context_height,
+        current_height,
+        expiry_height,
+    )?;
+    let private_data = (0..routes.len())
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    let authority_context_height = activate_governed_private_pools(
+        sponsor,
+        network.network_id(),
+        &governed,
+        &private_data,
         expiry_height,
     )?;
     let manifest = proof_manifest(
@@ -4769,37 +4777,6 @@ fn prepare_fault_bundle(
             prepare_leg(ordinal, leg, &manifest, committee.authority.digest()?)
         })
         .collect::<Result<Vec<_>>>()?;
-    let activations = prepared
-        .iter()
-        .map(|leg| {
-            ActivatePrivateSettlementPoolV1::from_restricted(
-                &leg.governed.governance,
-                leg.initial_commitments.to_vec(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let activation = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                activations,
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation)
-        .wrap_err("activate fault-campaign private pools")?;
-    ensure!(
-        sponsor
-            .client()
-            .get_privacy_capabilities()?
-            .committed_height
-            == authority_context_height,
-        "fault pool activation did not land at the bound authority height"
-    );
     let materials = provisional_materials(manifest.clone(), &prepared, committees)?;
     let authorities = committees
         .iter()
@@ -5223,7 +5200,7 @@ fn restart_quorum_progress_peer(
         .block_on(stopped.peer.process_id())
         .ok_or_else(|| eyre!("quorum-progress restart has no live PID"))?;
     ensure!(
-        after_pid != stopped.before_pid && stopped.peer.client().client().get_status().is_ok(),
+        after_pid != stopped.before_pid && stopped.peer.client().status().get().is_ok(),
         "quorum-progress restart did not produce a healthy new process"
     );
     let acknowledgement = FaultRestartAckV1 {
@@ -5280,7 +5257,7 @@ fn restart_peer_with_evidence(
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("restarted target has no live PID"))?;
     ensure!(
-        after_pid != before_pid && peer.client().client().get_status().is_ok(),
+        after_pid != before_pid && peer.client().status().get().is_ok(),
         "validator restart did not produce a healthy new process"
     );
     let acknowledgement = FaultRestartAckV1 {
@@ -5389,7 +5366,7 @@ fn prepare_fault_bundle_with_normalization(
         alternate_first.ok_or_else(|| eyre!("fault normalization lacks leg 0"))?;
     let first_barrier = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         first_certificates.clone(),
     )?;
@@ -5397,7 +5374,7 @@ fn prepare_fault_bundle_with_normalization(
     second_certificates[0] = alternate_first.clone();
     let second_barrier = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         second_certificates,
     )?;
@@ -5413,7 +5390,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_certificates[0] = changed_body;
     let changed_body_rejected = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         changed_certificates,
     )
@@ -5424,7 +5401,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_index_certificates[0] = changed_index;
     let authority_index_binding_verified = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         changed_index_certificates,
     )
@@ -5435,7 +5412,7 @@ fn prepare_fault_bundle_with_normalization(
     changed_signed_certificates[0] = changed_signed_body;
     let signed_body_binding_verified = SdkClient::build_private_settlement_prepare_barrier_v1(
         bundle.manifest.clone(),
-        bundle.authorities.clone(),
+        &bundle.authorities,
         bundle.deltas.clone(),
         changed_signed_certificates,
     )
@@ -5613,8 +5590,8 @@ fn exercise_consensus_carrier_hold(
 ) -> Result<(Vec<FaultControlOccurrenceV1>, FaultStateSnapshotV1)> {
     observer.begin_phase("consensus_carrier_hold", &[], false)?;
     let height = sponsor
-        .client()
-        .get_status()?
+        .status()
+        .get()?
         .blocks
         .checked_add(1)
         .ok_or_else(|| eyre!("carrier control height overflow"))?;
@@ -5805,7 +5782,7 @@ where
         .block_on(peer.process_id())
         .ok_or_else(|| eyre!("recovered crash target has no PID"))?;
     ensure!(
-        before_pid != after_pid && peer.client().client().get_status().is_ok(),
+        before_pid != after_pid && peer.client().status().get().is_ok(),
         "crash recovery did not produce a healthy new process"
     );
     let restart_type = if peer_index < VALIDATORS_PER_LANE {
@@ -8143,7 +8120,7 @@ fn verify_committee_proof_views(
             // compatibility state and must not be retargeted by changing their public fields.
             let client = peer.client_for(
                 sponsor.account_client().authority(),
-                sponsor.client().key_pair.private_key().clone(),
+                sponsor.client().key_pair().private_key().clone(),
             );
             ensure!(
                 client.account_client().network_id() == sponsor.account_client().network_id()
@@ -8234,8 +8211,7 @@ fn run_real_process_leakage_campaign(
         collect_process_inventory(&network, &runtime, shape, &request.commit, &coordinator)?;
     let sponsor = network.client();
     let activated_height = activate_ivm_private_note(&sponsor)?;
-    let authority_context_height = activated_height + 1;
-    let expiry_height = authority_context_height + 1_000;
+    let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(routes.len() == request.participants, "route count mismatch");
     let committees = committees_from_network(&network, shape, &routes)?;
@@ -8246,9 +8222,20 @@ fn run_real_process_leakage_campaign(
     asset_definition_ids[0] = canary_asset;
     let governed = governed_legs_with_asset_definitions(
         &routes,
-        authority_context_height,
+        activated_height,
         expiry_height,
         Some(&asset_definition_ids),
+    )?;
+    let mut private_data = (0..routes.len())
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    private_data[0] = private_leg_zero.clone();
+    let authority_context_height = activate_governed_private_pools(
+        &sponsor,
+        network.network_id(),
+        &governed,
+        &private_data,
+        expiry_height,
     )?;
     let manifest = proof_manifest(
         network.network_id(),
@@ -8292,37 +8279,6 @@ fn run_real_process_leakage_campaign(
             }
         })
         .collect::<Result<Vec<_>>>()?;
-    let activations = prepared
-        .iter()
-        .map(|leg| {
-            ActivatePrivateSettlementPoolV1::from_restricted(
-                &leg.governed.governance,
-                leg.initial_commitments.to_vec(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                activations,
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation_transaction)
-        .wrap_err("activate governed leakage pools")?;
-    ensure!(
-        sponsor
-            .client()
-            .get_privacy_capabilities()?
-            .committed_height
-            == authority_context_height,
-        "leakage pool activation did not land at the authority context"
-    );
 
     let before = wait_for_converged_fault_state_snapshot(&network, "leakage-before")?;
     let observer = FaultContinuousObserverV1::start_retaining_evidence(
@@ -8887,24 +8843,34 @@ fn run_real_process_private_benchmark(
     let pids = inventory.iter().map(|row| row.pid).collect::<Vec<_>>();
     let sponsor = network.client();
     let activated_height = activate_ivm_private_note(&sponsor)?;
-    let authority_context_height = activated_height + 1;
-    let expiry_height = authority_context_height + 1_000;
+    let expiry_height = activated_height + 1_000;
     let routes = routes_from_network(&network, shape)?;
     ensure!(routes.len() == request.participants, "route count mismatch");
     let committees = committees_from_network(&network, shape, &routes)?;
-    let governed = governed_legs(&routes, authority_context_height, expiry_height)?;
-    let manifest = proof_manifest(
-        network.network_id(),
-        authority_context_height,
-        expiry_height,
-        &governed,
-    )?;
+    let governed = governed_legs(&routes, activated_height, expiry_height)?;
 
     let process_before = sample_process_resources(&pids)?;
     let sampler = ProcessResourceSampler::start(pids.clone(), process_before.rss_bytes)?;
     let network_before = loopback_bytes()?;
     let storage_before = network_storage_bytes(&network)?;
     let end_to_end_started = Instant::now();
+
+    let private_data = (0..routes.len())
+        .map(default_private_settlement_leg_data)
+        .collect::<Vec<_>>();
+    let authority_context_height = activate_governed_private_pools(
+        &sponsor,
+        network.network_id(),
+        &governed,
+        &private_data,
+        expiry_height,
+    )?;
+    let manifest = proof_manifest(
+        network.network_id(),
+        authority_context_height,
+        expiry_height,
+        &governed,
+    )?;
 
     let proof_started = Instant::now();
     let prepared = governed
@@ -8922,37 +8888,6 @@ fn run_real_process_private_benchmark(
             .ok_or_else(|| eyre!("proof byte total overflow"))
     })?;
 
-    let activations = prepared
-        .iter()
-        .map(|leg| {
-            ActivatePrivateSettlementPoolV1::from_restricted(
-                &leg.governed.governance,
-                leg.initial_commitments.to_vec(),
-            )
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let activation_transaction = {
-        let account = sponsor.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                activations,
-                bounded_nexus_fee(),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .wrap_err("build integration-test transaction")?;
-    sponsor
-        .submit_transaction_and_wait(&activation_transaction)
-        .wrap_err("activate governed private pools")?;
-    ensure!(
-        sponsor
-            .client()
-            .get_privacy_capabilities()?
-            .committed_height
-            == authority_context_height,
-        "pool activation did not land at the manifest authority context"
-    );
     let atomicity_before = wait_for_converged_fault_state_snapshot(&network, "benchmark-before")?;
     let atomicity_observer = FaultContinuousObserverV1::start(
         &network,

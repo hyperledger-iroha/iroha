@@ -68,7 +68,11 @@ internal static class ToriiContractManifestJson
         "Option",
         "Result",
         "List",
+        "ListError",
+        "NumericError",
         "StateMap",
+        "StateCursor",
+        "StatePage",
         "Secret",
         "AccountView",
         "AssetView",
@@ -82,8 +86,12 @@ internal static class ToriiContractManifestJson
         "SoracloudRequest",
         "SoracloudResponse",
         "state_map_get",
+        "__kotodama_state_page",
+        "__kotodama_state_take",
         "__kotodama_list_len",
         "__kotodama_list_get",
+        "__kotodama_list_set",
+        "__kotodama_list_push",
         "__kotodama_list_try_set",
         "__kotodama_list_try_push",
         "__kotodama_list_pop",
@@ -91,6 +99,8 @@ internal static class ToriiContractManifestJson
         "__kotodama_list_take",
         "__kotodama_list_enumerate",
         "__kotodama_decimal_div_round",
+        "__kotodama_decimal_mul_div_round",
+        "__kotodama_quantity_mul_div_round",
         "__kotodama_quantity_div_round",
         "__kotodama_quantity_ratio_round",
         "__kotodama_decimal_to_int_trunc",
@@ -149,7 +159,7 @@ internal static class ToriiContractManifestJson
     };
     private static readonly HashSet<string> DynamicAccessBoundKinds = new(StringComparer.Ordinal)
     {
-        "range",
+        "page",
         "take",
     };
     private const uint MaxDynamicAccessKeys = 64;
@@ -268,7 +278,7 @@ internal static class ToriiContractManifestJson
             "access_set_hints",
             "entrypoints",
             "states",
-            "error_codes",
+            "error_types",
             "kotoba",
             "provenance");
 
@@ -280,7 +290,7 @@ internal static class ToriiContractManifestJson
 
         var entrypoints = OptionalObjectList(root, "entrypoints", $"{context}.entrypoints", ParseEntrypoint);
         var states = OptionalObjectList(root, "states", $"{context}.states", ParseState);
-        var errorCodes = OptionalObjectList(root, "error_codes", $"{context}.error_codes", ParseErrorCode);
+        var errorTypes = OptionalObjectList(root, "error_types", $"{context}.error_types", ParseErrorType);
         var kotoba = OptionalObjectList(root, "kotoba", $"{context}.kotoba", ParseKotobaEntry);
         var accessSetHints = OptionalObject(root, "access_set_hints", $"{context}.access_set_hints")
             is { } access ? ParseAccessSetHints(access, $"{context}.access_set_hints") : null;
@@ -289,7 +299,7 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }
-        ValidateManifestCollections(entrypoints, states, errorCodes, kotoba, context);
+        ValidateManifestCollections(entrypoints, states, errorTypes, kotoba, context);
         ValidateDynamicAccessHintStateMaps(accessSetHints, states, context);
 
         return new ToriiContractManifest
@@ -305,7 +315,7 @@ internal static class ToriiContractManifestJson
             AccessSetHints = accessSetHints,
             Entrypoints = entrypoints,
             States = states,
-            ErrorCodes = errorCodes,
+            ErrorTypes = errorTypes,
             Kotoba = kotoba,
             Provenance = OptionalObject(root, "provenance", $"{context}.provenance")
                 is { } provenance ? ParseProvenance(provenance, $"{context}.provenance") : null,
@@ -350,7 +360,7 @@ internal static class ToriiContractManifestJson
         var boundKind = RequiredExactString(root, "bound_kind", $"{context}.bound_kind");
         if (!DynamicAccessBoundKinds.Contains(boundKind))
         {
-            throw new JsonException($"{context}.bound_kind must be take or range.");
+            throw new JsonException($"{context}.bound_kind must be take or page.");
         }
         var maxKeys = RequiredUInt32(root, "max_keys", $"{context}.max_keys");
         if (maxKeys is < 1 or > MaxDynamicAccessKeys)
@@ -402,13 +412,12 @@ internal static class ToriiContractManifestJson
         var returnType = OptionalExactString(root, "return_type", $"{context}.return_type");
         var returnSchema = OptionalObject(root, "return_schema", $"{context}.return_schema")
             is { } returns ? ParseValueType(returns, $"{context}.return_schema") : null;
-        if ((returnType is null) != (returnSchema is null)
-            || (returnSchema is not null
-                && (returnSchema.WordCount > MaxBoundaryWords
+        if (returnType is null || returnSchema is null
+            || (returnSchema.WordCount > MaxBoundaryWords
                     || !string.Equals(
                         returnSchema.CanonicalTypeName,
                         returnType,
-                        StringComparison.Ordinal))))
+                        StringComparison.Ordinal)))
         {
             throw new JsonException($"{context} return_type and return_schema must describe the same exact V1 type.");
         }
@@ -550,6 +559,17 @@ internal static class ToriiContractManifestJson
             },
             "Tuple" => ParseTupleNode(root, context),
             "Option" => ParseNullNode(root, context, ToriiEntrypointValueTypeNodeKindV1.Option),
+            "Unit" => ParseNullNode(root, context, ToriiEntrypointValueTypeNodeKindV1.Unit),
+            "Error" => new ToriiEntrypointValueTypeNodeV1
+            {
+                Kind = ToriiEntrypointValueTypeNodeKindV1.Error,
+                ErrorValue = ParseErrorType(RequiredObject(root, "value", $"{context}.value"), $"{context}.value"),
+            },
+            "StateCursor" => new ToriiEntrypointValueTypeNodeV1
+            {
+                Kind = ToriiEntrypointValueTypeNodeKindV1.StateCursor,
+                CursorKeyKind = ParseLeafKind(RequiredObject(root, "value", $"{context}.value"), $"{context}.value"),
+            },
             "Result" => ParseNullNode(root, context, ToriiEntrypointValueTypeNodeKindV1.Result),
             "List" => new ToriiEntrypointValueTypeNodeV1
             {
@@ -680,7 +700,10 @@ internal static class ToriiContractManifestJson
                 ToriiEntrypointValueTypeNodeKindV1.Result or
                 ToriiEntrypointValueTypeNodeKindV1.List;
             if (!suppressWords
-                && (isHandle || node.Kind == ToriiEntrypointValueTypeNodeKindV1.Leaf))
+                && (isHandle || node.Kind is ToriiEntrypointValueTypeNodeKindV1.Leaf
+                    or ToriiEntrypointValueTypeNodeKindV1.Unit
+                    or ToriiEntrypointValueTypeNodeKindV1.Error
+                    or ToriiEntrypointValueTypeNodeKindV1.StateCursor))
             {
                 wordCount = checked(wordCount + 1);
             }
@@ -745,6 +768,21 @@ internal static class ToriiContractManifestJson
                         }
                         result = new RenderedType($"QueryPage<{viewName}>", null, null, null);
                     }
+                    else if (product.Name == "StatePage")
+                    {
+                        var pair = children.Count == 2 ? children[0].ListElement?.TupleChildren : null;
+                        if (!product.Fields.SequenceEqual(new[] { "items", "next" }, StringComparer.Ordinal)
+                            || children.Count != 2 || children[0].ListCapacity is null
+                            || pair is null || pair.Count != 2 || pair[0].LeafKind is null
+                            || !StateMapKeyTypeNames.Contains(pair[0].TypeName)
+                            || children[1].OptionElement?.CursorKeyKind != pair[0].LeafKind)
+                        {
+                            throw new JsonException($"{context} contains a forged StatePage schema.");
+                        }
+                        result = new RenderedType(
+                            $"StatePage<{pair[0].TypeName}, {pair[1].TypeName}, {children[0].ListCapacity}>",
+                            null, null, null);
+                    }
                     else if (IsCoreQueryViewName(product.Name))
                     {
                         if (!IsExactCoreQueryView(product, childTypeNames))
@@ -764,10 +802,11 @@ internal static class ToriiContractManifestJson
                         $"({string.Join(", ", children.Select(child => child.TypeName))})",
                         null,
                         null,
-                        null);
+                        null) { TupleChildren = children };
                     break;
                 case ToriiEntrypointValueTypeNodeKindV1.Option:
-                    result = new RenderedType($"Option<{children[0].TypeName}>", null, null, null);
+                    result = new RenderedType($"Option<{children[0].TypeName}>", null, null, null)
+                        { OptionElement = children[0] };
                     break;
                 case ToriiEntrypointValueTypeNodeKindV1.Result:
                     result = new RenderedType(
@@ -782,14 +821,25 @@ internal static class ToriiContractManifestJson
                         $"List<{children[0].TypeName}, {list.Capacity}>",
                         null,
                         list.Capacity,
-                        children[0].CoreQueryViewName);
+                        children[0].CoreQueryViewName) { ListElement = children[0] };
                     break;
                 case ToriiEntrypointValueTypeNodeKindV1.Leaf:
                     result = new RenderedType(
                         CanonicalLeafName(node.LeafKind!.Value),
                         null,
                         null,
-                        null);
+                        null) { LeafKind = node.LeafKind };
+                    break;
+                case ToriiEntrypointValueTypeNodeKindV1.Unit:
+                    result = new RenderedType("()", null, null, null);
+                    break;
+                case ToriiEntrypointValueTypeNodeKindV1.Error:
+                    result = new RenderedType(node.ErrorValue!.Identity, null, null, null);
+                    break;
+                case ToriiEntrypointValueTypeNodeKindV1.StateCursor:
+                    result = new RenderedType(
+                        $"StateCursor<{CanonicalLeafName(node.CursorKeyKind!.Value)}>", null, null, null)
+                        { CursorKeyKind = node.CursorKeyKind };
                     break;
                 default:
                     throw new JsonException($"{context} contains an unsupported node.");
@@ -829,6 +879,7 @@ internal static class ToriiContractManifestJson
                 && node.ListValue is null
                 && node.LeafKind is null,
             ToriiEntrypointValueTypeNodeKindV1.Option or
+                ToriiEntrypointValueTypeNodeKindV1.Unit or
                 ToriiEntrypointValueTypeNodeKindV1.Result =>
                 node.StructValue is null
                 && node.TupleArity is null
@@ -844,9 +895,19 @@ internal static class ToriiContractManifestJson
                 && node.TupleArity is null
                 && node.ListValue is null
                 && node.LeafKind is not null,
+            ToriiEntrypointValueTypeNodeKindV1.Error =>
+                node.StructValue is null && node.TupleArity is null
+                && node.ListValue is null && node.LeafKind is null
+                && node.ErrorValue is not null,
+            ToriiEntrypointValueTypeNodeKindV1.StateCursor =>
+                node.StructValue is null && node.TupleArity is null
+                && node.ListValue is null && node.LeafKind is null
+                && node.CursorKeyKind is not null,
             _ => false,
         };
-        if (!exactPayload)
+        if (!exactPayload
+            || (node.Kind != ToriiEntrypointValueTypeNodeKindV1.Error && node.ErrorValue is not null)
+            || (node.Kind != ToriiEntrypointValueTypeNodeKindV1.StateCursor && node.CursorKeyKind is not null))
         {
             throw new JsonException($"{context} contains inconsistent node metadata.");
         }
@@ -880,6 +941,18 @@ internal static class ToriiContractManifestJson
             case ToriiEntrypointValueTypeNodeKindV1.Result:
                 return 2;
             case ToriiEntrypointValueTypeNodeKindV1.Leaf:
+                _ = CanonicalLeafName(node.LeafKind!.Value);
+                return 0;
+            case ToriiEntrypointValueTypeNodeKindV1.Error:
+                ValidateErrorType(node.ErrorValue!, context);
+                return 0;
+            case ToriiEntrypointValueTypeNodeKindV1.StateCursor:
+                if (!StateMapKeyTypeNames.Contains(CanonicalLeafName(node.CursorKeyKind!.Value)))
+                {
+                    throw new JsonException($"{context} cursor key must be a canonical state-map key.");
+                }
+                return 0;
+            case ToriiEntrypointValueTypeNodeKindV1.Unit:
                 return 0;
             default:
                 throw new JsonException($"{context} contains an unsupported node.");
@@ -1045,10 +1118,6 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.name must be a canonical Kotodama declaration identifier.");
         }
-        if (!IsCanonicalStateTypeName(typeName))
-        {
-            throw new JsonException($"{context}.type_name must be a canonical Kotodama V1 state type.");
-        }
         return new ToriiContractStateDescriptor
         {
             Name = name,
@@ -1056,30 +1125,57 @@ internal static class ToriiContractManifestJson
         };
     }
 
-    private static ToriiContractErrorCodeDescriptor ParseErrorCode(JsonObject root, string context)
+    private static ToriiContractErrorTypeDescriptor ParseErrorType(JsonObject root, string context)
     {
-        EnsureOnly(root, context, "namespace", "name", "code");
-        var namespaceName = RequiredExactString(root, "namespace", $"{context}.namespace");
-        var name = RequiredExactString(root, "name", $"{context}.name");
-        if (!IsCanonicalTypeDeclarationIdentifier(namespaceName))
+        EnsureOnly(root, context, "identity", "variants");
+        var descriptor = new ToriiContractErrorTypeDescriptor
         {
-            throw new JsonException($"{context}.namespace must be a canonical Kotodama type declaration.");
-        }
-        if (!IsCanonicalBoundaryIdentifier(name))
-        {
-            throw new JsonException($"{context}.name must be a canonical Kotodama identifier.");
-        }
-        var code = RequiredUInt32(root, "code", $"{context}.code");
-        if (code == 0)
-        {
-            throw new JsonException($"{context}.code must be a non-zero u32.");
-        }
-        return new ToriiContractErrorCodeDescriptor
-        {
-            Namespace = namespaceName,
-            Name = name,
-            Code = code,
+            Identity = RequiredExactString(root, "identity", $"{context}.identity"),
+            Variants = RequiredObjectList(root, "variants", $"{context}.variants", ParseErrorVariant),
         };
+        ValidateErrorType(descriptor, context);
+        return descriptor;
+    }
+
+    private static ToriiContractErrorVariantDescriptor ParseErrorVariant(JsonObject root, string context)
+    {
+        EnsureOnly(root, context, "name", "code");
+        return new ToriiContractErrorVariantDescriptor
+        {
+            Name = RequiredExactString(root, "name", $"{context}.name"),
+            Code = RequiredUInt32(root, "code", $"{context}.code"),
+        };
+    }
+
+    private static void ValidateErrorType(ToriiContractErrorTypeDescriptor value, string context)
+    {
+        if (string.IsNullOrEmpty(value.Identity) || Encoding.UTF8.GetByteCount(value.Identity) > 1024
+            || value.Identity.Contains("__kotodama_link_", StringComparison.Ordinal)
+            || value.Identity.EnumerateRunes().Any(character => !Rune.IsLetterOrDigit(character)
+                && !(character.IsAscii && "_:/@.-".Contains((char)character.Value))))
+        {
+            throw new JsonException($"{context}.identity must be an exact bounded nominal identity.");
+        }
+        if (value.Variants.Count is < 1 or > 256)
+        {
+            throw new JsonException($"{context}.variants must contain 1..256 variants.");
+        }
+        uint previous = 0;
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var variant in value.Variants)
+        {
+            var runes = variant.Name.EnumerateRunes().ToArray();
+            var unicodeName = runes.Any(character => !character.IsAscii)
+                && runes.Length > 0
+                && (Rune.IsLetter(runes[0]) || runes[0].Value == '_')
+                && runes.All(character => Rune.IsLetterOrDigit(character) || character.Value == '_');
+            if ((!IsCanonicalBoundaryIdentifier(variant.Name) && !unicodeName)
+                || variant.Code <= previous || !names.Add(variant.Name))
+            {
+                throw new JsonException($"{context}.variants must have unique names and increasing nonzero u32 codes.");
+            }
+            previous = variant.Code;
+        }
     }
 
     private static ToriiContractKotobaTranslationEntry ParseKotobaEntry(JsonObject root, string context)
@@ -1117,7 +1213,7 @@ internal static class ToriiContractManifestJson
     private static void ValidateManifestCollections(
         IReadOnlyList<ToriiContractEntrypointDescriptor>? entrypoints,
         IReadOnlyList<ToriiContractStateDescriptor>? states,
-        IReadOnlyList<ToriiContractErrorCodeDescriptor>? errorCodes,
+        IReadOnlyList<ToriiContractErrorTypeDescriptor>? errorTypes,
         IReadOnlyList<ToriiContractKotobaTranslationEntry>? kotoba,
         string context)
     {
@@ -1154,12 +1250,39 @@ internal static class ToriiContractManifestJson
         {
             RequireUnique(states.Select(value => value.Name), $"{context}.states");
         }
-        if (errorCodes is not null)
+        var catalog = new Dictionary<string, ToriiContractErrorTypeDescriptor>(StringComparer.Ordinal);
+        if (errorTypes?.Count > 256)
         {
-            RequireUnique(
-                errorCodes.Select(value => $"{value.Namespace}::{value.Name}"),
-                $"{context}.error_codes");
-            RequireUnique(errorCodes.Select(value => value.Code.ToString(CultureInfo.InvariantCulture)), $"{context}.error_codes.code");
+            throw new JsonException($"{context}.error_types must contain at most 256 identities.");
+        }
+        foreach (var descriptor in errorTypes ?? Array.Empty<ToriiContractErrorTypeDescriptor>())
+        {
+            ValidateErrorType(descriptor, $"{context}.error_types");
+            if (!catalog.TryAdd(descriptor.Identity, descriptor))
+            {
+                throw new JsonException($"{context}.error_types must have unique nominal identities.");
+            }
+        }
+        foreach (var entrypoint in entrypoints ?? Array.Empty<ToriiContractEntrypointDescriptor>())
+        {
+            var schemas = entrypoint.ArgumentSchema?.Fields.Select(field => field.ValueType).ToList()
+                ?? new List<ToriiEntrypointValueTypeV1>();
+            if (entrypoint.ReturnSchema is { } returnSchema) schemas.Add(returnSchema);
+            foreach (var node in schemas.SelectMany(schema => schema.Nodes))
+            {
+                if (node.ErrorValue is { } error && (!catalog.TryGetValue(error.Identity, out var expected)
+                    || !expected.Variants.SequenceEqual(error.Variants)))
+                {
+                    throw new JsonException($"{context} Error schema must exactly match its error_types catalog descriptor.");
+                }
+            }
+        }
+        foreach (var state in states ?? Array.Empty<ToriiContractStateDescriptor>())
+        {
+            if (!IsCanonicalStateTypeName(state.TypeName, catalog.Keys))
+            {
+                throw new JsonException($"{context}.states.type_name must be a canonical Kotodama V1 state type using declared nominal errors.");
+            }
         }
         if (kotoba is not null)
         {
@@ -1297,7 +1420,7 @@ internal static class ToriiContractManifestJson
             ["access_set_hints"] = value.AccessSetHints is null ? null : BuildAccessSetHints(value.AccessSetHints, $"{context}.access_set_hints"),
             ["entrypoints"] = BuildOptionalArray(value.Entrypoints, (item, itemContext) => BuildEntrypoint(item, itemContext), $"{context}.entrypoints"),
             ["states"] = BuildOptionalArray(value.States, BuildState, $"{context}.states"),
-            ["error_codes"] = BuildOptionalArray(value.ErrorCodes, BuildErrorCode, $"{context}.error_codes"),
+            ["error_types"] = BuildOptionalArray(value.ErrorTypes, BuildErrorType, $"{context}.error_types"),
             ["kotoba"] = BuildOptionalArray(value.Kotoba, BuildKotobaEntry, $"{context}.kotoba"),
             ["provenance"] = value.Provenance is null ? null : BuildProvenance(value.Provenance, $"{context}.provenance"),
         };
@@ -1311,7 +1434,7 @@ internal static class ToriiContractManifestJson
         {
             throw new JsonException($"{context}.features_bitmap contains unsupported Kotodama V1 bits.");
         }
-        ValidateManifestCollections(value.Entrypoints, value.States, value.ErrorCodes, value.Kotoba, context);
+        ValidateManifestCollections(value.Entrypoints, value.States, value.ErrorTypes, value.Kotoba, context);
         ValidateDynamicAccessHintStateMaps(value.AccessSetHints, value.States, context);
         return root;
     }
@@ -1344,7 +1467,7 @@ internal static class ToriiContractManifestJson
         var boundKind = RequireExact(value.BoundKind, $"{context}.bound_kind");
         if (!DynamicAccessBoundKinds.Contains(boundKind))
         {
-            throw new JsonException($"{context}.bound_kind must be take or range.");
+            throw new JsonException($"{context}.bound_kind must be take or page.");
         }
         if (value.MaxKeys is < 1 or > MaxDynamicAccessKeys)
         {
@@ -1367,10 +1490,9 @@ internal static class ToriiContractManifestJson
         }
         ValidateLifecycleName(value.Kind, value.Name, context);
         ValidateExactArguments(value.Parameters, value.ArgumentSchema, context);
-        if ((value.ReturnType is null) != (value.ReturnSchema is null)
-            || (value.ReturnSchema is not null
-                && (value.ReturnSchema.WordCount > MaxBoundaryWords
-                    || value.ReturnSchema.CanonicalTypeName != value.ReturnType)))
+        if (value.ReturnType is null || value.ReturnSchema is null
+            || value.ReturnSchema.WordCount > MaxBoundaryWords
+            || value.ReturnSchema.CanonicalTypeName != value.ReturnType)
         {
             throw new JsonException($"{context} return_type and return_schema must match.");
         }
@@ -1475,7 +1597,14 @@ internal static class ToriiContractManifestJson
             ToriiEntrypointValueTypeNodeKindV1.Tuple => value.TupleArity is >= 2
                 ? JsonValue.Create(value.TupleArity.Value)
                 : throw new JsonException($"{context} tuple arity must be at least 2."),
-            ToriiEntrypointValueTypeNodeKindV1.Option or ToriiEntrypointValueTypeNodeKindV1.Result => null,
+            ToriiEntrypointValueTypeNodeKindV1.Option or ToriiEntrypointValueTypeNodeKindV1.Result
+                or ToriiEntrypointValueTypeNodeKindV1.Unit => null,
+            ToriiEntrypointValueTypeNodeKindV1.Error => BuildErrorType(value.ErrorValue!, $"{context}.value"),
+            ToriiEntrypointValueTypeNodeKindV1.StateCursor => new JsonObject
+            {
+                ["kind"] = value.CursorKeyKind!.Value.ToString(),
+                ["value"] = null,
+            },
             ToriiEntrypointValueTypeNodeKindV1.List => BuildListNode(
                 value.ListValue ?? throw new JsonException($"{context} list metadata is required."),
                 $"{context}.value"),
@@ -1575,10 +1704,6 @@ internal static class ToriiContractManifestJson
             throw new JsonException($"{context}.name must be a canonical Kotodama declaration identifier.");
         }
         var typeName = RequireExact(value.TypeName, $"{context}.type_name");
-        if (!IsCanonicalStateTypeName(typeName))
-        {
-            throw new JsonException($"{context}.type_name must be a canonical Kotodama V1 state type.");
-        }
         return new JsonObject
         {
             ["name"] = value.Name,
@@ -1586,25 +1711,17 @@ internal static class ToriiContractManifestJson
         };
     }
 
-    private static JsonObject BuildErrorCode(ToriiContractErrorCodeDescriptor value, string context)
+    private static JsonObject BuildErrorType(ToriiContractErrorTypeDescriptor value, string context)
     {
-        if (!IsCanonicalTypeDeclarationIdentifier(value.Namespace))
-        {
-            throw new JsonException($"{context}.namespace must be a canonical Kotodama type declaration.");
-        }
-        if (!IsCanonicalBoundaryIdentifier(value.Name))
-        {
-            throw new JsonException($"{context}.name must be a canonical Kotodama identifier.");
-        }
-        if (value.Code == 0)
-        {
-            throw new JsonException($"{context}.code must be a non-zero u32.");
-        }
+        ValidateErrorType(value, context);
         return new JsonObject
         {
-            ["namespace"] = value.Namespace,
-            ["name"] = value.Name,
-            ["code"] = value.Code,
+            ["identity"] = value.Identity,
+            ["variants"] = BuildArray(value.Variants, (variant, _) => new JsonObject
+            {
+                ["name"] = variant.Name,
+                ["code"] = variant.Code,
+            }, $"{context}.variants"),
         };
     }
 
@@ -2041,7 +2158,35 @@ internal static class ToriiContractManifestJson
             && !RetiredNumericTypeNames.Contains(value);
     }
 
-    private static bool IsCanonicalStateTypeName(string value)
+    private static bool IsCanonicalQualifiedStructIdentifier(string value)
+    {
+        if (value.Length > 1024 || value.Any(character => character > 127)
+            || value.Contains("__kotodama_link_", StringComparison.Ordinal))
+        {
+            return false;
+        }
+        var parts = value.Split("::", StringSplitOptions.None);
+        if (parts.Length != 3
+            || !IsCanonicalTypeDeclarationIdentifier(parts[1])
+            || !IsCanonicalTypeDeclarationIdentifier(parts[2]))
+        {
+            return false;
+        }
+        static bool Component(string component) => component.Length != 0
+            && (IsAsciiLetter(component[0]) || char.IsAsciiDigit(component[0]) || component[0] == '_')
+            && component.All(character => IsAsciiLetter(character) || char.IsAsciiDigit(character)
+                || character is '_' or '.' or '-');
+        var package = parts[0].Split('@');
+        return package.Length is 1 or 2
+            && package[0].Split('/').All(Component)
+            && (package.Length == 1 || Component(package[1]));
+    }
+
+    private static bool IsCanonicalUserStructIdentifier(string value) =>
+        value.Length <= 1024
+            && (IsCanonicalTypeDeclarationIdentifier(value) || IsCanonicalQualifiedStructIdentifier(value));
+
+    private static bool IsCanonicalStateTypeName(string value, IEnumerable<string> errorIdentities)
     {
         if (value.Length == 0)
         {
@@ -2050,6 +2195,7 @@ internal static class ToriiContractManifestJson
 
         var cursor = 0;
         var nodes = 0;
+        var errors = errorIdentities.OrderByDescending(identity => identity.Length).ToArray();
 
         bool Consume(string literal)
         {
@@ -2081,6 +2227,21 @@ internal static class ToriiContractManifestJson
             return value[start..cursor];
         }
 
+        string? TypeIdentifier()
+        {
+            var start = cursor;
+            while (cursor < value.Length
+                && (IsAsciiLetter(value[cursor]) || char.IsAsciiDigit(value[cursor])
+                    || "_:/@.-".Contains(value[cursor])))
+            {
+                cursor++;
+            }
+            var candidate = value[start..cursor];
+            if (IsCanonicalQualifiedStructIdentifier(candidate)) return candidate;
+            cursor = start;
+            return Identifier();
+        }
+
         bool ListCapacity()
         {
             var start = cursor;
@@ -2110,6 +2271,17 @@ internal static class ToriiContractManifestJson
                 return null;
             }
 
+            if (Consume("()")) return "()";
+            foreach (var identity in errors)
+            {
+                var end = cursor + identity.Length;
+                if ((end == value.Length || (end < value.Length && ",>)}".Contains(value[end])))
+                    && Consume(identity))
+                {
+                    return identity;
+                }
+            }
+
             if (Consume("("))
             {
                 if (ParseType(false, depth + 1) is null
@@ -2128,7 +2300,7 @@ internal static class ToriiContractManifestJson
                 return Consume(")") ? string.Empty : null;
             }
 
-            var name = Identifier();
+            var name = TypeIdentifier();
             if (name is null)
             {
                 return null;
@@ -2136,6 +2308,25 @@ internal static class ToriiContractManifestJson
             if (StateScalarTypeNames.Contains(name))
             {
                 return name;
+            }
+            if (name == "StateCursor")
+            {
+                if (!Consume("<")) return null;
+                var key = Identifier();
+                return key is not null && StateMapKeyTypeNames.Contains(key) && Consume(">")
+                    ? string.Empty : null;
+            }
+            if (name == "StatePage")
+            {
+                // StatePage has one exact reserved shape, including matching key types.
+                nodes += 5; // List, Tuple, key, Option, StateCursor.
+                if (nodes > MaxStateTypeNodes || depth + 3 > MaxStateTypeDepth
+                    || !Consume("{items: List<(")) return null;
+                var key = Identifier();
+                if (key is null || !StateMapKeyTypeNames.Contains(key) || !Consume(", ")
+                    || ParseType(false, depth + 3) is null || !Consume("), ")
+                    || !ListCapacity() || !Consume(">, next: Option<StateCursor<")) return null;
+                return Consume(key) && Consume(">>}") ? string.Empty : null;
             }
             if (name == "Option")
             {
@@ -2184,7 +2375,7 @@ internal static class ToriiContractManifestJson
                         ? string.Empty
                         : null;
             }
-            if (!IsCanonicalTypeDeclarationIdentifier(name) || !Consume("{"))
+            if (!IsCanonicalUserStructIdentifier(name) || !Consume("{"))
             {
                 return null;
             }
@@ -2216,8 +2407,8 @@ internal static class ToriiContractManifestJson
 
     private static bool IsCanonicalSchemaStructIdentifier(string value)
     {
-        return IsCanonicalTypeDeclarationIdentifier(value)
-            || value == "QueryPage"
+        return IsCanonicalUserStructIdentifier(value)
+            || value is "QueryPage" or "StatePage"
             || IsCoreQueryViewName(value);
     }
 
@@ -2260,9 +2451,16 @@ internal static class ToriiContractManifestJson
 
     private readonly record struct AnalysisFrame(int RemainingChildren, bool SuppressWords);
 
-    private readonly record struct RenderedType(
+    private sealed record RenderedType(
         string TypeName,
         string? CoreQueryViewName,
         byte? ListCapacity,
-        string? ListElementCoreQueryViewName);
+        string? ListElementCoreQueryViewName)
+    {
+        public RenderedType? ListElement { get; init; }
+        public RenderedType? OptionElement { get; init; }
+        public IReadOnlyList<RenderedType>? TupleChildren { get; init; }
+        public ToriiEntrypointValueKindV1? LeafKind { get; init; }
+        public ToriiEntrypointValueKindV1? CursorKeyKind { get; init; }
+    }
 }

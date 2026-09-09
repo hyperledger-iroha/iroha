@@ -6,7 +6,7 @@
 //! deployment/routing policy, state mutation limits, agent-policy envelopes, and deterministic
 //! confidential-compute policy in a form suitable for validator admission and audit trails.
 #![allow(clippy::module_name_repetitions)]
-#[cfg(feature = "json")]
+
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
@@ -42,7 +42,7 @@ use iroha_primitives::{
 };
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, Parser, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -347,8 +347,17 @@ pub const SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Exact hosted-replica capacity of one qualified Inrou V1 host advert.
 pub const SORA_INROU_HOSTED_REPLICA_CAPACITY_V1: u16 = 1;
 /// One canonical framed instruction returned by a Soracloud mutation-draft endpoint.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoracloudTxInstruction")]
@@ -394,8 +403,17 @@ impl SoracloudTxInstruction {
     }
 }
 /// Exact first-release response returned by every Soracloud mutation-draft endpoint.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::soracloud::SoracloudMutationDraftResponse")]
@@ -515,7 +533,7 @@ mod tests {
     include!("soracloud/tests/proof_schemas.rs");
     include!("soracloud/tests/proof_validation.rs");
     include!("soracloud/tests/provenance.rs");
-    #[cfg(feature = "json")]
+
     include!("soracloud/tests/generic_identity_tests.rs");
     include!("soracloud/tests/manifest_validation.rs");
     include!("soracloud/tests/fhe_policy.rs");

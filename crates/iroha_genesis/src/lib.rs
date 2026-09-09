@@ -16,6 +16,8 @@
     clippy::clone_on_copy
 )]
 mod bounded_manifest;
+#[cfg(test)]
+mod ivm_path_codec_tests;
 use base64::Engine as _;
 pub use bounded_manifest::{
     GENESIS_IVM_BYTECODE_MAX_BYTES_V1, GENESIS_IVM_BYTECODE_MAX_TOTAL_BYTES_V1,
@@ -2919,6 +2921,11 @@ pub mod genesis_instructions_json {
                 .expect("serialize chain discriminant"),
             );
             manifest_fields.insert("executor".to_string(), Value::Null);
+            manifest_fields.insert(
+                "wire_protocol_version".to_string(),
+                norito::json::value::to_value(&CONSENSUS_PROTOCOL_VERSION)
+                    .expect("serialize wire protocol version"),
+            );
             manifest_fields.insert("ivm_dir".to_string(), Value::String(".".to_string()));
             manifest_fields.insert(
                 "consensus_mode".to_string(),
@@ -2928,6 +2935,13 @@ pub mod genesis_instructions_json {
                 "sumeragi_v2".to_string(),
                 norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
                     .expect("serialize v2 genesis context"),
+            );
+            manifest_fields.insert(
+                "kagemusha_mint_finality".to_string(),
+                norito::json::value::to_value(
+                    &super::super::deterministic_test_kagemusha_mint_finality_genesis_parameters(),
+                )
+                .expect("serialize mint-finality authority"),
             );
             manifest_fields.insert(
                 "transactions".to_string(),
@@ -2944,6 +2958,7 @@ pub mod genesis_instructions_json {
 /// Individual genesis transaction as represented in JSON. A transaction may set parameters, execute
 /// instructions, schedule IVM triggers, or set the initial topology.
 #[derive(Debug, Clone, JsonDeserialize, IntoSchema, Encode, Decode, Default)]
+#[norito(decode_from_slice)]
 pub struct RawGenesisTx {
     /// Parameter updates applied at genesis.
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -4856,21 +4871,24 @@ impl GenesisDomainBuilder {
             .expect("at least one transaction exists")
     }
 }
-// Encode/Decode are provided generically by `norito` for any type that implements
-// `NoritoSerialize`/`NoritoDeserialize`, so no explicit impls are needed here.
-// Provide Norito core serialization so `IvmPath` can participate in
-// derive(Encode, Decode) on containing types.
-impl norito::core::NoritoSerialize for IvmPath {}
+// Manifest paths are String payload fields. Containing records own their frames;
+// Norito's blanket bare Encode/Decode implementations require only payload codecs.
 impl norito::core::SerializePayload for IvmPath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let s = self.0.to_str().expect("path contains not valid UTF-8");
         norito::core::SerializePayload::serialize(&s, writer)
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for IvmPath {
+impl<'a> norito::core::DeserializePayload<'a> for IvmPath {
     fn deserialize(archived: &'a norito::core::Archived<IvmPath>) -> Self {
-        let s: String = norito::core::NoritoDeserialize::deserialize(archived.cast());
+        let s: String = norito::core::DeserializePayload::deserialize(archived.cast());
         IvmPath(PathBuf::from(s))
+    }
+    fn try_deserialize(
+        archived: &'a norito::core::Archived<IvmPath>,
+    ) -> Result<Self, norito::core::Error> {
+        let s = <String as norito::core::DeserializePayload>::try_deserialize(archived.cast())?;
+        Ok(IvmPath(PathBuf::from(s)))
     }
 }
 impl From<PathBuf> for IvmPath {
@@ -4935,6 +4953,7 @@ impl norito::json::JsonDeserialize for IvmPath {
 /// Human-readable alternative to [`Trigger`] whose action executes IVM
 /// bytecode instead of a native instruction sequence.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode, Constructor)]
+#[norito(decode_from_slice)]
 pub struct GenesisIvmTrigger {
     /// Unique trigger identifier.
     id: TriggerId,
@@ -4943,6 +4962,7 @@ pub struct GenesisIvmTrigger {
 }
 /// Human-readable alternative to [`Action`] which contains IVM bytecode as the executable payload.
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode)]
+#[norito(decode_from_slice)]
 pub struct GenesisIvmAction {
     /// Path to the compiled IVM bytecode (`.to`) file.
     executable: IvmPath,
@@ -4993,35 +5013,10 @@ impl TryFrom<GenesisIvmTrigger> for Trigger {
         value.try_into_with_ivm_bytecode_budget(&mut total)
     }
 }
-// Enable packed-sequence decoding of genesis triggers under Norito by
-// delegating slice-based decoding to the regular codec decoder. This avoids
-// duplicating decode logic and keeps behavior consistent.
-impl<'a> norito::core::DecodeFromSlice<'a> for GenesisIvmTrigger {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        Ok((v, bytes.len()))
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for GenesisIvmAction {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        Ok((v, bytes.len()))
-    }
-}
 impl<'a> norito::core::DecodeFromSlice<'a> for IvmPath {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        Ok((v, bytes.len()))
-    }
-}
-impl<'a> norito::core::DecodeFromSlice<'a> for RawGenesisTx {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let mut cursor = std::io::Cursor::new(bytes);
-        let v: Self = <Self as norito::codec::Decode>::decode(&mut cursor)?;
-        Ok((v, bytes.len()))
+        let (path, used) = <String as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
+        Ok((Self(PathBuf::from(path)), used))
     }
 }
 impl TryFrom<GenesisIvmAction> for Action {

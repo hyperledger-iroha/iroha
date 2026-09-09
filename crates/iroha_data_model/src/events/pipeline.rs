@@ -18,6 +18,8 @@ mod model {
     use getset::{CopyGetters, Getters};
     #[derive(Debug, Clone, PartialEq, Eq, FromVariant, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::PipelineEventBox")]
     pub enum PipelineEventBox {
         Transaction(TransactionEvent),
         Block(BlockEvent),
@@ -31,6 +33,8 @@ mod model {
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Getters, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::BlockEvent")]
     pub struct BlockEvent {
         pub header: BlockHeader,
         pub status: BlockStatus,
@@ -49,6 +53,8 @@ mod model {
         IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::TransactionEvent")]
     pub struct TransactionEvent {
         #[getset(get = "pub")]
         pub hash: HashOf<SignedTransaction>,
@@ -64,6 +70,8 @@ mod model {
     /// Report of block's status in the pipeline
     #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::BlockStatus")]
     pub enum BlockStatus {
         /// Block created (only emitted by the leader node)
         Created,
@@ -79,6 +87,8 @@ mod model {
     /// Pipeline warning payload.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::PipelineWarning")]
     pub struct PipelineWarning {
         /// Block header associated with the warning.
         pub header: BlockHeader,
@@ -90,6 +100,8 @@ mod model {
     /// Merge-ledger entry that was appended to persistent storage.
     #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::MergeLedgerEvent")]
     pub struct MergeLedgerEvent {
         /// Merge-ledger entry payload.
         pub entry: MergeLedgerEntry,
@@ -97,6 +109,8 @@ mod model {
     /// Report of transaction's status in the pipeline
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::TransactionStatus")]
     pub enum TransactionStatus {
         /// Transaction was received and enqueued
         Queued,
@@ -111,6 +125,8 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, FromVariant, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::PipelineEventFilterBox")]
     pub enum PipelineEventFilterBox {
         Transaction(TransactionEventFilter),
         Block(BlockEventFilter),
@@ -132,6 +148,8 @@ mod model {
         IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::BlockEventFilter")]
     pub struct BlockEventFilter {
         #[getset(get_copy = "pub")]
         pub height: Option<NonZeroU64>,
@@ -142,6 +160,8 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::TransactionEventFilter")]
     pub struct TransactionEventFilter {
         #[getset(get = "pub")]
         pub hash: Option<HashOf<SignedTransaction>>,
@@ -159,6 +179,8 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Default, Getters, Decode, Encode, IntoSchema,
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::MergeLedgerEventFilter")]
     pub struct MergeLedgerEventFilter {
         #[getset(get_copy = "pub")]
         pub epoch_id: Option<u64>,
@@ -169,6 +191,8 @@ mod model {
     )]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[getset(get = "pub")]
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::events::pipeline::model::WitnessEventFilter")]
     pub struct WitnessEventFilter {
         /// Block hash associated with the witness event.
         pub block_hash: Option<HashOf<BlockHeader>>,
@@ -216,7 +240,7 @@ mod model {
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl_json_via_norito_bytes!(
     PipelineEventBox,
     BlockEvent,
@@ -630,3 +654,6 @@ mod tests {
         assert_eq!(matched, vec![events[5].clone()]);
     }
 }
+
+#[cfg(test)]
+mod captured_event_boundary_identity_tests;

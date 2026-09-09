@@ -9,6 +9,8 @@ struct LargePayload {
 }
 #[derive(Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 #[allow(clippy::large_enum_variant)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.decode_reader_short_payload.ShortPayloadEnum")]
 enum ShortPayloadEnum {
     Unit,
     Large(LargePayload),

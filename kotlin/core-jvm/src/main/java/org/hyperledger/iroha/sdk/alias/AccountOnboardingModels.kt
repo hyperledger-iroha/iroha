@@ -132,54 +132,84 @@ class AccountOnboardingPlanReceiptV1(
     )
 }
 
-/** Exact public-reset mutation identity authenticated by every prepared result. */
-class TairaPublicResetMutationBindingV1(
+/** Receipt-bound public operation identity authenticated by every prepared result. */
+class PreparedOperationBindingV1(
     schema: String = SCHEMA,
-    authorizationSha256: String,
-    authorizationNonce: String,
+    semanticHashHex: String,
     kind: String,
-    phase: String,
-    idempotencyKey: String,
+    requestId: String,
     executionExpiresAtUnixMs: Long,
 ) : AliasJsonValue() {
     @JvmField val schema: String = schema.also { require(it == SCHEMA) { "unsupported binding schema" } }
-    @JvmField val authorizationSha256: String = requireLowerHex32(authorizationSha256, "authorizationSha256")
-    @JvmField val authorizationNonce: String = authorizationNonce.also {
-        require(it.length == 32 && it.all(::isBindingTokenChar)) {
-            "authorizationNonce must contain exactly 32 lowercase token characters"
-        }
-    }
+    @JvmField val semanticHashHex: String = requireLowerHex32(semanticHashHex, "semanticHashHex")
     @JvmField val kind: String = kind.also { require(it == ONBOARDING || it == FAUCET) { "unsupported binding kind" } }
-    @JvmField val phase: String = phase.also {
-        require(it.length in 1..128 && it.all(::isBindingTokenChar)) {
-            "phase must contain 1..128 lowercase token characters"
-        }
-    }
-    @JvmField val idempotencyKey: String = requireLowerHex32(idempotencyKey, "idempotencyKey")
+    /** Caller-generated identity retained unchanged with the prepared envelope across retries. */
+    @JvmField val requestId: String = requireLowerHex32(requestId, "requestId")
     @JvmField val executionExpiresAtUnixMs: Long = executionExpiresAtUnixMs.also {
-        require(it >= 0) { "executionExpiresAtUnixMs must not be negative" }
+        require(it > 0) { "executionExpiresAtUnixMs must be positive" }
     }
 
     override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
         "schema" to schema,
-        "authorization_sha256" to authorizationSha256,
-        "authorization_nonce" to authorizationNonce,
+        "semantic_hash_hex" to semanticHashHex,
         "kind" to kind,
-        "phase" to phase,
-        "idempotency_key" to idempotencyKey,
+        "request_id" to requestId,
         "execution_expires_at_unix_ms" to executionExpiresAtUnixMs,
     )
 
+    internal fun requireOnboardingReceipt(receipt: AccountOnboardingPlanReceiptV1) {
+        require(kind == ONBOARDING) { "onboarding requires an onboarding binding" }
+        require(semanticHashHex == hexLower(requireNotNull(AliasHashText.decode(receipt.planHash)))) {
+            "onboarding binding semantic hash differs from the receipt"
+        }
+        require(executionExpiresAtUnixMs <= receipt.body.validUntilMs) {
+            "onboarding binding deadline exceeds the receipt validity"
+        }
+    }
+
     companion object {
-        const val SCHEMA: String = "iroha.taira.public-reset.mutation-binding.v1"
+        const val SCHEMA: String = "iroha.prepared-operation.binding.v1"
         const val ONBOARDING: String = "onboarding"
         const val FAUCET: String = "faucet"
+
+        /**
+         * Binds a self-consistent signed receipt to a stable request and bounded deadline.
+         * Callers must independently verify the expected network, authority and original
+         * request with [AccountOnboardingReceiptVerifier.requireValidForRequest].
+         */
+        @JvmStatic
+        fun onboarding(
+            receipt: AccountOnboardingPlanReceiptV1,
+            requestId: String,
+            executionExpiresAtUnixMs: Long,
+        ): PreparedOperationBindingV1 {
+            AccountOnboardingReceiptVerifier.requireValid(receipt, receipt.body.networkId, receipt.body.authority)
+            return PreparedOperationBindingV1(
+                semanticHashHex = hexLower(requireNotNull(AliasHashText.decode(receipt.planHash))),
+                kind = ONBOARDING,
+                requestId = requestId,
+                executionExpiresAtUnixMs = executionExpiresAtUnixMs,
+            ).also { it.requireOnboardingReceipt(receipt) }
+        }
+
+        /** Binds an exact solved claim to a stable caller request and positive deadline. */
+        @JvmStatic
+        fun faucet(
+            claim: AccountFaucetClaimV1,
+            requestId: String,
+            executionExpiresAtUnixMs: Long,
+        ): PreparedOperationBindingV1 = PreparedOperationBindingV1(
+            semanticHashHex = claim.semanticHashHex(),
+            kind = FAUCET,
+            requestId = requestId,
+            executionExpiresAtUnixMs = executionExpiresAtUnixMs,
+        )
     }
 }
 
 /** Non-mutating prepare body consuming one signed onboarding plan receipt. */
 class AccountOnboardingPrepareRequestV1(
-    /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact receipt-bound operation. */ @JvmField val binding: PreparedOperationBindingV1,
     /** Exact signed plan receipt. */ @JvmField val receipt: AccountOnboardingPlanReceiptV1,
     /** Exact payer, sponsor revision, and gas bound Torii may quote. */
     @JvmField val feePayment: FeePaymentIntent,
@@ -188,9 +218,7 @@ class AccountOnboardingPrepareRequestV1(
     @JvmField val schema: String = schema.also { require(it == SCHEMA) { "unsupported onboarding prepare schema" } }
 
     init {
-        require(binding.kind == TairaPublicResetMutationBindingV1.ONBOARDING) {
-            "onboarding prepare requires an onboarding binding"
-        }
+        binding.requireOnboardingReceipt(receipt)
     }
 
     override fun toJsonMap(): Map<String, Any?> = linkedMapOf(
@@ -286,7 +314,7 @@ class AccountFaucetClaimV1(
 
 /** Non-mutating prepare body consuming one exact faucet claim. */
 class AccountFaucetPrepareRequestV1(
-    /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact receipt-bound operation. */ @JvmField val binding: PreparedOperationBindingV1,
     /** Exact solved faucet claim. */ @JvmField val claim: AccountFaucetClaimV1,
     /** Exact payer, sponsor revision, and gas bound Torii may quote. */
     @JvmField val feePayment: FeePaymentIntent,
@@ -297,8 +325,11 @@ class AccountFaucetPrepareRequestV1(
     val schema: String = schema.also { require(it == SCHEMA) { "unsupported faucet prepare schema" } }
 
     init {
-        require(binding.kind == TairaPublicResetMutationBindingV1.FAUCET) {
+        require(binding.kind == PreparedOperationBindingV1.FAUCET) {
             "faucet prepare requires a faucet binding"
+        }
+        require(binding.semanticHashHex == claim.semanticHashHex()) {
+            "faucet binding semantic hash differs from the claim"
         }
     }
 
@@ -349,7 +380,7 @@ class AccountFaucetPolicyV1(
 
 /** Authenticated exact faucet transaction prepared by Torii. */
 class AccountFaucetPreparedTransactionV1(
-    /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact receipt-bound operation. */ @JvmField val binding: PreparedOperationBindingV1,
     /** Exact solved claim consumed during preparation. */ @JvmField val claim: AccountFaucetClaimV1,
     semanticHashHex: String,
     accountId: String,
@@ -412,7 +443,7 @@ class AccountFaucetPreparedTransactionV1(
     val serverSignature: String = requireHex(serverSignature, "serverSignature")
 
     init {
-        require(binding.kind == TairaPublicResetMutationBindingV1.FAUCET) {
+        require(binding.kind == PreparedOperationBindingV1.FAUCET) {
             "prepared faucet requires a faucet binding"
         }
         require(claim.accountId == this.accountId) {
@@ -443,7 +474,7 @@ class AccountFaucetPreparedTransactionV1(
 
     companion object {
         /** Current and only first-release prepared-envelope schema. */
-        const val SCHEMA: String = "iroha.taira.prepared-transaction.v1"
+        const val SCHEMA: String = "iroha.prepared-transaction.v1"
 
         /** Exact faucet operation label. */
         const val OPERATION: String = "faucet"
@@ -455,7 +486,7 @@ sealed interface AccountOnboardingPrepareResponseV1
 
 /** Authenticated exact transaction returned by onboarding preparation. */
 class AccountOnboardingPreparedTransactionV1(
-    /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact receipt-bound operation. */ @JvmField val binding: PreparedOperationBindingV1,
     /** Exact plan receipt consumed at prepare. */ @JvmField val receipt: AccountOnboardingPlanReceiptV1,
     semanticHashHex: String,
     accountId: String,
@@ -483,7 +514,7 @@ class AccountOnboardingPreparedTransactionV1(
     @JvmField val serverSignature: String = requireHex(serverSignature, "serverSignature")
 
     init {
-        require(binding.kind == TairaPublicResetMutationBindingV1.ONBOARDING) {
+        require(binding.kind == PreparedOperationBindingV1.ONBOARDING) {
             "prepared onboarding requires an onboarding binding"
         }
         require(disposition != AliasPlanDispositionV1.CONFLICT && disposition != AliasPlanDispositionV1.NO_OP) {
@@ -508,14 +539,14 @@ class AccountOnboardingPreparedTransactionV1(
     )
 
     companion object {
-        const val SCHEMA: String = "iroha.taira.prepared-transaction.v1"
+        const val SCHEMA: String = "iroha.prepared-transaction.v1"
         const val OPERATION: String = "onboarding"
     }
 }
 
 /** Authenticated nonterminal result requiring one fresh atomic account-and-alias observation. */
 class AccountOnboardingProofRequiredPrepareResponseV1(
-    /** Exact reset binding. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact receipt-bound operation. */ @JvmField val binding: PreparedOperationBindingV1,
     semanticHashHex: String,
     accountId: String,
     alias: String,
@@ -540,7 +571,7 @@ class AccountOnboardingProofRequiredPrepareResponseV1(
     @JvmField val serverSignature: String = requireHex(serverSignature, "serverSignature")
 
     init {
-        require(binding.kind == TairaPublicResetMutationBindingV1.ONBOARDING) {
+        require(binding.kind == PreparedOperationBindingV1.ONBOARDING) {
             "proof-required onboarding requires an onboarding binding"
         }
         require(disposition == AliasPlanDispositionV1.NO_OP) {
@@ -735,7 +766,7 @@ enum class PreparedTransactionOutcomeV1(@JvmField val wireValue: String) {
 
 /** Response bound to one exact submitted prepared transaction. */
 class PreparedTransactionSubmitResponseV1(
-    /** Exact binding copied from the submitted envelope. */ @JvmField val binding: TairaPublicResetMutationBindingV1,
+    /** Exact binding copied from the submitted envelope. */ @JvmField val binding: PreparedOperationBindingV1,
     operation: String,
     transactionHashHex: String,
     /** Canonical reconciliation result. */ @JvmField val outcome: PreparedTransactionOutcomeV1,
@@ -743,7 +774,7 @@ class PreparedTransactionSubmitResponseV1(
 ) : AliasJsonValue() {
     @JvmField val schema: String = schema.also { require(it == SCHEMA) { "unsupported prepared submit schema" } }
     @JvmField val operation: String = operation.also {
-        require(it == AccountOnboardingPreparedTransactionV1.OPERATION || it == TairaPublicResetMutationBindingV1.FAUCET) {
+        require(it == AccountOnboardingPreparedTransactionV1.OPERATION || it == PreparedOperationBindingV1.FAUCET) {
             "unsupported prepared submit operation"
         }
     }
@@ -758,7 +789,7 @@ class PreparedTransactionSubmitResponseV1(
     )
 
     companion object {
-        const val SCHEMA: String = "iroha.taira.prepared-transaction-submit.v1"
+        const val SCHEMA: String = "iroha.prepared-transaction-submit.v1"
     }
 }
 
@@ -1028,23 +1059,20 @@ object AccountOnboardingJsonParser {
         )
     }
 
-    private fun parseBinding(root: Map<String, Any?>): TairaPublicResetMutationBindingV1 {
-        val path = "public reset mutation binding"
+    private fun parseBinding(root: Map<String, Any?>): PreparedOperationBindingV1 {
+        val path = "prepared operation binding"
         parser.exactKeys(
             root,
             setOf(
-                "schema", "authorization_sha256", "authorization_nonce", "kind", "phase",
-                "idempotency_key", "execution_expires_at_unix_ms",
+                "schema", "semantic_hash_hex", "kind", "request_id", "execution_expires_at_unix_ms",
             ),
             path,
         )
-        return TairaPublicResetMutationBindingV1(
+        return PreparedOperationBindingV1(
             parser.stringField(root, "schema", "$path.schema"),
-            parser.stringField(root, "authorization_sha256", "$path.authorization_sha256"),
-            parser.stringField(root, "authorization_nonce", "$path.authorization_nonce"),
+            parser.stringField(root, "semantic_hash_hex", "$path.semantic_hash_hex"),
             parser.stringField(root, "kind", "$path.kind"),
-            parser.stringField(root, "phase", "$path.phase"),
-            parser.stringField(root, "idempotency_key", "$path.idempotency_key"),
+            parser.stringField(root, "request_id", "$path.request_id"),
             parser.longField(root, "execution_expires_at_unix_ms", "$path.execution_expires_at_unix_ms"),
         )
     }
@@ -1102,9 +1130,6 @@ private fun requireCanonicalResponseAlias(value: String): String {
     require(canonical == value) { "alias must be canonical" }
     return canonical
 }
-
-private fun isBindingTokenChar(value: Char): Boolean =
-    value in 'a'..'z' || value in '0'..'9' || value == '-' || value == '_'
 
 private fun requireLowerHex32(value: String, field: String): String {
     require(value.length == 64 && value.all { it in '0'..'9' || it in 'a'..'f' }) {

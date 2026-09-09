@@ -1,7 +1,7 @@
 //! Configuration utils related to Logger specifically.
 pub use iroha_data_model::Level;
 use norito::{
-    NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, SerializePayload,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
 };
@@ -38,7 +38,6 @@ impl JsonDeserialize for Format {
         })
     }
 }
-impl NoritoSerialize for Format {}
 impl SerializePayload for Format {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
@@ -51,13 +50,13 @@ impl SerializePayload for Format {
         self.encoded_len_hint()
     }
 }
-impl<'de> NoritoDeserialize<'de> for Format {
+impl<'de> DeserializePayload<'de> for Format {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("stored logger format strings must parse successfully")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
-        let text = <String as NoritoDeserialize>::deserialize(archived.cast());
+        let text = <String as DeserializePayload>::deserialize(archived.cast());
         Format::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
     }
 }
@@ -125,7 +124,6 @@ impl JsonDeserialize for Directives {
         })
     }
 }
-impl NoritoSerialize for Directives {}
 impl SerializePayload for Directives {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
@@ -138,12 +136,12 @@ impl SerializePayload for Directives {
         self.encoded_len_hint()
     }
 }
-impl<'de> NoritoDeserialize<'de> for Directives {
+impl<'de> DeserializePayload<'de> for Directives {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("stored logger directives must parse successfully")
     }
     fn try_deserialize(archived: &'de Archived<Self>) -> Result<Self, ncore::Error> {
-        let text = <String as NoritoDeserialize>::deserialize(archived.cast());
+        let text = <String as DeserializePayload>::deserialize(archived.cast());
         Directives::from_str(&text).map_err(|err| ncore::Error::Message(err.to_string()))
     }
 }

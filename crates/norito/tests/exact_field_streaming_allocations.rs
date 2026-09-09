@@ -72,7 +72,7 @@ fn large_allocations_during(threshold: usize, operation: impl FnOnce()) -> usize
     LARGE_ALLOCATIONS.with(Cell::get)
 }
 struct ExactBlob(Vec<u8>);
-impl NoritoSerialize for ExactBlob {}
+
 impl SerializePayload for ExactBlob {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         SerializePayload::serialize(&self.0, writer)
@@ -85,7 +85,7 @@ impl SerializePayload for ExactBlob {
     }
 }
 struct UnknownBlob(Vec<u8>);
-impl NoritoSerialize for UnknownBlob {}
+
 impl SerializePayload for UnknownBlob {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         SerializePayload::serialize(&self.0, writer)

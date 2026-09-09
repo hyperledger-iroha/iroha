@@ -42,7 +42,7 @@ pub struct SubscriptionUsage {
 #[norito(tag = "kind", content = "value", rename_all = "snake_case")]
 pub enum SubscriptionDraftArtifact {
     /// Exact payload and fee intent returned by Torii, ready for explicit signing.
-    Payload(iroha_data_model::transaction::TransactionPayload),
+    Payload(Box<iroha_data_model::transaction::TransactionPayload>),
     /// Exact instructions requiring explicit fee selection and transaction preparation.
     Instructions(Vec<iroha_data_model::isi::InstructionBox>),
 }
@@ -122,7 +122,7 @@ impl SubscriptionDraft {
         resulting_subscription: Option<iroha_data_model::subscription::SubscriptionState>,
     ) -> Self {
         Self {
-            network_id: account.network_id().clone(),
+            network_id: *account.network_id(),
             authority: account.authority().clone(),
             operation,
             artifact,

@@ -47,7 +47,7 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
     let fixture = try loadFixture()
     XCTAssertEqual(
       fixture.schema,
-      "iroha.taira.prepared-transaction-signature-fixture.v1"
+      "iroha.prepared-transaction-signature-fixture.v1"
     )
     XCTAssertEqual(
       fixture.signatureDomainHex,
@@ -143,6 +143,8 @@ final class PreparedTransactionSignatureV1Tests: XCTestCase {
     )
     XCTAssertEqual(faucetVector.networkId, onboardingVector.networkId)
     XCTAssertEqual(inspected.payload.networkId, faucetVector.networkId)
+    XCTAssertEqual(inspected.payload.metadata["taira_faucet_claim_marker_version"], .number(1))
+    XCTAssertEqual(inspected.payload.metadata.count, 4)
     let faucetPolicy = try policy(for: faucet, authority: faucetVector.signerAccountId)
     try faucet.validate(
       claim: faucet.claim,

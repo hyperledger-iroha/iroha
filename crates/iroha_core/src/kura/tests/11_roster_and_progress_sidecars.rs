@@ -1469,7 +1469,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         let encode_with_current_schema = |intent: &PreNamespaceBoundProgressAppendIntentV1| {
             let mut bytes = norito::to_bytes(intent).expect("encode pre-namespace intent layout");
             let schema =
-                <BoundProgressAppendIntentV1 as norito::core::NoritoSerialize>::schema_hash();
+                norito::schema::identity::frame_hash::<BoundProgressAppendIntentV1>();
             let schema_start = MAGIC.len() + 2;
             let schema_end = schema_start + schema.len();
             assert!(bytes.len() >= Header::SIZE);

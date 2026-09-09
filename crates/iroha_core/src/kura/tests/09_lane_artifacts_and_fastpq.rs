@@ -792,7 +792,7 @@ fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
         proofs: Vec::new(),
     };
     let mut bytes = norito::to_bytes(&pre_release).expect("encode pre-release sidecar");
-    let schema = <PipelineRecoverySidecar as norito::core::NoritoSerialize>::schema_hash();
+    let schema = norito::schema::identity::frame_hash::<PipelineRecoverySidecar>();
     let schema_start = MAGIC.len() + 2;
     let schema_end = schema_start + schema.len();
     assert!(bytes.len() >= Header::SIZE);
@@ -848,7 +848,7 @@ fn pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts() {
         writes: vec!["state:beta".to_owned()],
     };
     let mut bytes = norito::to_bytes(&pre_release).expect("encode pre-release snapshot");
-    let schema = <PipelineTxSnapshot as norito::core::NoritoSerialize>::schema_hash();
+    let schema = norito::schema::identity::frame_hash::<PipelineTxSnapshot>();
     let schema_start = MAGIC.len() + 2;
     let schema_end = schema_start + schema.len();
     assert!(bytes.len() >= Header::SIZE);

@@ -1,5 +1,5 @@
 // JSON wire-contract tests included by `consensus_v2_tests.rs`.
-#[cfg(feature = "json")]
+
 #[test]
 fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
     let context = context(&[1, 1, 1, 1]);
@@ -49,7 +49,7 @@ fn status_and_consensus_envelope_json_reject_unknown_nested_fields() {
         .insert("unknown".to_owned(), norito::json::Value::Bool(true));
     assert!(norito::json::from_value::<ConsensusMessageV2>(envelope_json).is_err());
 }
-#[cfg(feature = "json")]
+
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -240,7 +240,6 @@ fn current_consensus_json_requires_explicit_nullable_slots() {
     assert_required_nullable_field!(SumeragiV2QcResponse, qc_response, "locked_prepare_qc");
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
     macro_rules! assert_fields_required {
@@ -350,7 +349,7 @@ fn sumeragi_v2_status_json_rejects_every_omitted_current_field() {
         ["highest_prepare_qc", "locked_prepare_qc"]
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn authenticated_consensus_json_rejects_unknown_fields_at_every_signed_layer() {
     macro_rules! assert_unknown_rejected {
@@ -446,7 +445,7 @@ fn authenticated_consensus_json_rejects_unknown_fields_at_every_signed_layer() {
         }
     );
 }
-#[cfg(feature = "json")]
+
 #[test]
 fn execution_commitment_json_requires_explicit_finality_and_merge_manifests() {
     use iroha_schema::{IntoSchema as _, Metadata};

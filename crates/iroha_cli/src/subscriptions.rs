@@ -50,11 +50,11 @@ impl Run for PlanCommand {
 
 fn account_client<C: RunContext>(context: &C) -> Result<blocking::AccountClient> {
     Ok(blocking::AccountClient::from_client(
-        context.client_from_config().account_client()?,
+        context.client_from_config()?.account_client()?,
     )?)
 }
 fn public_client<C: RunContext>(context: &C) -> Result<blocking::Client> {
-    blocking::Client::from_client(context.client_from_config())
+    blocking::Client::from_client(context.client_from_config()?)
 }
 fn resolve_optional_account_id<C: RunContext>(
     context: &C,

@@ -5,7 +5,7 @@
 //! Parameters and the permutation KAT are pinned to Plonky3; see POSEIDON2_PROVENANCE.md.
 //! Whole-proof qualification remains separate from this primitive's parameter target.
 
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 pub(crate) use fastpq_isi::GoldilocksDigest384LastFieldStreamErrorV1 as StreamError;
 use fastpq_isi::{GoldilocksDigest384V1, GoldilocksDigestDomainV1};
 #[path = "poseidon2_constants.rs"]
@@ -198,7 +198,7 @@ pub(crate) fn hash_bytes_384_v1(
 }
 
 /// Incremental final field under exactly the same execution framing as the one-shot function.
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct LastFieldStream {
     sponge: Sponge,
@@ -207,7 +207,7 @@ pub(crate) struct LastFieldStream {
     pending: [u8; 7],
     pending_len: usize,
 }
-#[cfg(any(test, feature = "privacy-release-evidence"))]
+#[cfg(test)]
 impl LastFieldStream {
     pub(crate) fn new(
         domain: GoldilocksDigestDomainV1<'_>,

@@ -17,6 +17,8 @@ pub const POTR_RECEIPT_MAX_NOTE_BYTES_V1: usize = 1_024;
 const POTR_RECEIPT_SIGNING_PAYLOAD_MAX_BYTES_V1: usize = 8 * 1_024;
 const POTR_RECEIPT_MAX_CANONICAL_BYTES_V1: usize = 16 * 1_024;
 /// Receipt emitted after completing a timed retrieval probe.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::potr::PotrReceiptV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PotrReceiptV1 {
     /// Schema version (`POTR_RECEIPT_VERSION_V1`).
@@ -55,6 +57,8 @@ pub struct PotrReceiptV1 {
     pub provider_signature: Option<PotrSignatureV1>,
 }
 /// Detached signature covering a PoTR receipt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::potr::PotrSignatureV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PotrSignatureV1 {
     /// Algorithm identifier for the signature.
@@ -65,14 +69,9 @@ pub struct PotrSignatureV1 {
     pub signature: Vec<u8>,
 }
 mod borrowed_norito {
-    use norito::core::{NoritoSerialize, SerializePayload};
+    use norito::core::SerializePayload;
     pub(super) struct Value<'a, T>(pub(super) &'a T);
-    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            T::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -87,7 +86,7 @@ mod borrowed_norito {
         }
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct PotrReceiptSigningViewWireV1<'a> {
     version: u8,
     manifest_digest: [u8; 32],
@@ -107,6 +106,11 @@ struct PotrReceiptSigningViewWireV1<'a> {
     gateway_signature: Option<PotrSignatureV1>,
     provider_signature: Option<PotrSignatureV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::potr::PotrReceiptSigningViewV1",
+    frame = "sorafs_manifest::potr::PotrReceiptV1"
+)]
 struct PotrReceiptSigningViewV1<'a>(PotrReceiptSigningViewWireV1<'a>);
 impl<'a> PotrReceiptSigningViewV1<'a> {
     fn from_receipt(receipt: &'a PotrReceiptV1) -> Self {
@@ -131,11 +135,7 @@ impl<'a> PotrReceiptSigningViewV1<'a> {
         })
     }
 }
-impl norito::core::NoritoSerialize for PotrReceiptSigningViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        <PotrReceiptV1 as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PotrReceiptSigningViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -311,6 +311,8 @@ fn ed25519_signature_error_reason(reason: &str) -> &'static str {
     }
 }
 /// Supported signature algorithms for PoTR receipts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::potr::PotrSignatureAlgorithm")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[norito(tag = "algorithm")]
 #[repr(u8)]
@@ -583,6 +585,8 @@ pub fn potr_request_scope_digest_v1(
     *hasher.finalize().as_bytes()
 }
 /// Outcome classification for PoTR receipts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::potr::PotrStatus")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub enum PotrStatus {
     /// Retrieval completed within the configured deadline.
@@ -773,12 +777,12 @@ mod tests {
             provider_signature: None,
         }
     }
-    fn base_receipt() -> PotrReceiptV1 {
+    pub(super) fn base_receipt() -> PotrReceiptV1 {
         let mut receipt = unsigned_receipt();
         resign(&mut receipt);
         receipt
     }
-    fn resign(receipt: &mut PotrReceiptV1) {
+    pub(super) fn resign(receipt: &mut PotrReceiptV1) {
         receipt.gateway_signature =
             Some(sign_receipt(receipt, &SigningKey::from_bytes(&[0x11; 32])));
         receipt.provider_signature = Some(sign_receipt_mldsa(receipt, &[0x31; 32]));
@@ -1201,3 +1205,14 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("potr/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "potr/borrowed_payload_tests.rs"]
+mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "potr/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

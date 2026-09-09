@@ -11,6 +11,13 @@ mod model {
     struct PrivateItem {
         value: u32,
     }
+    /// Exercise both injected JSON traits without consumer crate-root aliases.
+    pub(super) fn json_roundtrip(value: u32) -> u32 {
+        let mut encoded = String::new();
+        value.json_serialize(&mut encoded);
+        let mut parser = norito::json::Parser::new(&encoded);
+        u32::json_deserialize(&mut parser).expect("decode encoded model scalar")
+    }
 }
 model_single! {
     /// Public struct produced by the `model_single!` helper.
@@ -25,4 +32,9 @@ fn uses_generated_items() {
     assert_eq!(public_item.value, 10);
     let single_item = SingleItem { value: 20 };
     assert_eq!(single_item.value, 20);
+}
+
+#[test]
+fn model_json_traits_are_available_without_a_json_feature() {
+    assert_eq!(model::json_roundtrip(42), 42);
 }

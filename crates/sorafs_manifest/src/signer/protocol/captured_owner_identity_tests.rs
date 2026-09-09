@@ -1,0 +1,73 @@
+// Actual compiler observations for existing owners in sorafs_manifest::signer::protocol.
+// This is a private include fragment; owning suites retain all payload controls.
+
+/// Verify every captured concrete identity in this ownership scope.
+#[test]
+fn captured_concrete_owner_identities() {
+    crate::captured_owner_identity_support::check_both::<self::SignerKeyAlgorithmV1>(
+        "sorafs_manifest::signer::protocol::SignerKeyAlgorithmV1",
+        "sorafs_manifest::signer::protocol::SignerKeyAlgorithmV1",
+        "e9f751eec32df0311c76f56ad4413583",
+        "e9f751eec32df0311c76f56ad4413583",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerRoleV1>(
+        "sorafs_manifest::signer::protocol::SignerRoleV1",
+        "sorafs_manifest::signer::protocol::SignerRoleV1",
+        "467f22a98855b1aecab01bbf99f2df4f",
+        "467f22a98855b1aecab01bbf99f2df4f",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerPurposeBindingV1>(
+        "sorafs_manifest::signer::protocol::SignerPurposeBindingV1",
+        "sorafs_manifest::signer::protocol::SignerPurposeBindingV1",
+        "f3e897f0546ef4968ae5aee5c2d9b3a3",
+        "f3e897f0546ef4968ae5aee5c2d9b3a3",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerOperationActionV1>(
+        "sorafs_manifest::signer::protocol::SignerOperationActionV1",
+        "sorafs_manifest::signer::protocol::SignerOperationActionV1",
+        "18597432b4d926119e65d972ebe3728b",
+        "18597432b4d926119e65d972ebe3728b",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerKeyOperationPurposeV1>(
+        "sorafs_manifest::signer::protocol::SignerKeyOperationPurposeV1",
+        "sorafs_manifest::signer::protocol::SignerKeyOperationPurposeV1",
+        "5940b9dfec9d2dcccd80b172e3e7d291",
+        "5940b9dfec9d2dcccd80b172e3e7d291",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerOperationAuditHeadV1>(
+        "sorafs_manifest::signer::protocol::SignerOperationAuditHeadV1",
+        "sorafs_manifest::signer::protocol::SignerOperationAuditHeadV1",
+        "8f2d83964ba6f8bd4863a56153a3f2ad",
+        "8f2d83964ba6f8bd4863a56153a3f2ad",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerOperationIntentV1>(
+        "sorafs_manifest::signer::protocol::SignerOperationIntentV1",
+        "sorafs_manifest::signer::protocol::SignerOperationIntentV1",
+        "8de89426b1ea49043999fbe52075cd5d",
+        "8de89426b1ea49043999fbe52075cd5d",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerOperationReservationV1>(
+        "sorafs_manifest::signer::protocol::SignerOperationReservationV1",
+        "sorafs_manifest::signer::protocol::SignerOperationReservationV1",
+        "c8f130cf20bb3a91fe613d2be1e356cc",
+        "c8f130cf20bb3a91fe613d2be1e356cc",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerOperationCommitmentV1>(
+        "sorafs_manifest::signer::protocol::SignerOperationCommitmentV1",
+        "sorafs_manifest::signer::protocol::SignerOperationCommitmentV1",
+        "701faaaa5bc36fa3de81b20924f95697",
+        "701faaaa5bc36fa3de81b20924f95697",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerOperationCustodyV1>(
+        "sorafs_manifest::signer::protocol::SignerOperationCustodyV1",
+        "sorafs_manifest::signer::protocol::SignerOperationCustodyV1",
+        "ed2b37f23eca2d65ddcd4716640db4e9",
+        "ed2b37f23eca2d65ddcd4716640db4e9",
+    );
+    crate::captured_owner_identity_support::check_both::<self::SignerOperationSignatureV1>(
+        "sorafs_manifest::signer::protocol::SignerOperationSignatureV1",
+        "sorafs_manifest::signer::protocol::SignerOperationSignatureV1",
+        "1cb5dbe3bd744106f38de1ef5eaf9430",
+        "1cb5dbe3bd744106f38de1ef5eaf9430",
+    );
+}

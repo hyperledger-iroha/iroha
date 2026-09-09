@@ -264,10 +264,7 @@ fn install_quiet_tracing() {
     });
 }
 fn ivm_build_profile_exists() -> bool {
-    use std::path::PathBuf;
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../crates/ivm/target/prebuilt/build_config.toml")
-        .exists()
+    iroha_test_samples::ivm_build_profile_path().is_file()
 }
 fn quiet_network_builder_base() -> NetworkBuilder {
     init_instruction_registry();
@@ -468,7 +465,7 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     };
     let env_dir = network.env_dir().to_path_buf();
     let mut clients = ClientPool::new(&network);
-    let torii = clients.current().client().torii_url.clone();
+    let torii = clients.current().client().endpoint().clone();
     if status_or_skip(
         get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
         "initial status",
@@ -916,7 +913,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         };
         let env_dir = network.env_dir().to_path_buf();
         let mut clients = ClientPool::new(&network);
-        let torii = clients.current().client().torii_url.clone();
+        let torii = clients.current().client().endpoint().clone();
         if status_or_skip(
             get_status_with_retry_or_storage(&network, clients.next(), "initial status"),
             "initial status",

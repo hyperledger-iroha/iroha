@@ -25,6 +25,8 @@ use zeroize::Zeroize;
 #[display("{}", hex::encode(self.as_ref()))]
 #[debug("{}", hex::encode(self.as_ref()))]
 #[repr(transparent)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_crypto::hash::Hash")]
 pub struct Hash([u8; Self::LENGTH]);
 impl Zeroize for Hash {
     fn zeroize(&mut self) {
@@ -49,7 +51,7 @@ impl Hash {
     fn decode_archived(
         archived: &norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
-        let bytes = <[u8; Self::LENGTH] as norito::core::NoritoDeserialize>::try_deserialize(
+        let bytes = <[u8; Self::LENGTH] as norito::core::DeserializePayload>::try_deserialize(
             archived.cast(),
         )?;
         Self::from_marked_bytes(bytes)
@@ -290,7 +292,7 @@ impl JsonKeyCodec for Hash {
         parse_hash_literal(encoded)
     }
 }
-impl norito::core::NoritoSerialize for Hash {}
+
 impl norito::core::SerializePayload for Hash {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.as_ref())?;
@@ -303,7 +305,8 @@ impl norito::core::SerializePayload for Hash {
         Some(Self::LENGTH)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for Hash {
+
+impl<'de> norito::core::DeserializePayload<'de> for Hash {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Hash decode")
     }
@@ -413,7 +416,7 @@ impl<T: norito::NoritoSchema> norito::NoritoSchema for HashOf<T> {
         norito::schema::identity::generic_name("iroha_crypto::hash::HashOf", &[T::nominal_name()])
     }
 }
-impl<T> norito::core::NoritoSerialize for HashOf<T> {}
+
 impl<T> norito::core::SerializePayload for HashOf<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         writer.write_all(self.0.as_ref())?;
@@ -426,7 +429,8 @@ impl<T> norito::core::SerializePayload for HashOf<T> {
         Some(Hash::LENGTH)
     }
 }
-impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
+
+impl<'de, T> norito::core::DeserializePayload<'de> for HashOf<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("HashOf decode")
     }
@@ -434,7 +438,7 @@ impl<'de, T> norito::core::NoritoDeserialize<'de> for HashOf<T> {
         archived: &'de norito::core::Archived<Self>,
     ) -> Result<Self, norito::core::Error> {
         let hash =
-            <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived.cast::<Hash>())?;
+            <Hash as norito::core::DeserializePayload>::try_deserialize(archived.cast::<Hash>())?;
         Ok(Self(hash, PhantomData))
     }
 }
@@ -514,6 +518,8 @@ impl<T: IntoSchema> IntoSchema for HashOf<T> {
     }
     fn update_schema_map(map: &mut iroha_schema::MetaMap) {
         if !map.contains_key::<Self>() {
+            // The referent supplies the name, but only the digest is stored.
+            // Traversing T here follows links back into their owning records.
             Hash::update_schema_map(map);
             map.insert::<Self>(iroha_schema::Metadata::Tuple(
                 iroha_schema::UnnamedFieldsMeta {
@@ -727,7 +733,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
-            let err = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            let err = <Hash as norito::core::DeserializePayload>::try_deserialize(archived)
                 .expect_err("invalid lsb");
             assert!(matches!(err, norito::core::Error::Message(_)));
         }
@@ -740,7 +746,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<Hash>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<Hash>(&framed).expect("archive");
-            let result = <Hash as norito::core::NoritoDeserialize>::try_deserialize(archived);
+            let result = <Hash as norito::core::DeserializePayload>::try_deserialize(archived);
             if final_byte & 1 == 1 {
                 assert_eq!(
                     <[u8; Hash::LENGTH]>::from(result.expect("marked hash")),
@@ -780,7 +786,7 @@ mod tests {
             let framed =
                 norito::core::frame_bare_with_header_flags::<HashOf<()>>(&bytes, 0).expect("frame");
             let archived = norito::from_bytes::<HashOf<()>>(&framed).expect("archive");
-            let err = <HashOf<()> as norito::core::NoritoDeserialize>::try_deserialize(archived)
+            let err = <HashOf<()> as norito::core::DeserializePayload>::try_deserialize(archived)
                 .expect_err("invalid lsb");
             assert!(matches!(err, norito::core::Error::Message(_)));
         }
@@ -859,6 +865,57 @@ mod json_tests {
         }
     }
 }
+#[cfg(test)]
+mod schema_tests {
+    //! Hash references retain their identity without owning their referent's schema.
+    use super::*;
+
+    #[derive(TypeId)]
+    struct UnreachableReferent;
+
+    impl IntoSchema for UnreachableReferent {
+        fn type_name() -> String {
+            "UnreachableReferent".to_owned()
+        }
+
+        fn update_schema_map(_: &mut iroha_schema::MetaMap) {
+            panic!("a hash must not traverse its phantom referent");
+        }
+    }
+
+    #[test]
+    fn hash_schema_does_not_visit_phantom_referent() {
+        let mut schema = HashOf::<UnreachableReferent>::schema();
+        assert_eq!(
+            HashOf::<UnreachableReferent>::type_name(),
+            "HashOf<UnreachableReferent>"
+        );
+        assert!(schema.contains_key::<Hash>());
+        assert!(!schema.contains_key::<UnreachableReferent>());
+        let before = schema.clone();
+        HashOf::<UnreachableReferent>::update_schema_map(&mut schema);
+        assert_eq!(schema, before);
+    }
+
+    #[derive(IntoSchema)]
+    struct HashLinkedRecord {
+        previous: Option<HashOf<HashLinkedRecord>>,
+    }
+
+    #[test]
+    fn self_referential_hash_schema_is_finite_from_either_root() {
+        let record = HashLinkedRecord { previous: None };
+        assert!(record.previous.is_none());
+        let hash_schema = HashOf::<HashLinkedRecord>::schema();
+        assert!(!hash_schema.contains_key::<HashLinkedRecord>());
+        let record_schema = HashLinkedRecord::schema();
+        assert!(record_schema.contains_key::<HashLinkedRecord>());
+        assert!(record_schema.contains_key::<Option<HashOf<HashLinkedRecord>>>());
+        assert!(record_schema.contains_key::<HashOf<HashLinkedRecord>>());
+        assert!(record_schema.contains_key::<Hash>());
+    }
+}
+
 #[cfg(test)]
 mod prehashed_tests {
     use super::*;

@@ -5,10 +5,10 @@ use crate::{
     axt::{self, AssetHandle, AxtPolicy, ProofBlob, RemoteSpendIntent, TouchManifest},
     gas,
     host::{
-        IVMHost, checked_state_keys_limit, common_syscall_gas_quote,
-        conservative_syscall_gas_quote, is_sm_syscall, preflight_reserved_syscall_gas,
-        quote_tlv_payload_len_at, require_host_syscall_metering_spec,
-        reserve_available_syscall_gas, reserve_available_syscall_gas_at_least,
+        IVMHost, common_syscall_gas_quote, conservative_syscall_gas_quote, is_sm_syscall,
+        preflight_reserved_syscall_gas, quote_tlv_payload_len_at,
+        require_host_syscall_metering_spec, reserve_available_syscall_gas,
+        reserve_available_syscall_gas_at_least,
     },
     ivm::IVM,
     parallel::StateUpdate,
@@ -45,7 +45,7 @@ use norito::{
 use sha2::{Digest as _, Sha256};
 use std::{
     any::Any,
-    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     num::{NonZeroU16, NonZeroU64},
     path::PathBuf,
     sync::Arc,
@@ -1564,7 +1564,7 @@ pub struct WsvHost {
     contract_runtime_entrypoint: Option<String>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
-    state_overlay: HashMap<StatePath, Option<Vec<u8>>>,
+    state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     tx_active: bool,
     /// Authoritative schema registry for typed Norito encode/decode.
     schema: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
@@ -1588,7 +1588,7 @@ struct WsvHostSnapshot {
     contract_runtime_entrypoint: Option<String>,
     fastpq_batch_entries: Option<Vec<(AccountId, AccountId, AssetDefinitionId, Quantity)>>,
     actual_access: crate::host::AccessLog,
-    state_overlay: HashMap<StatePath, Option<Vec<u8>>>,
+    state_overlay: BTreeMap<StatePath, Option<Vec<u8>>>,
     tx_active: bool,
     schema: std::sync::Arc<dyn SchemaRegistry + Send + Sync>,
 }
@@ -1706,7 +1706,7 @@ impl WsvHost {
             contract_runtime_entrypoint: None,
             fastpq_batch_entries: None,
             actual_access: crate::host::AccessLog::default(),
-            state_overlay: HashMap::new(),
+            state_overlay: BTreeMap::new(),
             tx_active: false,
             schema: Arc::new(DefaultRegistry::new()),
         }
@@ -2008,68 +2008,36 @@ impl WsvHost {
     fn mutation_batch_gas(entries: usize) -> u64 {
         MUTATION_GAS.saturating_mul(u64::try_from(entries).unwrap_or(u64::MAX))
     }
-    fn state_keys_page_with_prefix(
+    fn state_count_with_prefix(
         &self,
         vm: &IVM,
         prefix: &StatePath,
         path_len: usize,
-        offset: u64,
-        limit: u64,
-    ) -> Result<(Vec<StatePath>, u64, u64), VMError> {
+    ) -> Result<(u64, u64), VMError> {
         let prefix_text = prefix.as_ref();
-        let take = checked_state_keys_limit(limit)?;
-        let mut candidates = BTreeSet::<&StatePath>::new();
-        candidates.extend(self.wsv.state_overlay.keys_with_text_prefix(prefix_text));
-        if self.tx_active {
-            candidates.extend(
-                self.state_overlay
-                    .keys()
-                    .filter(|key| key.as_ref().starts_with(prefix_text)),
-            );
-        }
-        let mut selected = Vec::new();
-        let mut selected_element_bytes = 0_usize;
+        let backing = self.wsv.state_overlay.keys_with_text_prefix(prefix_text);
+        let overlay = self
+            .state_overlay
+            .range::<str, _>((
+                std::ops::Bound::Included(prefix_text),
+                std::ops::Bound::Unbounded,
+            ))
+            .take_while(|(key, _)| key.as_ref().starts_with(prefix_text))
+            .take(if self.tx_active { usize::MAX } else { 0 })
+            .map(|(key, value)| (key, value.is_some()));
         let mut total = 0_u64;
         let mut scan_work_gas = u64::try_from(path_len).unwrap_or(u64::MAX);
-        let mut response_tail_gas = crate::host::state_keys_prepare_minimum(path_len, limit)?
-            .saturating_sub(crate::host::state_path_gas(path_len));
-        for key in candidates {
-            crate::host::preflight_reserved_state_scan_work_with_tail(
-                vm,
-                scan_work_gas,
-                key.as_ref().len(),
-                response_tail_gas,
-            )?;
+        for (key, present) in crate::state_scan::merge_candidates(backing, overlay) {
+            crate::host::preflight_reserved_state_scan_work(vm, scan_work_gas, key.as_ref().len())?;
             crate::host::validate_state_path(key)?;
             scan_work_gas = scan_work_gas
                 .saturating_add(1)
                 .saturating_add(u64::try_from(key.as_ref().len()).unwrap_or(u64::MAX));
-            let present = self.state_overlay.get(key).map_or_else(
-                || self.wsv.state_overlay.get_ref(key).is_some(),
-                Option::is_some,
-            );
             if present && Self::state_key_matches_prefix(key.as_ref(), prefix_text) {
-                if total >= offset && selected.len() < take {
-                    let (next_elements, next_response_tail) =
-                        crate::host::state_keys_response_tail_after_item(
-                            selected.len(),
-                            selected_element_bytes,
-                            key.as_ref(),
-                        )?;
-                    preflight_reserved_syscall_gas(
-                        vm,
-                        crate::host::STATE_QUERY_GAS_BASE
-                            .saturating_add(scan_work_gas)
-                            .saturating_add(u64::try_from(next_response_tail).unwrap_or(u64::MAX)),
-                    )?;
-                    selected_element_bytes = next_elements;
-                    response_tail_gas = u64::try_from(next_response_tail).unwrap_or(u64::MAX);
-                    selected.push((*key).clone());
-                }
                 total = total.saturating_add(1);
             }
         }
-        Ok((selected, total, scan_work_gas))
+        Ok((total, scan_work_gas))
     }
     /// Enable or disable SM helper syscalls.
     pub fn with_sm_enabled(mut self, enabled: bool) -> Self {
@@ -2694,9 +2662,6 @@ impl WsvHost {
         out.extend_from_slice(&h);
         vm.alloc_host_tlv(&out)
     }
-    fn alloc_norito_bytes_tlv(vm: &mut IVM, payload: &[u8]) -> Result<u64, VMError> {
-        Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
-    }
     fn decode_name_payload(&self, payload: &[u8]) -> Result<Name, VMError> {
         decode_canonical_norito(payload).map_err(|_| VMError::DecodeError)
     }
@@ -2898,11 +2863,10 @@ impl IVMHost for WsvHost {
                 let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
                 Some(crate::host::state_path_gas(path_len))
             }
-            crate::syscalls::SYSCALL_STATE_KEYS => {
-                let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
-                let minimum = crate::host::state_keys_prepare_minimum(path_len, vm.register(12))?;
-                Some(reserve_available_syscall_gas_at_least(vm, minimum)?)
-            }
+            crate::syscalls::SYSCALL_STATE_SCAN => Some(reserve_available_syscall_gas_at_least(
+                vm,
+                crate::state_scan::prepare_minimum(vm)?,
+            )?),
             crate::syscalls::SYSCALL_STATE_COUNT => {
                 let path_len = crate::host::quote_state_path_payload_len_at(vm, vm.register(10))?;
                 Some(reserve_available_syscall_gas_at_least(
@@ -3071,33 +3035,41 @@ impl IVMHost for WsvHost {
                 }
                 Ok(crate::host::state_path_gas(path_len))
             }
-            crate::syscalls::SYSCALL_STATE_KEYS => {
-                let (prefix, path_len) = self.decode_state_path_reg(vm, 10)?;
-                crate::host::validate_declared_state_scan_path(vm, &prefix)?;
-                let (selected, total, scan_work_gas) = self.state_keys_page_with_prefix(
-                    vm,
-                    &prefix,
-                    path_len,
-                    vm.register(11),
-                    vm.register(12),
-                )?;
-                crate::host::preflight_reserved_state_keys_page(
-                    vm,
-                    &selected,
-                    scan_work_gas,
-                    0,
-                    u64::try_from(selected.len()).unwrap_or(u64::MAX),
-                )?;
-                let payload = encode_canonical_norito(&selected)?;
-                let gas = crate::host::STATE_QUERY_GAS_BASE
-                    .saturating_add(scan_work_gas)
-                    .saturating_add(u64::try_from(payload.len()).unwrap_or(u64::MAX));
-                preflight_reserved_syscall_gas(vm, gas)?;
-                self.log_read_key(prefix.as_ref());
-                let ptr = Self::alloc_norito_bytes_tlv(vm, &payload)?;
-                vm.set_register(10, ptr);
-                vm.set_register(11, total);
-                vm.set_register(12, u64::try_from(selected.len()).unwrap_or(u64::MAX));
+            crate::syscalls::SYSCALL_STATE_SCAN => {
+                let instance = self
+                    .contract_runtime_address
+                    .as_ref()
+                    .map_or_else(|| "local".to_owned(), ToString::to_string);
+                let request = crate::state_scan::StateScanRequest::decode(vm, &instance)?;
+                let map = request.map.clone();
+                let prefix = format!("{}/", map.as_ref());
+                let after = request.after.clone();
+                let lower = after
+                    .as_ref()
+                    .map_or(std::ops::Bound::Included(prefix.as_str()), |key| {
+                        std::ops::Bound::Excluded(key.as_ref())
+                    });
+                let backing = self
+                    .wsv
+                    .state_overlay
+                    .keys_after_with_text_prefix(&prefix, after.as_ref().map(|path| path.as_ref()));
+                let overlay = self
+                    .state_overlay
+                    .range::<str, _>((lower, std::ops::Bound::Unbounded))
+                    .take_while(|(key, _)| key.as_ref().starts_with(&prefix))
+                    .take(if self.tx_active { usize::MAX } else { 0 })
+                    .map(|(key, value)| (key, value.is_some()));
+                let mut page = crate::state_scan::StateScanPage::new(request);
+                for (key, present) in crate::state_scan::merge_candidates(backing, overlay) {
+                    if page
+                        .examine(vm, key.as_ref(), key.as_ref().len(), present)?
+                        .is_break()
+                    {
+                        break;
+                    }
+                }
+                let gas = page.publish(vm)?;
+                self.log_read_key(map.as_ref());
                 Ok(gas)
             }
             crate::syscalls::SYSCALL_STATE_HAS => {
@@ -3128,8 +3100,7 @@ impl IVMHost for WsvHost {
             crate::syscalls::SYSCALL_STATE_COUNT => {
                 let (prefix, path_len) = self.decode_state_path_reg(vm, 10)?;
                 crate::host::validate_declared_state_scan_path(vm, &prefix)?;
-                let (_, total, scan_work_gas) =
-                    self.state_keys_page_with_prefix(vm, &prefix, path_len, u64::MAX, 0)?;
+                let (total, scan_work_gas) = self.state_count_with_prefix(vm, &prefix, path_len)?;
                 let gas = crate::host::STATE_QUERY_GAS_BASE.saturating_add(scan_work_gas);
                 preflight_reserved_syscall_gas(vm, gas)?;
                 self.log_read_key(prefix.as_ref());
@@ -4127,10 +4098,10 @@ impl IVMHost for WsvHost {
                 vm.request_abort();
                 Ok(DEBUG_GAS)
             }
-            syscalls::SYSCALL_CONTRACT_ABORT => {
-                vm.request_contract_abort(vm.register(10));
-                Ok(DEBUG_GAS)
-            }
+            syscalls::SYSCALL_CONTRACT_ABORT => crate::host::request_nominal_contract_abort(
+                vm,
+                crate::core_host::CoreHost::resolve_code_tlv_addr,
+            ),
             syscalls::SYSCALL_DEBUG_LOG => {
                 let pointer = vm.register(10);
                 if pointer == 0 {
@@ -4627,9 +4598,9 @@ impl IVMHost for WsvHost {
                     self.state_overlay.len()
                 );
             }
-            let mut overlay = std::mem::take(&mut self.state_overlay);
+            let overlay = std::mem::take(&mut self.state_overlay);
             self.tx_active = false;
-            for (path, val) in overlay.drain() {
+            for (path, val) in overlay {
                 match val {
                     Some(bytes) => self.wsv.sc_set(&path, bytes)?,
                     None => self.wsv.sc_del(&path)?,
@@ -5453,8 +5424,10 @@ mod tests_null_decode {
                 kind: iroha_data_model::smart_contract::manifest::EntryPointKind::View,
                 params: Vec::new(),
                 argument_schema: None,
-                return_type: None,
-                return_schema: None,
+                return_type: Some("()".to_owned()),
+                return_schema: Some(ivm_abi::entrypoint::EntrypointValueTypeV1 {
+                    nodes: vec![ivm_abi::entrypoint::EntrypointValueTypeNodeV1::Unit],
+                }),
                 permission: None,
                 read_keys: Vec::new(),
                 write_keys: Vec::new(),
@@ -5470,7 +5443,7 @@ mod tests_null_decode {
                     value: Box::new(crate::metadata::EmbeddedStateType::Bytes),
                 },
             }],
-            error_codes: Vec::new(),
+            error_types: Vec::new(),
         };
         let mut artifact = crate::metadata::ProgramMetadata::default().encode();
         artifact.extend_from_slice(&interface.encode_section());
@@ -7268,7 +7241,7 @@ mod tests_null_decode {
         assert_eq!(host.decode_amount_reg(&vm, 12), Err(VMError::DecodeError));
     }
     #[test]
-    fn state_scan_quote_reserves_once_and_exact_execution_handles_adversarial_page() {
+    fn state_count_quote_reserves_once_and_exact_execution_handles_large_prefix() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
@@ -7296,10 +7269,10 @@ mod tests_null_decode {
             .expect("allocate prefix");
         vm.set_register(10, prefix_ptr);
         vm.set_register(11, u64::MAX);
-        vm.set_register(12, syscalls::STATE_KEYS_MAX_ITEMS);
+        vm.set_register(12, syscalls::STATE_SCAN_MAX_ITEMS_V1);
         let available = vm.remaining_gas();
         assert_eq!(
-            host.prepare_syscall(syscalls::SYSCALL_STATE_KEYS, &vm),
+            host.prepare_syscall(syscalls::SYSCALL_STATE_COUNT, &vm),
             Ok(available),
             "state cardinality is scanned once inside the reserved call"
         );
@@ -7307,21 +7280,14 @@ mod tests_null_decode {
         let mut execution_host = host.clone();
         let mut execution_vm = vm.clone();
         let actual = execution_host
-            .syscall(syscalls::SYSCALL_STATE_KEYS, &mut execution_vm)
-            .expect("direct state keys execution");
-        let output = execution_vm
-            .memory
-            .validate_tlv(execution_vm.register(10))
-            .expect("state keys output");
-        let keys: Vec<StatePath> = norito::decode_from_bytes(output.payload).expect("decode keys");
-        assert!(keys.is_empty(), "maximal offset must select an empty page");
-        assert_eq!(execution_vm.register(11), 1_024);
-        assert_eq!(execution_vm.register(12), 0);
+            .syscall(syscalls::SYSCALL_STATE_COUNT, &mut execution_vm)
+            .expect("direct state count execution");
+        assert_eq!(execution_vm.register(10), 1_024);
         assert!(actual <= available);
         assert_eq!(WsvHost::state_query_gas(usize::MAX), u64::MAX);
     }
     #[test]
-    fn state_scan_charges_all_text_prefix_candidates_before_overlay_selection() {
+    fn state_count_charges_text_prefix_candidates_and_merges_live_overlay() {
         let caller: AccountId = test_account_id(
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
             "wonderland",
@@ -7341,13 +7307,9 @@ mod tests_null_decode {
         let prefix: StatePath = "orders".parse().expect("state prefix");
         let path_len = crate::host::state_path_payload_len(&prefix).expect("framed prefix length");
         let vm = IVM::new(u64::MAX);
-        let (selected, total, scan_work_gas) = host
-            .state_keys_page_with_prefix(&vm, &prefix, path_len, 0, syscalls::STATE_KEYS_MAX_ITEMS)
+        let (total, scan_work_gas) = host
+            .state_count_with_prefix(&vm, &prefix, path_len)
             .expect("scan adversarial base and transaction overlays");
-        assert_eq!(
-            selected.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            vec!["orders/01".to_owned(), "orders/02".to_owned()]
-        );
         assert_eq!(total, 2);
         let candidate_text = [
             "orders-extra",

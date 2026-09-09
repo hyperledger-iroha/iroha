@@ -2492,7 +2492,7 @@ fn native_amx_set_no_follow_flag(options: &mut OpenOptions) {
 }
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn native_amx_platform_no_follow_flag() -> i32 {
-    0o400000
+    rustix::fs::OFlags::NOFOLLOW.bits() as i32
 }
 #[cfg(all(
     unix,

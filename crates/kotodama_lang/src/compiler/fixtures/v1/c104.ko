@@ -1,4 +1,4 @@
 
 seiyaku CompilerFixture {
-fn main() { let _acct = ledger::account::resolve_alias(json::object()); }
+fn main() { let _acct = ledger::account::resolve_alias(alias: json::object()); }
 }

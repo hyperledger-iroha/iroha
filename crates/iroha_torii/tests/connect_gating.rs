@@ -509,7 +509,10 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
-        telemetry,
+        iroha_torii::ToriiRuntimeDeps::new(
+            build_identity_test_fixture::build_identity(),
+            telemetry,
+        ),
     )
     .expect("valid Torii Connect fixture")
 }
@@ -1644,3 +1647,6 @@ async fn connect_ws_rejects_query_token() {
     server.shutdown().await;
 }
 include!("connect_gating_disabled_ws_test.rs");
+
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;

@@ -781,6 +781,8 @@ fn broker_server_accepts_exact_subset_and_confines_session_to_it() {
 }
 #[test]
 fn canonical_broker_codec_accounts_for_variable_payload_frame_header() {
+    use norito::SerializePayload as _;
+
     let value = SoracloudProvenanceSignRequestWireV1 {
         purpose: iroha_data_model::soracloud::SoracloudRuntimeProvenancePurposeV1::InrouHostAdvert
             .wire_id(),

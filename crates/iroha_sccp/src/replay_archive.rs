@@ -68,7 +68,10 @@ impl Default for SccpReplayArchiveDecodeLimitsV1 {
 }
 
 /// Finalized chain coordinate bound into one immutable snapshot.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveFinalityV1")]
 pub struct SccpReplayArchiveFinalityV1 {
     /// SHA-256 of the exact canonical network identity.
     pub network_identity_sha256: [u8; 32],
@@ -87,7 +90,10 @@ impl SccpReplayArchiveFinalityV1 {
 }
 
 /// One sorted key/digest pair retained outside the consensus safety boundary.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveLeafV1")]
 pub struct SccpReplayArchiveLeafV1 {
     /// Complete replay key; byte zero selects its shard. Every 256-bit value is
     /// valid, including zero.
@@ -97,7 +103,8 @@ pub struct SccpReplayArchiveLeafV1 {
 }
 
 /// Deterministic, content-addressable replay snapshot suitable for SoraFS.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveSnapshotV1")]
 pub struct SccpReplayArchiveSnapshotV1 {
     /// Snapshot schema version. Final V1 requires exactly one.
     pub version: u8,
@@ -123,7 +130,10 @@ impl SccpReplayArchiveSnapshotV1 {
 }
 
 /// Immutable identity and Ed25519 verification key for one archive replica.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveReplicaBindingV1")]
 pub struct SccpReplayArchiveReplicaBindingV1 {
     /// Stable nonzero replica identity assigned by release policy.
     pub replica_id: [u8; 32],
@@ -132,7 +142,8 @@ pub struct SccpReplayArchiveReplicaBindingV1 {
 }
 
 /// Exact three-replica release policy used to authenticate checkpoints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveReplicaPolicyV1")]
 pub struct SccpReplayArchiveReplicaPolicyV1 {
     /// Strictly replica-id-ordered, independently keyed bindings.
     pub replicas: [SccpReplayArchiveReplicaBindingV1; 3],
@@ -159,7 +170,8 @@ impl SccpReplayArchiveReplicaPolicyV1 {
 }
 
 /// Common checkpoint statement signed independently by all three replicas.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveCheckpointBodyV1")]
 pub struct SccpReplayArchiveCheckpointBodyV1 {
     /// Checkpoint schema version. Final V1 requires exactly one.
     pub version: u8,
@@ -251,7 +263,8 @@ pub fn sccp_replay_archive_checkpoint_set_frame_sha256_v1(canonical_frame: &[u8]
 }
 
 /// One replica's exact detached Ed25519 attestation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveReplicaAttestationV1")]
 pub struct SccpReplayArchiveReplicaAttestationV1 {
     /// Replica identity selecting one pinned release-policy key.
     pub replica_id: [u8; 32],
@@ -260,7 +273,8 @@ pub struct SccpReplayArchiveReplicaAttestationV1 {
 }
 
 /// Exactly three matching, independently signed replica checkpoints.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveSignedCheckpointV1")]
 pub struct SccpReplayArchiveSignedCheckpointV1 {
     /// Common statement agreed by every replica.
     pub body: SccpReplayArchiveCheckpointBodyV1,
@@ -272,7 +286,10 @@ pub struct SccpReplayArchiveSignedCheckpointV1 {
 ///
 /// This coordinate contains every value that must be identical across the
 /// complete inventory, including an empty one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveHeadFinalityV1")]
 pub struct SccpReplayArchiveHeadFinalityV1 {
     /// SHA-256 of the exact canonical Iroha network identity.
     pub network_identity_sha256: [u8; 32],
@@ -310,7 +327,8 @@ impl From<SccpReplayArchiveFinalityV1> for SccpReplayArchiveHeadFinalityV1 {
 }
 
 /// Authenticated SoraFS publication of the exact ordered snapshot package.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveSorafsManifestV1")]
 pub struct SccpReplayArchiveSorafsManifestV1 {
     /// SHA-256 of the exact canonical SoraFS manifest bytes.
     pub manifest_sha256: [u8; 32],
@@ -332,7 +350,8 @@ impl SccpReplayArchiveSorafsManifestV1 {
 }
 
 /// One exact accumulator commitment inside the signed complete inventory.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveCheckpointSetEntryV1")]
 pub struct SccpReplayArchiveCheckpointSetEntryV1 {
     /// Exact route/boundary accumulator identity.
     pub accumulator_id: SccpReplayAccumulatorIdV1,
@@ -364,7 +383,8 @@ impl SccpReplayArchiveCheckpointSetEntryV1 {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveCheckpointInventoryV1")]
 struct SccpReplayArchiveCheckpointInventoryV1 {
     version: u8,
     finality: SccpReplayArchiveHeadFinalityV1,
@@ -375,7 +395,8 @@ struct SccpReplayArchiveCheckpointInventoryV1 {
 ///
 /// This statement is valid for zero entries. That is the only signed shape
 /// used for a chain whose current SCCP registry is empty.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveCheckpointSetBodyV1")]
 pub struct SccpReplayArchiveCheckpointSetBodyV1 {
     /// Checkpoint-set schema version. Final V1 accepts exactly one.
     pub version: u8,
@@ -436,7 +457,8 @@ impl SccpReplayArchiveCheckpointSetBodyV1 {
 }
 
 /// Exactly three matching replica signatures over one complete inventory.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayArchiveSignedCheckpointSetV1")]
 pub struct SccpReplayArchiveSignedCheckpointSetV1 {
     /// Complete inventory statement, including its SoraFS publication.
     pub body: SccpReplayArchiveCheckpointSetBodyV1,
@@ -449,7 +471,8 @@ pub struct SccpReplayArchiveSignedCheckpointSetV1 {
 /// The signed set binds the complete accumulator inventory and its SoraFS
 /// publication. The selected checkpoint binds this accumulator's exact domain,
 /// forest roots, leaf count, update sequence, and finalized chain coordinate.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayRootResponseV1")]
 pub struct SccpReplayRootResponseV1 {
     /// Response schema version. Final V1 accepts exactly one.
     pub version: u8,
@@ -466,7 +489,8 @@ pub struct SccpReplayRootResponseV1 {
 ///
 /// The root and witness are one atomic response from the same locally rebuilt
 /// head. Every 256-bit replay key is valid, including the all-zero key.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::replay_archive::SccpReplayWitnessResponseV1")]
 pub struct SccpReplayWitnessResponseV1 {
     /// Response schema version. Final V1 accepts exactly one.
     pub version: u8,
@@ -2895,4 +2919,12 @@ mod tests {
             }
         })
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_checkpoint_inventory_frame_identity() {
+    crate::frame_identity_tests::assert_serialize::<SccpReplayArchiveCheckpointInventoryV1>(
+        "iroha_sccp::replay_archive::SccpReplayArchiveCheckpointInventoryV1",
+    );
 }

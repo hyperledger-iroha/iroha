@@ -505,14 +505,20 @@ private enum ControllerPayload {
             }
             buffer.append(key)
         case .multiSig(let version, let threshold, let members):
-            guard members.count <= multisigMemberMax else {
+            guard !members.isEmpty else {
+                throw AccountAddressError.invalidMultisigPolicy("InvalidMemberCount")
+            }
+            guard members.count <= multisigMemberMax,
+                  let memberCount = UInt16(exactly: members.count) else {
                 throw AccountAddressError.multisigMemberOverflow(members.count)
             }
             buffer.append(ControllerPayloadTag.multiSig.rawValue)
             buffer.append(version)
             var thresholdBE = threshold.bigEndian
             withUnsafeBytes(of: &thresholdBE) { buffer.append(contentsOf: $0) }
-            buffer.append(UInt8(members.count))
+            // Final V1 addresses always carry the complete u16 big-endian count.
+            var memberCountBE = memberCount.bigEndian
+            withUnsafeBytes(of: &memberCountBE) { buffer.append(contentsOf: $0) }
             for member in members {
                 buffer.append(member.curve.rawValue)
                 var weightBE = member.weight.bigEndian

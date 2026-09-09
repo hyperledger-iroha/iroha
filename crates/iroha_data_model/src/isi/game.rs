@@ -2,8 +2,8 @@
 use super::*;
 isi! {
  /// Native OpenGameSessionV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::OpenGameSessionV1")]
  pub struct OpenGameSessionV1 {
   /// Exact session id for this operation.
@@ -84,8 +84,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for OpenGameSessionV1 {
 }
 isi! {
  /// Native JoinGameSessionV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::JoinGameSessionV1")]
  pub struct JoinGameSessionV1 {
   /// Exact session id for this operation.
@@ -192,8 +192,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for JoinGameSessionV1 {
 }
 isi! {
  /// Native StartGameSessionV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::StartGameSessionV1")]
  pub struct StartGameSessionV1 {
   /// Exact session id for this operation.
@@ -229,8 +229,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for StartGameSessionV1 {
 }
 isi! {
  /// Native CommitGameCheckpointV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::CommitGameCheckpointV1")]
  pub struct CommitGameCheckpointV1 {
   /// Exact session id for this operation.
@@ -293,8 +293,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitGameCheckpointV1 {
 }
 isi! {
  /// Native ChallengeGameSessionV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::ChallengeGameSessionV1")]
  pub struct ChallengeGameSessionV1 {
   /// Exact session id for this operation.
@@ -366,8 +366,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ChallengeGameSessionV1 {
 }
 isi! {
  /// Native CommitGameInputsV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::CommitGameInputsV1")]
  pub struct CommitGameInputsV1 {
   /// Exact input for this operation.
@@ -403,8 +403,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for CommitGameInputsV1 {
 }
 isi! {
  /// Native RevealGameInputsV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::RevealGameInputsV1")]
  pub struct RevealGameInputsV1 {
   /// Exact reveal for this operation.
@@ -440,8 +440,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RevealGameInputsV1 {
 }
 isi! {
  /// Native AdvanceGameDeadlineV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::AdvanceGameDeadlineV1")]
  pub struct AdvanceGameDeadlineV1 {
   /// Exact session id for this operation.
@@ -477,8 +477,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AdvanceGameDeadlineV1 {
 }
 isi! {
  /// Native SettleGameSessionV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::SettleGameSessionV1")]
  pub struct SettleGameSessionV1 {
   /// Exact session id for this operation.
@@ -540,8 +540,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for SettleGameSessionV1 {
 }
 isi! {
  /// Native ExpireGameSessionV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::ExpireGameSessionV1")]
  pub struct ExpireGameSessionV1 {
   /// Exact session id for this operation.
@@ -558,8 +558,8 @@ impl ExpireGameSessionV1 {
 }
 isi! {
     /// Pay an exact portion of a finalized game prize or refund claim.
-    #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
-    #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+    #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+    #[norito (deny_unknown_fields)]
     #[norito_schema(name = "iroha_data_model::isi::game::ClaimGamePayoutV1")]
     pub struct ClaimGamePayoutV1 {
         /// Session retaining the backed claim.
@@ -650,8 +650,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ExpireGameSessionV1 {
 }
 isi! {
  /// Native RegisterExecutionProofProfileV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::RegisterExecutionProofProfileV1")]
  pub struct RegisterExecutionProofProfileV1 {
   /// Exact profile id for this operation.
@@ -687,8 +687,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterExecutionProofProfileV1 {
 }
 isi! {
  /// Native VerifyExecutionProofV1 operation with complete authorization in Core.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::VerifyExecutionProofV1")]
  pub struct VerifyExecutionProofV1 {
   /// Exact proof for this operation.
@@ -724,8 +724,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for VerifyExecutionProofV1 {
 
 isi! {
  /// Reserve an already-joined wallet's explicitly selected NFT before a game starts.
- #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize))]
- #[cfg_attr(feature = "json", norito(deny_unknown_fields))]
+ #[derive (crate :: DeriveJsonSerialize , crate :: DeriveJsonDeserialize)]
+ #[norito (deny_unknown_fields)]
  #[norito_schema(name = "iroha_data_model::isi::game::StakeGameItemV1")]
  pub struct StakeGameItemV1 {
   /// Exact session being joined.

@@ -95,7 +95,7 @@ fn lane_privacy_proof_attachment_roundtrips() -> Result<()> {
         .expect("one attachment is a valid bounded proof list");
     let norito_bytes = norito::to_bytes(&list)?;
     let archived = norito::from_bytes::<ProofAttachmentList>(&norito_bytes)?;
-    let decoded: ProofAttachmentList = norito_core::NoritoDeserialize::deserialize(archived);
+    let decoded: ProofAttachmentList = norito_core::DeserializePayload::deserialize(archived);
     assert_eq!(decoded, list);
     let decoded_privacy = decoded
         .as_slice()

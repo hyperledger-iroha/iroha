@@ -19,3 +19,5 @@ mod secret_security_diagnostics;
 mod sugar_zero_cost;
 #[path = "v1_contract_edges.rs"]
 mod v1_contract_edges;
+#[path = "v1_value_redesign.rs"]
+mod v1_value_redesign;

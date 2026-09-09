@@ -18,8 +18,21 @@ use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize};
 
 /// Network and height shared by one source manifest.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqSourceStatementContextV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqSourceStatementContextV1",
+    frame = "iroha_data_model::fastpq::FastpqSourceStatementContextV1"
+)]
 pub struct FastpqSourceStatementContextV1 {
     /// Exact genesis-derived deployment identity, independently authenticated.
     pub network_id: NetworkId,
@@ -28,8 +41,21 @@ pub struct FastpqSourceStatementContextV1 {
 }
 
 /// Exact lane identity observed at the source height.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqSourceLaneV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqSourceLaneV1",
+    frame = "iroha_data_model::fastpq::FastpqSourceLaneV1"
+)]
 pub struct FastpqSourceLaneV1 {
     /// Source execution lane.
     pub lane_id: LaneId,
@@ -39,8 +65,21 @@ pub struct FastpqSourceLaneV1 {
 
 /// Runtime source lane binding, independent of the execution dataspace.
 /// An absent lane never acquires a default lane or a synthetic incarnation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqSourceRouteV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqSourceRouteV1",
+    frame = "iroha_data_model::fastpq::FastpqSourceRouteV1"
+)]
 pub enum FastpqSourceRouteV1 {
     /// Execution supplied no lane context.
     Unrouted,
@@ -49,8 +88,21 @@ pub enum FastpqSourceRouteV1 {
 }
 
 /// Meaning of the source identity, authenticated by the source commitment.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqSourceExecutionKindV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqSourceExecutionKindV1",
+    frame = "iroha_data_model::fastpq::FastpqSourceExecutionKindV1"
+)]
 pub enum FastpqSourceExecutionKindV1 {
     /// Execution call, including signed, triggered or internally derived IVM execution.
     ExecutionCall,
@@ -60,8 +112,21 @@ pub enum FastpqSourceExecutionKindV1 {
 
 /// One complete source execution entry in its validator-derived projection order.
 /// The fields require independently authenticated execution and route authority.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqSourceExecutionEntryV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqSourceExecutionEntryV1",
+    frame = "iroha_data_model::fastpq::FastpqSourceExecutionEntryV1"
+)]
 pub struct FastpqSourceExecutionEntryV1 {
     /// Actual execution-call or typed native protocol-purpose identity.
     pub entry_hash: Hash,
@@ -117,8 +182,21 @@ pub fn fastpq_source_execution_entries_digest_v1(
 }
 
 /// One ordinary statement at an exact executed entry and manifest position.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqOrdinarySourceStatementLeafV1",
+    frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1"
+)]
 pub struct FastpqOrdinarySourceStatementLeafV1 {
     /// Source context repeated in each leaf to prevent cross-manifest reuse.
     pub source: FastpqSourceStatementContextV1,
@@ -144,8 +222,21 @@ pub struct FastpqOrdinarySourceStatementLeafV1 {
 }
 
 /// Untrusted ordinary manifest; authentication comes from finality.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1")]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqOrdinarySourceStatementManifestV1",
+    frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1"
+)]
 pub struct FastpqOrdinarySourceStatementManifestV1 {
     /// Source network and height.
     pub source: FastpqSourceStatementContextV1,
@@ -162,8 +253,20 @@ pub struct FastpqOrdinarySourceStatementManifestV1 {
 }
 
 /// Untrusted bounded source-opening transport; no embedded finality claim.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1")]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_data_model::fastpq::source_statement::FastpqOrdinarySourceStatementOpeningV1",
+    frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1"
+)]
 pub struct FastpqOrdinarySourceStatementOpeningV1 {
     /// Advertised source manifest, whose inclusion must be checked separately.
     pub manifest: FastpqOrdinarySourceStatementManifestV1,
@@ -645,8 +748,11 @@ mod tests {
 
     #[test]
     fn source_leaf_rejects_pre_occurrence_layout_under_same_nominal_identity() {
-        #[derive(NoritoSerialize)]
-        #[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1")]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::EntryLeaf",
+            frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1"
+        )]
         struct EntryLeaf {
             source: FastpqSourceStatementContextV1,
             statement_index: u32,
@@ -669,8 +775,8 @@ mod tests {
             statement_digest: leaf.statement_digest,
         };
         assert_eq!(
-            <EntryLeaf as norito::core::NoritoSerialize>::schema_hash(),
-            <FastpqOrdinarySourceStatementLeafV1 as norito::core::NoritoSerialize>::schema_hash()
+            norito::schema::identity::frame_hash::<EntryLeaf>(),
+            norito::schema::identity::frame_hash::<FastpqOrdinarySourceStatementLeafV1>()
         );
         let frame = norito::encode_canonical(&previous).unwrap();
         assert!(norito::decode_canonical::<FastpqOrdinarySourceStatementLeafV1>(&frame).is_err());
@@ -1028,8 +1134,11 @@ mod tests {
 
     #[test]
     fn source_leaf_rejects_the_unqualified_flat_lane_prototype_layout() {
-        #[derive(Clone, Copy, NoritoSerialize)]
-        #[norito(schema_name = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1")]
+        #[derive(Clone, Copy, NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::FlatPrototypeLeaf",
+            frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1"
+        )]
         struct FlatPrototypeLeaf {
             source: FastpqSourceStatementContextV1,
             statement_index: u32,
@@ -1041,8 +1150,8 @@ mod tests {
             statement_digest: [u8; 32],
         }
         assert_eq!(
-            <FlatPrototypeLeaf as norito::core::NoritoSerialize>::schema_hash(),
-            <FastpqOrdinarySourceStatementLeafV1 as norito::core::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<FlatPrototypeLeaf>(),
+            norito::schema::identity::frame_hash::<FastpqOrdinarySourceStatementLeafV1>(),
             "test must exercise layout rejection even under the same unqualified nominal identity"
         );
         let leaf = leaves()[0];
@@ -1067,3 +1176,62 @@ mod tests {
 
 #[cfg(test)]
 mod source_entries_tests;
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::FastpqSourceStatementContextV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqSourceStatementContextV1",
+            "iroha_data_model::fastpq::FastpqSourceStatementContextV1",
+            "7e48033109e7e361a873c9fbbd003354",
+        );
+        check::<super::FastpqSourceLaneV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqSourceLaneV1",
+            "iroha_data_model::fastpq::FastpqSourceLaneV1",
+            "f55338511b9c06432bb8d9de3f62b265",
+        );
+        check::<super::FastpqSourceRouteV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqSourceRouteV1",
+            "iroha_data_model::fastpq::FastpqSourceRouteV1",
+            "d2484a1c17621b1cfd32c6b908989781",
+        );
+        check::<super::FastpqSourceExecutionKindV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqSourceExecutionKindV1",
+            "iroha_data_model::fastpq::FastpqSourceExecutionKindV1",
+            "179692754ca72583f022f29872cdf989",
+        );
+        check::<super::FastpqSourceExecutionEntryV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqSourceExecutionEntryV1",
+            "iroha_data_model::fastpq::FastpqSourceExecutionEntryV1",
+            "54097bbce045c968a8bb8241cd3a69ef",
+        );
+        check::<super::FastpqOrdinarySourceStatementLeafV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqOrdinarySourceStatementLeafV1",
+            "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1",
+            "f926b1a18ce1cdba26f4d6bd6943567f",
+        );
+        check::<super::FastpqOrdinarySourceStatementManifestV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqOrdinarySourceStatementManifestV1",
+            "iroha_data_model::fastpq::FastpqOrdinarySourceStatementManifestV1",
+            "8c84bc09cdb24bd972f55d4a2349d6f1",
+        );
+        check::<super::FastpqOrdinarySourceStatementOpeningV1>(
+            "iroha_data_model::fastpq::source_statement::FastpqOrdinarySourceStatementOpeningV1",
+            "iroha_data_model::fastpq::FastpqOrdinarySourceStatementOpeningV1",
+            "d4dc364d9003f8bf36f103ba592121dd",
+        );
+    }
+}

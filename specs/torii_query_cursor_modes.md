@@ -71,3 +71,27 @@ If `pipeline.query_stored_min_gas_units=200`, the above is rejected with NotPerm
 ---
 
 For the canonical list of Torii endpoints, see the Reference section. This page covers only mode selection and behavior for snapshot-lane query execution.
+
+
+## Bounded ordinary account identities
+
+Ordinary `FindAccountIds` admits a pass predicate, default selector, bounded
+counting and unsorted zero-offset pagination. The immutable world adapter owns
+at most `min(limit, F + 1)` rows for ephemeral queries and
+`min(limit, F + T + 1)` rows for stored queries. The extra row detects retained
+item overflow only when the requested range exceeds the cursor ceiling. The
+source uses exact fallible row slots and compact key/member copies charged to
+both the per-row and aggregate graph allowances. Multisig member order and the
+canonical account identity are preserved.
+
+Stored Start carries both source-pass statistics into retained-tail sizing and
+reserves the configured response-byte ceiling from the same work budget before
+publishing a cursor. Continuations retain only the initial snapshot tail, form
+each page through exact fallible storage, and charge a fresh page/response
+budget. Response charges are conservative ceiling reservations, not measured
+encoded lengths. Each returned response still passes the existing wire-byte
+ceiling. Source and page storage fit the combined fresh and retained admission
+leases; neither a live-State replay nor a generic producer fallback is used.
+Other predicates, selectors, offsets and sorting remain closed until their
+source-specific adapters exist. The remaining inventory is 35 world producers
+and three Kura producers; peers support the bounded ephemeral adapter.

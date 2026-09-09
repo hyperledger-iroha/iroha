@@ -1156,3 +1156,180 @@ fn sealed_recovery_selection_rejects_rollback_before_selected_history_prefix() {
         Err(KagemushaStateErrorV1::AuthenticatedHistoryUnavailable)
     ));
 }
+
+#[test]
+fn checkpointed_pre_index_operations_require_the_selected_wal_and_allow_valid_suffixes() {
+    for begin_intent in [false, true] {
+        let (_temp, bundle, hardware) = bootstrap_location();
+        let pending = bootstrap_stage(hardware.clone(), 0)
+            .initialize_journals(&bundle, BOOTSTRAP_CAPACITY, [190; 32])
+            .unwrap();
+        let certificate = hardware.commit(&pending.candidate).unwrap();
+        let (machine, mut selected_store, _responses) =
+            pending.finish(certificate).unwrap().into_parts();
+        let original = KagemushaOutgoingPublicInputPreimageV1 {
+            version: KAGEMUSHA_STATE_VERSION_V1,
+            operation_id: [191; 32],
+            context: KagemushaOutgoingOperationContextV1 {
+                lane: machine.state.lane.clone(),
+                release: machine.state.context(),
+                credential_id: machine.accepted_credential_floor().credential.credential_id,
+                hardware_epoch: machine.state.hardware_epoch,
+                device_policy_binding: machine.state.device_policy_binding,
+                core_authorization_key_reference: [192; 32],
+            },
+            inputs: KagemushaOutgoingPublicInputsV1::RedeemSplit {
+                amount: 20,
+                beneficiary: machine.enrollment_binding().owner.account_id.clone(),
+            },
+        };
+        let original_binding = norito::encode_canonical(&original.inputs).unwrap();
+        let mut changed = original.clone();
+        changed.inputs = KagemushaOutgoingPublicInputsV1::RedeemSplit {
+            amount: 21,
+            beneficiary: machine.enrollment_binding().owner.account_id.clone(),
+        };
+        let changed_binding = norito::encode_canonical(&changed.inputs).unwrap();
+        machine
+            .reserve_coordinator_operation(
+                &mut selected_store,
+                original.operation_id,
+                5,
+                &original_binding,
+            )
+            .unwrap();
+        if begin_intent {
+            machine
+                .begin_coordinator_sender_intent(&mut selected_store, &original)
+                .unwrap();
+        }
+        assert!(machine.outgoing_operation_index().is_empty());
+
+        // Initial empty creation remains supported before the selected prefix advances.
+        // One alternate is an older valid prefix; the other has a conflicting valid suffix.
+        let parent = bundle.parent().unwrap();
+        let older_path = parent.join("older-operations");
+        let mut older = machine
+            .create_coordinator_operation_store(&older_path, BOOTSTRAP_CAPACITY)
+            .unwrap();
+        let conflicting_path = parent.join("conflicting-operations");
+        let mut conflicting = machine
+            .create_coordinator_operation_store(&conflicting_path, BOOTSTRAP_CAPACITY)
+            .unwrap();
+        machine
+            .reserve_coordinator_operation(
+                &mut conflicting,
+                changed.operation_id,
+                5,
+                &changed_binding,
+            )
+            .unwrap();
+        if begin_intent {
+            machine
+                .begin_coordinator_sender_intent(&mut conflicting, &changed)
+                .unwrap();
+        }
+        let mut journals = machine.recovery_metadata().journals;
+        journals.coordinator = selected_store.recovery_prefix().unwrap();
+        assert_eq!(
+            journals.coordinator.sequence,
+            if begin_intent { 3 } else { 2 }
+        );
+        let next = machine
+            .prepare_recovery_checkpoint([193; 32], journals)
+            .unwrap();
+        let certificate = hardware.commit(&next).unwrap();
+        let machine = machine
+            .stage_recovery_checkpoint(next)
+            .unwrap()
+            .finish(certificate)
+            .unwrap();
+        machine.current_recovery_selection().unwrap();
+        let unused = parent.join("must-not-be-created");
+        assert!(matches!(
+            machine.create_coordinator_operation_store(&unused, BOOTSTRAP_CAPACITY),
+            Err(KagemushaCoordinatorOperationStoreErrorV1::CoreMismatch)
+        ));
+        assert!(!unused.exists());
+        for other in [&mut older, &mut conflicting] {
+            assert_eq!(
+                machine.reserve_coordinator_operation(
+                    other,
+                    changed.operation_id,
+                    5,
+                    &changed_binding,
+                ),
+                Err(KagemushaCoordinatorOperationStoreErrorV1::CoreMismatch)
+            );
+            assert_eq!(
+                machine.begin_coordinator_sender_intent(other, &changed),
+                Err(KagemushaCoordinatorOperationStoreErrorV1::CoreMismatch)
+            );
+            assert_eq!(
+                machine.recover_coordinator_sender_intent(other, changed.operation_id),
+                Err(KagemushaCoordinatorOperationStoreErrorV1::CoreMismatch)
+            );
+            assert_eq!(
+                machine.retire_released_coordinator_sender_operations(other),
+                Err(KagemushaCoordinatorOperationStoreErrorV1::CoreMismatch)
+            );
+        }
+        drop(older);
+        drop(conflicting);
+        for path in [&older_path, &conflicting_path] {
+            assert!(matches!(
+                machine.open_coordinator_operation_store(path, BOOTSTRAP_CAPACITY),
+                Err(KagemushaCoordinatorOperationStoreErrorV1::CoreMismatch)
+            ));
+        }
+        let expected = if begin_intent {
+            KagemushaCoordinatorSenderIntentRecoveryV1::Intent(original.clone())
+        } else {
+            KagemushaCoordinatorSenderIntentRecoveryV1::Reserved
+        };
+        assert_eq!(
+            machine.recover_coordinator_sender_intent(&selected_store, original.operation_id),
+            Ok(expected.clone())
+        );
+        assert_eq!(
+            machine.reserve_coordinator_operation(
+                &mut selected_store,
+                original.operation_id,
+                5,
+                &changed_binding,
+            ),
+            Err(KagemushaCoordinatorOperationStoreErrorV1::Conflict)
+        );
+        let checkpointed = selected_store.recovery_prefix().unwrap();
+        machine
+            .reserve_coordinator_operation(&mut selected_store, [194; 32], 4, b"retained suffix")
+            .unwrap();
+        let extended = selected_store.recovery_prefix().unwrap();
+        assert_eq!(extended.sequence, checkpointed.sequence + 1);
+        drop(selected_store);
+        let mut selected_store = machine
+            .open_coordinator_operation_store(&bundle.join("operations"), 0)
+            .unwrap();
+        assert_eq!(selected_store.recovery_prefix().unwrap(), extended);
+        assert_eq!(
+            machine.recover_coordinator_sender_intent(&selected_store, original.operation_id),
+            Ok(expected)
+        );
+        assert_eq!(
+            machine.reserve_coordinator_operation(
+                &mut selected_store,
+                original.operation_id,
+                5,
+                &original_binding,
+            ),
+            Ok(original.operation_id)
+        );
+        machine
+            .begin_coordinator_sender_intent(&mut selected_store, &original)
+            .unwrap();
+        assert_eq!(
+            machine.recover_coordinator_sender_intent(&selected_store, original.operation_id),
+            Ok(KagemushaCoordinatorSenderIntentRecoveryV1::Intent(original))
+        );
+    }
+}

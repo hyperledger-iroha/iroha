@@ -264,10 +264,11 @@ the valid upper projection. Neither default admission limits nor existing
 bundle limits were raised.
 
 The complete DTO has an unconditional raw value lower bound of
-`375*342*8 + 375*64 = 1,050,000` bytes. It exceeds both the unchanged 512 KiB proof
-and 1 MiB AXT ceilings before any framing, indices, roots or frontiers. The
+`375*342*8 + 375*64 = 1,050,000` bytes. It exceeds the 512 KiB compact proof
+target and 1 MiB AXT ceiling before any framing, indices, roots or frontiers. The
 750-row maximum shape contains 2,052,000 row bytes separately; that maximum is
-not a universal lower bound. None of these calculations raises an admission cap.
+not a universal lower bound. Replay's derived payload/frame defaults are a
+separate policy; none of these calculations activates compact admission.
 
 The [prefix contract](fastpq_compact_v1_framing.md) defines owned immutable
 canonical-prefix reuse. It changes physical repeated absorption, not logical

@@ -32,7 +32,7 @@ public final class AccountFaucetPreparedVerifier {
   public static SignedTransaction requireValidPrepared(
       final AccountFaucetPreparedTransactionV1 prepared,
       final AccountFaucetClaimV1 claim,
-      final TairaPublicResetMutationBindingV1 binding,
+      final PreparedOperationBindingV1 binding,
       final FeePaymentIntent expectedFeePayment,
       final AccountFaucetPolicyV1 policy,
       final NetworkId expectedNetworkId) {
@@ -42,6 +42,7 @@ public final class AccountFaucetPreparedVerifier {
     Objects.requireNonNull(expectedFeePayment, "expectedFeePayment");
     Objects.requireNonNull(policy, "policy");
     Objects.requireNonNull(expectedNetworkId, "expectedNetworkId");
+    binding.requireFaucetClaim(claim);
     if (!prepared.binding().toJsonMap().equals(binding.toJsonMap())
         || !prepared.claim().toJsonMap().equals(claim.toJsonMap())) {
       throw new IllegalArgumentException(
@@ -93,6 +94,7 @@ public final class AccountFaucetPreparedVerifier {
           "prepared faucet transaction hash differs from the envelope");
     }
     final TransactionPayload payload = SignedTransactionEncoder.decodeCanonicalPayload(transaction);
+    binding.requireTransactionLifetime(payload);
     if (!AccountOnboardingReceiptVerifier.verifyAuthoritySignature(
         payload.authority(),
         IrohaHash.prehash(transaction.encodedPayload()),
@@ -109,19 +111,7 @@ public final class AccountFaucetPreparedVerifier {
       throw new IllegalArgumentException(
           "prepared faucet fee intent differs from the signed transaction");
     }
-    final Map<String, JsonValue> expectedMetadata = new LinkedHashMap<>();
-    expectedMetadata.put(
-        "taira_public_reset_binding",
-        JsonValue.parse(JsonEncoder.encode(binding.toJsonMap())));
-    expectedMetadata.put(
-        "taira_prepared_operation",
-        JsonValue.string(AccountFaucetPreparedTransactionV1.OPERATION));
-    expectedMetadata.put(
-        "taira_prepared_semantic_hash", JsonValue.string(prepared.semanticHashHex()));
-    if (!payload.metadata().equals(expectedMetadata)) {
-      throw new IllegalArgumentException(
-          "prepared faucet transaction metadata differs from the envelope");
-    }
+    requireExactMetadata(payload.metadata(), binding, prepared.semanticHashHex());
     requireExactInstructions(payload.executable(), claim, policy);
     return transaction;
   }
@@ -154,6 +144,26 @@ public final class AccountFaucetPreparedVerifier {
       throw new IllegalArgumentException("HTTP 202 prepared faucet submit must remain Pending");
     }
     return response;
+  }
+
+  static void requireExactMetadata(
+      final Map<String, JsonValue> actualMetadata,
+      final PreparedOperationBindingV1 binding,
+      final String semanticHashHex) {
+    final Map<String, JsonValue> expectedMetadata = new LinkedHashMap<>();
+    expectedMetadata.put(
+        "prepared_operation_binding",
+        JsonValue.parse(JsonEncoder.encode(binding.toJsonMap())));
+    expectedMetadata.put(
+        "prepared_operation",
+        JsonValue.string(AccountFaucetPreparedTransactionV1.OPERATION));
+    expectedMetadata.put(
+        "prepared_semantic_hash", JsonValue.string(semanticHashHex));
+    expectedMetadata.put("taira_faucet_claim_marker_version", JsonValue.number(1L));
+    if (!actualMetadata.equals(expectedMetadata)) {
+      throw new IllegalArgumentException(
+          "prepared faucet transaction metadata differs from the envelope");
+    }
   }
 
   private static void requireExactInstructions(

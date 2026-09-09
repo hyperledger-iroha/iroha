@@ -46,7 +46,7 @@ fn external_multisig_address_rejects_noncanonical_policy_before_accepting_litera
         assert!(AccountAddress::from_i105_for_discriminant(&literal, Some(753)).is_err());
         let _chain = ChainDiscriminantGuard::enter(753);
         assert!(AccountId::parse_encoded(&literal).is_err());
-        #[cfg(feature = "json")]
+
         assert!(
             norito::json::from_str::<AccountId>(&norito::json::to_json(&literal).unwrap()).is_err()
         );
@@ -79,7 +79,7 @@ fn external_multisig_address_preserves_complete_canonical_identity() {
             .sum::<u32>(),
         3
     );
-    #[cfg(feature = "json")]
+
     assert_eq!(
         norito::json::from_str::<AccountId>(&norito::json::to_json(&account).unwrap()).unwrap(),
         account

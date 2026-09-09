@@ -228,9 +228,8 @@ pub fn normalized_numeric_to_u64(value: &Numeric, target_scale: u32) -> Option<u
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
     IntoSchema,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1")]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::fastpq::FastpqTransitionBatch",
     frame = "iroha_data_model::fastpq::FastpqStateTransitionBatchV1"
@@ -487,11 +486,11 @@ mod tests {
             expected
         );
         assert_eq!(
-            <FastpqTransitionBatch as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<FastpqTransitionBatch>(),
             expected
         );
         assert_eq!(
-            <FastpqTransitionBatch as norito::NoritoDeserialize<'static>>::schema_hash(),
+            norito::schema::identity::frame_hash::<FastpqTransitionBatch>(),
             expected
         );
         let batch = FastpqTransitionBatch {

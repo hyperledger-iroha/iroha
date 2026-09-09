@@ -32,13 +32,13 @@ pub const MAX_NAME_BYTES: usize = 255;
 // The fingerprinted Unicode NFC profile has at most four recursively decomposed scalars for one
 // input scalar. `nfc_profile_decomposition_bound_matches_charge_audit` derives this value from the
 // same ICU4X data, and the profile hash below makes a data change fail closed in production.
-#[cfg(feature = "json")]
+
 const JSON_NFC_PROFILE_MAX_DECOMPOSITION_SCALARS: usize = 4;
 // ICU4X 2.2's NFC iterator uses `SmallVec<[CharacterAndClass; 17]>`, where
 // `CharacterAndClass` is one u32. On overflow, smallvec 1.15 grows through power-of-two capacities
 // beginning at 32. The sum below charges every requested replacement layout in one traversal,
 // independent of whether the allocator can extend a particular allocation in place.
-#[cfg(feature = "json")]
+
 fn json_nfc_buffer_request_bytes(source_scalars: usize) -> usize {
     const INLINE_SCALARS: usize = 17;
     const FIRST_HEAP_CAPACITY: usize = 32;
@@ -49,7 +49,7 @@ fn json_nfc_buffer_request_bytes(source_scalars: usize) -> usize {
     let max_capacity = max_decomposed.next_power_of_two();
     (2 * max_capacity - FIRST_HEAP_CAPACITY) * core::mem::size_of::<u32>()
 }
-#[cfg(feature = "json")]
+
 fn name_json_error(message: &'static str) -> norito::json::Error {
     norito::json::Error::WithPos {
         msg: message,
@@ -147,36 +147,32 @@ impl Name {
     fn validate_str(candidate: &str) -> Result<(), ParseError> {
         const FORBIDDEN_CHARS: [char; 3] = ['@', '#', '$'];
         if candidate.is_empty() {
-            return Err(ParseError {
-                reason: "Empty `Name`",
-            });
+            return Err(ParseError::new("Empty `Name`"));
         }
         if candidate.len() > MAX_NAME_BYTES {
-            return Err(ParseError {
-                reason: "`Name` exceeds the 255-byte UTF-8 limit",
-            });
+            return Err(ParseError::new("`Name` exceeds the 255-byte UTF-8 limit"));
         }
         if candidate.chars().any(char::is_control) {
-            return Err(ParseError {
-                reason: "Unicode control characters are not allowed in `Name` constructs",
-            });
+            return Err(ParseError::new(
+                "Unicode control characters are not allowed in `Name` constructs",
+            ));
         }
         if candidate.chars().any(is_bidi_control) {
-            return Err(ParseError {
-                reason: "Unicode bidirectional control characters are not allowed in `Name` constructs",
-            });
+            return Err(ParseError::new(
+                "Unicode bidirectional control characters are not allowed in `Name` constructs",
+            ));
         }
         if candidate.chars().any(char::is_whitespace) {
-            return Err(ParseError {
-                reason: "White space not allowed in `Name` constructs",
-            });
+            return Err(ParseError::new(
+                "White space not allowed in `Name` constructs",
+            ));
         }
         if candidate.chars().any(|ch| FORBIDDEN_CHARS.contains(&ch)) {
             #[allow(clippy::non_ascii_literal)]
-            return Err(ParseError {
-                reason: "The `@` character is reserved for scoped alias/public-key constructs, \
+            return Err(ParseError::new(
+                "The `@` character is reserved for scoped alias/public-key constructs, \
                         `#` for alias separators (for example `name#domain.dataspace`), and `$` — for `nft$domain`.",
-            });
+            ));
         }
         Ok(())
     }
@@ -205,7 +201,7 @@ impl Name {
         Ok(Self(ConstString::from(candidate)))
     }
     /// Check exact NFC spelling while charging the audited normalization scratch.
-    #[cfg(feature = "json")]
+
     pub(crate) fn ensure_nfc_for_json_decode(candidate: &str) -> Result<(), norito::json::Error> {
         let normalizer = nfc_normalizer().map_err(|err| name_json_error(err.reason()))?;
         if candidate.is_ascii() {
@@ -222,7 +218,7 @@ impl Name {
         }
         Err(name_json_error(ERR_NAME_NFC))
     }
-    #[cfg(feature = "json")]
+
     fn parse_for_json_decode(candidate: &str) -> Result<Self, norito::json::Error> {
         fn retain_exact(value: &str) -> Result<Name, norito::json::Error> {
             Name::validate_str(value).map_err(|err| name_json_error(err.reason()))?;
@@ -254,7 +250,8 @@ impl Name {
             .ok_or(NoritoError::LengthMismatch)?;
         let value = core::str::from_utf8(raw).map_err(|_| NoritoError::InvalidUtf8)?;
         norito::core::reserve_decode_allocation(len)?;
-        let name = Self::parse(value).map_err(|error| NoritoError::Message(error.reason.into()))?;
+        let name =
+            Self::parse(value).map_err(|error| NoritoError::Message(error.reason().into()))?;
         norito::core::note_payload_access(bytes, end);
         Ok((name, end))
     }
@@ -266,7 +263,7 @@ impl Name {
         self.0.as_ref().eq_ignore_ascii_case("genesis")
     }
 }
-impl norito::core::NoritoSerialize for Name {}
+
 impl norito::core::SerializePayload for Name {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
@@ -278,7 +275,8 @@ impl norito::core::SerializePayload for Name {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl<'a> norito::core::NoritoDeserialize<'a> for Name {
+
+impl<'a> norito::core::DeserializePayload<'a> for Name {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
             .expect("Name deserialization must succeed for valid archives")
@@ -299,9 +297,9 @@ impl<'a> norito::core::NoritoDeserialize<'a> for Name {
             }
             return Self::decode_wire(payload).map(|(name, _)| name);
         }
-        let string = norito::core::NoritoDeserialize::deserialize(archived.cast::<String>());
+        let string = norito::core::DeserializePayload::deserialize(archived.cast::<String>());
         Name::from_str(string.as_str())
-            .map_err(|err| norito::core::Error::Message(err.reason.into()))
+            .map_err(|err| norito::core::Error::Message(err.reason().into()))
     }
 }
 impl AsRef<str> for Name {
@@ -379,7 +377,7 @@ pub(crate) fn is_bidi_control(ch: char) -> bool {
             | '\u{2066}'..='\u{2069}'
     )
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for Name {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(self.as_ref(), out);
@@ -391,7 +389,7 @@ impl norito::json::FastJsonWrite for Name {
         norito::json::write_json_string_to(self.as_ref(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for Name {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -406,7 +404,7 @@ impl norito::json::JsonDeserialize for Name {
         Self::parse_for_json_decode(candidate)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKey for Name {
     fn visit_json_key_text<E>(
         &self,
@@ -415,7 +413,7 @@ impl norito::json::JsonObjectKey for Name {
         visitor(self.as_ref())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKeyOwned for Name {
     fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         Self::parse_for_json_decode(key)
@@ -434,7 +432,7 @@ mod tests {
     use std::borrow::ToOwned as _;
     // Trait import not required; tests roundtrip via header-framed helpers.
     const INVALID_NAMES: [&str; 4] = ["", " ", "@", "#"];
-    #[cfg(feature = "json")]
+
     #[test]
     fn deserialize_name() {
         for invalid_name in INVALID_NAMES {
@@ -444,7 +442,7 @@ mod tests {
             assert!(name.is_err());
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn borrowed_json_name_charges_final_box_before_allocation() {
         fn limits(bytes: usize) -> norito::DecodeLimits {
@@ -469,7 +467,7 @@ mod tests {
         ));
         assert_eq!(usage.total_allocated_bytes(), 0);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn borrowed_json_name_rejects_invalid_values_without_decode_heap() {
         let limits = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX);
@@ -484,7 +482,7 @@ mod tests {
             assert_eq!(usage.total_allocated_bytes(), 0);
         }
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn borrowed_json_name_charges_nfc_check_and_rejects_rewrites() {
         fn limits(bytes: usize) -> norito::DecodeLimits {
@@ -516,7 +514,7 @@ mod tests {
         ));
         assert_eq!(usage.total_allocated_bytes(), 0);
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn nfc_profile_decomposition_bound_matches_charge_audit() {
         let nfd = icu_normalizer::DecomposingNormalizer::new_nfd();
@@ -536,7 +534,7 @@ mod tests {
             // Use stable header-framed Norito over String, then parse back to Name
             let bytes = norito::to_bytes(&s.to_string()).expect("encode str");
             let archived = norito::from_bytes::<String>(&bytes).expect("archived str");
-            let decoded_s = norito::core::NoritoDeserialize::deserialize(archived);
+            let decoded_s = norito::core::DeserializePayload::deserialize(archived);
             assert_eq!(decoded_s, s);
             let reparsed = Name::from_str(&decoded_s).expect("parse back");
             assert_eq!(reparsed, name);
@@ -656,7 +654,7 @@ mod tests {
             "decoder reached a generic truncation error before the Name limit: {error}"
         );
     }
-    #[cfg(feature = "json")]
+
     #[test]
     fn json_decoder_cannot_bypass_name_validation() {
         for invalid in [

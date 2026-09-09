@@ -76,7 +76,7 @@ test("Kotodama dynamic-access policy exposes the exact ordered V1 contract", () 
     "DomainId",
     "Name",
   ]);
-  assert.deepEqual(KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS, ["range", "take"]);
+  assert.deepEqual(KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS, ["page", "take"]);
   assert.equal(KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS, 64);
 
   for (const keyType of KOTODAMA_V1_STATE_MAP_KEY_TYPES) {
@@ -282,7 +282,7 @@ function compilerArtifactFixture({
   kotoba = 0,
   entrypoints = 1,
   states = 0,
-  errorCodes = 0,
+  errorTypes = 0,
   interfaceAbiByte = 0x23,
   headerAbiByte = 0x23,
 } = {}) {
@@ -299,7 +299,7 @@ function compilerArtifactFixture({
     field(vector(kotoba)),
     field(vector(entrypoints)),
     field(vector(states)),
-    field(vector(errorCodes)),
+    field(vector(errorTypes)),
   );
   const frame = concatBytes(
     new TextEncoder().encode("NRT0"),
@@ -400,8 +400,8 @@ function compilerEntrypoint(name, kind, permission = null) {
     kind: { kind, value: null },
     params: [],
     argument_schema: null,
-    return_type: null,
-    return_schema: null,
+    return_type: "()",
+    return_schema: { nodes: [{ kind: "Unit", value: null }] },
     permission,
     read_keys: [],
     write_keys: [],
@@ -442,7 +442,7 @@ const SERVICE_OUTPUT = {
       compilerEntrypoint("ping", "View"),
     ],
     states: [],
-    error_codes: null,
+    error_types: null,
     kotoba: null,
     provenance: null,
   }),
@@ -815,7 +815,7 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
       kotoba: manifest.kotoba?.length ?? 0,
       entrypoints: manifest.entrypoints?.length ?? 0,
       states: manifest.states?.length ?? 0,
-      errorCodes: manifest.error_codes?.length ?? 0,
+      errorTypes: manifest.error_types?.length ?? 0,
     });
     const matched = serviceSuccessWithArtifact(artifact, (target) => {
       for (const key of Object.keys(target)) delete target[key];
@@ -843,14 +843,14 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
     manifest.states = [
       { name: "amount", type_name: "Transfer{amount: quantity}" },
     ];
-    manifest.error_codes = [
-      { namespace: "LedgerError", name: "amount", code: 7 },
+    manifest.error_types = [
+      { identity: "LedgerError", variants: [{ name: "amount", code: 7 }] },
     ];
   });
   assert.deepEqual(contextualAmount.output.manifest.states, [
     { name: "amount", type_name: "Transfer{amount: quantity}" },
   ]);
-  assert.equal(contextualAmount.output.manifest.error_codes[0].name, "amount");
+  assert.equal(contextualAmount.output.manifest.error_types[0].variants[0].name, "amount");
 
   const retiredIdentifierCases = [
     ["entrypoint", (manifest) => {
@@ -874,8 +874,8 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
       manifest.states = [{ name: "Balances", type_name: "Transfer{Amount: quantity}" }];
     }, /state 0\.type_name is not a canonical V1 state type/u],
     ["error variant", (manifest) => {
-      manifest.error_codes = [{ namespace: "LedgerError", name: "Amount", code: 7 }];
-    }, /canonical namespace and variant identifiers/u],
+      manifest.error_types = [{ identity: "LedgerError", variants: [{ name: "Amount", code: 7 }] }];
+    }, /canonical variant identifier|stable package\/unit\/enum identity/u],
     ["dynamic state base", (manifest) => {
       manifest.access_set_hints = {
         read_keys: [],
@@ -929,14 +929,14 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
       /state 0\.type_name is not a canonical V1 state type/u,
     );
   }
-  for (const namespace of ["Amount", "amount"]) {
+  for (const namespace of ["Invalid Error", "Error<Injected>"]) {
     await assert.rejects(
       compileResponse((manifest) => {
-        manifest.error_codes = [
-          { namespace, name: "Denied", code: 7 },
+        manifest.error_types = [
+          { identity: namespace, variants: [{ name: "Denied", code: 7 }] },
         ];
       }),
-      /canonical namespace and variant identifiers/u,
+      /canonical variant identifier|stable package\/unit\/enum identity/u,
     );
   }
   await assert.rejects(
@@ -971,12 +971,12 @@ test("compiler adapters preserve branded selectors and reject forged manifest de
   );
   await assert.rejects(
     compileResponse((manifest) => {
-      manifest.error_codes = [
-        { namespace: "LedgerError", name: "Denied", code: 7 },
-        { namespace: "LedgerError", name: "Missing", code: 7 },
+      manifest.error_types = [
+        { identity: "LedgerError", variants: [{ name: "Denied", code: 7 }] },
+        { identity: "LedgerError", variants: [{ name: "Missing", code: 7 }] },
       ];
     }),
-    /duplicate error path or code/u,
+    /duplicate error identity/u,
   );
 });
 
@@ -1065,6 +1065,16 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
       }));
       entrypoint.argument_schema = { fields: [] };
     }, /at most 13 items/u],
+    ["missing Unit return descriptors", ({ manifest }) => {
+      manifest.entrypoints[0].return_type = null;
+      manifest.entrypoints[0].return_schema = null;
+    }, /return_type and return_schema must be present together/u],
+    ["missing Unit return type", ({ manifest }) => {
+      manifest.entrypoints[0].return_type = null;
+    }, /return_type and return_schema must be present together/u],
+    ["missing Unit return schema", ({ manifest }) => {
+      manifest.entrypoints[0].return_schema = null;
+    }, /return_type and return_schema must be present together/u],
     ["return schema mismatch", ({ manifest }) => {
       const entrypoint = manifest.entrypoints[0];
       entrypoint.return_type = "decimal";
@@ -1092,7 +1102,7 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
         dynamic_reads: [{
           base_key: "state:amount",
           key_type: "quantity",
-          bound_kind: "range",
+          bound_kind: "page",
           max_keys: 0,
         }],
         dynamic_writes: [],
@@ -1178,7 +1188,7 @@ test("compiler manifest boundary rejects unknown, inconsistent, and unbounded da
           dynamic_writes: [],
         };
       },
-      /bound_kind must be exactly take or range/u,
+      /bound_kind must be exactly take or page/u,
     ]),
     ["duplicate kotoba language", ({ manifest }) => {
       manifest.kotoba = [{
@@ -1466,7 +1476,7 @@ test("compiler trigger metadata is exact, bounded, and non-recursive beyond poli
     }),
     /id must be unique and canonical/u,
   );
-  for (const namespace of ["Amount", "amount"]) {
+  for (const namespace of ["Invalid Error", "Error<Injected>"]) {
     await assert.rejects(
       compileMutatedServiceResponse(({ manifest }) => {
         const value = trigger();

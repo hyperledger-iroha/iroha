@@ -1082,12 +1082,13 @@ impl norito::core::SerializePayload for FieldPath {
         <String as norito::core::SerializePayload>::serialize(&self.0, writer)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for FieldPath {
+impl norito::core::NoritoDeserialize<'_> for FieldPath {}
+impl<'de> norito::core::DeserializePayload<'de> for FieldPath {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FieldPath>,
     ) -> Result<Self, norito::core::Error> {
         let archived_str: &norito::core::Archived<String> = archived.cast();
-        let inner = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_str)?;
+        let inner = <String as norito::core::DeserializePayload>::try_deserialize(archived_str)?;
         Ok(FieldPath(inner))
     }
     fn deserialize(archived: &'de norito::core::Archived<FieldPath>) -> Self {
@@ -1101,13 +1102,14 @@ impl norito::core::SerializePayload for Selector {
         <Vec<FieldPath> as norito::core::SerializePayload>::serialize(&self.0, writer)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for Selector {
+impl norito::core::NoritoDeserialize<'_> for Selector {}
+impl<'de> norito::core::DeserializePayload<'de> for Selector {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Selector>,
     ) -> Result<Self, norito::core::Error> {
         let archived_inner: &norito::core::Archived<Vec<FieldPath>> = archived.cast();
         let inner =
-            <Vec<FieldPath> as norito::core::NoritoDeserialize>::try_deserialize(archived_inner)?;
+            <Vec<FieldPath> as norito::core::DeserializePayload>::try_deserialize(archived_inner)?;
         Ok(Selector(inner))
     }
     fn deserialize(archived: &'de norito::core::Archived<Selector>) -> Self {
@@ -1124,12 +1126,13 @@ impl norito::core::SerializePayload for Order {
         <u8 as norito::core::SerializePayload>::serialize(&tag, writer)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for Order {
+impl norito::core::NoritoDeserialize<'_> for Order {}
+impl<'de> norito::core::DeserializePayload<'de> for Order {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Order>,
     ) -> Result<Self, norito::core::Error> {
         let archived_tag: &norito::core::Archived<u8> = archived.cast();
-        let tag = <u8 as norito::core::NoritoDeserialize>::try_deserialize(archived_tag)?;
+        let tag = <u8 as norito::core::DeserializePayload>::try_deserialize(archived_tag)?;
         match tag {
             0 => Ok(Order::Asc),
             1 => Ok(Order::Desc),
@@ -1149,13 +1152,14 @@ impl norito::core::SerializePayload for SortKey {
         <(FieldPath, Order) as norito::core::SerializePayload>::serialize(&payload, writer)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for SortKey {
+impl norito::core::NoritoDeserialize<'_> for SortKey {}
+impl<'de> norito::core::DeserializePayload<'de> for SortKey {
     fn try_deserialize(
         archived: &'de norito::core::Archived<SortKey>,
     ) -> Result<Self, norito::core::Error> {
         let archived_pair: &norito::core::Archived<(FieldPath, Order)> = archived.cast();
         let (key, order) =
-            <(FieldPath, Order) as norito::core::NoritoDeserialize>::try_deserialize(
+            <(FieldPath, Order) as norito::core::DeserializePayload>::try_deserialize(
                 archived_pair,
             )?;
         Ok(SortKey { key, order })
@@ -1174,12 +1178,13 @@ impl norito::core::SerializePayload for FilterExpr {
         <String as norito::core::SerializePayload>::serialize(&json, writer)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for FilterExpr {
+impl norito::core::NoritoDeserialize<'_> for FilterExpr {}
+impl<'de> norito::core::DeserializePayload<'de> for FilterExpr {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FilterExpr>,
     ) -> Result<Self, norito::core::Error> {
         let archived_str: &norito::core::Archived<String> = archived.cast();
-        let json = <String as norito::core::NoritoDeserialize>::try_deserialize(archived_str)?;
+        let json = <String as norito::core::DeserializePayload>::try_deserialize(archived_str)?;
         let expr = norito::json::from_str::<FilterExpr>(&json)
             .map_err(|err| norito::core::Error::Message(err.to_string()))?;
         validate_filter(&expr)

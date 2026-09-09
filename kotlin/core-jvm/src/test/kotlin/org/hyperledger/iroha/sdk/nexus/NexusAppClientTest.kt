@@ -23,7 +23,7 @@ import org.hyperledger.iroha.sdk.alias.AccountOnboardingPrepareResponseV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingPreparedTransactionV1
 import org.hyperledger.iroha.sdk.alias.AccountOnboardingProofRequiredPrepareResponseV1
 import org.hyperledger.iroha.sdk.alias.PreparedTransactionSubmitResponseV1
-import org.hyperledger.iroha.sdk.alias.TairaPublicResetMutationBindingV1
+import org.hyperledger.iroha.sdk.alias.PreparedOperationBindingV1
 import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -852,7 +852,7 @@ class NexusAppClientTest {
         override fun prepareSponsoredAccountOnboarding(
             request: AccountOnboardingPlanRequestV1,
             receipt: AccountOnboardingPlanReceiptV1,
-            binding: TairaPublicResetMutationBindingV1,
+            binding: PreparedOperationBindingV1,
             feePayment: FeePaymentIntent,
             onboardingToken: String,
             expectedAuthority: String,
@@ -864,7 +864,7 @@ class NexusAppClientTest {
             proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
             request: AccountOnboardingPlanRequestV1,
             receipt: AccountOnboardingPlanReceiptV1,
-            binding: TairaPublicResetMutationBindingV1,
+            binding: PreparedOperationBindingV1,
             expectedAuthority: String,
             expectedNetworkId: NetworkId,
             canonicalAuth: ToriiCanonicalRequestAuth,
@@ -883,7 +883,7 @@ class NexusAppClientTest {
 
         override fun prepareAccountFaucetTransaction(
             claim: AccountFaucetClaimV1,
-            binding: TairaPublicResetMutationBindingV1,
+            binding: PreparedOperationBindingV1,
             feePayment: FeePaymentIntent,
             policy: AccountFaucetPolicyV1,
             expectedNetworkId: NetworkId,

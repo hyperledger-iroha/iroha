@@ -96,17 +96,20 @@ fn pick_submit_peer_index(
         fallback
     }
 }
-fn submit_client_for_network(
+async fn submit_client_for_network(
     network: &sandbox::SerializedNetwork,
     _probe: &iroha::blocking::Client,
 ) -> iroha::blocking::Client {
     let peer_count = network.peers().len();
-    let status = network.peers().iter().find_map(|peer| {
-        if !peer.is_running() {
-            return None;
+    let mut status = None;
+    for peer in network.peers() {
+        if peer.is_running() {
+            status = peer.status().await.ok();
+            if status.is_some() {
+                break;
+            }
         }
-        peer.client().client().get_status().ok()
-    });
+    }
     let sumeragi = network.peers().iter().find_map(|peer| {
         if !peer.is_running() {
             return None;
@@ -156,17 +159,12 @@ async fn wait_for_submit_connectivity(
     let expected = min_connected_peers_for_submit(network.peers().len());
     let mut last_snapshot = Vec::new();
     loop {
-        let peer_counts = network
-            .peers()
-            .iter()
-            .filter_map(|peer| {
-                peer.client()
-                    .client()
-                    .get_status()
-                    .ok()
-                    .map(|status| status.peers)
-            })
-            .collect::<Vec<_>>();
+        let mut peer_counts = Vec::new();
+        for peer in network.peers() {
+            if let Ok(status) = peer.status().await {
+                peer_counts.push(status.peers);
+            }
+        }
         if !peer_counts.is_empty() {
             last_snapshot.clone_from(&peer_counts);
             if peer_counts.iter().all(|count| *count >= expected) {
@@ -302,7 +300,9 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     let client = network.client();
     let status_before = client
         .client()
-        .get_status()
+        .status()
+        .get()
+        .await
         .wrap_err("fetch initial status snapshot")?;
     let start_non_empty = status_before.blocks_non_empty;
     let target_non_empty = start_non_empty.saturating_add(SAMPLE_BLOCKS);
@@ -310,7 +310,7 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     // not hidden by an artificial startup queue burst.
     let mut next_seed = start_non_empty.saturating_add(1);
     if next_seed <= target_non_empty {
-        let submit_client = submit_client_for_network(&network, &client);
+        let submit_client = submit_client_for_network(&network, &client).await;
         let message = format!("npos baseline seed {next_seed}");
         tokio::task::spawn_blocking(move || {
             submit_client.submit(
@@ -326,7 +326,7 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
     let http = integration_tests::http::client();
     let metrics_url = client
         .client()
-        .torii_url
+        .endpoint()
         .join("metrics")
         .wrap_err("compose metrics URL")?;
     let mut queue_depth_samples = Vec::new();
@@ -369,12 +369,14 @@ async fn npos_baseline_1s_captures_metrics() -> Result<()> {
         }
         last_status = client
             .client()
-            .get_status()
+            .status()
+            .get()
+            .await
             .wrap_err("fetch status during sampling")?;
         if next_seed <= target_non_empty
             && last_status.blocks_non_empty.saturating_add(1) >= next_seed
         {
-            let submit_client = submit_client_for_network(&network, &client);
+            let submit_client = submit_client_for_network(&network, &client).await;
             let message = format!("npos baseline seed {next_seed}");
             tokio::task::spawn_blocking(move || {
                 submit_client.submit(
@@ -574,7 +576,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
     let client = network.client();
     let metrics_url = client
         .client()
-        .torii_url
+        .endpoint()
         .join("metrics")
         .wrap_err("compose metrics URL")?;
     let http = integration_tests::http::client();

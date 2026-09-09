@@ -2,7 +2,6 @@ use super::*;
 use crate::json_macros::JsonSerialize;
 use clap::Parser;
 use eyre::eyre;
-use futures::stream;
 use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     ChainId, Level,
@@ -19,7 +18,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tempfile::NamedTempFile;
-use tokio::runtime::Runtime;
 use url::Url;
 fn fixture_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -260,20 +258,151 @@ fn operator_private_key_file_is_an_explicit_global_runtime_option() {
     let args = Args::try_parse_from(["iroha", "ops", "sumeragi", "status"])
         .expect("operator credential remains optional for non-operator commands");
     assert!(args.operator_private_key_file.is_none());
+    assert!(args.operator_private_key_fd.is_none());
+    assert!(
+        load_runtime_operator_key(&args)
+            .expect("no inferred signer")
+            .is_none()
+    );
+}
+#[test]
+fn operator_private_key_fd_is_explicit_bounded_and_exclusive() {
+    for fd in ["3", "65535"] {
+        let args = Args::try_parse_from([
+            "iroha",
+            "--operator-private-key-fd",
+            fd,
+            "ops",
+            "sumeragi",
+            "status",
+        ])
+        .expect("bounded operator descriptor");
+        assert_eq!(args.operator_private_key_fd, Some(fd.parse().unwrap()));
+        assert!(args.operator_private_key_file.is_none());
+    }
+    for fd in ["0", "1", "2", "65536", "-1", "3.0", "not-a-descriptor"] {
+        assert!(
+            Args::try_parse_from([
+                "iroha",
+                "--operator-private-key-fd",
+                fd,
+                "ops",
+                "sumeragi",
+                "status",
+            ])
+            .is_err()
+        );
+    }
+    assert!(
+        Args::try_parse_from([
+            "iroha",
+            "--operator-private-key-fd",
+            "3",
+            "--operator-private-key-file",
+            "/run/secrets/iroha/operator.key",
+            "ops",
+            "sumeragi",
+            "status",
+        ])
+        .is_err()
+    );
+}
+#[test]
+fn credential_free_commands_reject_operator_fd_without_reading_it() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "--operator-private-key-fd",
+        "65535",
+        "ops",
+        "sumeragi",
+        "status",
+    ])
+    .expect("parse only; descriptor is never opened");
+    assert!(reject_irrelevant_local_tool_globals(&args, "app sorafs toolkit pack").is_err());
+    for error in [
+        reject_irrelevant_taira_doctor_globals(&args).unwrap_err(),
+        reject_irrelevant_taira_public_reset_globals(&args).unwrap_err(),
+    ] {
+        assert!(format!("{error:?}").contains("--operator-private-key-fd"));
+    }
+}
+#[cfg(unix)]
+#[test]
+fn inherited_operator_key_load_installs_the_explicit_run_context_signer() {
+    use iroha::crypto::ExposedPrivateKey;
+    use std::{
+        io::{Seek as _, SeekFrom},
+        os::{fd::AsRawFd as _, unix::fs::PermissionsExt as _},
+    };
+    let directory = tempfile::tempdir().expect("private operator fixture");
+    let path = directory.path().join("operator.key");
+    let key_pair = fixture_key_pair(0x73);
+    let encoded =
+        zeroize::Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
+    fs::write(&path, encoded.as_bytes()).expect("write explicit signer");
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("owner-only signer");
+    let mut file = fs::File::open(&path).expect("read-only inherited file");
+    file.seek(SeekFrom::Start(5)).expect("caller offset");
+    let fd = file.as_raw_fd().to_string();
+    let args = Args::try_parse_from([
+        "iroha",
+        "--operator-private-key-fd",
+        &fd,
+        "ops",
+        "sumeragi",
+        "status",
+    ])
+    .expect("parse inherited signer");
+    let mut context = test_context(CliOutputFormat::Json);
+    context.operator_key_pair = load_runtime_operator_key(&args).expect("load real descriptor");
+    let client = context.client_from_config().expect("valid command context");
+    assert_eq!(
+        client.operator_key_pair().map(KeyPair::public_key),
+        Some(key_pair.public_key())
+    );
+    assert_ne!(client.key_pair().public_key(), key_pair.public_key());
+    assert_eq!(client.network_id(), &context.config.network_id);
+    assert_eq!(
+        file.stream_position().expect("retained caller descriptor"),
+        5
+    );
 }
 #[test]
 fn run_context_installs_only_the_explicit_operator_key() {
     let mut context = test_context(CliOutputFormat::Json);
-    assert!(context.client_from_config().operator_key_pair.is_none());
+    assert!(
+        context
+            .client_from_config()
+            .expect("valid command context")
+            .operator_key_pair()
+            .is_none()
+    );
     let operator_key_pair = fixture_key_pair(0x71);
     context.operator_key_pair = Some(operator_key_pair.clone());
-    let client = context.client_from_config();
+    let client = context.client_from_config().expect("valid command context");
     assert_eq!(
-        client.operator_key_pair.as_ref().map(KeyPair::public_key),
+        client.operator_key_pair().map(KeyPair::public_key),
         Some(operator_key_pair.public_key())
     );
-    assert_eq!(client.network_id, context.config.network_id);
-    assert_ne!(client.key_pair.public_key(), operator_key_pair.public_key());
+    assert_eq!(client.network_id(), &context.config.network_id);
+    assert_ne!(
+        client.key_pair().public_key(),
+        operator_key_pair.public_key()
+    );
+}
+#[test]
+fn run_context_returns_invalid_client_configuration() {
+    let mut context = test_context(CliOutputFormat::Json);
+    context.config.torii_api_url = Url::parse("ftp://invalid.example/").expect("URL fixture");
+    let error = context
+        .client_from_config()
+        .expect_err("invalid endpoint must be returned before command dispatch");
+    assert!(matches!(
+        error.downcast_ref::<iroha::Error>(),
+        Some(iroha::Error::Context(
+            iroha::client::AuthorityContextError::UnsupportedEndpointScheme { .. }
+        ))
+    ));
 }
 fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
     let _domain =
@@ -516,7 +645,9 @@ fn fallback_config_is_limited_to_kagemusha_commands() {
     assert!(args.command.allows_fallback_config());
     assert!(args.command.allows_fallback_config_in_machine_mode());
     let network_id = iroha::data_model::NetworkId::from_genesis_hash(
-        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"local-contract-test")),
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"local-contract-test",
+        )),
     )
     .to_string();
     for command in [
@@ -875,6 +1006,8 @@ fn taira_public_reset_exposes_strict_preflight_and_apply() {
         "/private/runtime/known_hosts",
         "--runtime-client-config",
         "/private/runtime/client.toml",
+        "--validator-operator-key",
+        "/private/runtime/operator.key",
         "--validator-client-config",
         "/private/runtime/validator-1.toml",
         "/private/runtime/validator-2.toml",
@@ -913,6 +1046,77 @@ fn taira_public_reset_exposes_strict_preflight_and_apply() {
         .expect_err("retired public-reset apply flag must be rejected");
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
+}
+#[test]
+fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
+    let local = [
+        "--runtime-client-config",
+        "/private/runtime/client.toml",
+        "--validator-client-config",
+        "/private/runtime/client-1.toml",
+        "/private/runtime/client-2.toml",
+        "/private/runtime/client-3.toml",
+        "/private/runtime/client-4.toml",
+        "--onboarding-token",
+        "/private/runtime/token",
+        "--inrou-stage-dir",
+        "/private/runtime/stage",
+        "--validator-unit",
+        "/private/runtime/validator-1.service",
+        "/private/runtime/validator-2.service",
+        "/private/runtime/validator-3.service",
+        "/private/runtime/validator-4.service",
+        "--edge-unit",
+        "/private/runtime/edge.service",
+        "--known-hosts",
+        "/private/runtime/known_hosts",
+        "--output",
+        "/private/runtime/new.json",
+    ];
+    for subcommand in ["assemble", "authorize"] {
+        let mut argv = vec!["iroha", "taira", "public-reset", subcommand];
+        if subcommand == "assemble" {
+            argv.extend(["--inventory-draft", "/private/runtime/inventory-draft.json"]);
+        } else {
+            argv.extend([
+                "--inventory",
+                "/private/runtime/inventory.json",
+                "--trusted-public-key",
+                "/private/runtime/trusted.json",
+                "--signing-key-fd",
+                "3",
+            ]);
+        }
+        argv.extend(local);
+        let error = Args::try_parse_from(&argv).expect_err("explicit operator credential required");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::MissingRequiredArgument
+        );
+        assert!(error.to_string().contains("--validator-operator-key"));
+        argv.extend(["--validator-operator-key", "/private/runtime/operator.key"]);
+        Args::try_parse_from(argv)
+            .expect("parse complete local custody arguments without opening files");
+    }
+}
+#[test]
+fn taira_public_reset_operator_keygen_has_explicit_private_output() {
+    let args = Args::try_parse_from([
+        "iroha",
+        "taira",
+        "public-reset",
+        "operator-keygen",
+        "--private-key-file",
+        "/private/runtime/new-operator.key",
+    ])
+    .expect("parse key generation without generating a credential");
+    reject_irrelevant_taira_public_reset_globals(&args).expect("no unrelated global signer");
+    let error = Args::try_parse_from(["iroha", "taira", "public-reset", "operator-keygen"])
+        .expect_err("explicit output is required");
+    assert_eq!(
+        error.kind(),
+        clap::error::ErrorKind::MissingRequiredArgument
+    );
 }
 #[test]
 fn taira_write_canary_cli_parses_defaults_and_overrides() {
@@ -1496,27 +1700,112 @@ fn resolve_account_id_with_resolves_encoded_literal() {
 }
 #[test]
 fn stream_timeout_driver_propagates_errors() {
-    let mut stream = stream::iter(vec![Result::<DummyEvent, eyre::Report>::Err(eyre!(
-        "connection failed"
-    ))]);
     let mut processed = 0usize;
-    let rt = Runtime::new().expect("runtime");
-    let result = rt.block_on(async {
-        drive_try_stream_until_timeout(
-            &mut stream,
-            |_event| -> Result<()> {
-                processed += 1;
-                Ok(())
-            },
-            Duration::from_millis(1),
-            "timeout",
-        )
-        .await
-    });
+    let result = drive_stream_until_timeout(
+        |_timeout| {
+            Err::<Option<DummyEvent>, _>(iroha::Error::Transport {
+                operation: "events.subscribe",
+                kind: iroha::TransportErrorKind::Other,
+                details: "connection failed".to_owned(),
+            })
+        },
+        |_event| -> Result<()> {
+            processed += 1;
+            Ok(())
+        },
+        Duration::from_millis(1),
+        "timeout",
+    );
     let err = result.expect_err("stream error should propagate");
     assert!(err.to_string().contains("connection failed"));
     assert_eq!(processed, 0);
 }
+
+#[test]
+fn stream_timeout_driver_preserves_idle_wait_and_stops_at_timeout() {
+    let mut calls = 0;
+    let mut received = Vec::new();
+    drive_stream_until_timeout(
+        |timeout| {
+            assert_eq!(timeout, Duration::from_secs(7));
+            calls += 1;
+            match calls {
+                1 | 2 => Ok(Some(calls)),
+                3 => Err(iroha::Error::Timeout {
+                    operation: "stream.receive",
+                }),
+                _ => panic!("receive called after idle timeout"),
+            }
+        },
+        |item| {
+            received.push(item);
+            Ok(())
+        },
+        Duration::from_secs(7),
+        "timeout",
+    )
+    .expect("idle timeout completes the listener");
+    assert_eq!(calls, 3);
+    assert_eq!(received, vec![1, 2]);
+}
+
+#[test]
+fn stream_timeout_driver_preserves_transport_timeout_errors() {
+    let result = drive_stream_until_timeout(
+        |_| {
+            Err::<Option<DummyEvent>, _>(iroha::Error::Timeout {
+                operation: "events.subscribe",
+            })
+        },
+        |_| panic!("transport timeout must not deliver an item"),
+        Duration::from_secs(1),
+        "timeout",
+    );
+    assert!(result.unwrap_err().to_string().contains("events.subscribe"));
+}
+
+#[test]
+fn stream_timeout_driver_stops_at_clean_eof() {
+    let mut calls = 0;
+    drive_stream_until_timeout(
+        |_| {
+            calls += 1;
+            Ok::<Option<DummyEvent>, _>(None)
+        },
+        |_| panic!("EOF must not deliver an item"),
+        Duration::from_secs(1),
+        "timeout",
+    )
+    .expect("clean EOF");
+    assert_eq!(calls, 1);
+}
+
+#[test]
+fn stream_close_retains_receive_and_close_failures() {
+    let close_error = || iroha::Error::Timeout {
+        operation: "stream.close",
+    };
+    assert_eq!(finish_stream(Ok(7), Ok(())).unwrap(), 7);
+    assert_eq!(
+        finish_stream::<()>(Err(eyre!("original receive failure")), Ok(()))
+            .unwrap_err()
+            .to_string(),
+        "original receive failure",
+    );
+    assert!(matches!(
+        finish_stream(Ok(()), Err(close_error()))
+            .unwrap_err()
+            .downcast_ref::<iroha::Error>(),
+        Some(iroha::Error::Timeout {
+            operation: "stream.close"
+        }),
+    ));
+    let error = finish_stream::<()>(Err(eyre!("original receive failure")), Err(close_error()))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("original receive failure"));
+    assert!(error.to_string().contains("stream.close"));
+}
+
 fn authority_fee_payment_with_gas(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
@@ -1713,8 +2002,12 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
             stream.write_all(&body).expect("write fee-quote response");
         });
         config.torii_api_url = Url::parse(&format!("http://{address}/")).expect("fee-quote URL");
-        let client = BlockingClient::from_client(Client::new(config))
-            .expect("blocking fee-quote fixture client");
+        let client = BlockingClient::from_client(
+            Client::builder(config)
+                .build()
+                .expect("valid fee-quote context"),
+        )
+        .expect("blocking fee-quote fixture client");
         let result = quote_and_sign_transaction(
             &client,
             Executable::Instructions(Vec::<InstructionBox>::new().into()),

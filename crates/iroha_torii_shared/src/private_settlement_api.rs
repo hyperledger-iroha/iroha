@@ -49,6 +49,10 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementLifecycleDtoV1"
+)]
 pub enum PrivateSettlementLifecycleDtoV1 {
     /// Encrypted sidecar is durable and auditor approvals are being collected.
     Collecting,
@@ -87,6 +91,10 @@ impl PrivateSettlementLifecycleDtoV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementLegUploadRequestV1"
+)]
 pub struct PrivateSettlementLegUploadRequestV1 {
     /// Exact public atomic bundle manifest.
     pub manifest: AtomicPrivateSettlementV1,
@@ -103,6 +111,10 @@ pub struct PrivateSettlementLegUploadRequestV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementAvailabilityShareRequestV1"
+)]
 pub struct PrivateSettlementAvailabilityShareRequestV1 {
     /// Exact encrypted material that the node must persist before signing.
     pub material: PrivateSettlementProvisionalLegMaterialV1,
@@ -113,6 +125,10 @@ pub struct PrivateSettlementAvailabilityShareRequestV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementAvailabilityShareResponseV1"
+)]
 pub struct PrivateSettlementAvailabilityShareResponseV1 {
     /// Public bundle identifier.
     pub bundle_id: Hash,
@@ -131,6 +147,10 @@ pub struct PrivateSettlementAvailabilityShareResponseV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementPrepareVoteRequestV1"
+)]
 pub struct PrivateSettlementPrepareVoteRequestV1 {
     /// Exact finalized public manifest retained with the local encrypted leg.
     pub manifest: AtomicPrivateSettlementV1,
@@ -143,6 +163,10 @@ pub struct PrivateSettlementPrepareVoteRequestV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementCommitVoteRequestV1"
+)]
 pub struct PrivateSettlementCommitVoteRequestV1 {
     /// Content address selecting the exact locally staged participant leg.
     pub payload_digest: Hash,
@@ -155,6 +179,10 @@ pub struct PrivateSettlementCommitVoteRequestV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseVoteResponseV1"
+)]
 pub struct PrivateSettlementPhaseVoteResponseV1 {
     /// Public bundle identifier.
     pub bundle_id: Hash,
@@ -171,6 +199,10 @@ pub struct PrivateSettlementPhaseVoteResponseV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseCertificateRequestV1"
+)]
 pub struct PrivateSettlementPhaseCertificateRequestV1 {
     /// Exact finalized public manifest retained with the local encrypted leg.
     pub manifest: AtomicPrivateSettlementV1,
@@ -193,6 +225,10 @@ pub struct PrivateSettlementPhaseCertificateRequestV1 {
     Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseCertificateResponseV1"
+)]
 pub struct PrivateSettlementPhaseCertificateResponseV1 {
     /// Public bundle identifier.
     pub bundle_id: Hash,
@@ -211,6 +247,10 @@ pub struct PrivateSettlementPhaseCertificateResponseV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseCertificatesResponseV1"
+)]
 pub struct PrivateSettlementPhaseCertificatesResponseV1 {
     /// Public bundle identifier.
     pub bundle_id: Hash,
@@ -246,6 +286,10 @@ pub struct PrivateSettlementPhaseCertificatesResponseV1 {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementLegUploadDispositionV1"
+)]
 pub enum PrivateSettlementLegUploadDispositionV1 {
     /// New encrypted bytes became durable.
     Stored,
@@ -266,6 +310,10 @@ pub enum PrivateSettlementLegUploadDispositionV1 {
     Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementLegUploadResponseV1"
+)]
 pub struct PrivateSettlementLegUploadResponseV1 {
     /// Public bundle identifier.
     pub bundle_id: Hash,
@@ -292,6 +340,10 @@ pub struct PrivateSettlementLegUploadResponseV1 {
     Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementLegStatusResponseV1"
+)]
 pub struct PrivateSettlementLegStatusResponseV1 {
     /// Public bundle identifier.
     pub bundle_id: Hash,
@@ -321,6 +373,10 @@ pub struct PrivateSettlementLegStatusResponseV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementCommitteeProofResponseV1"
+)]
 pub struct PrivateSettlementCommitteeProofResponseV1 {
     /// Exact public bundle manifest.
     pub manifest: AtomicPrivateSettlementV1,
@@ -362,6 +418,10 @@ impl fmt::Debug for PrivateSettlementCommitteeProofResponseV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditorCapsuleRequestV1"
+)]
 pub struct PrivateSettlementAuditorCapsuleRequestV1 {
     /// Exact current governed policy under which the request is authorized.
     pub audit_policy: PrivateSettlementAuditPolicyV1,
@@ -372,6 +432,10 @@ pub struct PrivateSettlementAuditorCapsuleRequestV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditorCapsuleResponseV1"
+)]
 pub struct PrivateSettlementAuditorCapsuleResponseV1 {
     /// Node-authoritative height used for access and lifecycle evaluation.
     pub authoritative_height: u64,
@@ -431,6 +495,10 @@ impl PrivateSettlementAuditorCapsuleResponseV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditApprovalRequestV1"
+)]
 pub struct PrivateSettlementAuditApprovalRequestV1 {
     /// Exact current governed policy under which the approval is submitted.
     pub audit_policy: PrivateSettlementAuditPolicyV1,
@@ -443,6 +511,10 @@ pub struct PrivateSettlementAuditApprovalRequestV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditApprovalResponseV1"
+)]
 pub struct PrivateSettlementAuditApprovalResponseV1 {
     /// Node-authoritative height at which the approval result is durable.
     pub authoritative_height: u64,
@@ -1093,6 +1165,10 @@ pub fn validate_private_settlement_audit_approval_response_v1(
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleSubmitRequestV1"
+)]
 pub struct PrivateSettlementBundleSubmitRequestV1 {
     /// Exact sponsor-signed transaction carrying one Prepare-lock registration,
     /// finalization, or abort instruction.
@@ -1112,6 +1188,10 @@ pub struct PrivateSettlementBundleSubmitRequestV1 {
     Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleSubmitResponseV1"
+)]
 pub struct PrivateSettlementBundleSubmitResponseV1 {
     /// Public bundle identifier.
     pub bundle_id: Hash,
@@ -1126,6 +1206,10 @@ pub struct PrivateSettlementBundleSubmitResponseV1 {
     JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize, Debug, Clone, PartialEq, Eq,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleStatusResponseV1"
+)]
 pub struct PrivateSettlementBundleStatusResponseV1 {
     /// Exact public bundle manifest when locally retained.
     ///
@@ -1149,6 +1233,10 @@ pub struct PrivateSettlementBundleStatusResponseV1 {
     content = "value",
     rename_all = "snake_case",
     deny_unknown_fields
+)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleReceiptResponseV1"
 )]
 pub enum PrivateSettlementBundleReceiptResponseV1 {
     /// The bundle is known but has no public terminal receipt yet.
@@ -2225,6 +2313,119 @@ mod tests {
             error
                 .to_string()
                 .contains("missing field `prepare_certificate`")
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementAuditApprovalRequestV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditApprovalRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementAuditApprovalResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditApprovalResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementAuditorCapsuleRequestV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditorCapsuleRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementAuditorCapsuleResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementAuditorCapsuleResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementAvailabilityShareRequestV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementAvailabilityShareRequestV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementAvailabilityShareResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementAvailabilityShareResponseV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementBundleReceiptResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleReceiptResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementBundleStatusResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleStatusResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementBundleSubmitRequestV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleSubmitRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementBundleSubmitResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementBundleSubmitResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementCommitVoteRequestV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementCommitVoteRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementCommitteeProofResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementCommitteeProofResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementLegStatusResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementLegStatusResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementLegUploadDispositionV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementLegUploadDispositionV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementLegUploadRequestV1,
+        >("iroha_torii_shared::private_settlement_api::PrivateSettlementLegUploadRequestV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementLegUploadResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementLegUploadResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementLifecycleDtoV1,
+        >("iroha_torii_shared::private_settlement_api::PrivateSettlementLifecycleDtoV1");
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementPhaseCertificateRequestV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseCertificateRequestV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementPhaseCertificateResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseCertificateResponseV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementPhaseCertificatesResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseCertificatesResponseV1",
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementPhaseVoteResponseV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementPhaseVoteResponseV1"
+        );
+        crate::captured_identity_tests::assert_bidirectional::<
+            super::PrivateSettlementPrepareVoteRequestV1,
+        >(
+            "iroha_torii_shared::private_settlement_api::PrivateSettlementPrepareVoteRequestV1"
         );
     }
 }

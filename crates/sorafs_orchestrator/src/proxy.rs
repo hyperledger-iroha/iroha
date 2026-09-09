@@ -97,7 +97,7 @@ const O_NOFOLLOW_FLAG: i32 = 0x2000_0000;
     feature = "local-quic-proxy",
     any(target_os = "linux", target_os = "android")
 ))]
-const O_NOFOLLOW_FLAG: i32 = 0x0002_0000;
+const O_NOFOLLOW_FLAG: i32 = rustix::fs::OFlags::NOFOLLOW.bits() as i32;
 #[cfg(all(
     feature = "local-quic-proxy",
     any(

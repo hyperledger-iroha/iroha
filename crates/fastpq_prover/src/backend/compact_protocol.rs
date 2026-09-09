@@ -1,6 +1,6 @@
 //! Private compact AIR engine for bounded candidate verification.
 //!
-//! The test prover commits complete base-field LDE rows before full-Fp4 column
+//! The prover commits complete base-field LDE rows before full-Fp4 column
 //! mixing, commits the mixed oracle before independent Fp4 constraint alphas,
 //! then commits the quotient before joint trace/quotient FRI challenges. The
 //! verifier checks only bounded authenticated openings and caller-fixed AIR and
@@ -10,29 +10,26 @@
 //! proximity/Fiat-Shamir/query security and the concrete six-lane construction,
 //! and close the proof-size and resource gaps before production admission. The
 //! fixed 375-query profile remains unqualified. Production still requires replay;
-//! test-only diagnostic byte budgets are not production admission limits. This
+//! explicit offline byte budgets are not production admission limits. This
 //! proof is not a zero-knowledge claim.
 
 use fastpq_isi::{FASTPQ_FINAL_V1, GoldilocksDigest384V1 as Digest};
 use iroha_data_model::privacy::GoldilocksDigest384V1 as WireDigest;
-use norito::{NoritoDeserialize, NoritoSerialize};
 #[cfg(test)]
+use norito::DeserializePayload;
+use norito::{NoritoDeserialize, NoritoSerialize};
 use rayon::prelude::*;
 
-#[cfg(test)]
-use super::ExecutionMode;
 use super::{
-    AirQuotientDomain, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1, JointFriBatch,
-    MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
+    AirQuotientDomain, ExecutionMode, FriDomain, GOLDILOCKS_MODULUS, GoldilocksFp4V1,
+    JointFriBatch, MerkleTreeRoleV1, fixed_domain::FixedTraceDomain,
 };
+#[cfg(test)]
+use crate::proof::PublicIO;
 use crate::{
     Error, Result,
-    proof::{VerifyLimits, compact_fri_support},
-};
-#[cfg(test)]
-use crate::{
     fft::Planner,
-    proof::{FriQueryOpening, PublicIO},
+    proof::{FriQueryOpening, VerifyLimits, compact_fri_support},
 };
 
 #[path = "compact_protocol/shared_openings.rs"]
@@ -46,13 +43,11 @@ mod profile;
 #[cfg(test)]
 #[path = "compact_protocol/test_fixture.rs"]
 mod test_fixture;
-use profile::Binding;
-#[cfg(test)]
-use profile::ProtocolTranscript;
+use profile::{Binding, ProtocolTranscript};
 
-#[cfg(test)]
-const PROTOCOL_TAG: &str = "fastpq:compact:v1:compact-single-phase:v1";
 const MAX_CONSTRAINTS: usize = 1024;
+/// Maximum independently allocated row/evaluator workspaces in one proof phase.
+pub(super) const MAX_PROVER_JOBS: usize = 32;
 
 /// Exact trusted relation geometry and circuit identity; never taken from a proof.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -68,12 +63,10 @@ pub(super) struct FixedAirSchema {
 }
 
 /// Prepared prover callback; mutable captures may retain per-proof scratch space.
-#[cfg(test)]
 pub(super) type ProverEvaluator<'a> =
     Box<dyn FnMut(usize, u64, &[u64], &[u64]) -> Result<Vec<u64>> + Send + 'a>;
 
 /// Immutable prover preparation shared across jobs; each evaluator owns its scratch.
-#[cfg(test)]
 pub(super) trait PreparedAir: Sync {
     /// Create a worker-local evaluator borrowing only immutable prepared data.
     fn evaluator(&self) -> ProverEvaluator<'_>;
@@ -94,7 +87,6 @@ pub(super) trait FixedAir: Sync {
     /// Evaluate every base-field numerator at x from complete current/next rows.
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>>;
     /// Prepare prover-only acceleration without changing the verifier relation.
-    #[cfg(test)]
     fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>>
     where
         Self: Sized,
@@ -103,12 +95,10 @@ pub(super) trait FixedAir: Sync {
     }
 }
 
-#[cfg(test)]
 struct DirectPrepared<'a, R: FixedAir + ?Sized> {
     relation: &'a R,
 }
 
-#[cfg(test)]
 impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
     fn evaluator(&self) -> ProverEvaluator<'_> {
         Box::new(move |_, point, current, next| self.relation.evaluate(point, current, next))
@@ -116,9 +106,11 @@ impl<R: FixedAir + ?Sized> PreparedAir for DirectPrepared<'_, R> {
 }
 
 /// Private typed proof; its Norito schema is distinct from production ProofV1.
-#[cfg(test)]
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::SinglePhaseProofV1")]
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_protocol::CompactProof",
+    frame = "fastpq_prover::compact_v1::SinglePhaseProofV1"
+)]
 pub(super) struct CompactProof {
     row_root: WireDigest,
     mixed_root: WireDigest,
@@ -127,7 +119,6 @@ pub(super) struct CompactProof {
     queries: Vec<CompactQuery>,
 }
 
-#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct CompactQuery {
     index: u32,
@@ -209,8 +200,107 @@ impl Geometry {
     }
 }
 
+// Canonical compact-length Norito framing: fields carry a varint byte length,
+// vectors carry an eight-byte count and framed elements. All arithmetic is
+// checked even though normal proving fixes the geometry before using it.
+fn wire_add(left: usize, right: usize) -> Result<usize> {
+    left.checked_add(right)
+        .ok_or_else(|| shape("compact wire-size arithmetic overflow"))
+}
+
+fn wire_field(payload: usize) -> Result<usize> {
+    let bits = (usize::BITS - payload.leading_zeros()).max(1) as usize;
+    wire_add(payload, bits.div_ceil(7))
+}
+
+fn wire_vector(count: usize, element: usize) -> Result<usize> {
+    let elements = count
+        .checked_mul(wire_field(element)?)
+        .ok_or_else(|| shape("compact wire-size arithmetic overflow"))?;
+    wire_add(8, elements)
+}
+
+fn wire_struct(fields: &[usize]) -> Result<usize> {
+    fields
+        .iter()
+        .try_fold(0, |size, &field| wire_add(size, wire_field(field)?))
+}
+
+/// Exact fixed-layout size of the prover's temporary repeated openings.
+/// This internal representation is not the caller's shared-output byte budget.
+fn repeated_wire_bytes(geometry: &Geometry) -> Result<usize> {
+    let depth = geometry.lde_rows.ilog2() as usize;
+    let layers = geometry.fri_lengths.len();
+    let terminal = *geometry
+        .fri_lengths
+        .last()
+        .ok_or_else(|| shape("compact wire size needs a terminal layer"))?;
+    let mut rounds = 8;
+    for &length in geometry.fri_lengths.iter().take(layers - 1) {
+        let round = wire_struct(&[
+            4,
+            4,
+            wire_vector(2, 32)?,
+            32,
+            wire_vector((length / 2).ilog2() as usize, 48)?,
+        ])?;
+        rounds = wire_add(rounds, wire_field(round)?)?;
+    }
+    let fri = wire_struct(&[
+        4,
+        rounds,
+        4,
+        wire_vector(terminal, 32)?,
+        wire_vector(1, 48)?,
+    ])?;
+    let row = wire_vector(geometry.schema.width, 8)?;
+    let path = wire_vector(depth, 48)?;
+    let query = wire_struct(&[4, row, row, path, path, 32, path, 32, path, fri])?;
+    wire_add(
+        norito::core::Header::SIZE,
+        wire_struct(&[
+            48,
+            48,
+            48,
+            wire_vector(layers, 48)?,
+            wire_vector(profile::QUERY_COUNT, query)?,
+        ])?,
+    )
+}
+
+/// Evaluate at most 32 contiguous ranges, preserving both row and error order.
+/// Each range owns one scratch workspace; Rayon cannot subdivide its evaluator.
+fn collect_prover_rows<T: Send>(
+    length: usize,
+    evaluate: impl Fn(std::ops::Range<usize>) -> Result<Vec<T>> + Sync + Send,
+) -> Result<Vec<T>> {
+    if length == 0 {
+        return Err(shape("compact prover needs nonempty row ranges"));
+    }
+    let rows_per_job = length.div_ceil(MAX_PROVER_JOBS);
+    let chunks: Vec<Result<Vec<T>>> = (0..length.div_ceil(rows_per_job))
+        .into_par_iter()
+        .map(|job| {
+            let start = job * rows_per_job;
+            let end = start.saturating_add(rows_per_job).min(length);
+            let rows = evaluate(start..end)?;
+            if rows.len() != end - start {
+                return Err(shape("compact prover range returned another row count"));
+            }
+            Ok(rows)
+        })
+        .collect();
+    let mut rows = Vec::with_capacity(length);
+    for chunk in chunks {
+        rows.extend(chunk?);
+    }
+    if rows.len() != length {
+        return Err(shape("compact prover range returned another row count"));
+    }
+    Ok(rows)
+}
+
 /// Reusable committed prover data. It is never constructed by verification.
-#[cfg(test)]
 struct PreparedTrace {
     geometry: Geometry,
     columns: Vec<Vec<u64>>,
@@ -219,13 +309,11 @@ struct PreparedTrace {
     bound_statement: Vec<u8>,
 }
 
-#[cfg(test)]
 struct CommittedTree {
     levels: Vec<Vec<Digest>>,
     leaf_count: usize,
 }
 
-#[cfg(test)]
 impl CommittedTree {
     fn root(&self) -> Digest {
         self.levels.last().expect("nonempty tree")[0]
@@ -253,7 +341,6 @@ pub(super) fn prove(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Co
     let trace = prepare_trace(relation, columns)?;
     prove_prepared(relation, &trace)
 }
-#[cfg(test)]
 fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<PreparedTrace> {
     let geometry = Geometry::new(relation)?;
     check_limit(
@@ -283,19 +370,15 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
     planner.ifft_columns(&mut coefficients);
     let columns = planner.lde_columns(&coefficients);
     drop(coefficients);
-    let leaves = {
-        let results: Vec<Result<Digest>> = (0..geometry.lde_rows)
-            .into_par_iter()
-            .map_init(
-                || vec![0; geometry.schema.width],
-                |row, index| {
-                    fill_row(&columns, index, row);
-                    binding.row(index, row)
-                },
-            )
-            .collect();
-        results.into_iter().collect::<Result<Vec<Digest>>>()?
-    };
+    let leaves = collect_prover_rows(geometry.lde_rows, |indices| {
+        let mut row = vec![0; geometry.schema.width];
+        indices
+            .map(|index| {
+                fill_row(&columns, index, &mut row);
+                binding.row(index, &row)
+            })
+            .collect()
+    })?;
     let rows = binding.tree(&leaves, MerkleTreeRoleV1::AirTrace)?;
     Ok(PreparedTrace {
         geometry,
@@ -306,7 +389,6 @@ fn prepare_trace(relation: &impl FixedAir, columns: &[Vec<u64>]) -> Result<Prepa
     })
 }
 
-#[cfg(test)]
 fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<CompactProof> {
     let geometry = &trace.geometry;
     if relation.schema() != geometry.schema {
@@ -351,29 +433,23 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     let alphas = transcript.alphas(mixed_tree.root())?;
     let weights = AirQuotientDomain::new(&FASTPQ_FINAL_V1, geometry.lde_rows)?;
     let prepared = relation.prepare_prover()?;
-    let mut current = vec![0; geometry.schema.width];
-    let mut next = current.clone();
-    let quotient_results: Vec<Result<GoldilocksFp4V1>> = (0..geometry.lde_rows)
-        .into_par_iter()
-        .with_min_len(64)
-        .map_init(
-            || {
-                (
-                    prepared.evaluator(),
-                    vec![0; geometry.schema.width],
-                    vec![0; geometry.schema.width],
-                )
-            },
-            |(evaluate, current, next), index| {
-                fill_row(&trace.columns, index, current);
-                fill_row(&trace.columns, next_index(index, geometry.lde_rows), next);
-                let residues = evaluate(index, geometry.domain.point(index), current, next)?;
+    let quotients = collect_prover_rows(geometry.lde_rows, |indices| {
+        let mut evaluate = prepared.evaluator();
+        let mut current = vec![0; geometry.schema.width];
+        let mut next = vec![0; geometry.schema.width];
+        indices
+            .map(|index| {
+                fill_row(&trace.columns, index, &mut current);
+                fill_row(
+                    &trace.columns,
+                    next_index(index, geometry.lde_rows),
+                    &mut next,
+                );
+                let residues = evaluate(index, geometry.domain.point(index), &current, &next)?;
                 Ok(combine(&residues, &alphas)?.mul_base(weights.weights_at(index)?.all_rows))
-            },
-        )
-        .collect();
-    // Indexed collection fixes row order; select any errors in that same order.
-    let quotients = quotient_results.into_iter().collect::<Result<Vec<_>>>()?;
+            })
+            .collect()
+    })?;
     drop(prepared); // No evaluator remains; release all prover-only fixed LDEs.
     let quotient_leaves = {
         let results: Vec<Result<Digest>> = quotients
@@ -394,6 +470,8 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     )?;
     let chains = fri.open_query_chains(&indices, FASTPQ_FINAL_V1.fri.arity)?;
     let mut queries = Vec::with_capacity(indices.len());
+    let mut current = vec![0; geometry.schema.width];
+    let mut next = current.clone();
     for (index, fri) in indices.into_iter().zip(chains) {
         fill_row(&trace.columns, index, &mut current);
         let next_index = next_index(index, geometry.lde_rows);
@@ -420,9 +498,8 @@ fn prove_prepared(relation: &impl FixedAir, trace: &PreparedTrace) -> Result<Com
     })
 }
 
-// Hash and transcript orchestration differ by descriptor; the fold arithmetic,
-// domain schedule and retained opening owner are shared by both implementations.
-#[cfg(test)]
+// The fixed binding owns every commitment and transcript message; the FRI
+// fold arithmetic and retained opening owner share one deterministic schedule.
 fn fold_protocol_layers(
     evaluations: &[GoldilocksFp4V1],
     geometry: &Geometry,
@@ -492,8 +569,8 @@ fn fold_protocol_layers(
 
 /// Verify using only bounded rows/oracle/FRI openings and known public AIR.
 ///
-/// The supplied limits are trusted caller policy. Production defaults remain
-/// 512 KiB; a larger diagnostic envelope must be selected explicitly by tests.
+/// The supplied limits are trusted caller policy. Replay defaults do not admit
+/// the fixed compact geometry; diagnostic envelopes must be selected explicitly.
 #[cfg(test)]
 pub(super) fn verify(
     relation: &impl FixedAir,
@@ -527,7 +604,6 @@ fn verify_recorded(
     result
 }
 
-#[cfg(test)]
 fn preflight(
     relation: &impl FixedAir,
     proof: &CompactProof,
@@ -662,7 +738,6 @@ fn combine(residues: &[u64], alphas: &[GoldilocksFp4V1]) -> Result<GoldilocksFp4
     Ok(value)
 }
 
-#[cfg(test)]
 fn fill_row(columns: &[Vec<u64>], index: usize, row: &mut [u64]) {
     for (value, column) in row.iter_mut().zip(columns) {
         *value = column[index];
@@ -827,7 +902,7 @@ impl PreparedAir for PreparedHashDigest<'_> {
 
 #[cfg(test)]
 mod tests {
-    // Isolate the unchanged512KiB byte ceiling from the independently retained
+    // Isolate the derived replay byte ceiling from the independently retained
     // raw-replay default query ceiling. This is an explicit test policy.
     fn byte_limit_policy() -> crate::VerifyLimits {
         crate::VerifyLimits {
@@ -847,7 +922,10 @@ mod tests {
     fn raw_replay_default_query_ceiling_does_not_admit_final_geometry() {
         let policy = crate::VerifyLimits::default();
         assert_eq!(policy.max_queries, 136);
-        assert_eq!(policy.max_proof_bytes, 512 * 1024);
+        assert_eq!(
+            policy.max_proof_bytes,
+            fastpq_isi::resource_limits::FASTPQ_DEFAULT_MAX_PROOF_PAYLOAD_BYTES_V1
+        );
         let mut work = VerificationWork::default();
         assert!(matches!(
             verify_recorded(
@@ -947,6 +1025,7 @@ mod tests {
                 expanded_wire_bytes(profile::QUERY_COUNT, width, depth, &geometry.fri_lengths)
             );
             assert_eq!(counted, 7_791_716);
+            assert_eq!(repeated_wire_bytes(&geometry).unwrap(), counted);
             assert!(matches!(
                 preflight(&air, &proof, byte_limit_policy(), &geometry),
                 Err(Error::VerifierLimitExceeded {
@@ -955,6 +1034,55 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn canonical_wire_arithmetic_checks_prefixes_and_overflow() {
+        assert_eq!(wire_field(0).unwrap(), 1);
+        assert_eq!(wire_field(127).unwrap(), 128);
+        assert_eq!(wire_field(128).unwrap(), 130);
+        assert_eq!(wire_vector(0, 32).unwrap(), 8);
+        assert_eq!(wire_struct(&[4, 32, 32]).unwrap(), 71);
+        assert!(wire_field(usize::MAX).is_err());
+        assert!(wire_vector(usize::MAX, 32).is_err());
+        assert!(wire_struct(&[usize::MAX]).is_err());
+    }
+
+    #[test]
+    fn prover_row_jobs_are_bounded_and_preserve_rows_and_first_error() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let jobs = AtomicUsize::new(0);
+        let rows = collect_prover_rows(1_003, |indices| {
+            jobs.fetch_add(1, Ordering::Relaxed);
+            Ok(indices.map(|index| index * 3).collect::<Vec<_>>())
+        })
+        .unwrap();
+        assert_eq!(jobs.load(Ordering::Relaxed), MAX_PROVER_JOBS);
+        assert_eq!(rows, (0..1_003).map(|index| index * 3).collect::<Vec<_>>());
+        assert!(matches!(
+            collect_prover_rows::<usize>(1_003, |indices| {
+                let start = indices.start;
+                Err(Error::QueryIndexOutOfRange {
+                    index: start,
+                    len: 0,
+                })
+            }),
+            Err(Error::QueryIndexOutOfRange { index: 0, len: 0 })
+        ));
+        assert!(collect_prover_rows::<usize>(0, |_| panic!("empty ranges never run")).is_err());
+        assert!(collect_prover_rows::<usize>(1, |_| Ok(Vec::new())).is_err());
+        // An excess row in one job cannot compensate for a missing row in the
+        // next job and silently shift every subsequent oracle coordinate.
+        assert!(
+            collect_prover_rows::<usize>(2, |indices| {
+                Ok(if indices.start == 0 {
+                    vec![0, 1]
+                } else {
+                    Vec::new()
+                })
+            })
+            .is_err()
+        );
     }
 
     fn expanded_wire_bytes(queries: usize, width: usize, depth: usize, layers: &[usize]) -> usize {
@@ -1042,7 +1170,7 @@ mod tests {
                 .all(|query| query.current.len() == 342 && query.next.len() == 342)
         );
         eprintln!(
-            "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=375; production_512KiB_admitted=false; profile_security_qualified=false",
+            "compact_single_hash_verify={:?}; work={work:?}; canonical_queries=375; replay_byte_budget_admitted=false; profile_security_qualified=false",
             started.elapsed()
         );
         rejected_before_hashing(&fixture.compact, byte_limit_policy());

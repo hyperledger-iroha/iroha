@@ -2682,6 +2682,8 @@ enum ProductionLifecycleStartupErrorKindV1 {
     ServePayload(#[source] CertifiedServePayloadStoreError),
     #[error("the complete body-pipeline census could not enter its startup phase")]
     InvalidBodyPipelineCensus,
+    #[error("authenticated body-pipeline adapter replay failed: {0}")]
+    BodyPipelineAdapterReplay(&'static str),
     #[error("lifecycle recovery assembly failed: {0}")]
     Recovery(#[source] LifecycleRecoveryAssemblyError),
     #[error("the recovered body-pipeline census cannot enter an empty registry")]
@@ -2840,9 +2842,9 @@ impl AuthenticatedDurableCertifiedBodyPipelineStorageRecoveryCutV1 {
         })?;
         let (body_pipeline, adapter_startup) = body_pipeline
             .replay_adapter_startup(adapter_startup)
-            .map_err(|_| {
+            .map_err(|reason| {
                 ProductionLifecycleStartupErrorV1::new(
-                    ProductionLifecycleStartupErrorKindV1::InvalidBodyPipelineCensus,
+                    ProductionLifecycleStartupErrorKindV1::BodyPipelineAdapterReplay(reason),
                 )
             })?;
         let mut registry = LifecycleWorkRegistryHolder::empty();
@@ -3243,6 +3245,78 @@ impl ProductionLifecycleOwnerV1 {
                     .map_err(|error| {
                         ProductionRecoveredWalControlStartupErrorV1::new(error.reason())
                     })?;
+                return Ok(ProductionLifecycleOwnerV1 {
+                    verified,
+                    coordinator,
+                    registry,
+                    recovered_lifecycle_outputs: recovery.take_lifecycle_output_recovery(),
+                    payload_store,
+                    serve_payloads: recovery.into_serve_payloads(),
+                    body_store: Some(body_store),
+                    body_store_identity: None,
+                    kura_binding: None,
+                    apply_service: None,
+                    adapter_startup: Some(adapter_startup),
+                    timeout_supersession_successor: None,
+                });
+            }
+            if projection.is_proposal() {
+                let (adapter_startup, continuation) = projection
+                    .recover_advanced_proposal_continuation(
+                        &verified,
+                        &opened,
+                        parent_ordinal,
+                        child_ordinal,
+                        broadcast,
+                        adapter_startup,
+                        &body_store,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let body_pipeline = opened
+                    .authenticate_durable_certified_body_pipeline_startup(&verified, &body_store)
+                    .map_err(|_| {
+                        ProductionRecoveredWalControlStartupErrorV1::new(
+                            "cold Proposal continuation body-pipeline authentication failed",
+                        )
+                    })?;
+                let (body_pipeline, adapter_startup) = body_pipeline
+                    .replay_adapter_startup(adapter_startup)
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let (recovery, body_pipeline) = AuthenticatedLifecycleRecoveryCut::assemble_storage_only_with_control_continuation(
+                    opened.clone(), serve_payloads, &mut body_store, &continuation, body_pipeline,
+                ).map_err(|_| ProductionRecoveredWalControlStartupErrorV1::new(
+                    "cold Proposal continuation storage census assembly failed"))?;
+                let mut registry = LifecycleWorkRegistryHolder::empty();
+                let mut installed = registry
+                    .registry_mut()
+                    .install_recovered_control_continuation(
+                        &verified,
+                        &ledger_store,
+                        &opened,
+                        continuation,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                installed
+                    .install_body_pipeline(body_pipeline)
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
+                let authority = authority::production_authority(
+                    &verified,
+                    config,
+                    reply_route_source_capacity,
+                )
+                .ok_or_else(|| {
+                    ProductionRecoveredWalControlStartupErrorV1::new(
+                        "verified height cannot derive cold Proposal continuation authority",
+                    )
+                })?;
+                let (coordinator, mut recovery) = installed
+                    .open_with_exact_store_authority(
+                        authority,
+                        ledger_store,
+                        &mut payload_store,
+                        recovery,
+                    )
+                    .map_err(ProductionRecoveredWalControlStartupErrorV1::new)?;
                 return Ok(ProductionLifecycleOwnerV1 {
                     verified,
                     coordinator,

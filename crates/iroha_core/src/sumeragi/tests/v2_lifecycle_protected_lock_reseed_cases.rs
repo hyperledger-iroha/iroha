@@ -40,7 +40,7 @@ fn protected_lock_validate_reseed_enters_local_admission_without_local_handoff()
         .expect("inherit the full Prepare statement at Validate");
     let receipt =
         DurableBodyReceipt::for_test(context.id(), round, subject, HashOf::new(&fixture.manifest));
-    let prepared = super::super::work_registry::PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(
+    let prepared = super::super::work_registry::PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
         validate_effect.clone(),
         validate_ownership.clone(),
         fixture.manifest.clone(),
@@ -137,7 +137,7 @@ fn protected_lock_validate_reseed_rejects_a_foreign_valid_prepare_qc() {
     .expect("aggregate a valid foreign PrepareQC");
     assert!(fixture.verified.verify_quorum_certificate(&foreign).is_ok());
     assert!(
-        super::super::work_registry::PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(
+        super::super::work_registry::PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
             validate_effect.clone(),
             validate_ownership.clone(),
             fixture.manifest.clone(),
@@ -148,7 +148,7 @@ fn protected_lock_validate_reseed_rejects_a_foreign_valid_prepare_qc() {
         "a valid QC for another subject cannot reseal this durable body",
     );
     assert!(
-        super::super::work_registry::PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(
+        super::super::work_registry::PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
             validate_effect,
             validate_ownership,
             fixture.manifest,
@@ -158,4 +158,94 @@ fn protected_lock_validate_reseed_rejects_a_foreign_valid_prepare_qc() {
         .is_ok(),
         "the rejected foreign QC leaves the canonical reseed available",
     );
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn protected_commit_reseed_reauthenticates_qc_in_later_active_view_before_admission() {
+    let fixture = CertifiedServeRecoveredReplayFixture::new();
+    let context = fixture.verified.context();
+    let mut certificate = fixture.authenticated.request().certificate.clone();
+    certificate.phase = wire::GlobalPhase::Commit;
+    let preimage = wire::Vote {
+        round: certificate.round,
+        proposal_round: certificate.proposal_round,
+        phase: certificate.phase,
+        subject: certificate.subject,
+        execution_commitment: certificate.execution_commitment,
+        signer: 0,
+        signature: Vec::new(),
+    }
+    .signature_preimage();
+    let shares = certificate
+        .signers
+        .iter()
+        .map(|signer| {
+            Signature::new(
+                fixture.keys[usize::try_from(*signer).expect("small signer")].private_key(),
+                &preimage,
+            )
+            .payload()
+            .to_vec()
+        })
+        .collect::<Vec<_>>();
+    certificate.aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(
+        &shares.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+    )
+    .expect("aggregate the CommitQC");
+    fixture
+        .verified
+        .verify_quorum_certificate(&certificate)
+        .expect("the CommitQC has an exact proposal round and valid quorum signature");
+    for corrupt_signature in [false, true] {
+        let mut exact = certificate.clone();
+        if corrupt_signature {
+            exact.aggregate_signature[0] ^= 1;
+        }
+        let tag = EventTag::new(exact.round.height, exact.round.view + 1, Generation::new(14));
+        let fetch = AdapterEffect::FetchBody {
+            tag,
+            round: exact.proposal_round,
+            subject: exact.subject,
+            manifest: Some(fixture.manifest.clone()),
+            certified_sources: context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(exact.clone()),
+        };
+        let effect = AdapterEffect::ValidateBody {
+            tag,
+            round: exact.proposal_round,
+            subject: exact.subject,
+        };
+        let ownership = bind_adapter_effect_batch_ownership(
+            core::slice::from_ref(&fetch),
+            vec![RuntimeEffectOwnership::fresh_for_test(tag, 0xDF)],
+        )
+        .expect("bind the exact Commit statement")
+        .pop()
+        .expect("one owner")
+        .rebind_as_inherited_adapter_effect(&effect)
+        .expect("inherit Commit authority");
+        let receipt = DurableBodyReceipt::for_test(
+            context.id(),
+            exact.proposal_round,
+            exact.subject,
+            HashOf::new(&fixture.manifest),
+        );
+        let prepared = super::super::work_registry::PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
+            effect, ownership, fixture.manifest.clone(), receipt, exact,
+        ).expect("structural resealing preserves the complete QC for authentication");
+        let pending = prepared.into_pending_durable_validate_admission();
+        assert!(!pending.projects_local_proposal_handoff_for_test());
+        assert_eq!(
+            pending
+                .prepare(replay_context(certificate.round), &fixture.verified)
+                .is_ok(),
+            !corrupt_signature,
+            "normal lifecycle admission must reauthenticate the full Commit signature"
+        );
+    }
 }

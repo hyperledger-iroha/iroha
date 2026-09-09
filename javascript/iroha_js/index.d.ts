@@ -5446,7 +5446,8 @@ export type ParliamentPublicTransitionTagV1 =
   | "RecordInvitationResponse"
   | "RegisterBallotParticipant"
   | "RecordBallotDropout"
-  | "FailPublicFindingNoResult";
+  | "FailPublicFindingNoResult"
+  | "RegisterInitialSortition";
 
 export interface ParliamentTransitionLayoutV1 {
   readonly noritoIndex: number;
@@ -5632,8 +5633,12 @@ export type ParliamentProposalV1 =
 
 export type ParliamentLifecycleTransitionV1 =
   | { transition: "CompleteQualification" }
+  | { transition: "RegisterInitialSortition" }
   | {
-      transition: Exclude<ParliamentPublicTransitionTagV1, "CompleteQualification">;
+      transition: Exclude<
+        ParliamentPublicTransitionTagV1,
+        "CompleteQualification" | "RegisterInitialSortition"
+      >;
       payload: Record<string, unknown>;
     };
 
@@ -8432,7 +8437,7 @@ export const KOTODAMA_V1_STATE_MAP_KEY_TYPES: readonly [
   "Name",
 ];
 export const KOTODAMA_V1_DYNAMIC_ACCESS_BOUND_KINDS: readonly [
-  "range",
+  "page",
   "take",
 ];
 export const KOTODAMA_V1_DYNAMIC_ACCESS_MAX_KEYS: 64;
@@ -8513,7 +8518,10 @@ export type ContractEntrypointValueTypeNode =
   | { kind: "Option"; value: null }
   | { kind: "Result"; value: null }
   | { kind: "List"; value: ContractEntrypointListTypeNode }
-  | { kind: "Leaf"; value: ContractEntrypointValueKindRecord };
+  | { kind: "Leaf"; value: ContractEntrypointValueKindRecord }
+  | { kind: "Unit"; value: null }
+  | { kind: "StateCursor"; value: ContractEntrypointValueKindRecord }
+  | { kind: "Error"; value: ContractErrorTypeDescriptorRecord };
 
 export interface ContractEntrypointValueType {
   nodes: ReadonlyArray<ContractEntrypointValueTypeNode>;
@@ -8556,8 +8564,9 @@ export interface ContractEntrypointInput {
   kind: ContractEntrypointKind | ContractEntrypointKindRecord;
   params?: ReadonlyArray<ContractEntrypointParamInput>;
   argumentSchema?: ContractEntrypointArgumentSchema | null;
-  returnType?: string | null;
-  returnSchema?: ContractEntrypointValueType | null;
+  /** Every entrypoint returns a value; Unit uses `()` and a Unit schema. */
+  returnType: string;
+  returnSchema: ContractEntrypointValueType;
   permission?: string | null;
   readKeys?: ReadonlyArray<string>;
   writeKeys?: ReadonlyArray<string>;
@@ -8570,10 +8579,10 @@ export type ContractStateDescriptorInput = {
   name: string;
 } & ContractRequiredAliasPair<"typeName", "type_name", string>;
 
-export interface ContractErrorCodeDescriptorInput {
-  namespace: string;
-  name: string;
-  code: NumericLike;
+export interface ContractErrorVariantDescriptorInput { name: string; code: NumericLike; }
+export interface ContractErrorTypeDescriptorInput {
+  identity: string;
+  variants: ReadonlyArray<ContractErrorVariantDescriptorInput>;
 }
 
 export interface ContractKotobaTranslationInput {
@@ -8605,7 +8614,7 @@ export interface ContractManifestInput {
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
   states?: ReadonlyArray<ContractStateDescriptorInput> | null;
-  errorCodes?: ReadonlyArray<ContractErrorCodeDescriptorInput> | null;
+  errorTypes?: ReadonlyArray<ContractErrorTypeDescriptorInput> | null;
   kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
   provenance?: ContractManifestProvenanceInput | null;
 }
@@ -8624,7 +8633,7 @@ export interface ToriiContractManifestInput {
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
   states?: ReadonlyArray<ContractStateDescriptorInput> | null;
-  errorCodes?: ReadonlyArray<ContractErrorCodeDescriptorInput> | null;
+  errorTypes?: ReadonlyArray<ContractErrorTypeDescriptorInput> | null;
   kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
   provenance?: ContractManifestProvenanceInput | null;
 }
@@ -8815,7 +8824,7 @@ export interface ContractManifestRecord {
       | null;
     entrypoints: ReadonlyArray<ContractEntrypointRecord> | null;
     states: ReadonlyArray<ContractStateDescriptorRecord> | null;
-    error_codes: ReadonlyArray<ContractErrorCodeDescriptorRecord> | null;
+    error_types: ReadonlyArray<ContractErrorTypeDescriptorRecord> | null;
     kotoba: ReadonlyArray<ContractKotobaEntryRecord> | null;
     provenance: ContractManifestProvenanceInput | null;
   };
@@ -8842,8 +8851,8 @@ export interface ContractEntrypointRecord {
   kind: ContractEntrypointKindRecord;
   params: ReadonlyArray<ContractEntrypointParamRecord>;
   argument_schema: ContractEntrypointArgumentSchema | null;
-  return_type: string | null;
-  return_schema: ContractEntrypointValueType | null;
+  return_type: string;
+  return_schema: ContractEntrypointValueType;
   permission: string | null;
   read_keys: ReadonlyArray<string>;
   write_keys: ReadonlyArray<string>;
@@ -8857,10 +8866,10 @@ export interface ContractStateDescriptorRecord {
   type_name: string;
 }
 
-export interface ContractErrorCodeDescriptorRecord {
-  namespace: string;
-  name: string;
-  code: number;
+export interface ContractErrorVariantDescriptorRecord { name: string; code: number; }
+export interface ContractErrorTypeDescriptorRecord {
+  identity: string;
+  variants: ReadonlyArray<ContractErrorVariantDescriptorRecord>;
 }
 
 export interface ContractKotobaEntryRecord {

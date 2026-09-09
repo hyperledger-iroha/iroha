@@ -2401,6 +2401,8 @@ include!("autonomous_merge_and_queue_plan_route_count_tests.rs");
     reason = "one adversarial roster test covers missing, malformed, oversized, and bounded members"
 )]
 fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomically() {
+    // These checks own only QueuePlan markers. Narrow storage overlays avoid
+    // reserving unrelated World snapshots for every corruption phase.
     {
         let (state, validator_keypairs, _, _) = configured_two_lane_merge_state();
         let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
@@ -2442,7 +2444,7 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         seed_exact_queue_plan_admission_state_for_test(&state, &second_certificate);
         assert!(
             State::queue_plan_pending_route_members_from_storage_with_limit(
-                state.world.view().smart_contract_state(),
+                &state.world.smart_contract_state.view(),
                 route,
                 1,
             )
@@ -2456,9 +2458,8 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             State::queue_plan_pending_route_member_marker_key(route, second_member)
                 .expect("fixture second exact route-member key");
         let first_member_payload = {
-            let world = state.world.view();
-            world
-                .smart_contract_state()
+            let storage = state.world.smart_contract_state.view();
+            storage
                 .get(&first_member_key)
                 .cloned()
                 .expect("fixture first exact route-member payload")
@@ -2474,9 +2475,9 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         )
         .expect("fixture second obligation key");
         {
-            let mut world = state.world.block();
-            world.smart_contract_state.remove(first_member_key.clone());
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.remove(first_member_key.clone());
+            storage.commit();
         }
         assert!(
             state
@@ -2485,27 +2486,18 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             "the exact route roster must not conceal a missing member"
         );
         let (first_before, second_before, second_member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world
-                    .smart_contract_state()
-                    .get(&first_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_member_key)
-                    .cloned(),
+                storage.get(&first_obligation_key).cloned(),
+                storage.get(&second_obligation_key).cloned(),
+                storage.get(&second_member_key).cloned(),
             )
         };
         {
-            let mut world = state.world.block();
+            let mut storage = state.world.smart_contract_state.block();
             assert!(
                 State::stage_queue_plan_pending_obligation_in_storage(
-                    &mut world.smart_contract_state,
+                    &mut storage,
                     &first_admission,
                 )
                 .is_err(),
@@ -2513,114 +2505,62 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
             );
             assert!(
                 State::resolve_queue_plan_pending_obligation_in_storage(
-                    &mut world.smart_contract_state,
+                    &mut storage,
                     first_binding.network_id_digest,
                     first_binding.entrypoint_hash.clone(),
                 )
                 .is_err(),
                 "nonterminal resolution must reject a missing exact member"
             );
+            assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+            assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
             assert_eq!(
-                world
-                    .smart_contract_state
-                    .get(&first_obligation_key)
-                    .cloned(),
-                first_before
-            );
-            assert_eq!(
-                world
-                    .smart_contract_state
-                    .get(&second_obligation_key)
-                    .cloned(),
-                second_before
-            );
-            assert_eq!(
-                world.smart_contract_state.get(&second_member_key).cloned(),
+                storage.get(&second_member_key).cloned(),
                 second_member_before,
                 "failed exact-member checks must not mutate another roster member"
             );
-            assert!(world.smart_contract_state.get(&first_member_key).is_none());
+            assert!(storage.get(&first_member_key).is_none());
         }
         {
-            let mut world = state.world.block();
-            world
-                .smart_contract_state
-                .insert(first_member_key.clone(), first_member_payload);
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(first_member_key.clone(), first_member_payload);
+            storage.commit();
         }
         {
-            let mut world = state.world.block();
-            world
-                .smart_contract_state
-                .insert(first_member_key.clone(), vec![0x00]);
-            world.commit();
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(first_member_key.clone(), vec![0x00]);
+            storage.commit();
         }
         let (first_before, second_before, member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world
-                    .smart_contract_state()
-                    .get(&first_obligation_key)
-                    .cloned(),
-                world
-                    .smart_contract_state()
-                    .get(&second_obligation_key)
-                    .cloned(),
-                world.smart_contract_state().get(&first_member_key).cloned(),
+                storage.get(&first_obligation_key).cloned(),
+                storage.get(&second_obligation_key).cloned(),
+                storage.get(&first_member_key).cloned(),
             )
         };
-        let mut world = state.world.block();
+        let mut storage = state.world.smart_contract_state.block();
         assert!(
-            State::stage_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                &first_admission,
-            )
-            .is_err(),
+            State::stage_queue_plan_pending_obligation_in_storage(&mut storage, &first_admission,)
+                .is_err(),
             "idempotent staging must reject a malformed exact member"
         );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&first_obligation_key)
-                .cloned(),
-            first_before
-        );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&second_obligation_key)
-                .cloned(),
-            second_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&first_member_key).cloned(),
-            member_before
-        );
+        assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+        assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
+        assert_eq!(storage.get(&first_member_key).cloned(), member_before);
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
+                &mut storage,
                 first_binding.network_id_digest,
                 first_binding.entrypoint_hash,
             )
             .is_err(),
             "resolution must reject a malformed exact member"
         );
+        assert_eq!(storage.get(&first_obligation_key).cloned(), first_before);
+        assert_eq!(storage.get(&second_obligation_key).cloned(), second_before);
         assert_eq!(
-            world
-                .smart_contract_state
-                .get(&first_obligation_key)
-                .cloned(),
-            first_before
-        );
-        assert_eq!(
-            world
-                .smart_contract_state
-                .get(&second_obligation_key)
-                .cloned(),
-            second_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&first_member_key).cloned(),
+            storage.get(&first_member_key).cloned(),
             member_before,
             "failed malformed-member checks must not mutate the exact roster"
         );
@@ -2652,12 +2592,12 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         let member_key = State::queue_plan_pending_route_member_marker_key(route, member_identity)
             .expect("fixture oversized route-member key");
         {
-            let mut world = state.world.block();
-            world.smart_contract_state.insert(
+            let mut storage = state.world.smart_contract_state.block();
+            storage.insert(
                 member_key.clone(),
                 vec![0xA5; MAX_QUEUE_PLAN_COMPACT_MARKER_BYTES + 1],
             );
-            world.commit();
+            storage.commit();
         }
         let obligation_key = State::queue_plan_pending_obligation_marker_key(
             binding.network_id_digest,
@@ -2665,44 +2605,32 @@ fn queue_plan_route_accumulator_rejects_positive_undercount_and_overcount_atomic
         )
         .expect("fixture oversized-member obligation key");
         let (obligation_before, member_before) = {
-            let world = state.world.view();
+            let storage = state.world.smart_contract_state.view();
             (
-                world.smart_contract_state().get(&obligation_key).cloned(),
-                world.smart_contract_state().get(&member_key).cloned(),
+                storage.get(&obligation_key).cloned(),
+                storage.get(&member_key).cloned(),
             )
         };
-        let mut world = state.world.block();
+        let mut storage = state.world.smart_contract_state.block();
         assert!(
-            State::stage_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
-                &admission,
-            )
-            .is_err(),
+            State::stage_queue_plan_pending_obligation_in_storage(&mut storage, &admission,)
+                .is_err(),
             "idempotent staging must reject an oversized exact member"
         );
-        assert_eq!(
-            world.smart_contract_state.get(&obligation_key).cloned(),
-            obligation_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&member_key).cloned(),
-            member_before
-        );
+        assert_eq!(storage.get(&obligation_key).cloned(), obligation_before);
+        assert_eq!(storage.get(&member_key).cloned(), member_before);
         assert!(
             State::resolve_queue_plan_pending_obligation_in_storage(
-                &mut world.smart_contract_state,
+                &mut storage,
                 binding.network_id_digest,
                 binding.entrypoint_hash,
             )
             .is_err(),
             "resolution must reject an oversized exact member"
         );
+        assert_eq!(storage.get(&obligation_key).cloned(), obligation_before);
         assert_eq!(
-            world.smart_contract_state.get(&obligation_key).cloned(),
-            obligation_before
-        );
-        assert_eq!(
-            world.smart_contract_state.get(&member_key).cloned(),
+            storage.get(&member_key).cloned(),
             member_before,
             "failed oversized-member checks must not mutate the exact roster"
         );
@@ -4042,6 +3970,199 @@ fn merge_execution_prefix_budget_includes_historical_authority_catalog_on_consen
         State::select_merge_execution_candidate_prefix(&template, 3, unsigned_limit, |_| None,)
             .is_none(),
         "failed source construction remains fail-closed"
+    );
+}
+
+#[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one immutable certificate is checked against both carriers and every current source failure"
+)]
+fn pending_queue_plan_old_carrier_retains_only_valid_current_sources() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let old_carrier = parent.header().height().get();
+    let next_carrier = old_carrier.checked_add(1).unwrap();
+    let route = crate::queue::RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+    let routing_plan = crate::queue::RoutingPlan::single(route);
+    let (binding, fixture_certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan.clone(),
+        &validator_keypairs,
+        old_carrier,
+        0x75,
+    );
+    let decoded = norito::decode_from_bytes::<crate::torii_proxy::QueuePlanAdmissionCertificateV1>(
+        &fixture_certificate,
+    )
+    .expect("decode the existing authenticated fixture");
+    let certificate = norito::encode_canonical(&decoded).unwrap();
+    let validated = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+        state.network_id_ref(),
+        &certificate,
+    )
+    .expect("the original canonical certificate must pass exact quorum authentication");
+    assert_eq!(validated.certificate.binding, binding);
+    assert_eq!(
+        norito::encode_canonical(&validated.certificate).unwrap(),
+        certificate
+    );
+    let classify = |bytes: &[u8], carrier| {
+        state
+            .classify_pending_queue_plan_admission(bytes, carrier)
+            .map(|(_, disposition)| disposition)
+    };
+    assert_eq!(
+        classify(&certificate, old_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::DeferredCarrier
+    );
+    assert_eq!(
+        classify(&certificate, next_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
+    );
+    assert_eq!(
+        classify(&certificate, next_carrier + 1).unwrap(),
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent,
+        "a caller already ahead of State keeps its existing validation behavior"
+    );
+    assert!(
+        state
+            .validate_queue_plan_admissions_for_carrier(&[certificate.clone()], old_carrier)
+            .is_err(),
+        "waiting never authorizes actual inclusion before the signed proposal height"
+    );
+    state
+        .validate_queue_plan_admissions_for_carrier(&[certificate.clone()], next_carrier)
+        .expect("the same exact certificate is valid for the current next carrier");
+
+    let mut wrong_context = binding.admission_context.clone();
+    wrong_context.predecessor_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+        b"wrong-current-queue-plan-predecessor",
+    )));
+    let wrong_binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+        state.network_id_ref(),
+        &queue_plan_entrypoint_for_state_test(&state, 0x75),
+        &routing_plan,
+        wrong_context,
+        binding.enqueue_timestamp_ms,
+    )
+    .expect("recompute every exact digest for the authenticated wrong predecessor");
+    let wrong_predecessor =
+        queue_plan_admission_certificate_bytes_for_state_test(&wrong_binding, &validator_keypairs);
+    let wrong_predecessor = norito::decode_from_bytes::<
+        crate::torii_proxy::QueuePlanAdmissionCertificateV1,
+    >(&wrong_predecessor)
+    .unwrap();
+    let wrong_predecessor = norito::encode_canonical(&wrong_predecessor).unwrap();
+    crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+        state.network_id_ref(),
+        &wrong_predecessor,
+    )
+    .expect("the wrong predecessor is authenticated, so its rejection must be State-dependent");
+    for carrier in [old_carrier, next_carrier] {
+        assert_eq!(
+            classify(&wrong_predecessor, carrier).unwrap(),
+            PendingQueuePlanAdmissionDisposition::Stale,
+            "caller lag must not hide a bad predecessor"
+        );
+    }
+
+    let mut bad_schema = decoded.clone();
+    bad_schema.version = u16::MAX;
+    let bad_schema = norito::encode_canonical(&bad_schema).unwrap();
+    let wrong_wire_schema = norito::encode_canonical(&decoded.binding).unwrap();
+    let mut bad_signature = decoded.clone();
+    let wrong_key = KeyPair::try_from_seed(vec![0xB7; 32], Algorithm::BlsNormal).unwrap();
+    let attestation = &mut bad_signature.attestations[0];
+    let preimage = crate::torii_proxy::queue_plan_admission_attestation_signing_bytes_v1(
+        binding.canonical_hash(),
+        attestation.validator_index,
+    )
+    .unwrap();
+    let signing_validator = &binding.admission_context.route_incarnations[0].validator_set
+        [usize::from(attestation.validator_index)];
+    decoded.attestations[0]
+        .signature
+        .verify(signing_validator.public_key(), &preimage)
+        .expect("the unchanged signature authenticates this exact binding/index preimage");
+    attestation.signature = Signature::try_new(wrong_key.private_key(), &preimage).unwrap();
+    let bad_signature = norito::encode_canonical(&bad_signature).unwrap();
+    for carrier in [old_carrier, next_carrier] {
+        let version_error = classify(&bad_schema, carrier).unwrap_err();
+        assert!(
+            matches!(version_error, MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+            if reason == "pending queue-plan admission certificate is invalid: QueuePlan admission-certificate version is unsupported")
+        );
+        let signature_error = classify(&bad_signature, carrier).unwrap_err();
+        assert!(
+            matches!(signature_error, MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+            if reason.starts_with("pending queue-plan admission certificate is invalid: QueuePlan admission attestation is invalid:"))
+        );
+        for malformed in [wrong_wire_schema.as_slice(), &[0xFF]] {
+            let decode_error = classify(malformed, carrier).unwrap_err();
+            assert!(
+                matches!(decode_error, MergeLedgerCommitError::ExecutionBatchInvalid(reason)
+                if reason.starts_with("pending queue-plan admission certificate is invalid: QueuePlan admission certificate cannot be decoded:"))
+            );
+        }
+    }
+
+    let signer_accounts = decoded
+        .attestations
+        .iter()
+        .map(|attestation| {
+            AccountId::new(
+                decoded.binding.admission_context.route_incarnations[0].validator_set
+                    [usize::from(attestation.validator_index)]
+                .public_key()
+                .clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(signer_accounts.len(), 2);
+    let (replacement_accounts, replacement_keys) = bls_accounts_in("current-queue-plan-drift", 2);
+    seed_consensus_keys_with_pops(&state, &replacement_keys);
+    let mut changed_roster = signer_accounts;
+    changed_roster.extend(replacement_accounts);
+    assert_eq!(changed_roster.len(), 4);
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, changed_roster)],
+    );
+    for carrier in [old_carrier, next_carrier] {
+        assert_eq!(
+            classify(&certificate, carrier).unwrap(),
+            PendingQueuePlanAdmissionDisposition::Stale,
+            "current non-signer roster drift must invalidate even a lagging caller"
+        );
+    }
+    let original_accounts = validator_keypairs
+        .iter()
+        .map(|key| AccountId::new(key.public_key().clone()))
+        .collect();
+    install_lane_manifest_registry(
+        &state,
+        &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, original_accounts)],
+    );
+    let original_incarnation = state.lane_incarnation(LaneId::SINGLE).unwrap();
+    let _ = state.set_lane_incarnation_for_test(
+        LaneId::SINGLE,
+        Hash::new(b"current-queue-plan-incarnation-drift"),
+    );
+    for carrier in [old_carrier, next_carrier] {
+        assert_eq!(
+            classify(&certificate, carrier).unwrap(),
+            PendingQueuePlanAdmissionDisposition::Stale,
+            "current incarnation drift must invalidate even a lagging caller"
+        );
+    }
+    let _ = state.set_lane_incarnation_for_test(LaneId::SINGLE, original_incarnation);
+    assert_eq!(
+        classify(&certificate, old_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::DeferredCarrier
+    );
+    assert_eq!(
+        classify(&certificate, next_carrier).unwrap(),
+        PendingQueuePlanAdmissionDisposition::EligibleAbsent
     );
 }
 

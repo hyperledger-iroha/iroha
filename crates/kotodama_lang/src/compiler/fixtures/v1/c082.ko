@@ -2,7 +2,7 @@
 seiyaku CompilerFixture {
 
 fn main() {
-  crypto::zk::verify_batch(1);
+  crypto::zk::verify_batch(request: 1);
 }
 
 }

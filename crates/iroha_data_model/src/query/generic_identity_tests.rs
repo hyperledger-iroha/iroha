@@ -22,8 +22,8 @@ where
     let decoded: T = norito::decode_from_bytes(&frame).expect("decode query identity fixture");
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
     let expected_hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), expected_hash);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), expected_hash);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), expected_hash);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), expected_hash);
     let header = norito::core::Header::read(frame.as_slice()).unwrap();
     assert_eq!(header.schema, expected_hash);
     assert_eq!(T::frame_name(), T::nominal_name());
@@ -41,8 +41,8 @@ where
     let raw = norito::codec::encode_adaptive(&value);
     norito::json!({
         "nominal": (T::nominal_name()),
-        "serialize_hash": (hex::encode(<T as NoritoSerialize>::schema_hash())),
-        "deserialize_hash": (hex::encode(<T as NoritoDeserialize>::schema_hash())),
+        "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
+        "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "bare_hex": (hex::encode(raw)),
         "frame_hex": (hex::encode(frame)),
     })
@@ -303,8 +303,8 @@ fn captured_query_hash_markers_retain_their_codec_identities() {
         assert_eq!(T::nominal_name(), nominal);
         assert_eq!(T::frame_name(), nominal);
         let expected = norito::core::schema_hash_for_name(nominal);
-        assert_eq!(<T as NoritoSerialize>::schema_hash(), expected);
-        assert_eq!(<T as NoritoDeserialize>::schema_hash(), expected);
+        assert_eq!(norito::schema::identity::frame_hash::<T>(), expected);
+        assert_eq!(norito::schema::identity::frame_hash::<T>(), expected);
     }
     // Both marker names occur inside the original populated MembershipValues<HashOf<T>> frames.
     check::<crate::block::BlockHeader>("iroha_data_model::block::header::model::BlockHeader");

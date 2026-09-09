@@ -8,8 +8,6 @@
 //! a losing global proposal can therefore never advance the durable lane tip.
 mod lane_authority_methods;
 
-#[cfg(test)]
-use super::v2_worker::durable_exact_output_handoff_owner_pair;
 use super::{
     FairV2IngressOwnershipEvidence, InboundBlockMessage, LaneRelayMessage,
     lane_planner::{
@@ -17,7 +15,7 @@ use super::{
         autonomous_lane_reservation_identity_hashes_for_proposal,
         pinned_autoscale_validator_pops_for_set, plan_autonomous_lane_reservation_slot,
         prepare_v2_lane_payload_plan, prepare_v2_lane_payload_validation_plan,
-        proposal_lookahead_enabled, v2_known_lane_tip_for_route,
+        v2_known_lane_tip_for_route,
     },
     message::{
         BlockMessage, CanonicalExecutedBlockNeedV1, LANE_HISTORICAL_RECOVERY_VERSION_V1,
@@ -59,6 +57,10 @@ use super::{
         DurableExactOutputHandoffReceipt, DurableExactOutputServiceOwner,
         DurableExactOutputTransportOwner, ExactFanoutOwnership, ProductionV2Services,
     },
+};
+#[cfg(test)]
+use super::{
+    lane_planner::proposal_lookahead_enabled, v2_worker::durable_exact_output_handoff_owner_pair,
 };
 #[cfg(test)]
 use crate::kura::LaneBlockApplicationReceiptArtifactFormat;
@@ -1303,6 +1305,11 @@ struct ValidatedMergeExecutionCandidate {
     key: MergeKey,
     state_view_generation: u64,
     canonical_candidate_bytes: Vec<u8>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MergeCandidateValidationOutcome {
+    Valid { state_view_generation: u64 },
+    RoundUnavailable,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct GlobalBodyLock {
@@ -3257,6 +3264,12 @@ pub(crate) struct V2LaneWorkAdapter {
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
     #[cfg(test)]
     merge_candidate_validation_checks: std::cell::Cell<usize>,
+    /// Deterministically publish a real block after refresh preflight in tests.
+    #[cfg(test)]
+    before_authorized_merge_revalidation: Option<Box<dyn FnOnce() + Send>>,
+    /// Deterministically publish a real block after semantic validation in tests.
+    #[cfg(test)]
+    before_local_merge_publication_lease: Option<Box<dyn FnOnce() + Send>>,
     /// Positive-only, exact-round memo for expensive deterministic execution validation.
     validated_merge_execution_candidate: Option<ValidatedMergeExecutionCandidate>,
     #[cfg(test)]
@@ -4004,6 +4017,10 @@ impl V2LaneWorkAdapter {
             merge_claims: BTreeMap::new(),
             #[cfg(test)]
             merge_candidate_validation_checks: std::cell::Cell::new(0),
+            #[cfg(test)]
+            before_authorized_merge_revalidation: None,
+            #[cfg(test)]
+            before_local_merge_publication_lease: None,
             validated_merge_execution_candidate: None,
             #[cfg(test)]
             merge_execution_full_validation_checks: 0,
@@ -16087,17 +16104,11 @@ impl V2LaneWorkAdapter {
             if !self
                 .consensus_storage_read(
                     self.state
-                        .certified_autonomous_lane_block_is_globally_applied(proposal),
+                        .certified_autonomous_lane_block_or_predecessor_is_globally_applied(
+                            proposal,
+                        ),
                 )
                 .map_err(|error| error.to_string())?
-                && !self
-                    .consensus_storage_read(
-                        self.state
-                            .certified_autonomous_lane_block_predecessor_is_globally_applied(
-                                proposal,
-                            ),
-                    )
-                    .map_err(|error| error.to_string())?
             {
                 return Err(
                     "finalized autonomous carrier has neither exact application nor an applied predecessor"
@@ -17889,29 +17900,8 @@ impl V2LaneWorkAdapter {
             })
     }
     fn merge_parent_frontier_is_exact(&self) -> bool {
-        let committed_height = self.state.committed_height();
-        let Some(parent_height) = NonZeroUsize::new(committed_height) else {
-            return false;
-        };
-        let Some(expected_parent) = self
-            .context
-            .parent_commit_qc
-            .as_ref()
-            .map(|qc| qc.subject.block_hash)
-            .or_else(|| {
-                self.context
-                    .snapshot_bootstrap
-                    .as_ref()
-                    .map(|anchor| anchor.snapshot_block_hash)
-            })
-        else {
-            return false;
-        };
-        self.kura
-            .exact_durable_blocks_count()
-            .is_ok_and(|durable_height| durable_height == committed_height)
-            && self.kura.get_durable_block_hash(parent_height) == Some(expected_parent)
-            && self.state.latest_block_hash_fast() == Some(expected_parent)
+        self.merge_parent_frontier_is_exact_at_generation(self.state.state_view_generation())
+            .unwrap_or(false)
     }
     fn validate_merge_share_transport_shape(
         &self,
@@ -18020,23 +18010,36 @@ impl V2LaneWorkAdapter {
         if digest != signature.message_digest {
             return Err("merge leader candidate body differs from its signed digest".to_owned());
         }
-        self.validate_merge_candidate_for_active_round(&candidate, parent_header, active_view)?;
-        Ok(candidate)
+        match self.validate_merge_candidate_for_active_round(
+            &candidate,
+            parent_header,
+            active_view,
+        )? {
+            MergeCandidateValidationOutcome::Valid { .. } => Ok(candidate),
+            MergeCandidateValidationOutcome::RoundUnavailable => {
+                Err("merge candidate global round is no longer available".to_owned())
+            }
+        }
     }
     fn validate_merge_candidate_for_active_round(
         &mut self,
         candidate: &crate::merge::MergeLedgerCandidate,
         parent_header: &BlockHeader,
         active_view: wire::View,
-    ) -> Result<(), String> {
+    ) -> Result<MergeCandidateValidationOutcome, String> {
         #[cfg(test)]
         self.merge_candidate_validation_checks.set(
             self.merge_candidate_validation_checks
                 .get()
                 .saturating_add(1),
         );
+        let state_view_generation = self.state.state_view_generation();
+        if !self.merge_parent_frontier_is_exact_at_generation(state_view_generation)? {
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeCandidateValidationOutcome::RoundUnavailable);
+        }
         if candidate.execution_batch.is_none() {
-            return self
+            let validation = self
                 .state
                 .validate_merge_candidate_for_global_round(
                     candidate,
@@ -18045,31 +18048,39 @@ impl V2LaneWorkAdapter {
                     self.context.mode,
                 )
                 .map_err(|error| error.to_string());
+            if !self.merge_parent_frontier_is_exact_at_generation(state_view_generation)? {
+                self.validated_merge_execution_candidate = None;
+                return Ok(MergeCandidateValidationOutcome::RoundUnavailable);
+            }
+            validation?;
+            return Ok(MergeCandidateValidationOutcome::Valid {
+                state_view_generation,
+            });
         }
 
         // Deterministic execution validation can be substantially more expensive than the
         // retransmit cadence. Cache only one exact successful execution candidate, and bind the
         // positive result to a stable committed-State generation. Relay/drain candidates retain
         // their full live validation above.
-        let state_view_generation = self.state.state_view_generation();
         let validated = self.merge_execution_candidate_validation_memo(
             candidate,
             parent_header,
             active_view,
             state_view_generation,
-        )?;
+        );
+        if !self.merge_parent_frontier_is_exact_at_generation(state_view_generation)? {
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeCandidateValidationOutcome::RoundUnavailable);
+        }
+        let validated = validated?;
         let cache_hit = self
             .validated_merge_execution_candidate
             .as_ref()
             .is_some_and(|cached| cached == &validated);
         if cache_hit {
-            if self.merge_parent_frontier_is_exact_at_generation(state_view_generation) {
-                return Ok(());
-            }
-            return Err(
-                "execution candidate validation cache crossed a committed frontier change"
-                    .to_owned(),
-            );
+            return Ok(MergeCandidateValidationOutcome::Valid {
+                state_view_generation,
+            });
         }
 
         #[cfg(test)]
@@ -18078,22 +18089,24 @@ impl V2LaneWorkAdapter {
                 .merge_execution_full_validation_checks
                 .saturating_add(1);
         }
-        self.state
+        let validation = self
+            .state
             .validate_merge_candidate_for_global_round(
                 candidate,
                 parent_header,
                 active_view,
                 self.context.mode,
             )
-            .map_err(|error| error.to_string())?;
-        if !self.merge_parent_frontier_is_exact_at_generation(state_view_generation) {
-            return Err(
-                "execution candidate validation crossed a committed State frontier change"
-                    .to_owned(),
-            );
+            .map_err(|error| error.to_string());
+        if !self.merge_parent_frontier_is_exact_at_generation(state_view_generation)? {
+            self.validated_merge_execution_candidate = None;
+            return Ok(MergeCandidateValidationOutcome::RoundUnavailable);
         }
+        validation?;
         self.validated_merge_execution_candidate = Some(validated);
-        Ok(())
+        Ok(MergeCandidateValidationOutcome::Valid {
+            state_view_generation,
+        })
     }
     fn merge_execution_candidate_validation_memo(
         &self,
@@ -18184,11 +18197,62 @@ impl V2LaneWorkAdapter {
             canonical_candidate_bytes,
         })
     }
-    fn merge_parent_frontier_is_exact_at_generation(&self, state_view_generation: u64) -> bool {
+    fn merge_parent_frontier_matches_durable_tip(
+        &self,
+        state_view_generation: u64,
+        durable_height: usize,
+        durable_tip: Option<HashOf<BlockHeader>>,
+    ) -> bool {
+        let Some(expected_parent) = self
+            .context
+            .parent_commit_qc
+            .as_ref()
+            .map(|qc| qc.subject.block_hash)
+            .or_else(|| {
+                self.context
+                    .snapshot_bootstrap
+                    .as_ref()
+                    .map(|anchor| anchor.snapshot_block_hash)
+            })
+        else {
+            return false;
+        };
+        let committed_height = self.state.committed_height();
         state_view_generation % 2 == 0
             && self.state.state_view_generation() == state_view_generation
-            && self.merge_parent_frontier_is_exact()
+            && committed_height.checked_add(1) == usize::try_from(self.context.height).ok()
+            && durable_height == committed_height
+            && durable_tip == Some(expected_parent)
+            && self.state.latest_block_hash_fast() == Some(expected_parent)
             && self.state.state_view_generation() == state_view_generation
+    }
+    fn merge_parent_frontier_is_exact_at_generation(
+        &self,
+        state_view_generation: u64,
+    ) -> Result<bool, String> {
+        let (durable_height, durable_tip) = self
+            .kura
+            .exact_durable_tip()
+            .map_err(|error| format!("cannot read exact durable Kura frontier: {error}"))?;
+        Ok(self.merge_parent_frontier_matches_durable_tip(
+            state_view_generation,
+            durable_height,
+            durable_tip,
+        ))
+    }
+    fn merge_parent_frontier_is_exact_under_publication_lease(
+        &self,
+        state_view_generation: u64,
+        lease: &crate::kura::KuraCanonicalPublicationLease<'_>,
+    ) -> Result<bool, String> {
+        let (durable_height, durable_tip) = lease
+            .exact_durable_tip()
+            .map_err(|error| format!("cannot read exact durable Kura frontier: {error}"))?;
+        Ok(self.merge_parent_frontier_matches_durable_tip(
+            state_view_generation,
+            durable_height,
+            durable_tip,
+        ))
     }
     /// Build through State's validating constructor and retain its positive result only while the
     /// exact committed State/Kura frontier remains unchanged. Any concurrent change simply leaves
@@ -18211,7 +18275,9 @@ impl V2LaneWorkAdapter {
                 active_view,
                 state_view_generation,
             )
-            && self.merge_parent_frontier_is_exact_at_generation(state_view_generation)
+            && self
+                .merge_parent_frontier_is_exact_at_generation(state_view_generation)
+                .unwrap_or(false)
         {
             self.validated_merge_execution_candidate = Some(validated);
         }
@@ -18224,7 +18290,16 @@ impl V2LaneWorkAdapter {
         parent_header: &BlockHeader,
         active_view: wire::View,
     ) -> Result<(), String> {
-        self.validate_merge_candidate_for_active_round(candidate, parent_header, active_view)
+        match self.validate_merge_candidate_for_active_round(
+            candidate,
+            parent_header,
+            active_view,
+        )? {
+            MergeCandidateValidationOutcome::Valid { .. } => Ok(()),
+            MergeCandidateValidationOutcome::RoundUnavailable => {
+                Err("merge candidate global round is no longer available".to_owned())
+            }
+        }
     }
     #[cfg(test)]
     pub(crate) const fn merge_execution_full_validation_checks_for_test(&self) -> usize {
@@ -18290,13 +18365,30 @@ impl V2LaneWorkAdapter {
     /// private key is used. In-memory claims remain an immediate same-process
     /// equivocation check, while the Kura-root journal is authoritative across
     /// crashes and adapter reconstruction.
+    #[cfg(test)]
     fn authorize_local_merge_claim(
         &mut self,
         candidate: &crate::merge::MergeLedgerCandidate,
         active_view: wire::View,
         signer: wire::ValidatorIndex,
         message_digest: Hash,
-    ) -> Result<(), MergeSidecarError> {
+    ) -> Result<MergeCandidateValidationOutcome, MergeSidecarError> {
+        self.authorize_local_merge_claim_with_validation(
+            candidate,
+            active_view,
+            signer,
+            message_digest,
+            None,
+        )
+    }
+    fn authorize_local_merge_claim_with_validation(
+        &mut self,
+        candidate: &crate::merge::MergeLedgerCandidate,
+        active_view: wire::View,
+        signer: wire::ValidatorIndex,
+        message_digest: Hash,
+        validated_state_generation: Option<u64>,
+    ) -> Result<MergeCandidateValidationOutcome, MergeSidecarError> {
         if !self.voting_enabled {
             return Err(MergeSidecarError::SigningGuard(
                 "non-voting lane work has no merge-signing authority".to_owned(),
@@ -18430,14 +18522,30 @@ impl V2LaneWorkAdapter {
                 "merge signing parent header differs from the frozen context".to_owned(),
             ));
         }
-        self.validate_merge_candidate_for_active_round(candidate, &parent_header, active_view)
-            .map_err(MergeSidecarError::SigningGuard)?;
+        let state_view_generation = if let Some(state_view_generation) = validated_state_generation
+        {
+            state_view_generation
+        } else {
+            match self
+                .validate_merge_candidate_for_active_round(candidate, &parent_header, active_view)
+                .map_err(MergeSidecarError::SigningGuard)?
+            {
+                MergeCandidateValidationOutcome::Valid {
+                    state_view_generation,
+                } => state_view_generation,
+                MergeCandidateValidationOutcome::RoundUnavailable => {
+                    return Ok(MergeCandidateValidationOutcome::RoundUnavailable);
+                }
+            }
+        };
         self.merge_signing_guard
             .as_ref()
             .expect("merge signing guard checked above")
             .authorize(durable_context, message_digest, candidate)?;
         self.merge_claims.entry(claim_key).or_insert(message_digest);
-        Ok(())
+        Ok(MergeCandidateValidationOutcome::Valid {
+            state_view_generation,
+        })
     }
     pub(crate) fn refresh_merge_candidates(
         &mut self,
@@ -18462,8 +18570,14 @@ impl V2LaneWorkAdapter {
         self.merge_entries.retain(|key, _| key.view == active_view);
         self.merge_claims
             .retain(|(_, view, _), _| *view == active_view);
-        if self.pre_apply_unlocked_merge_view() != Some(active_view)
-            || !self.merge_parent_frontier_is_exact()
+        if self.pre_apply_unlocked_merge_view() != Some(active_view) {
+            self.validated_merge_execution_candidate = None;
+            return Ok(());
+        }
+        let initial_state_generation = self.state.state_view_generation();
+        if !self
+            .merge_parent_frontier_is_exact_at_generation(initial_state_generation)
+            .map_err(V2LaneWorkError::SigningGuard)?
         {
             self.validated_merge_execution_candidate = None;
             return Ok(());
@@ -18574,20 +18688,34 @@ impl V2LaneWorkAdapter {
                 VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash,
             );
-            if *digest != recomputed
-                || *bytes != candidate.canonical_bytes()
-                || self
-                    .validate_merge_candidate_for_active_round(
-                        candidate,
-                        &parent_header,
-                        active_view,
-                    )
-                    .is_err()
-            {
+            if *digest != recomputed || *bytes != candidate.canonical_bytes() {
                 return Err(V2LaneWorkError::SigningGuard(
-                    "durable merge candidate no longer revalidates against its exact global round"
+                    "durable merge candidate canonical bytes or digest differ from its exact global round"
                         .to_owned(),
                 ));
+            }
+            // Preserve the actual rejection at the fail-stop boundary. A
+            // frontier race, invalid execution and damaged signing record
+            // require different repairs; collapsing them loses that evidence.
+            #[cfg(test)]
+            if let Some(publish) = self.before_authorized_merge_revalidation.take() {
+                publish();
+            }
+            match self.validate_merge_candidate_for_active_round(
+                candidate,
+                &parent_header,
+                active_view,
+            ) {
+                Ok(MergeCandidateValidationOutcome::Valid { .. }) => {}
+                Ok(MergeCandidateValidationOutcome::RoundUnavailable) => {
+                    self.purge_queued_merge_broadcasts();
+                    return Ok(());
+                }
+                Err(reason) => {
+                    return Err(V2LaneWorkError::SigningGuard(format!(
+                        "durable merge candidate no longer revalidates against its exact global round: {reason}"
+                    )));
+                }
             }
         }
         let installed_candidate_bodies = self
@@ -18609,11 +18737,19 @@ impl V2LaneWorkAdapter {
             .collect::<Vec<_>>();
         let mut installed_candidates = Vec::with_capacity(installed_candidate_bodies.len());
         for candidate in installed_candidate_bodies {
-            if self
-                .validate_merge_candidate_for_active_round(&candidate, &parent_header, active_view)
-                .is_ok()
-            {
-                installed_candidates.push(candidate);
+            match self.validate_merge_candidate_for_active_round(
+                &candidate,
+                &parent_header,
+                active_view,
+            ) {
+                Ok(MergeCandidateValidationOutcome::Valid { .. }) => {
+                    installed_candidates.push(candidate);
+                }
+                Ok(MergeCandidateValidationOutcome::RoundUnavailable) => {
+                    self.purge_queued_merge_broadcasts();
+                    return Ok(());
+                }
+                Err(_) => {}
             }
         }
         if let Some((_, candidate, _)) = authorized_candidate {
@@ -18692,19 +18828,69 @@ impl V2LaneWorkAdapter {
             {
                 continue;
             }
-            if let Err(error) =
-                self.authorize_local_merge_claim(&candidate, active_view, local_index, digest)
-            {
-                if let MergeSidecarError::SigningGuard(reason) = &error {
-                    return Err(V2LaneWorkError::SigningGuard(reason.clone()));
+            let validated_state_generation = match self.validate_merge_candidate_for_active_round(
+                &candidate,
+                &parent_header,
+                active_view,
+            ) {
+                Ok(MergeCandidateValidationOutcome::Valid {
+                    state_view_generation,
+                }) => state_view_generation,
+                Ok(MergeCandidateValidationOutcome::RoundUnavailable) => {
+                    self.purge_queued_merge_broadcasts();
+                    return Ok(());
                 }
-                iroha_logger::warn!(
-                    ?error,
-                    epoch = candidate.epoch_id,
-                    view = candidate.view,
-                    "refusing local merge signature without durable exact-context authorization"
-                );
-                continue;
+                Err(reason) => return Err(V2LaneWorkError::SigningGuard(reason)),
+            };
+            #[cfg(test)]
+            if let Some(publish) = self.before_local_merge_publication_lease.take() {
+                publish();
+            }
+            // Consume the generation-bound validation and perform the private-key
+            // action while both State and canonical Kura publication are excluded.
+            // The established cross-layer order is State, then Kura.
+            let state = Arc::clone(&self.state);
+            let state_publication_lease = state.consensus_publication_lease();
+            let kura = Arc::clone(&self.kura);
+            let kura_publication_lease = kura.canonical_publication_lease();
+            if !self
+                .merge_parent_frontier_is_exact_under_publication_lease(
+                    validated_state_generation,
+                    &kura_publication_lease,
+                )
+                .map_err(V2LaneWorkError::SigningGuard)?
+            {
+                drop(kura_publication_lease);
+                drop(state_publication_lease);
+                self.purge_queued_merge_broadcasts();
+                return Ok(());
+            }
+            match self.authorize_local_merge_claim_with_validation(
+                &candidate,
+                active_view,
+                local_index,
+                digest,
+                Some(validated_state_generation),
+            ) {
+                Ok(MergeCandidateValidationOutcome::Valid { .. }) => {}
+                Ok(MergeCandidateValidationOutcome::RoundUnavailable) => {
+                    drop(kura_publication_lease);
+                    drop(state_publication_lease);
+                    self.purge_queued_merge_broadcasts();
+                    return Ok(());
+                }
+                Err(error) => {
+                    if let MergeSidecarError::SigningGuard(reason) = &error {
+                        return Err(V2LaneWorkError::SigningGuard(reason.clone()));
+                    }
+                    iroha_logger::warn!(
+                        ?error,
+                        epoch = candidate.epoch_id,
+                        view = candidate.view,
+                        "refusing local merge signature without durable exact-context authorization"
+                    );
+                    continue;
+                }
             }
             let signature = Signature::try_new(self.key_pair.private_key(), digest.as_ref())
                 .map_err(|error| V2LaneWorkError::SigningGuard(error.to_string()))?;
@@ -18716,6 +18902,8 @@ impl V2LaneWorkAdapter {
                 .signatures
                 .insert(local_index, payload);
             self.push_effect(V2LaneWorkEffect::BroadcastMerge(share));
+            drop(kura_publication_lease);
+            drop(state_publication_lease);
             self.try_commit_merge(key)?;
         }
         Ok(())
@@ -19246,41 +19434,24 @@ impl CandidateWorkProvider for &mut V2LaneWorkAdapter {
                 .values()
                 .flat_map(|payload| payload.entrypoint_hashes.iter().copied())
                 .collect::<BTreeSet<_>>();
-            let nexus = self.state.nexus_snapshot();
-            if !candidates.is_empty() {
-                let autonomous_routes = self
-                    .state
-                    .consensus_lane_routes_at_height(self.context.height);
-                // QueuePlanSynced ownership always belongs to the autonomous
-                // corridor, including a topology with only one routable lane.
-                // Multi-lane scheduling retains its broader route exclusion.
-                let broad_autonomous_route_exclusion =
-                    proposal_lookahead_enabled(&nexus, self.context.height);
-                let unavailable = candidates
-                    .iter()
-                    .copied()
-                    .enumerate()
-                    .filter_map(|(index, candidate)| {
-                        let route = candidate.routing_plan().coordinator_route();
-                        let is_queue_plan_synced = candidate
-                            .transaction()
-                            .entrypoint()
-                            .admission_intent()
-                            == iroha_data_model::transaction::TransactionAdmissionIntent::
-                                QueuePlanSynced;
-                        (is_queue_plan_synced
-                            || (broad_autonomous_route_exclusion
-                                && autonomous_routes
-                                    .contains_key(&(route.lane_id, route.dataspace_id))))
+            // Signed admission intent determines the execution corridor. An
+            // Ordinary transaction has no global QueuePlan admission and cannot
+            // acquire an autonomous reservation, even in a multi-route world.
+            let unavailable = candidates
+                .iter()
+                .copied()
+                .enumerate()
+                .filter_map(|(index, candidate)| {
+                    (candidate.transaction().entrypoint().admission_intent()
+                        == iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
                         .then_some(index)
-                    })
-                    .collect::<BTreeSet<_>>();
-                if !unavailable.is_empty() {
-                    return Err(CandidateWorkUnavailable::new(
-                        unavailable,
-                        "waiting for deterministic autonomous lane authors to publish durable FIFO reservations",
-                    ));
-                }
+                })
+                .collect::<BTreeSet<_>>();
+            if !unavailable.is_empty() {
+                return Err(CandidateWorkUnavailable::new(
+                    unavailable,
+                    "QueuePlanSynced work requires its globally admitted autonomous reservation",
+                ));
             }
             let unavailable = candidates
                 .iter()
@@ -31073,6 +31244,76 @@ pub(super) mod tests {
     }
     include!("v2_lane_work_autonomous_ready_durability_tests.rs");
     #[test]
+    fn candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced()
+    {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let lane_id = LaneId::new(1);
+        let dataspace_id = DataSpaceId::new(7);
+        enable_multilane_nexus(&mut adapter, &keys, lane_id, dataspace_id);
+        assert!(proposal_lookahead_enabled(
+            &adapter.state.nexus_snapshot(),
+            adapter.context.height,
+        ));
+        let context = adapter.context.clone();
+        // Both the default route used by application onboarding and another
+        // routable lane must retain ordinary proposal eligibility.
+        for (lane_id, dataspace_id) in [
+            (LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+            (lane_id, dataspace_id),
+        ] {
+            let routing_plan = RoutingPlan::single(RoutingDecision::new(lane_id, dataspace_id));
+            let (ordinary, _) = planned_lane_candidate_block_for_route_at_view(
+                &adapter,
+                &keys,
+                0,
+                lane_id,
+                dataspace_id,
+            );
+            let ordinary = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+                ordinary
+                    .external_entrypoints_cloned()
+                    .next()
+                    .expect("ordinary entrypoint"),
+            ));
+            let prepared = (&mut adapter)
+                .prepare(
+                    &context,
+                    0,
+                    &[CandidateDescriptor::new(&ordinary, &routing_plan)],
+                )
+                .expect("ordinary work cannot wait for an unavailable autonomous reservation");
+            assert_eq!(prepared.native_amx_receipts.len(), 1);
+            assert!(prepared.native_amx_receipts[0].is_none());
+            assert_eq!(prepared.lane_payload_ownerships.len(), 1);
+            assert!(prepared.autonomous_lane_payloads.is_empty());
+            let (synced, _) = planned_autonomous_lane_candidate_block_for_route_at_view(
+                &adapter,
+                &keys,
+                0,
+                lane_id,
+                dataspace_id,
+            );
+            let synced = AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+                synced
+                    .external_entrypoints_cloned()
+                    .next()
+                    .expect("QueuePlanSynced entrypoint"),
+            ));
+            let unavailable = (&mut adapter)
+                .prepare(
+                    &context,
+                    0,
+                    &[CandidateDescriptor::new(&synced, &routing_plan)],
+                )
+                .expect_err("QueuePlanSynced cannot bypass its autonomous ownership corridor");
+            assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
+            assert_eq!(
+                unavailable.reason(),
+                "QueuePlanSynced work requires its globally admitted autonomous reservation",
+            );
+        }
+    }
+    #[test]
     fn candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict() {
         let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
         let (block, mut proposal) =
@@ -31082,9 +31323,15 @@ pub(super) mod tests {
             .external_entrypoints_cloned()
             .next()
             .expect("pending autonomous entrypoint");
-        let accepted = crate::tx::AcceptedTransaction::new_unchecked_entrypoint(
-            std::borrow::Cow::Owned(entrypoint.clone()),
-        );
+        let (ordinary, _) = planned_lane_candidate_block_at_view(&adapter, &keys, 0);
+        let accepted =
+            crate::tx::AcceptedTransaction::new_unchecked_entrypoint(std::borrow::Cow::Owned(
+                ordinary
+                    .external_entrypoints_cloned()
+                    .next()
+                    .expect("ordinary conflicting entrypoint"),
+            ));
+        assert_ne!(accepted.hash_as_entrypoint(), entrypoint.hash());
         let routing_plan = RoutingPlan::single(RoutingDecision::new(
             proposal.descriptor.lane_id,
             proposal.descriptor.dataspace_id,
@@ -31148,6 +31395,10 @@ pub(super) mod tests {
             .prepare(&context, 0, &[conflicting])
             .expect_err("ordinary ownership cannot overlap a live lane reservation");
         assert_eq!(unavailable.indices(), &BTreeSet::from([0]));
+        assert_eq!(
+            unavailable.reason(),
+            "ordinary work conflicts with an already-reserved autonomous lane slot",
+        );
         let prepared = provider
             .prepare(&context, 0, &[])
             .expect("empty ordinary batch carries the pending autonomous anchor");

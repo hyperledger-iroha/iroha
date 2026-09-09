@@ -167,11 +167,11 @@ where
         "permanent schema-name KAT changed for {schema_name}"
     );
     assert_eq!(
-        <T as norito::NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<T>(),
         expected_schema_hash
     );
     assert_eq!(
-        <T as norito::NoritoDeserialize<'static>>::schema_hash(),
+        norito::schema::identity::frame_hash::<T>(),
         expected_schema_hash
     );
     let legacy_type_name_hash = norito::core::type_name_schema_hash::<T>();
@@ -2785,7 +2785,6 @@ fn zk_ace_digest384_wrappers_reject_noncanonical_field_elements() {
     assert!(PrivacyZkAceReplayNullifierV1::from_le_bytes(noncanonical).is_none());
 }
 
-#[cfg(feature = "json")]
 #[test]
 fn goldilocks_digest384_json_rejects_noncanonical_words() {
     let digest = GoldilocksDigest384V1::new([1, 2, 3, 4, 5, 6]).expect("canonical words");

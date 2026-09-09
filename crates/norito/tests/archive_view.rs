@@ -4,7 +4,8 @@ use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{DecodeFromSlice, Error, from_bytes_view, to_bytes},
 };
-#[derive(Debug, IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, IntoSchema, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.archive_view.DummyPayload")]
 struct DummyPayload(Vec<u8>);
 impl<'a> DecodeFromSlice<'a> for DummyPayload {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {

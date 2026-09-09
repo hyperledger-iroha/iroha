@@ -1,7 +1,7 @@
 //! Regression test: complex struct with Vec and enum fields roundtrips under
 //! hybrid packed-struct layout without panicking or length mismatches.
 use iroha_schema::IntoSchema;
-use norito::{NoritoDeserialize, NoritoSerialize, from_bytes, to_bytes};
+use norito::{DeserializePayload, NoritoDeserialize, NoritoSerialize, from_bytes, to_bytes};
 #[derive(Clone, Debug, PartialEq, Default, NoritoSerialize, NoritoDeserialize, IntoSchema)]
 struct DomainId {
     name: String,
@@ -57,7 +57,10 @@ struct MetadataEntry {
     key: String,
     value: String,
 }
-#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema)]
+#[derive(
+    Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, IntoSchema, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.tx_like.SignedTransaction")]
 struct SignedTransaction {
     creator: AccountId,
     timestamp_ms: u64,
@@ -82,7 +85,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for DomainId {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), tmp, bytes.len());
         }
         let archived = unsafe { &*(tmp as *const norito::Archived<Self>) };
-        let v = <Self as NoritoDeserialize>::deserialize(archived);
+        let v = <Self as DeserializePayload>::deserialize(archived);
         unsafe {
             dealloc(tmp, layout);
         }
@@ -104,7 +107,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AccountId {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), tmp, bytes.len());
         }
         let archived = unsafe { &*(tmp as *const norito::Archived<Self>) };
-        let v = <Self as NoritoDeserialize>::deserialize(archived);
+        let v = <Self as DeserializePayload>::deserialize(archived);
         unsafe {
             dealloc(tmp, layout);
         }
@@ -126,7 +129,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for AssetDefinitionId {
             core::ptr::copy_nonoverlapping(bytes.as_ptr(), tmp, bytes.len());
         }
         let archived = unsafe { &*(tmp as *const norito::Archived<Self>) };
-        let v = <Self as NoritoDeserialize>::deserialize(archived);
+        let v = <Self as DeserializePayload>::deserialize(archived);
         unsafe {
             dealloc(tmp, layout);
         }
@@ -211,6 +214,6 @@ fn tx_like_roundtrip() {
     let tx = sample_tx(8, 3, 2);
     let bytes = to_bytes(&tx).expect("encode");
     let archived = from_bytes::<SignedTransaction>(&bytes).expect("from_bytes");
-    let out: SignedTransaction = <SignedTransaction as NoritoDeserialize>::deserialize(archived);
+    let out: SignedTransaction = <SignedTransaction as DeserializePayload>::deserialize(archived);
     assert_eq!(tx, out);
 }

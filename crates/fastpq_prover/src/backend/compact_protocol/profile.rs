@@ -26,8 +26,11 @@ pub(super) fn check_geometry(geometry: &Geometry) -> Result<()> {
     Ok(())
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_v1::EngineStatementV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_protocol::profile::StatementContext",
+    frame = "fastpq_prover::compact_v1::EngineStatementV1"
+)]
 struct StatementContext {
     relation: String,
     trace_rows: u32,
@@ -173,7 +176,6 @@ impl Binding {
     }
 
     /// Build a prover-owned tree under the same canonical owner and exact shape.
-    #[cfg(test)]
     pub(super) fn tree(&self, leaves: &[Digest], role: MerkleTreeRoleV1) -> Result<CommittedTree> {
         let expected = match oracle(role)? {
             compact::Oracle::Row | compact::Oracle::Mixed | compact::Oracle::Quotient => 524_288,

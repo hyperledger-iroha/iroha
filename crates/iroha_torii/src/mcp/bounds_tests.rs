@@ -48,7 +48,7 @@ fn native_early_transport_errors_omit_an_unreadable_request_id() {
 }
 
 #[test]
-fn native_batch_results_remap_legacy_application_error_codes() {
+fn native_batch_results_remap_legacy_application_error_types() {
     let mut response = norito::json!({
         "jsonrpc": "2.0",
         "id": "batch",

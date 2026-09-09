@@ -29,6 +29,53 @@ def _guarded_errors(package: str, document: dict) -> list[str]:
     return FEATURE_HYGIENE._check_expected_features(document, manifest)
 
 
+def test_model_json_dependencies_are_unconditional_and_reject_owner_removal() -> None:
+    document = _guarded_document("iroha_data_model")
+    assert _guarded_errors("iroha_data_model", document) == []
+    for name in FEATURE_HYGIENE.MANDATORY_MODEL_JSON_DEPENDENCIES:
+        for mutation in ("remove", "optional"):
+            changed = copy.deepcopy(document)
+            if mutation == "remove":
+                del changed["dependencies"][name]
+            else:
+                changed["dependencies"][name]["optional"] = True
+            assert changed != document
+            errors = _guarded_errors("iroha_data_model", changed)
+            assert any(
+                f"mandatory model JSON dependency `{name}` must be a non-optional normal dependency"
+                in error
+                for error in errors
+            ), (name, mutation, errors)
+
+
+def test_model_json_dependencies_reject_disabled_protocol_features() -> None:
+    document = _guarded_document("iroha_data_model")
+    assert _guarded_errors("iroha_data_model", document) == []
+    for name, required in FEATURE_HYGIENE.MANDATORY_MODEL_JSON_DEPENDENCIES.items():
+        for feature in required:
+            changed = copy.deepcopy(document)
+            changed["dependencies"][name]["features"].remove(feature)
+            assert changed != document
+            errors = _guarded_errors("iroha_data_model", changed)
+            assert any(
+                f"mandatory model JSON dependency `{name}` must select {list(required)!r} unconditionally"
+                in error
+                for error in errors
+            ), (name, feature, errors)
+
+
+def test_model_json_feature_cannot_return_as_an_empty_alias() -> None:
+    document = _guarded_document("iroha_data_model")
+    assert _guarded_errors("iroha_data_model", document) == []
+    changed = copy.deepcopy(document)
+    changed["features"]["json"] = []
+    assert changed != document
+    assert any(
+        "Cargo feature `json` is unclassified" in error
+        for error in _guarded_errors("iroha_data_model", changed)
+    )
+
+
 def test_rejects_unclassified_explicit_feature_omitted_from_default() -> None:
     document = copy.deepcopy(_guarded_document("iroha_core"))
     document["features"]["new-portable-production-capability"] = []

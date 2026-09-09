@@ -5,7 +5,7 @@ The release has two distinct profile identities:
 - `profile_digest` identifies the circuit-shape evidence file and the released
   state/helper protocol inventory.
 - `native_profile_digest` identifies the exact native circuit configuration used
-  before decoding compact-v1 Halo2 proving keys or Processed verifying keys. It is a required field of
+  before decoding structured-v1 Halo2 proving keys or Processed verifying keys. It is a required field of
   `KagemushaInternalValidationReceiptV1` and is authenticated by the receipt digest,
   manifest, and threshold release approvals. It must be nonzero and distinct from
   the evidence profile digest.

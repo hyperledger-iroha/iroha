@@ -1,0 +1,136 @@
+{
+  "manifest": {
+    "entrypoints": [
+      {
+        "name": "echo",
+        "kind": {
+          "kind": "View",
+          "value": null
+        },
+        "params": [
+          {
+            "name": "receipt",
+            "type_name": "struct std/math@1.0.0::Math::Receipt"
+          }
+        ],
+        "argument_schema": {
+          "fields": [
+            {
+              "name": "receipt",
+              "ty": {
+                "nodes": [
+                  {
+                    "kind": "Struct",
+                    "value": {
+                      "name": "std/math@1.0.0::Math::Receipt",
+                      "fields": [
+                        "completed",
+                        "amount",
+                        "outcome"
+                      ]
+                    }
+                  },
+                  {
+                    "kind": "Unit",
+                    "value": null
+                  },
+                  {
+                    "kind": "Leaf",
+                    "value": {
+                      "kind": "Int",
+                      "value": null
+                    }
+                  },
+                  {
+                    "kind": "Result",
+                    "value": null
+                  },
+                  {
+                    "kind": "Unit",
+                    "value": null
+                  },
+                  {
+                    "kind": "Error",
+                    "value": {
+                      "identity": "std/math@1.0.0::Math::Fault",
+                      "variants": [
+                        {
+                          "name": "Denied",
+                          "code": 1
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "return_type": "struct std/math@1.0.0::Math::Receipt",
+        "return_schema": {
+          "nodes": [
+            {
+              "kind": "Struct",
+              "value": {
+                "name": "std/math@1.0.0::Math::Receipt",
+                "fields": [
+                  "completed",
+                  "amount",
+                  "outcome"
+                ]
+              }
+            },
+            {
+              "kind": "Unit",
+              "value": null
+            },
+            {
+              "kind": "Leaf",
+              "value": {
+                "kind": "Int",
+                "value": null
+              }
+            },
+            {
+              "kind": "Result",
+              "value": null
+            },
+            {
+              "kind": "Unit",
+              "value": null
+            },
+            {
+              "kind": "Error",
+              "value": {
+                "identity": "std/math@1.0.0::Math::Fault",
+                "variants": [
+                  {
+                    "name": "Denied",
+                    "code": 1
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    ],
+    "states": [
+      {
+        "name": "receipt",
+        "type_name": "std/math@1.0.0::Math::Receipt{completed: (), amount: int, outcome: Result<(), std/math@1.0.0::Math::Fault>}"
+      }
+    ],
+    "error_types": [
+      {
+        "identity": "std/math@1.0.0::Math::Fault",
+        "variants": [
+          {
+            "name": "Denied",
+            "code": 1
+          }
+        ]
+      }
+    ]
+  }
+}

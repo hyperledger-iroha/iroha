@@ -7,12 +7,12 @@ use crate::{
 use iroha_crypto::HashOf;
 use iroha_primitives::json::Json;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-#[cfg(feature = "json")]
+
 use norito::json::{self, JsonDeserialize, JsonSerialize, Map, Value};
 use thiserror::Error;
 /// Predicate tree over committed transactions.
 ///
-/// With the `json` feature, the canonical representation is an app expression
+/// The canonical JSON representation is an app expression
 /// object with exactly `op` and `args` fields. Field paths are strings
 /// (`block_hash`, `authority`, `timestamp_ms`, `entrypoint_hash`, `result_ok`, or
 /// `metadata.<name>`); presence operators carry an explicit boolean argument.
@@ -277,7 +277,7 @@ pub(super) fn committed_tx_predicate_is_valid(predicate: &CommittedTxPredicate) 
     validate_committed_tx_predicate(predicate).is_ok()
 }
 /// Validation error for the committed-transaction app-expression JSON codec.
-#[cfg(feature = "json")]
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(super) enum CommittedTxPredicateJsonError {
     /// A predicate node was not a JSON object.
@@ -373,13 +373,13 @@ pub(super) enum CommittedTxPredicateJsonError {
     #[error("invalid committed transaction predicate tree: {0}")]
     InvalidTree(String),
 }
-#[cfg(feature = "json")]
+
 #[derive(Default)]
 struct PredicateJsonBudget {
     nodes: usize,
     membership_values: usize,
 }
-#[cfg(feature = "json")]
+
 impl PredicateJsonBudget {
     fn enter_node(&mut self, depth: usize) -> Result<(), CommittedTxPredicateJsonError> {
         if depth > MAX_COMMITTED_TX_PREDICATE_DEPTH {
@@ -420,7 +420,7 @@ impl PredicateJsonBudget {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 enum CommittedTxField {
     BlockHash,
     Authority,
@@ -429,7 +429,7 @@ enum CommittedTxField {
     ResultOk,
     Metadata(Name),
 }
-#[cfg(feature = "json")]
+
 fn parse_committed_tx_field(
     value: &Value,
 ) -> Result<CommittedTxField, CommittedTxPredicateJsonError> {
@@ -459,18 +459,18 @@ fn parse_committed_tx_field(
         }
     }
 }
-#[cfg(feature = "json")]
+
 fn predicate_expr(op: &str, args: Vec<Value>) -> Value {
     let mut object = Map::new();
     object.insert("args".to_owned(), Value::Array(args));
     object.insert("op".to_owned(), Value::String(op.to_owned()));
     Value::Object(object)
 }
-#[cfg(feature = "json")]
+
 fn binary_predicate_expr(op: &str, field: impl Into<String>, value: Value) -> Value {
     predicate_expr(op, vec![Value::String(field.into()), value])
 }
-#[cfg(feature = "json")]
+
 fn exact_args<'a>(
     op: &str,
     args: &'a Value,
@@ -493,7 +493,7 @@ fn exact_args<'a>(
     }
     Ok(args)
 }
-#[cfg(feature = "json")]
+
 fn invalid_value(op: &str, field: &str, expected: &'static str) -> CommittedTxPredicateJsonError {
     CommittedTxPredicateJsonError::InvalidValue {
         op: op.to_owned(),
@@ -501,7 +501,7 @@ fn invalid_value(op: &str, field: &str, expected: &'static str) -> CommittedTxPr
         expected,
     }
 }
-#[cfg(feature = "json")]
+
 fn parse_account_literal(
     op: &str,
     field: &str,
@@ -528,7 +528,7 @@ fn parse_account_literal(
     }
     Ok(account)
 }
-#[cfg(feature = "json")]
+
 fn parse_entrypoint_hash_literal(
     op: &str,
     field: &str,
@@ -550,7 +550,7 @@ fn parse_entrypoint_hash_literal(
     }
     Ok(hash)
 }
-#[cfg(feature = "json")]
+
 fn parse_block_hash_literal(
     op: &str,
     field: &str,
@@ -570,12 +570,12 @@ fn parse_block_hash_literal(
     }
     Ok(hash)
 }
-#[cfg(feature = "json")]
+
 fn parse_metadata_literal(value: &Value) -> Result<Json, CommittedTxPredicateJsonError> {
     Json::from_norito_value_ref(value)
         .map_err(|_| CommittedTxPredicateJsonError::InvalidMetadataJson)
 }
-#[cfg(feature = "json")]
+
 fn parse_equality_atom(
     op: &str,
     field_path: &str,
@@ -641,7 +641,7 @@ fn parse_equality_atom(
         }
     })
 }
-#[cfg(feature = "json")]
+
 fn parse_ordering_atom(
     op: &str,
     field_path: &str,
@@ -666,7 +666,7 @@ fn parse_ordering_atom(
         _ => unreachable!("caller restricts ordering operators"),
     })
 }
-#[cfg(feature = "json")]
+
 fn parse_membership_atom(
     op: &str,
     field_path: &str,
@@ -762,7 +762,7 @@ fn parse_membership_atom(
         }
     })
 }
-#[cfg(feature = "json")]
+
 fn parse_presence_atom(
     op: &str,
     field_path: &str,
@@ -789,7 +789,7 @@ fn parse_presence_atom(
         }),
     }
 }
-#[cfg(feature = "json")]
+
 #[allow(clippy::too_many_lines)]
 fn parse_committed_tx_predicate_inner(
     value: &Value,
@@ -886,7 +886,7 @@ fn parse_committed_tx_predicate_inner(
     }
 }
 /// Parse a validated committed-transaction app-expression JSON value.
-#[cfg(feature = "json")]
+
 pub(super) fn committed_tx_predicate_from_value(
     value: &Value,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
@@ -924,17 +924,17 @@ pub(super) fn committed_tx_predicate_from_value(
     })?;
     Ok(predicate)
 }
-#[cfg(feature = "json")]
+
 fn metadata_field_path(key: &Name) -> String {
     format!("metadata.{key}")
 }
-#[cfg(feature = "json")]
+
 fn metadata_json_value(value: &Json) -> Value {
     value
         .try_into_any_norito::<Value>()
         .expect("Json values maintain their documented validity invariant")
 }
-#[cfg(feature = "json")]
+
 #[allow(clippy::too_many_lines)]
 fn committed_tx_predicate_to_value_unchecked(predicate: &CommittedTxPredicate) -> Value {
     use CommittedTxPredicate as P;
@@ -1097,7 +1097,7 @@ fn committed_tx_predicate_to_value_unchecked(predicate: &CommittedTxPredicate) -
     }
 }
 /// Convert a validated committed-transaction predicate to its canonical app-expression value.
-#[cfg(feature = "json")]
+
 pub(super) fn committed_tx_predicate_to_value(
     predicate: &CommittedTxPredicate,
 ) -> Result<Value, CommittedTxPredicateJsonError> {
@@ -1106,7 +1106,7 @@ pub(super) fn committed_tx_predicate_to_value(
     Ok(committed_tx_predicate_to_value_unchecked(predicate))
 }
 /// Parse raw JSON and require the exact canonical app-expression encoding.
-#[cfg(feature = "json")]
+
 pub(super) fn committed_tx_predicate_from_canonical_json(
     raw: &str,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
@@ -1121,7 +1121,7 @@ pub(super) fn committed_tx_predicate_from_canonical_json(
     Ok(predicate)
 }
 /// Convert the generic builder schema into the typed committed-transaction tree.
-#[cfg(feature = "json")]
+
 pub(super) fn committed_tx_predicate_from_predicate_json(
     predicate: &crate::query::json::PredicateJson,
 ) -> Result<CommittedTxPredicate, CommittedTxPredicateJsonError> {
@@ -1184,7 +1184,7 @@ pub(super) fn committed_tx_predicate_from_predicate_json(
         _ => committed_tx_predicate_from_value(&predicate_expr("and", children)),
     }
 }
-#[cfg(feature = "json")]
+
 fn write_predicate_expression_to(
     operation: &str,
     out: &mut dyn json::JsonWriteSink,
@@ -1203,7 +1203,7 @@ fn write_predicate_expression_to(
     out.end_container();
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn write_binary_predicate_to(
     operation: &str,
     out: &mut dyn json::JsonWriteSink,
@@ -1216,7 +1216,7 @@ fn write_binary_predicate_to(
         write_value(out)
     })
 }
-#[cfg(feature = "json")]
+
 fn write_named_predicate_to<T: JsonSerialize>(
     operation: &str,
     field: &str,
@@ -1230,7 +1230,7 @@ fn write_named_predicate_to<T: JsonSerialize>(
         |out| value.json_serialize_to(out),
     )
 }
-#[cfg(feature = "json")]
+
 fn write_named_display_predicate_to<T: core::fmt::Display>(
     operation: &str,
     field: &str,
@@ -1244,7 +1244,7 @@ fn write_named_display_predicate_to<T: core::fmt::Display>(
         |out| json::write_json_display_to(value, out),
     )
 }
-#[cfg(feature = "json")]
+
 fn write_json_slice_to<T: JsonSerialize>(
     values: &[T],
     out: &mut dyn json::JsonWriteSink,
@@ -1261,7 +1261,7 @@ fn write_json_slice_to<T: JsonSerialize>(
     out.end_container();
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn write_json_display_slice_to<T: core::fmt::Display>(
     values: &[T],
     out: &mut dyn json::JsonWriteSink,
@@ -1278,7 +1278,7 @@ fn write_json_display_slice_to<T: core::fmt::Display>(
     out.end_container();
     Ok(())
 }
-#[cfg(feature = "json")]
+
 fn write_metadata_field_to(
     key: &Name,
     out: &mut dyn json::JsonWriteSink,
@@ -1296,7 +1296,7 @@ fn write_metadata_field_to(
         .map_err(|_| json::BoundedJsonError::LengthMismatch)?;
     json::write_json_string_to(field, out)
 }
-#[cfg(feature = "json")]
+
 #[allow(clippy::too_many_lines)]
 fn write_committed_tx_predicate_to(
     predicate: &CommittedTxPredicate,
@@ -1444,7 +1444,7 @@ fn write_committed_tx_predicate_to(
         }
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonSerialize for CommittedTxPredicate {
     fn json_serialize(&self, out: &mut String) {
         json::write_with_unbounded_sink(out, |sink| self.json_serialize_to(sink));
@@ -1459,7 +1459,7 @@ impl JsonSerialize for CommittedTxPredicate {
         write_committed_tx_predicate_to(self, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl JsonDeserialize for CommittedTxPredicate {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
         let value = Value::json_deserialize(parser)?;
@@ -1754,7 +1754,9 @@ mod wire {
     use iroha_crypto::HashOf;
     use iroha_primitives::json::Json;
     use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
-    use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, core::Error};
+    use norito::{
+        DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, core::Error,
+    };
     use std::cell::Cell;
     thread_local! {
         /// Remaining aggregate membership literals while decoding one predicate.
@@ -1822,7 +1824,7 @@ mod wire {
             Self(values)
         }
     }
-    impl<T: NoritoSerialize> NoritoSerialize for MembershipValues<T> {}
+
     impl<T: NoritoSerialize> SerializePayload for MembershipValues<T> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
             self.0.serialize(writer)
@@ -1834,9 +1836,10 @@ mod wire {
             self.0.encoded_len_exact()
         }
     }
-    impl<'de, T> NoritoDeserialize<'de> for MembershipValues<T>
+
+    impl<'de, T> DeserializePayload<'de> for MembershipValues<T>
     where
-        T: NoritoSerialize + for<'a> NoritoDeserialize<'a>,
+        T: NoritoSerialize + for<'a> DeserializePayload<'a>,
     {
         fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
             Self::try_deserialize(archived)
@@ -2251,11 +2254,11 @@ mod wire {
     pub(super) mod captured_tx_predicate_schema_tests;
 }
 
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 pub(super) fn generic_membership_identity_records() -> Vec<norito::json::Value> {
     wire::captured_tx_predicate_schema_tests::generic_membership_identity_records()
 }
-impl norito::core::NoritoSerialize for CommittedTxPredicate {}
+
 impl norito::core::SerializePayload for CommittedTxPredicate {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if !norito::core::use_packed_seq() && !norito::core::use_packed_struct() {
@@ -2271,7 +2274,8 @@ impl norito::core::SerializePayload for CommittedTxPredicate {
         wire::streamed_encoded_len(self)
     }
 }
-impl<'de> norito::core::NoritoDeserialize<'de> for CommittedTxPredicate {
+
+impl<'de> norito::core::DeserializePayload<'de> for CommittedTxPredicate {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CommittedTxPredicate deserialization must succeed")
     }
@@ -2296,7 +2300,7 @@ impl IntoSchema for CommittedTxPredicate {
         map.insert::<Self>(Metadata::Tuple(UnnamedFieldsMeta { types: vec![] }));
     }
 }
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{

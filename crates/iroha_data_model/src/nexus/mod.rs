@@ -13,7 +13,7 @@ use crate::{
 };
 use derive_more::Display;
 use iroha_crypto::Hash;
-#[cfg(feature = "json")]
+
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::XorQuantity;
 use iroha_schema::IntoSchema;
@@ -39,7 +39,7 @@ pub use endorsement::*;
 pub use fee_sponsor_program::*;
 pub use manifest::*;
 pub use privacy::*;
-#[cfg(all(test, feature = "json"))]
+#[cfg(test)]
 pub(crate) use private_settlement::tests::measured_receipt as measured_private_settlement_receipt;
 pub use private_settlement::*;
 pub mod portfolio;
@@ -91,7 +91,8 @@ pub struct LaneLifecycleIncarnationEntry {
 /// The status carries the exact canonical lane catalog and its domain-separated commitment. Clients
 /// must validate the snapshot before embedding [`Self::catalog_hash`] as
 /// [`LaneLifecycleParameterV1::expected_catalog_hash`].
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::LaneLifecycleStatusV1")]
 pub struct LaneLifecycleStatusV1 {
     /// Status layout version. This must be [`Self::VERSION`].
     pub version: u8,
@@ -330,7 +331,7 @@ impl LaneLifecycleParameterV1 {
             .expect("valid Nexus lane lifecycle custom parameter identifier")
     }
     /// Convert this envelope into the custom parameter accepted by `SetParameter`.
-    #[cfg(feature = "json")]
+
     #[must_use]
     pub fn into_custom_parameter(self) -> CustomParameter {
         CustomParameter::new(Self::parameter_id(), Json::new(self))
@@ -344,7 +345,7 @@ impl LaneLifecycleParameterV1 {
     ///
     /// Returns [`norito::json::Error`] when a matching payload is malformed or
     /// carries an unsupported lifecycle version.
-    #[cfg(feature = "json")]
+
     pub fn from_custom_parameter(
         custom: &CustomParameter,
     ) -> Result<Option<Self>, norito::json::Error> {
@@ -518,7 +519,7 @@ pub enum LaneIdError {
         lane_count: u32,
     },
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -530,7 +531,7 @@ impl norito::json::FastJsonWrite for LaneId {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -541,20 +542,19 @@ impl norito::json::JsonDeserialize for LaneId {
         Ok(Self(value))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKey for LaneId {
     fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
         norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKeyOwned for LaneId {
     fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         <u32 as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
     }
 }
 
-#[cfg(feature = "json")]
 impl norito::json::FastJsonWrite for ShardId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -566,7 +566,7 @@ impl norito::json::FastJsonWrite for ShardId {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for ShardId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -703,10 +703,7 @@ pub struct DaManifestPolicyParseError(pub String);
 /// Optional positive per-lane scheduler overrides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 pub struct LaneSchedulerPolicy {
     /// Positive per-block TEU capacity override; absent values use the global fallback.
     #[norito(required)]
@@ -736,10 +733,7 @@ impl LaneSchedulerPolicy {
 /// Typed settlement reserve configuration for one lane.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(deny_unknown_fields)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
+#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize)]
 pub struct LaneSettlementBufferPolicy {
     /// Canonical universal account holding the reserve asset.
     pub account_id: AccountId,
@@ -1108,7 +1102,7 @@ pub struct LaneVisibilityParseError(pub String);
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("invalid lane storage profile `{0}`")]
 pub struct LaneStorageProfileParseError(pub String);
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneVisibility {
     fn write_json(&self, out: &mut String) {
         out.push('"');
@@ -1122,7 +1116,7 @@ impl norito::json::FastJsonWrite for LaneVisibility {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneVisibility {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1133,7 +1127,7 @@ impl norito::json::JsonDeserialize for LaneVisibility {
             .map_err(|err: LaneVisibilityParseError| norito::json::Error::Message(err.to_string()))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneStorageProfile {
     fn write_json(&self, out: &mut String) {
         out.push('"');
@@ -1147,7 +1141,7 @@ impl norito::json::FastJsonWrite for LaneStorageProfile {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneStorageProfile {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1158,7 +1152,7 @@ impl norito::json::JsonDeserialize for LaneStorageProfile {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for DaManifestPolicy {
     fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
@@ -1171,7 +1165,7 @@ impl norito::json::FastJsonWrite for DaManifestPolicy {
         norito::json::write_json_string_to(self.as_str(), out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for DaManifestPolicy {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1184,7 +1178,7 @@ impl norito::json::JsonDeserialize for DaManifestPolicy {
             })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneConfig {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1295,7 +1289,7 @@ impl norito::json::FastJsonWrite for LaneConfig {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 fn ensure_lane_config_json_fields(
     seen_fields: &BTreeSet<String>,
 ) -> Result<(), norito::json::Error> {
@@ -1327,7 +1321,7 @@ fn ensure_lane_config_json_fields(
     }
     Ok(())
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneConfig {
     #[allow(
         clippy::too_many_lines,
@@ -1415,7 +1409,7 @@ impl norito::json::JsonDeserialize for LaneConfig {
         Ok(lane)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecyclePlan {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1442,7 +1436,7 @@ impl norito::json::FastJsonWrite for LaneLifecyclePlan {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecyclePlan {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1491,7 +1485,7 @@ impl norito::json::JsonDeserialize for LaneLifecyclePlan {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1530,7 +1524,7 @@ impl norito::json::FastJsonWrite for LaneLifecycleParameterV1 {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1610,7 +1604,7 @@ impl norito::json::JsonDeserialize for LaneLifecycleParameterV1 {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1637,7 +1631,7 @@ impl norito::json::FastJsonWrite for LaneLifecycleIncarnationEntry {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecycleIncarnationEntry {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -1686,7 +1680,7 @@ impl norito::json::JsonDeserialize for LaneLifecycleIncarnationEntry {
         })
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
     fn write_json(&self, out: &mut String) {
         out.push('{');
@@ -1737,7 +1731,7 @@ impl norito::json::FastJsonWrite for LaneLifecycleStatusV1 {
         Ok(())
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for LaneLifecycleStatusV1 {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2117,7 +2111,7 @@ pub enum DataSpaceCatalogError {
         fault_tolerance: u32,
     },
 }
-#[cfg(feature = "json")]
+
 impl norito::json::FastJsonWrite for DataSpaceId {
     fn write_json(&self, out: &mut String) {
         norito::json::JsonSerialize::json_serialize(&self.0, out);
@@ -2129,7 +2123,7 @@ impl norito::json::FastJsonWrite for DataSpaceId {
         norito::json::JsonSerialize::json_serialize_to(&self.0, out)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonDeserialize for DataSpaceId {
     fn json_deserialize(
         parser: &mut norito::json::Parser<'_>,
@@ -2138,13 +2132,13 @@ impl norito::json::JsonDeserialize for DataSpaceId {
         Ok(Self(value))
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKey for DataSpaceId {
     fn visit_json_key_text<E>(&self, visitor: impl FnMut(&str) -> Result<(), E>) -> Result<(), E> {
         norito::json::JsonObjectKey::visit_json_key_text(&self.0, visitor)
     }
 }
-#[cfg(feature = "json")]
+
 impl norito::json::JsonObjectKeyOwned for DataSpaceId {
     fn from_json_key_text(key: &str) -> Result<Self, norito::json::Error> {
         <u64 as norito::json::JsonObjectKeyOwned>::from_json_key_text(key).map(Self)
@@ -3321,4 +3315,16 @@ pub mod prelude {
         LaneStorageProfile, LaneStorageProfileParseError, LaneVisibility, LaneVisibilityParseError,
         ShardId,
     };
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::nexus::LaneLifecycleStatusV1,
+        >("iroha_data_model::nexus::LaneLifecycleStatusV1");
+    }
 }

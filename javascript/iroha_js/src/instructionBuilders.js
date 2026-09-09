@@ -1671,7 +1671,7 @@ function normalizeAccessSetHints(value, context) {
       if (!isKotodamaV1DynamicAccessBoundKind(boundKind)) {
         fail(
           V_CODE_INVALID_STRING,
-          `${hintName}.boundKind${TEXT_MUST_BE}exactly take or range`,
+          `${hintName}.boundKind must be exactly take or page`,
           `${hintName}.boundKind`,
         );
       }

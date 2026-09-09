@@ -134,8 +134,9 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
     else {
         return Ok(());
     };
-    let mut client = network.client().client().clone();
-    client.add_transaction_nonce = true;
+    let mut client_builder = network.client().client().to_builder();
+    client_builder.add_transaction_nonce = true;
+    let client = client_builder.build()?;
 
     let row = client
         .get_privacy_capabilities()
@@ -173,7 +174,7 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
     let genesis_hash = canonical_genesis_hash(&client)?;
     let build_error = match build_signed_zk_ace_privacy_transfer_v1(
         ZkAcePrivacyActionTransactionContextV1 {
-            network_id: client.network_id,
+            network_id: *client.network_id(),
             authority: ALICE_ID.clone(),
             creation_time,
             time_to_live: Some(Duration::from_secs(3_600)),

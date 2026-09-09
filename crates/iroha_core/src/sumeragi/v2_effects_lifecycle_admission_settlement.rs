@@ -3814,18 +3814,16 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 }
             }
             None => {
-                // A TC may promote an older PrepareQC after a newer durable
-                // Prepare high-water mark caused ordinary Proposal replay to
-                // retire. Rejoin only the currently protected full PrepareQC
-                // to this exact recovered manifest/receipt and runtime
-                // statement. This remains a normal LocalBody lifecycle
-                // admission; it neither synthesizes certified-Fetch authority
-                // nor bypasses the registry transaction.
+                // A TC may promote an older PrepareQC after ordinary Proposal
+                // replay retired; a later CommitQC may decide the same durable
+                // body directly. Rejoin only the currently protected full QC
+                // to the exact recovered manifest, receipt and runtime
+                // statement. Both phases enter normal LocalBody lifecycle
+                // admission with an inert Store predecessor. Validation and
+                // Apply still require their separate durable registry turns.
                 let authority_certificate =
                     self.exact_remote_proposal_validate_authority_certificate(&effect, &ownership)?;
-                let Some(certificate) = authority_certificate
-                    .filter(|certificate| certificate.phase == wire::GlobalPhase::Prepare)
-                else {
+                let Some(certificate) = authority_certificate else {
                     return Err(EffectExecutorError::Contract(
                         "ValidateBody omitted its mandatory lifecycle replay owner".to_owned(),
                     ));
@@ -3833,13 +3831,13 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 let (manifest, recovered_receipt) =
                     self.recovered_bodies.get(&key).cloned().ok_or_else(|| {
                         EffectExecutorError::Contract(
-                            "protected-lock ValidateBody omitted its exact recovered body frame"
+                            "protected-body ValidateBody omitted its exact recovered body frame"
                                 .to_owned(),
                         )
                     })?;
                 if recovered_receipt != receipt {
                     return Err(EffectExecutorError::Contract(
-                        "protected-lock ValidateBody changed its durable body receipt".to_owned(),
+                        "protected-body ValidateBody changed its durable body receipt".to_owned(),
                     ));
                 }
                 let validate_ownership = ownership;
@@ -3850,11 +3848,11 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
                 .ok_or_else(|| {
                     EffectExecutorError::Contract(
-                        "protected-lock ValidateBody could not seal its exact Store predecessor"
+                        "protected-body ValidateBody could not seal its exact Store predecessor"
                             .to_owned(),
                     )
                 })?;
-                let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_lock_validate(
+                let prepared = PreparedLocalBodyValidateReplayPreAdmission::seal_exact_protected_body_validate(
                     effect.clone(),
                     validate_ownership.clone(),
                     manifest,
@@ -3863,7 +3861,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 )
                 .map_err(|_| {
                     EffectExecutorError::Contract(
-                        "protected-lock ValidateBody could not reseal exact lifecycle replay"
+                        "protected-body ValidateBody could not reseal exact lifecycle replay"
                             .to_owned(),
                     )
                 })?;

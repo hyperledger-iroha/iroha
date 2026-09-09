@@ -125,7 +125,6 @@ pub(crate) fn assert_serialize<T: NoritoSchema + NoritoSerialize>(nominal: &str)
     let row = assert_identity::<T>(nominal);
     let hash = expected_hash(row, "serialize_hash");
     assert_eq!(norito::schema::identity::frame_hash::<T>(), hash);
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), hash);
 }
 
 /// Check an existing decoder without requiring a serializer or constructing a value.
@@ -136,7 +135,6 @@ where
     let row = assert_identity::<T>(nominal);
     let hash = expected_hash(row, "deserialize_hash");
     assert_eq!(norito::schema::identity::frame_hash::<T>(), hash);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), hash);
 }
 
 /// Check both independently generated codec directions without adding either codec.

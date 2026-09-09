@@ -17,7 +17,10 @@ fn runtime_dependency_builders_retain_injected_instances() {
         sorafs::hardware_test_support::anchor(100),
     )
     .expect("independent approved public pin");
-    let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+    let dependencies = ToriiRuntimeDeps::new(
+        crate::build_identity_test_fixture::build_identity(),
+        routing::MaybeTelemetry::disabled(),
+    )
         .with_sorafs_stream_token_hardware_client(Arc::clone(&hardware))
         .with_sorafs_stream_token_state_observer(Arc::clone(&observer))
         .with_sorafs_stream_token_approved_anchor(approved)

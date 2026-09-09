@@ -332,7 +332,7 @@ async fn post_ingest(network: &Network, request: &DaIngestRequest) -> Result<Res
     let url = network
         .client()
         .client()
-        .torii_url
+        .endpoint()
         .join("/v1/da/ingest")
         .expect("compose DA ingest URL");
     let timestamp_ms: u64 = SystemTime::now()
@@ -377,8 +377,8 @@ fn build_taikai_request(
     let payload = TEST_PAYLOAD.to_vec();
     let digest = BlobDigest::from_hash(blake3_hash(&payload));
     DaIngestRequestIntentV1 {
-        network_id: network.client().client().network_id,
-        owner: network.client().client().account.clone(),
+        network_id: *network.client().client().network_id(),
+        owner: network.client().client().account().clone(),
         client_blob_id: digest,
         lane_id: LaneId::SINGLE,
         epoch: 7,

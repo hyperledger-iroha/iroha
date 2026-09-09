@@ -1821,5 +1821,57 @@ mod tests {
                 .expect("expected error on bad preface");
         assert!(matches!(err, crate::Error::HandshakeBadPreface));
     }
+
+    #[test]
+    fn captured_original_p2p_signed_transport_frames() {
+        use crate::frame_identity_tests::{preimage, shapes};
+        let network_id = test_network_id("v5-canonical");
+        let node = delegation_test_key(0x11, Algorithm::BlsNormal);
+        let node_id = iroha_data_model::peer::PeerId::from(node.public_key().clone());
+        let transport = Arc::new(delegation_test_key(0x22, Algorithm::Ed25519));
+        let relay_authentication = Arc::new(delegation_test_key(0x23, Algorithm::MlDsa));
+        let certificate =
+            transport_certificate(&node, &transport, &relay_authentication, &network_id);
+        shapes(
+            "signed_certificate_v5",
+            "canonical",
+            &certificate.signed_certificate,
+        );
+        let signed_bytes = super::soranet_transport_certificate_signature_payload_v5(
+            &certificate.signed_certificate.certificate,
+        );
+        Signature::try_from_bytes(&certificate.signed_certificate.node_signature)
+            .unwrap()
+            .verify(node.public_key(), &signed_bytes)
+            .unwrap();
+        preimage("signed_certificate_v5", "canonical", &signed_bytes);
+        for (variant, byte, binding, expected_len) in [
+            ("unbound", 0x31, None, 4459),
+            ("bound", 0x32, Some(TEST_SORANET_TRANSPORT_BINDING), 4525),
+        ] {
+            let challenge = delegation_test_challenge(byte);
+            let signed = signed_delegation(&certificate, &transport, challenge, binding);
+            assert_eq!(signed.canonical_signed_frame.len(), expected_len);
+            let verified = super::verify_soranet_transport_delegation_v5(
+                &signed.canonical_signed_frame,
+                &network_id,
+                &node_id,
+                &challenge,
+                binding,
+            )
+            .unwrap();
+            assert_eq!(verified.binding, signed.binding);
+            let decoded = decode_delegation(&signed.canonical_signed_frame);
+            assert_eq!(encode_delegation(&decoded), signed.canonical_signed_frame);
+            shapes("signed_delegation_v5", variant, &decoded);
+            let signed_bytes =
+                super::soranet_transport_proof_signature_payload_v5(&decoded.proof.statement);
+            Signature::try_from_bytes(&decoded.proof.transport_signature)
+                .unwrap()
+                .verify(transport.public_key(), &signed_bytes)
+                .unwrap();
+            preimage("signed_delegation_v5", variant, &signed_bytes);
+        }
+    }
 }
 // handshake payload is encoded/decoded as a tuple to avoid extra type definitions

@@ -58,6 +58,9 @@ iroha_crypto = { path = "../iroha_crypto", default-features = false, features = 
 iroha_config = { path = "../iroha_config", optional = true }
 toml = { workspace = true, optional = true }
 
+[target.'cfg(any(target_os = "linux", target_os = "android"))'.dependencies]
+rustix = { version = "1.1.4", features = ["fs"] }
+
 [dev-dependencies]
 iroha_logger = { workspace = true }
 futures = "0.3.31"

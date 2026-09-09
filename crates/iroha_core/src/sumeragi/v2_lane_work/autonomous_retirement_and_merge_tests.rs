@@ -2059,6 +2059,223 @@ fn single_production_merge_candidate_for_view(
         .expect("relay merge candidate")
 }
 #[test]
+fn durable_merge_refresh_retains_journal_across_real_parent_publication() {
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let view = remote_merge_leader_view(&adapter);
+    adapter
+        .retain_merge_sidecars_for_global_view(view, None, None)
+        .expect("install an unlocked follower directive without choosing a body");
+    adapter.drain_effects(usize::MAX);
+    let candidate = single_production_merge_candidate_for_view(&adapter, view);
+    let context = merge_signing_context_for_test(&adapter, &candidate);
+    let digest = crate::merge::merge_qc_message_digest(
+        &adapter.context.network_id,
+        &candidate,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        adapter.frozen_validator_set_hash(),
+    );
+    let parent = adapter.state.latest_block_header_fast().expect("parent");
+    let initial_validation = adapter
+        .validate_merge_candidate_for_active_round(&candidate, &parent, view)
+        .expect("candidate is valid against its original committed parent");
+    assert!(matches!(
+        initial_validation,
+        MergeCandidateValidationOutcome::Valid { .. }
+    ));
+    adapter
+        .merge_signing_guard
+        .as_ref()
+        .expect("voting signing guard")
+        .authorize(context.clone(), digest, &candidate)
+        .expect("retain the exact valid journal before concurrent publication");
+    let applied = test_block(
+        adapter.context.height,
+        Some(candidate.carrier_parent_hash),
+        None,
+        &keys[0],
+    );
+    let state = Arc::clone(&adapter.state);
+    let kura = Arc::clone(&adapter.kura);
+    let height_context = adapter.context.clone();
+    let original_generation = state.state_view_generation();
+    adapter.before_authorized_merge_revalidation = Some(Box::new(move || {
+        kura.store_block(applied.clone())
+            .expect("persist a real carrier after the refresh frontier preflight");
+        let committed = ValidBlock::committed_from_replay_signed_block(applied);
+        commit_test_block_to_state(state.as_ref(), &committed, &height_context);
+    }));
+    adapter
+        .refresh_merge_candidates(view)
+        .expect("a round retired by concurrent publication is unavailable, not corrupt");
+    assert!(adapter.before_authorized_merge_revalidation.is_none());
+    assert!(adapter.state.state_view_generation() > original_generation);
+    assert_eq!(
+        u64::try_from(adapter.state.committed_height()).expect("committed height"),
+        adapter.context.height
+    );
+    assert_eq!(
+        adapter
+            .merge_signing_guard
+            .as_ref()
+            .expect("voting signing guard")
+            .authorized_candidate(&context)
+            .expect("retain exact journal until normal committed retirement"),
+        Some((digest, candidate.clone(), candidate.canonical_bytes()))
+    );
+    assert!(adapter.drain_effects(usize::MAX).is_empty());
+}
+
+#[test]
+fn merge_signing_fence_refuses_private_key_after_parent_publication() {
+    let (mut adapter, keys) = fixture_with_durable_relay_parent();
+    let view = remote_merge_leader_view(&adapter);
+    adapter
+        .retain_merge_sidecars_for_global_view(view, None, None)
+        .expect("install an unlocked follower directive without choosing a body");
+    adapter.drain_effects(usize::MAX);
+    let candidate = single_production_merge_candidate_for_view(&adapter, view);
+    let context = merge_signing_context_for_test(&adapter, &candidate);
+    let digest = crate::merge::merge_qc_message_digest(
+        &adapter.context.network_id,
+        &candidate,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        adapter.frozen_validator_set_hash(),
+    );
+    adapter
+        .merge_signing_guard
+        .as_ref()
+        .expect("voting signing guard")
+        .authorize(context.clone(), digest, &candidate)
+        .expect("retain the exact valid journal before concurrent publication");
+    let local = adapter
+        .local_validator_index()
+        .expect("fixture local validator belongs to the global roster");
+    let key = MergeKey {
+        epoch_id: candidate.epoch_id,
+        view: candidate.view,
+        digest,
+    };
+    let applied = test_block(
+        adapter.context.height,
+        Some(candidate.carrier_parent_hash),
+        None,
+        &keys[0],
+    );
+    let state = Arc::clone(&adapter.state);
+    let kura = Arc::clone(&adapter.kura);
+    let height_context = adapter.context.clone();
+    adapter.before_local_merge_publication_lease = Some(Box::new(move || {
+        kura.store_block(applied.clone())
+            .expect("persist a real carrier after semantic validation");
+        let committed = ValidBlock::committed_from_replay_signed_block(applied);
+        commit_test_block_to_state(state.as_ref(), &committed, &height_context);
+    }));
+    adapter
+        .refresh_merge_candidates(view)
+        .expect("the publication fence rejects a stale private-key action");
+    assert!(adapter.before_local_merge_publication_lease.is_none());
+    assert!(
+        adapter
+            .merge_entries
+            .get(&key)
+            .is_none_or(|pending| !pending.signatures.contains_key(&local))
+    );
+    assert_eq!(
+        adapter
+            .merge_signing_guard
+            .as_ref()
+            .expect("voting signing guard")
+            .authorized_candidate(&context)
+            .expect("retain exact journal until normal committed retirement"),
+        Some((digest, candidate.clone(), candidate.canonical_bytes()))
+    );
+    assert!(adapter.drain_effects(usize::MAX).is_empty());
+}
+
+#[test]
+fn durable_merge_revalidation_retains_semantic_reason_and_signing_record() {
+    let (mut adapter, _) = fixture_with_durable_relay_parent();
+    let view = remote_merge_leader_view(&adapter);
+    adapter
+        .retain_merge_sidecars_for_global_view(view, None, None)
+        .expect("install an unlocked follower directive without choosing a body");
+    adapter.drain_effects(usize::MAX);
+    let mut candidate = single_production_merge_candidate_for_view(&adapter, view);
+    candidate.global_state_root = Hash::new(b"invalid durable merge state root");
+    let context = merge_signing_context_for_test(&adapter, &candidate);
+    let digest = crate::merge::merge_qc_message_digest(
+        &adapter.context.network_id,
+        &candidate,
+        VALIDATOR_SET_HASH_VERSION_V1,
+        adapter.frozen_validator_set_hash(),
+    );
+    adapter
+        .merge_signing_guard
+        .as_ref()
+        .expect("voting signing guard")
+        .authorize(context.clone(), digest, &candidate)
+        .expect("retain a self-consistent journal with a semantically invalid body");
+    let parent = adapter.state.latest_block_header_fast().expect("parent");
+    let reason = adapter
+        .validate_merge_candidate_for_active_round(&candidate, &parent, view)
+        .expect_err("the invalid root must fail semantic validation");
+    assert!(!reason.is_empty());
+    assert!(matches!(
+        adapter.refresh_merge_candidates(view),
+        Err(V2LaneWorkError::SigningGuard(message))
+            if message == format!(
+                "durable merge candidate no longer revalidates against its exact global round: {reason}"
+            )
+    ));
+    assert_eq!(
+        adapter
+            .merge_signing_guard
+            .as_ref()
+            .expect("voting signing guard")
+            .authorized_candidate(&context)
+            .expect("retain exact rejected journal evidence"),
+        Some((digest, candidate.clone(), candidate.canonical_bytes()))
+    );
+    assert!(adapter.drain_effects(usize::MAX).is_empty());
+}
+
+#[test]
+fn durable_merge_digest_mismatch_fails_before_semantic_revalidation() {
+    let (mut adapter, _) = fixture_with_durable_relay_parent();
+    let view = remote_merge_leader_view(&adapter);
+    adapter
+        .retain_merge_sidecars_for_global_view(view, None, None)
+        .expect("install an unlocked follower directive without choosing a body");
+    adapter.drain_effects(usize::MAX);
+    let candidate = single_production_merge_candidate_for_view(&adapter, view);
+    let context = merge_signing_context_for_test(&adapter, &candidate);
+    let digest = Hash::new(b"incorrect durable merge digest");
+    adapter
+        .merge_signing_guard
+        .as_ref()
+        .expect("voting signing guard")
+        .authorize(context.clone(), digest, &candidate)
+        .expect("retain an inconsistent digest for fail-stop validation");
+    let validations = adapter.merge_candidate_validation_checks.get();
+    assert!(matches!(
+        adapter.refresh_merge_candidates(view),
+        Err(V2LaneWorkError::SigningGuard(message))
+            if message == "durable merge candidate canonical bytes or digest differ from its exact global round"
+    ));
+    assert_eq!(adapter.merge_candidate_validation_checks.get(), validations);
+    assert_eq!(
+        adapter
+            .merge_signing_guard
+            .as_ref()
+            .expect("voting signing guard")
+            .authorized_candidate(&context)
+            .expect("retain exact inconsistent journal evidence"),
+        Some((digest, candidate.clone(), candidate.canonical_bytes()))
+    );
+    assert!(adapter.drain_effects(usize::MAX).is_empty());
+}
+
+#[test]
 fn merge_signing_rejects_wrong_round_context_and_post_apply_state() {
     let (mut adapter, keys) = fixture_with_durable_relay_parent();
     let candidate = single_production_merge_candidate_for_view(&adapter, 0);

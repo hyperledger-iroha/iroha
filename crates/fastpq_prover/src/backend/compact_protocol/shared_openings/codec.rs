@@ -762,8 +762,8 @@ mod tests {
         };
         macro_rules! retired_frame {
             ($name:ident, $schema:literal) => {
-                #[derive(NoritoSerialize)]
-                #[norito(schema_name = $schema)]
+                #[derive(NoritoSerialize, norito::NoritoSchema)]
+                #[norito_schema(name = $schema)]
                 struct $name {
                     row_root: WireDigest,
                     mixed_root: WireDigest,

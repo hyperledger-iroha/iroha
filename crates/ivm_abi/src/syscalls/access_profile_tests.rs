@@ -42,10 +42,10 @@ fn generic_program_syscall_profile_is_sorted_complete_and_fail_closed() {
             SYSCALL_SYSVAR_ENTRYPOINT,
             SYSCALL_SYSVAR_CONTRACT_SUBJECT,
             SYSCALL_CALL_CONTRACT_QUANTITY2,
-            SYSCALL_STATE_KEYS,
             SYSCALL_STATE_HAS,
             SYSCALL_STATE_LEN,
             SYSCALL_STATE_COUNT,
+            SYSCALL_STATE_SCAN,
         ]
     );
     for &syscall in GENERIC_PROGRAM_DENIED_SYSCALLS_V1 {

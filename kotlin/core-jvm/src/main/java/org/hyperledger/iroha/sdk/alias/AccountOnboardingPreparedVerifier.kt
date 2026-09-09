@@ -9,16 +9,17 @@ import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.NetworkId
+import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
 import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.SignedTransactionEncoder
 import org.hyperledger.iroha.sdk.tx.norito.TransactionPayloadAdapter
 
-/** Stable cross-SDK signature transcript for Taira prepared transactions. */
+/** Canonical cross-SDK signature transcript for prepared transactions. */
 object PreparedTransactionSignatureV1 {
-    const val TRANSCRIPT_SCHEMA: String = "iroha.taira.prepared-signature-transcript.v1"
-    private val DOMAIN = "iroha:taira:prepared-transaction:v1\u0000".toByteArray(StandardCharsets.UTF_8)
+    const val TRANSCRIPT_SCHEMA: String = "iroha.prepared-signature-transcript.v1"
+    private val DOMAIN = "iroha:prepared-transaction:v1\u0000".toByteArray(StandardCharsets.UTF_8)
 
     /** Exact transcript authenticated by an onboarding prepared envelope. */
     @JvmStatic
@@ -72,18 +73,16 @@ object PreparedTransactionSignatureV1 {
     private fun base(
         envelopeSchema: String,
         operation: String,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
     ): ByteArrayOutputStream = ByteArrayOutputStream().also { transcript ->
         frame(transcript, DOMAIN)
         field(transcript, "transcript_schema", TRANSCRIPT_SCHEMA)
         field(transcript, "envelope_schema", envelopeSchema)
         field(transcript, "operation", operation)
         field(transcript, "binding.schema", binding.schema)
-        field(transcript, "binding.authorization_sha256", binding.authorizationSha256)
-        field(transcript, "binding.authorization_nonce", binding.authorizationNonce)
+        field(transcript, "binding.semantic_hash_hex", binding.semanticHashHex)
         field(transcript, "binding.kind", binding.kind)
-        field(transcript, "binding.phase", binding.phase)
-        field(transcript, "binding.idempotency_key", binding.idempotencyKey)
+        field(transcript, "binding.request_id", binding.requestId)
         field(
             transcript,
             "binding.execution_expires_at_unix_ms",
@@ -117,7 +116,7 @@ object AccountOnboardingPreparedVerifier {
         prepared: AccountOnboardingPreparedTransactionV1,
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         expectedFeePayment: FeePaymentIntent,
         expectedNetworkId: NetworkId,
         expectedAuthority: String,
@@ -128,6 +127,7 @@ object AccountOnboardingPreparedVerifier {
             expectedNetworkId,
             expectedAuthority,
         )
+        binding.requireOnboardingReceipt(receipt)
         require(sameBinding(prepared.binding, binding) && sameReceipt(prepared.receipt, receipt)) {
             "prepared onboarding envelope differs from the exact receipt or binding"
         }
@@ -168,6 +168,7 @@ object AccountOnboardingPreparedVerifier {
             "prepared onboarding transaction hash differs from the envelope"
         }
         val payload = TransactionPayloadAdapter.validateCanonicalPayloadBytes(transaction.encodedPayload())
+        requirePreparedOperationLifetime(payload, binding)
         require(
             AccountOnboardingReceiptVerifier.verifyAuthoritySignature(
                 payload.authority,
@@ -188,9 +189,9 @@ object AccountOnboardingPreparedVerifier {
             "prepared onboarding fee intent differs from the signed transaction"
         }
         val expectedMetadata = linkedMapOf(
-            "taira_public_reset_binding" to JsonValue.parse(JsonEncoder.encode(binding.toJsonMap())),
-            "taira_prepared_operation" to JsonValue.string(AccountOnboardingPreparedTransactionV1.OPERATION),
-            "taira_prepared_semantic_hash" to JsonValue.string(prepared.semanticHashHex),
+            "prepared_operation_binding" to JsonValue.parse(JsonEncoder.encode(binding.toJsonMap())),
+            "prepared_operation" to JsonValue.string(AccountOnboardingPreparedTransactionV1.OPERATION),
+            "prepared_semantic_hash" to JsonValue.string(prepared.semanticHashHex),
         )
         require(payload.metadata == expectedMetadata) {
             "prepared onboarding transaction metadata differs from the envelope"
@@ -212,7 +213,7 @@ object AccountOnboardingPreparedVerifier {
         proofRequired: AccountOnboardingProofRequiredPrepareResponseV1,
         request: AccountOnboardingPlanRequestV1,
         receipt: AccountOnboardingPlanReceiptV1,
-        binding: TairaPublicResetMutationBindingV1,
+        binding: PreparedOperationBindingV1,
         expectedNetworkId: NetworkId,
         expectedAuthority: String,
     ): AccountOnboardingProofRequiredPrepareResponseV1 {
@@ -222,6 +223,7 @@ object AccountOnboardingPreparedVerifier {
             expectedNetworkId,
             expectedAuthority,
         )
+        binding.requireOnboardingReceipt(receipt)
         val receiptHash = requireNotNull(AliasHashText.decode(receipt.planHash)) {
             "receipt plan hash is invalid"
         }
@@ -294,14 +296,23 @@ object AccountOnboardingPreparedVerifier {
     }
 
     private fun sameBinding(
-        left: TairaPublicResetMutationBindingV1,
-        right: TairaPublicResetMutationBindingV1,
+        left: PreparedOperationBindingV1,
+        right: PreparedOperationBindingV1,
     ): Boolean = left.toJsonMap() == right.toJsonMap()
 
     private fun sameReceipt(
         left: AccountOnboardingPlanReceiptV1,
         right: AccountOnboardingPlanReceiptV1,
     ): Boolean = left.toJsonMap() == right.toJsonMap()
+}
+
+internal fun requirePreparedOperationLifetime(payload: TransactionPayload, binding: PreparedOperationBindingV1) {
+    val ttl = requireNotNull(payload.timeToLiveMs) { "prepared transaction requires a signature-bound lifetime" }
+    require(
+        ttl > 0 && payload.creationTimeMs >= 0 &&
+            payload.creationTimeMs < binding.executionExpiresAtUnixMs &&
+            ttl <= binding.executionExpiresAtUnixMs - payload.creationTimeMs,
+    ) { "prepared transaction lifetime exceeds its operation deadline" }
 }
 
 internal fun decodeLowerHex(value: String): ByteArray {

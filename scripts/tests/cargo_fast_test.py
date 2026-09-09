@@ -565,7 +565,7 @@ def test_explicit_jobs_override_replaces_inherited_limit(tmp_path: Path) -> None
     assert "serializes compilation" not in result.stderr
 
 
-def test_stable_metadata_only_sets_the_non_authoritative_sha(tmp_path: Path) -> None:
+def test_explicit_development_metadata_has_no_release_marker(tmp_path: Path) -> None:
     result, environment, _ = _run_wrapper(
         tmp_path,
         "--no-sccache",
@@ -577,7 +577,31 @@ def test_stable_metadata_only_sets_the_non_authoritative_sha(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     assert environment["VERGEN_GIT_SHA"] == "local-fast-build"
     assert "IROHA_GIT_COMMIT_HASH" not in environment
-    assert "IROHA_GIT_COMMIT_HASH" not in SCRIPT.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("sealed", ["a" * 40, "", "local-fast-build"])
+def test_local_metadata_rejects_a_sealed_marker_before_cargo(
+    tmp_path: Path, sealed: str
+) -> None:
+    result, environment, cargo_arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--stable-local-metadata", "--", "build",
+        extra_env={"IROHA_GIT_COMMIT_HASH": sealed},
+    )
+    assert result.returncode != 0
+    assert "conflicts with IROHA_GIT_COMMIT_HASH" in result.stderr
+    assert environment == {}
+    assert cargo_arguments == []
+
+
+def test_exact_build_preserves_both_source_markers(tmp_path: Path) -> None:
+    commit = "a" * 40
+    result, environment, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--", "build",
+        extra_env={"IROHA_GIT_COMMIT_HASH": commit, "VERGEN_GIT_SHA": commit},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["IROHA_GIT_COMMIT_HASH"] == commit
+    assert environment["VERGEN_GIT_SHA"] == commit
 
 
 def test_default_linker_does_not_probe_installed_alternatives(tmp_path: Path) -> None:

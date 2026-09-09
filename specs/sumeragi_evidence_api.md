@@ -4,8 +4,9 @@ Sumeragi evidence audit endpoints.
 
 All finite reads on this page require a fresh allow-listed operator signature
 bound to the node's exact runtime `NetworkId`, method, target, and empty body.
-The maintained CLI accepts that key only through the explicit absolute
-`--operator-private-key-file` runtime option; it never falls back to an account
+The maintained CLI accepts that key through the explicit absolute
+`--operator-private-key-file` runtime option or the mutually exclusive inherited,
+read-only `--operator-private-key-fd` descriptor (3–65535); it never falls back to an account
 key, token, environment variable, or client TOML credential.
 Omitting `Accept` selects canonical Norito, while an explicit JSON-compatible
 range selects JSON; unacceptable or malformed negotiation returns a JSON `406`

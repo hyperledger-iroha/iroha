@@ -1,5 +1,5 @@
 //! Asset usage policy types shared between issuer/domain/dataspace enforcement paths.
-#[cfg(feature = "json")]
+
 use crate::{
     DeriveFastJson as DeriveFast, DeriveJsonDeserialize as DeriveJsonDe,
     DeriveJsonSerialize as DeriveJsonSer,
@@ -13,9 +13,20 @@ pub const ASSET_ISSUER_USAGE_POLICY_METADATA_KEY: &str = "iroha:asset_issuer_usa
 /// Metadata key on a [`crate::domain::Domain`] storing [`DomainAssetUsagePolicyV1`].
 pub const DOMAIN_ASSET_USAGE_POLICY_METADATA_KEY: &str = "iroha:domain_asset_usage_policy_v1";
 /// Issuer-controlled baseline policy for an asset definition.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSer,
+    DeriveJsonDe,
+    DeriveFast,
+)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -40,9 +51,20 @@ impl AssetIssuerUsagePolicyV1 {
     }
 }
 /// Subject-level binding payload inside [`AssetIssuerUsagePolicyV1`].
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSer,
+    DeriveJsonDe,
+    DeriveFast,
+)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)
@@ -74,9 +96,20 @@ impl AssetSubjectBindingV1 {
     }
 }
 /// Domain-owner overlay policy for asset usage inside a specific domain.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
-#[cfg_attr(feature = "json", derive(DeriveJsonSer, DeriveJsonDe, DeriveFast))]
-#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Encode,
+    Decode,
+    IntoSchema,
+    Default,
+    DeriveJsonSer,
+    DeriveJsonDe,
+    DeriveFast,
+)]
+#[norito(no_fast_from_json)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
     derive(iroha_ffi::FfiType)

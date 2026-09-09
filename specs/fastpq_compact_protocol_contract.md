@@ -151,11 +151,22 @@ allocation charges are not a peak-RSS measurement. Explicit diagnostic policies
 cannot change the cryptographic geometry or the production defaults.
 
 The current DTO alone requires at least
-`375*342*8 + 375*64 = 1,050,000` raw row and mixed/quotient bytes. This exceeds both
-the unchanged 512 KiB proof ceiling and the 1 MiB AXT ceiling, even before framing,
+`375*342*8 + 375*64 = 1,050,000` raw row and mixed/quotient bytes. This exceeds
+the 512 KiB compact proof target and the 1 MiB AXT ceiling, even before framing,
 indices, roots, frontiers or FRI data. The separate maximum row shape has 750 rows
-and 2,052,000 raw row bytes. It is not a lower bound on every proof. Passing a
-larger synthetic fixture budget does not close either production resource gap.
+and 2,052,000 raw row bytes. It is not a lower bound on every proof. Explicit
+offline budgets do not close the production resource gap. Replay's derived
+payload/frame limits are separate policies and do not admit this compact profile.
+
+Normal-library quantity producers use the same sole compact V1 owner. Before
+private columns or transforms, they require exact public context and geometry,
+per-segment output capacity of 4,279,877 framed bytes, and explicit trace,
+private-tree and decode budgets. The temporary repeated-opening representation
+has a separate 7,791,716-byte bound. Row and AIR evaluation partitions own at most
+32 independent workspaces, with deterministic row and error order. Segments run
+sequentially, and the complete artifact passes the public verifier before being
+returned. These structural charges do not measure peak RSS or establish
+production authority.
 
 Tests cover exact framing and independent known answers, owned/borrowed/streaming
 prefix equality, full-width indices and concurrent context reuse, fixed tape
@@ -180,7 +191,7 @@ It does not establish concrete six-lane or public internal-permutation security.
 No original SHAKE theorem transfers merely because geometry is unchanged.
 
 TODO: Complete that mapping, external cryptographic and AIR review, witness
-privacy, a representation that meets the unchanged resource limits, release
+privacy, a representation that meets the production resource targets, release
 hardware parity and authenticated production integration. Core/AXT/CLI/SDK and
 persistence consumers must transition together; no compact activation or final
 public raw-wire cutover is established by this offline implementation.
