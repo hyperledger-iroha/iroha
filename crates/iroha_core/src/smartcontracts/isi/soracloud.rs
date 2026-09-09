@@ -1607,7 +1607,29 @@ fn validate_soracloud_fhe_stark_native_air_binding(
             "{label} native AIR opening count mismatch"
         )));
     }
-    if native.proof.commits.roots.first().copied() != Some(air.composition_root) {
+    if native.proof.commits.roots.is_empty() {
+        return Err(invalid_parameter(format!(
+            "{label} native AIR commitment root count mismatch"
+        )));
+    }
+    if native.params.n_log2 > crate::zk_stark::MAX_BINDING_AIR_DOMAIN_LOG2 {
+        return Err(invalid_parameter(format!(
+            "{label} native AIR binding domain exceeds the supported limit"
+        )));
+    }
+    // AIR composition uses base-field leaves in its own Merkle domain. FRI commits
+    // the same evaluations as Fp4 values under a distinct, round-specific domain.
+    let domain_size = 1_usize << native.params.n_log2;
+    let expected_composition_root = crate::zk_stark::stark_merkle_root_from_field_values_v1(
+        &native.params,
+        &vec![0; domain_size],
+    )
+    .ok_or_else(|| {
+        invalid_parameter(format!(
+            "{label} native AIR composition root reconstruction failed"
+        ))
+    })?;
+    if air.composition_root != expected_composition_root {
         return Err(invalid_parameter(format!(
             "{label} native AIR composition root mismatch"
         )));
@@ -1823,11 +1845,9 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
             "{label} native BFV AIR must not carry auxiliary composition value commitments"
         )));
     }
-    if native.proof.commits.roots.first().copied() != Some(air.composition_root) {
-        return Err(invalid_parameter(format!(
-            "{label} native BFV AIR composition root mismatch"
-        )));
-    }
+    // The AIR and FRI roots use distinct typed Merkle domains. Reconstruct the
+    // governed AIR root below, then authenticate each FRI chain and bind its
+    // initial opened value to the corresponding AIR composition evaluation.
     let expected_public_digest =
         crate::zk_stark::bfv_full_bootstrap_stark_public_digest_v1(&native.params, statement_hash)
             .ok_or_else(|| {
@@ -5136,6 +5156,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             .iter()
             .find(|placement| {
                 placement.replica_slot == replica_slot
+                    && placement.placement_incarnation == placement_incarnation
                     && placement.validator_account_id == *reporter
             })
             .cloned()
@@ -5228,6 +5249,8 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 checkpoint.reporting_epoch == reporting_epoch
                     && checkpoint.assignment.service_version == active_service_version
                     && checkpoint.assignment.placement.replica_slot == replica_slot
+                    && checkpoint.assignment.placement.placement_incarnation
+                        == placement_incarnation
                     && checkpoint.assignment.placement.validator_account_id == *reporter
             })
         {
@@ -5365,6 +5388,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 (
                     service_version.clone(),
                     assignment.replica_slot,
+                    assignment.placement_incarnation,
                     assignment.validator_account_id,
                 )
             }));
@@ -5373,6 +5397,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             active_reporter_assignments.contains(&(
                 checkpoint.assignment.service_version.clone(),
                 checkpoint.assignment.placement.replica_slot,
+                checkpoint.assignment.placement.placement_incarnation,
                 checkpoint.assignment.placement.validator_account_id.clone(),
             ))
         }) {
@@ -5443,12 +5468,14 @@ pub(crate) fn write_soracloud_service_lease_usage(
             left.reporting_epoch,
             left.assignment.service_version.as_str(),
             left.assignment.placement.replica_slot,
+            left.assignment.placement.placement_incarnation,
             &left.assignment.placement.validator_account_id,
         )
             .cmp(&(
                 right.reporting_epoch,
                 right.assignment.service_version.as_str(),
                 right.assignment.placement.replica_slot,
+                right.assignment.placement.placement_incarnation,
                 &right.assignment.placement.validator_account_id,
             ))
     });
@@ -15649,6 +15676,8 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
             checkpoint.reporting_epoch == state.reporting_epoch
                 && checkpoint.assignment.service_version == state.service_version
                 && checkpoint.assignment.placement.replica_slot == state.replica_slot
+                && checkpoint.assignment.placement.placement_incarnation
+                    == state.placement_incarnation
                 && checkpoint.assignment.placement.validator_account_id == *authority
         });
         if matches!(
@@ -15791,9 +15820,10 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
             self.replica_slot,
             state_transaction.block_unix_timestamp_ms().max(1),
         )?;
-        let reporter_has_active_assignment = assignment
-            .as_ref()
-            .is_some_and(|assignment| assignment.validator_account_id == *authority);
+        let reporter_has_active_assignment = assignment.as_ref().is_some_and(|assignment| {
+            assignment.validator_account_id == *authority
+                && assignment.placement_incarnation == self.placement_incarnation
+        });
         if reporter_has_active_assignment {
             if self.finalize_reporter {
                 return Err(invalid_parameter(
@@ -15825,6 +15855,8 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                         checkpoint.reporting_epoch == self.reporting_epoch
                             && checkpoint.assignment.service_version == self.active_service_version
                             && checkpoint.assignment.placement.replica_slot == self.replica_slot
+                            && checkpoint.assignment.placement.placement_incarnation
+                                == self.placement_incarnation
                             && checkpoint.assignment.placement.validator_account_id == *authority
                     })
                 });

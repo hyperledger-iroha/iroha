@@ -8,6 +8,8 @@ The previous dirty working copies are preserved in the [dated historical archive
 
 ## Current implementation and local evidence
 
+SoraCloud lease usage and snapshot replay now bind placement incarnation, and FHE preflight respects distinct AIR/FRI Merkle domains. The default-stack lease regression is decomposed and ledger-owned fixture sequences are corrected. One extracted current FHE fixture test and five lease replay tests pass; both new replay regressions fail against the original helpers. Fresh Core execution is blocked by the incomplete Norito identity migration (1,818 compile errors). [Validation details](docs/soracloud_validation.md) retain the limits and existing source-contract failures.
+
 The latest Taira rollout failed before public cutover: daemon startup treated the QEMU executable as a directory during minimal-root attestation, so Torii never bound. A service stop during initialization also left a live nested QEMU outside its systemd unit cgroup. The exact orphan was stopped through a pidfd and native rollback completed with all four validators stopped. The directory/file fix and exact daemon-pidfd/cgroup watchdog are written. Host topology confirms bubblewrap’s retained PID1 reaper and QEMU share the private root and namespaces; compiled startup and supervisor-death validation remain pending. Prior standalone host probes did not exercise the complete daemon attestation path. No live finality, workload canary or application rollout is qualified.
 
 Candidate convergence, canaries and restart proofs precede public cutover. The preceding CLI gate passed 81 tests; that evidence predates the current runtime edits. The [previous Taira checkpoint](docs/history/2026-09-08/taira-release78-checkpoint.md) retains its exact source-era results.
