@@ -1,3 +1,5 @@
+mod scaling_evidence;
+
 use crate::{Outcome, RunArgs, tui};
 use clap::{Args as ClapArgs, Subcommand};
 use color_eyre::eyre::{WrapErr as _, eyre};

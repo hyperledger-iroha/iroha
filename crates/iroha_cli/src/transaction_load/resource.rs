@@ -13,9 +13,9 @@ mod ipc;
 mod tests;
 
 const REQUEST_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.request.v1";
-const RESPONSE_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.response.v1";
+pub(super) const RESPONSE_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.response.v1";
 const CAPTURE_SCHEMA: &str = "iroha.sumeragi_v2.resource_probe.capture.v1";
-const MAX_IPC_BYTES: usize = 16 * 1024;
+pub(super) const MAX_IPC_BYTES: usize = 16 * 1024;
 const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 const MAX_SAMPLES: u64 = 100_000;
 
@@ -32,6 +32,9 @@ pub(super) struct Args {
     /// Existing owner-only runtime probe configuration; never copied to evidence.
     #[arg(long, value_name = "PATH")]
     resource_config: PathBuf,
+    /// Independently supplied SHA-256 of the canonical complete public run budget.
+    #[arg(long)]
+    pub(super) resource_budget_sha256: String,
     /// Absent directory for new owner-only, immutable probe captures.
     #[arg(long, value_name = "PATH")]
     resource_capture_dir: PathBuf,
@@ -48,7 +51,7 @@ pub(super) struct Args {
 
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Plan {
-    interval_ns: i64,
+    pub(super) interval_ns: i64,
     timeout_ns: i64,
     start_lag_ns: i64,
     final_offset_ns: i64,
@@ -116,6 +119,7 @@ impl Plan {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
+    Admit,
     Preflight,
     Sample,
     Finish,
@@ -123,6 +127,7 @@ enum Kind {
 impl Kind {
     fn text(self) -> &'static str {
         match self {
+            Self::Admit => "admit",
             Self::Preflight => "preflight",
             Self::Sample => "sample",
             Self::Finish => "finish",
@@ -182,6 +187,9 @@ struct Response {
     manifest: Option<Manifest>,
 }
 fn parse_response(request: Request, line: &[u8]) -> Result<Response> {
+    if request.kind == Kind::Admit {
+        bail!("admission requires its typed receipt decoder");
+    }
     if line.is_empty()
         || line.len() > MAX_IPC_BYTES
         || line.last() != Some(&b'\n')
@@ -263,26 +271,50 @@ pub(super) struct Session {
     probe: ipc::ChildProbe,
 }
 impl Session {
-    pub(super) async fn preflight(
-        args: &Args,
-        plan: Plan,
-        recorder: &impl Recorder,
-    ) -> Result<Self> {
+    pub(super) fn check_admission_deadline(&self) -> Result<()> {
         #[cfg(unix)]
         {
-            let probe = ipc::ChildProbe::start(args, plan)?;
-            let response = probe.exchange(plan.request(Kind::Preflight, 0)).await?;
+            self.probe.check_admission_deadline()
+        }
+        #[cfg(not(unix))]
+        {
+            bail!("bounded resource probe requires supported descriptor ownership");
+        }
+    }
+    pub(super) async fn admit(
+        args: &Args,
+        plan: Plan,
+        expected: allocation::Expected,
+    ) -> Result<(Self, allocation::Writers)> {
+        #[cfg(unix)]
+        {
+            let (probe, writers) = ipc::ChildProbe::admit(args, plan, expected).await?;
+            Ok((Self { probe }, writers))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (args, plan, expected);
+            bail!("bounded resource probe requires supported descriptor ownership");
+        }
+    }
+    pub(super) async fn preflight(&self, plan: Plan, recorder: &impl Recorder) -> Result<()> {
+        #[cfg(unix)]
+        {
+            let response = self
+                .probe
+                .exchange(plan.request(Kind::Preflight, 0))
+                .await?;
             recorder.record(norito::json!({"event": "resource_preflight", "sequence": 0,
                 "outcome": (response.outcome.text()), "manifest": (response.manifest.as_ref().map(Manifest::value)),
                 "sampling": (plan.value())}))?;
             if response.outcome != Outcome::Complete {
                 bail!("resource preflight did not establish complete observations");
             }
-            Ok(Self { probe })
+            Ok(())
         }
         #[cfg(not(unix))]
         {
-            let _ = (args, plan, recorder);
+            let _ = (plan, recorder);
             bail!("bounded resource probe requires supported descriptor ownership");
         }
     }

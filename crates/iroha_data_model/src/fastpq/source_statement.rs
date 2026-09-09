@@ -181,7 +181,7 @@ pub fn fastpq_source_execution_entries_digest_v1(
     .ok()
 }
 
-/// One ordinary statement at an exact executed entry and manifest position.
+/// One complete nonempty transcript bundle at an exact execution-entry position.
 #[derive(
     Debug,
     Clone,
@@ -200,14 +200,13 @@ pub fn fastpq_source_execution_entries_digest_v1(
 pub struct FastpqOrdinarySourceStatementLeafV1 {
     /// Source context repeated in each leaf to prevent cross-manifest reuse.
     pub source: FastpqSourceStatementContextV1,
-    /// Position among all recorded transfer-operation statements in the manifest.
+    /// Sequential position among all nonempty execution-entry bundles in the manifest.
     pub statement_index: u32,
     /// Position in the complete canonical source projection: external calls, time
     /// invocations, then other applied transcript sources in ascending hash order.
     pub entry_index: u32,
-    /// Original transcript occurrence within this source execution entry.
-    pub transcript_index: u32,
-    /// Complete number of transcript occurrences for this execution entry.
+    /// Complete nonzero number of ordered transcripts in this execution-entry bundle.
+    /// This count may exceed the manifest's number of statement leaves.
     pub entry_transcript_count: u32,
     /// Exact source call or typed native protocol-purpose identity.
     pub entry_hash: Hash,
@@ -217,7 +216,8 @@ pub struct FastpqOrdinarySourceStatementLeafV1 {
     pub route: FastpqSourceRouteV1,
     /// Validator-derived source dataspace identifier.
     pub dataspace_id: DataSpaceId,
-    /// Canonical path-free statement digest; eventual proof bytes are excluded.
+    /// Canonical path-free digest of this entry's complete ordered transcript bundle;
+    /// eventual proof bytes are excluded.
     pub statement_digest: [u8; 32],
 }
 
@@ -246,7 +246,7 @@ pub struct FastpqOrdinarySourceStatementManifestV1 {
     /// Commitment to every ordered source entry, including entries without leaves.
     /// This does not replace the canonical transaction-wire hash in public inputs.
     pub source_entries_digest: Hash,
-    /// Exact number of statement leaves, authenticated together with the root.
+    /// Exact number of nonempty execution-entry bundles, authenticated with the root.
     pub statement_count: u32,
     /// Canonical application-Merkle root, or the distinct empty-manifest root.
     pub statement_root: Hash,
@@ -330,7 +330,7 @@ pub fn verify_fastpq_ordinary_source_statement_opening_v1(
     )
 }
 
-/// Distinct root for an explicitly present manifest with no transfer statements.
+/// Distinct root for an explicitly present manifest with no transcript bundles.
 pub fn fastpq_ordinary_source_statement_empty_root_v1() -> Hash {
     Hash::new(b"iroha:fastpq:ordinary-source-statements:empty:v1\0")
 }
@@ -354,8 +354,10 @@ pub fn fastpq_ordinary_source_statement_leaf_hash_v1(
 
 /// Construct a manifest only from a bounded, exact ordered entry projection.
 ///
-/// The caller must derive every leaf from validator execution. These structural
-/// checks cannot establish that an omitted entry actually contained no transfers.
+/// The caller must derive every leaf from its complete ordered execution-entry
+/// transcript bundle. These structural checks bind the exact entry inventory and
+/// permit at most one nonempty bundle leaf per entry; they cannot establish that
+/// an omitted entry actually contained no transfers or authenticate bundle contents.
 pub fn build_fastpq_ordinary_source_statement_manifest_v1(
     source: FastpqSourceStatementContextV1,
     entries: &[FastpqSourceExecutionEntryV1],
@@ -368,7 +370,7 @@ pub fn build_fastpq_ordinary_source_statement_manifest_v1(
         return None;
     }
     let statement_count = u32::try_from(leaves.len()).ok()?;
-    if statement_count > max_statements {
+    if statement_count > max_statements || statement_count > executed_entry_count {
         return None;
     }
     let mut previous: Option<&FastpqOrdinarySourceStatementLeafV1> = None;
@@ -377,8 +379,6 @@ pub fn build_fastpq_ordinary_source_statement_manifest_v1(
             || leaf.statement_index != u32::try_from(index).ok()?
             || leaf.entry_index >= executed_entry_count
             || leaf.entry_transcript_count == 0
-            || leaf.entry_transcript_count > statement_count
-            || leaf.transcript_index >= leaf.entry_transcript_count
         {
             return None;
         }
@@ -390,30 +390,10 @@ pub fn build_fastpq_ordinary_source_statement_manifest_v1(
         {
             return None;
         }
-        if let Some(prior) = previous {
-            if leaf.entry_index == prior.entry_index {
-                if leaf.transcript_index != prior.transcript_index.checked_add(1)?
-                    || leaf.entry_transcript_count != prior.entry_transcript_count
-                    || leaf.entry_hash != prior.entry_hash
-                    || leaf.execution_kind != prior.execution_kind
-                    || leaf.route != prior.route
-                    || leaf.dataspace_id != prior.dataspace_id
-                {
-                    return None;
-                }
-            } else if leaf.entry_index < prior.entry_index
-                || prior.transcript_index.checked_add(1)? != prior.entry_transcript_count
-                || leaf.transcript_index != 0
-            {
-                return None;
-            }
-        } else if leaf.transcript_index != 0 {
+        if previous.is_some_and(|prior| leaf.entry_index <= prior.entry_index) {
             return None;
         }
         previous = Some(leaf);
-    }
-    if previous.is_some_and(|last| last.transcript_index + 1 != last.entry_transcript_count) {
-        return None;
     }
     let source_entries_digest =
         fastpq_source_execution_entries_digest_v1(entries, max_executed_entries)?;
@@ -453,7 +433,7 @@ pub fn verify_fastpq_ordinary_source_statement_manifest_write_v1(
         || manifest.source.height == 0
         || manifest.executed_entry_count > max_executed_entries
         || manifest.statement_count > max_statements
-        || (manifest.executed_entry_count == 0 && manifest.statement_count != 0)
+        || manifest.statement_count > manifest.executed_entry_count
         || (manifest.executed_entry_count == 0
             && Some(manifest.source_entries_digest)
                 != fastpq_source_execution_entries_digest_v1(&[], 0))
@@ -509,25 +489,13 @@ pub fn verify_fastpq_ordinary_source_statement_membership_v1(
         || manifest.source.height == 0
         || manifest.executed_entry_count > max_executed_entries
         || manifest.statement_count > max_statements
-        || (manifest.executed_entry_count == 0 && manifest.statement_count != 0)
+        || manifest.statement_count > manifest.executed_entry_count
         || leaf.entry_index >= manifest.executed_entry_count
         || leaf.entry_transcript_count == 0
-        || leaf.entry_transcript_count > manifest.statement_count
-        || leaf.transcript_index >= leaf.entry_transcript_count
         || leaf.statement_index >= manifest.statement_count
         || proof.leaf_index() != leaf.statement_index
         || proof.audit_path().len() > 32
     {
-        return false;
-    }
-    let Some(entry_end) = leaf
-        .statement_index
-        .checked_sub(leaf.transcript_index)
-        .and_then(|start| start.checked_add(leaf.entry_transcript_count))
-    else {
-        return false;
-    };
-    if entry_end > manifest.statement_count {
         return false;
     }
     let Some(count) = NonZeroU64::new(u64::from(manifest.statement_count)) else {
@@ -596,8 +564,7 @@ mod tests {
                 },
                 statement_index: i,
                 entry_index: i * 2,
-                transcript_index: 0,
-                entry_transcript_count: 1,
+                entry_transcript_count: i + 2,
                 entry_hash: Hash::new([i as u8]),
                 execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
                 route: FastpqSourceRouteV1::Lane(FastpqSourceLaneV1 {
@@ -638,88 +605,122 @@ mod tests {
     }
 
     #[test]
-    fn ordinary_manifest_binds_complete_contiguous_occurrences_inside_one_entry() {
+    fn ordinary_manifest_binds_one_complete_nonempty_bundle_per_entry() {
         let base = leaves()[0];
-        let leaves = (0..3)
-            .map(|index| FastpqOrdinarySourceStatementLeafV1 {
-                statement_index: index,
-                transcript_index: index,
-                entry_transcript_count: 3,
-                statement_digest: [index as u8; 32],
+        let entries = test_entries(1, &[base]);
+        // Bundle cardinality is independent of the leaf count, including its u32 boundary.
+        for entry_transcript_count in [1, 3, u32::MAX] {
+            let leaf = FastpqOrdinarySourceStatementLeafV1 {
+                entry_transcript_count,
                 ..base
-            })
-            .collect::<Vec<_>>();
-        let manifest = build_test_manifest(base.source, 1, &leaves, 1, 3).unwrap();
-        assert_eq!(
-            (manifest.executed_entry_count, manifest.statement_count),
-            (1, 3)
-        );
-        let tree: MerkleTree<_> = leaves
-            .iter()
-            .map(|leaf| fastpq_ordinary_source_statement_leaf_hash_v1(leaf).unwrap())
-            .collect();
-        for leaf in &leaves {
-            let proof = tree.get_proof(leaf.statement_index).unwrap();
+            };
+            let manifest = build_fastpq_ordinary_source_statement_manifest_v1(
+                base.source,
+                &entries,
+                &[leaf],
+                1,
+                1,
+            )
+            .unwrap();
+            assert_eq!(
+                (manifest.executed_entry_count, manifest.statement_count),
+                (1, 1)
+            );
+            let tree: MerkleTree<_> =
+                [fastpq_ordinary_source_statement_leaf_hash_v1(&leaf).unwrap()]
+                    .into_iter()
+                    .collect();
+            let proof = tree.get_proof(0).unwrap();
             assert!(verify_fastpq_ordinary_source_statement_membership_v1(
-                leaf, leaf, &manifest, &proof, 1, 3,
+                &leaf, &leaf, &manifest, &proof, 1, 1,
             ));
             assert!(!verify_fastpq_ordinary_source_statement_membership_v1(
-                leaf, leaf, &manifest, &proof, 1, 2,
+                &leaf, &leaf, &manifest, &proof, 1, 0,
             ));
-            for (transcript_index, entry_transcript_count) in [
-                ((leaf.transcript_index + 1) % 3, 3),
-                (leaf.transcript_index, 2),
-            ] {
+            assert!(
+                build_fastpq_ordinary_source_statement_manifest_v1(
+                    base.source,
+                    &entries,
+                    &[leaf],
+                    1,
+                    0,
+                )
+                .is_none()
+            );
+            // The expected leaf and Merkle commitment independently bind bundle cardinality.
+            for changed_count in [0, if entry_transcript_count == 1 { 2 } else { 1 }] {
                 let changed = FastpqOrdinarySourceStatementLeafV1 {
-                    transcript_index,
-                    entry_transcript_count,
-                    ..*leaf
+                    entry_transcript_count: changed_count,
+                    ..leaf
                 };
                 assert!(!verify_fastpq_ordinary_source_statement_membership_v1(
-                    &changed, &changed, &manifest, &proof, 1, 3,
+                    &changed, &leaf, &manifest, &proof, 1, 1,
+                ));
+                assert!(!verify_fastpq_ordinary_source_statement_membership_v1(
+                    &changed, &changed, &manifest, &proof, 1, 1,
                 ));
             }
         }
-        assert!(build_test_manifest(base.source, 1, &leaves, 1, 2,).is_none());
-        for mutation in 0..12 {
-            let mut changed = leaves.clone();
+    }
+
+    #[test]
+    fn ordinary_manifest_rejects_duplicate_and_reordered_complete_entry_bundles() {
+        let originals = leaves();
+        let entries = test_entries(5, &originals);
+        assert!(
+            build_fastpq_ordinary_source_statement_manifest_v1(
+                originals[0].source,
+                &entries,
+                &originals,
+                5,
+                3,
+            )
+            .is_some()
+        );
+        for mutation in 0..4 {
+            let mut changed = originals.clone();
             match mutation {
-                0 => {
-                    changed.pop();
-                }
-                1 => {
-                    changed.remove(0);
-                }
-                2 => changed[1].transcript_index = 0,
-                3 => changed[1].entry_transcript_count = 2,
-                4 => changed[1].entry_hash = Hash::new(b"different call"),
-                5 => changed[1].execution_kind = FastpqSourceExecutionKindV1::ProtocolPurpose,
-                6 => changed[1].route = FastpqSourceRouteV1::Unrouted,
-                7 => changed[1].dataspace_id = DataSpaceId::new(8),
-                8 => changed[1].entry_index = 1,
-                9 => changed[2].entry_transcript_count = u32::MAX,
-                10 => changed[1].entry_transcript_count = 0,
-                11 => changed[2].transcript_index = u32::MAX,
+                0 => changed[1] = changed[0],
+                1 => changed.swap(0, 1),
+                2 => changed.swap(1, 2),
+                3 => changed[1].entry_transcript_count = 0,
                 _ => unreachable!(),
             }
-            // Renumbering the statement positions cannot hide an omitted occurrence.
+            // Sequential statement positions cannot hide a duplicate or reordered entry.
             for (index, leaf) in changed.iter_mut().enumerate() {
                 leaf.statement_index = index as u32;
             }
             assert!(
-                build_test_manifest(base.source, 2, &changed, 2, 3,).is_none(),
-                "mutation {mutation}"
+                build_fastpq_ordinary_source_statement_manifest_v1(
+                    originals[0].source,
+                    &entries,
+                    &changed,
+                    5,
+                    3,
+                )
+                .is_none(),
+                "mutation {mutation}",
             );
         }
     }
 
     #[test]
-    fn ordinary_membership_rejects_impossible_occurrence_ranges_even_with_matching_root() {
+    fn ordinary_membership_rejects_empty_bundles_even_with_matching_root() {
         let base = leaves()[0];
-        for (index, transcript_index, entry_transcript_count) in [(0, 1, 2), (2, 0, 2)] {
+        for index in [0, 2] {
             let mut leaves = leaves();
-            leaves[index].transcript_index = transcript_index;
-            leaves[index].entry_transcript_count = entry_transcript_count;
+            leaves[index].entry_transcript_count = 0;
+            let entries = test_entries(5, &leaves);
+            assert!(
+                build_fastpq_ordinary_source_statement_manifest_v1(
+                    base.source,
+                    &entries,
+                    &leaves,
+                    5,
+                    3,
+                )
+                .is_none()
+            );
             let tree: MerkleTree<_> = leaves
                 .iter()
                 .map(|leaf| fastpq_ordinary_source_statement_leaf_hash_v1(leaf).unwrap())
@@ -727,11 +728,8 @@ mod tests {
             let manifest = FastpqOrdinarySourceStatementManifestV1 {
                 source: base.source,
                 executed_entry_count: 5,
-                source_entries_digest: fastpq_source_execution_entries_digest_v1(
-                    &test_entries(5, &leaves),
-                    5,
-                )
-                .unwrap(),
+                source_entries_digest: fastpq_source_execution_entries_digest_v1(&entries, 5)
+                    .unwrap(),
                 statement_count: 3,
                 statement_root: Hash::from(tree.root().unwrap()),
             };
@@ -743,6 +741,52 @@ mod tests {
                 5,
                 3,
             ));
+        }
+    }
+
+    #[test]
+    fn source_leaf_rejects_exact_per_transcript_layout_under_same_nominal_identity() {
+        // Encoding-only hostile wire fixture: the previous per-transcript layout
+        // has no runtime decoder, adapter or alternative accepted V1 representation.
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::PerTranscriptLeaf",
+            frame = "iroha_data_model::fastpq::FastpqOrdinarySourceStatementLeafV1"
+        )]
+        struct PerTranscriptLeaf {
+            source: FastpqSourceStatementContextV1,
+            statement_index: u32,
+            entry_index: u32,
+            transcript_index: u32,
+            entry_transcript_count: u32,
+            entry_hash: Hash,
+            execution_kind: FastpqSourceExecutionKindV1,
+            route: FastpqSourceRouteV1,
+            dataspace_id: DataSpaceId,
+            statement_digest: [u8; 32],
+        }
+        assert_eq!(
+            norito::schema::identity::frame_hash::<PerTranscriptLeaf>(),
+            norito::schema::identity::frame_hash::<FastpqOrdinarySourceStatementLeafV1>(),
+        );
+        let leaf = leaves()[0];
+        for transcript_index in 0..3 {
+            let previous = PerTranscriptLeaf {
+                source: leaf.source,
+                statement_index: transcript_index,
+                entry_index: leaf.entry_index,
+                transcript_index,
+                entry_transcript_count: 3,
+                entry_hash: leaf.entry_hash,
+                execution_kind: leaf.execution_kind,
+                route: leaf.route,
+                dataspace_id: leaf.dataspace_id,
+                statement_digest: leaf.statement_digest,
+            };
+            let frame = norito::encode_canonical(&previous).unwrap();
+            assert!(
+                norito::decode_canonical::<FastpqOrdinarySourceStatementLeafV1>(&frame).is_err()
+            );
         }
     }
 
@@ -820,7 +864,7 @@ mod tests {
         else {
             unreachable!()
         };
-        for mutation in 0..11 {
+        for mutation in 0..12 {
             let mut changed = leaves[0];
             match mutation {
                 0 => changed.source.network_id = network(8),
@@ -844,6 +888,7 @@ mod tests {
                 8 => changed.statement_digest[0] ^= 1,
                 9 => changed.route = FastpqSourceRouteV1::Unrouted,
                 10 => changed.execution_kind = FastpqSourceExecutionKindV1::ProtocolPurpose,
+                11 => changed.entry_transcript_count += 1,
                 _ => unreachable!(),
             }
             assert!(
@@ -877,6 +922,18 @@ mod tests {
                 &leaves[2], &leaves[2], &changed, &proof, 6, 6
             ));
         }
+        let mut impossible = manifest;
+        impossible.executed_entry_count = 2;
+        // The opening at entry zero remains locally in range, but three distinct
+        // entry bundles cannot belong to a complete inventory of only two entries.
+        assert!(!verify_fastpq_ordinary_source_statement_membership_v1(
+            &leaves[0],
+            &leaves[0],
+            &impossible,
+            &tree.get_proof(0).unwrap(),
+            5,
+            5,
+        ));
         let mut changed = manifest;
         changed.statement_root = fastpq_ordinary_source_statement_empty_root_v1();
         assert!(!verify_fastpq_ordinary_source_statement_membership_v1(

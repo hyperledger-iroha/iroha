@@ -10,6 +10,9 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
+#[path = "absolute_deadline.rs"]
+mod absolute_deadline;
+use absolute_deadline::{BrokerDeadlineV1, DeadlineUnixStreamV1};
 #[path = "protocol/platform/endpoint_recovery.rs"]
 mod endpoint_recovery;
 #[path = "protocol/platform/stream_token_gateway_client.rs"]
@@ -51,4 +54,5 @@ mod tests {
     include!("server_tests_03.rs");
     include!("server_tests_04.rs");
     include!("runtime_operation_tests.rs");
+    include!("absolute_deadline_exchange_tests.rs");
 }

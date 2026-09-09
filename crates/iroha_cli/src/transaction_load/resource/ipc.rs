@@ -99,6 +99,7 @@ struct Work {
 pub(super) struct ChildProbe {
     sender: mpsc::SyncSender<Work>,
     control: Arc<Control>,
+    preflight_deadline: u64,
 }
 impl Drop for ChildProbe {
     fn drop(&mut self) {
@@ -106,7 +107,14 @@ impl Drop for ChildProbe {
     }
 }
 impl ChildProbe {
-    pub(super) fn start(args: &Args, plan: Plan) -> Result<Self> {
+    pub(super) fn check_admission_deadline(&self) -> Result<()> {
+        self.control.check(self.preflight_deadline)
+    }
+    pub(super) async fn admit(
+        args: &Args,
+        plan: Plan,
+        expected: allocation::Expected,
+    ) -> Result<(Self, allocation::Writers)> {
         if [
             &args.resource_program,
             &args.resource_worker,
@@ -118,7 +126,7 @@ impl ChildProbe {
         {
             bail!("resource inputs must be absolute paths");
         }
-        let captures = Captures::create(&args.resource_capture_dir)?;
+        let capture_path = args.resource_capture_dir.clone();
         let mut child = OwnedChild(
             Command::new(&args.resource_program)
                 .arg(&args.resource_worker)
@@ -166,62 +174,61 @@ impl ChildProbe {
             .map_err(|_| eyre!("resource child watchdog could not start"))?;
         let (sender, receiver) = mpsc::sync_channel::<Work>(1);
         let worker_control = Arc::clone(&control);
+        let deadline = control
+            .now()
+            .checked_add(plan.timeout_ns as u64)
+            .ok_or_else(|| eyre!("resource admission deadline overflow"))?;
+        control
+            .request_deadline_ns
+            .store(deadline, Ordering::Release);
+        let (admission_reply, admission_receive) = tokio::sync::oneshot::channel();
         if std::thread::Builder::new()
             .name("load-resource-pipe".to_owned())
             .spawn(move || {
-                let mut io = Pipe {
-                    stdin: Some(stdin),
-                    stdout,
-                    control: worker_control,
-                    captures,
-                };
-                let mut sequence = 0;
-                loop {
-                    if io.control.check(io.control.lifetime_ns).is_err() {
-                        break;
-                    }
-                    let work = match receiver.recv_timeout(TURN) {
-                        Ok(work) => work,
-                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                    };
-                    let identity_ok = work.request.sequence == sequence
-                        && ((sequence == 0 && work.request.kind == Kind::Preflight)
-                            || (sequence > 0 && work.request.kind != Kind::Preflight));
-                    let result = if identity_ok {
-                        io.exchange(work.request, work.deadline)
-                    } else {
-                        Err(eyre!("resource request sequence is invalid"))
-                    };
-                    let finished = result.is_err() || work.request.kind == Kind::Finish;
-                    if !finished {
-                        io.control
-                            .request_deadline_ns
-                            .store(io.control.lifetime_ns, Ordering::Release);
-                    }
-                    if work.reply.send(result).is_err() || finished {
-                        break;
-                    }
-                    sequence += 1;
-                }
-                io.control.stop.store(true, Ordering::Release);
+                serve_pipe(
+                    Pipe {
+                        stdin: Some(stdin),
+                        stdout,
+                        control: worker_control,
+                        captures: capture_path,
+                    },
+                    receiver,
+                    expected,
+                    plan.request(Kind::Admit, 0),
+                    deadline,
+                    admission_reply,
+                );
             })
             .is_err()
         {
             control.stop.store(true, Ordering::Release);
             bail!("resource pipe worker could not start");
         }
-        Ok(Self { sender, control })
+        let probe = Self {
+            sender,
+            control,
+            preflight_deadline: deadline,
+        };
+        let remaining = Duration::from_nanos(deadline.saturating_sub(probe.control.now()));
+        let writers = match tokio::time::timeout(remaining, admission_receive).await {
+            Ok(Ok(result)) => result?,
+            _ => bail!("resource admission owner timed out or closed"),
+        };
+        probe.control.check(deadline)?;
+        Ok((probe, writers))
     }
 }
 impl Probe for ChildProbe {
     fn exchange(&self, request: Request) -> BoxFuture<'_, Result<Response>> {
         async move {
-            let deadline = self
-                .control
-                .now()
-                .checked_add(request.timeout_ms * 1_000_000)
-                .ok_or_else(|| eyre!("resource wall deadline overflow"))?;
+            let deadline = if request.kind == Kind::Preflight && request.sequence == 0 {
+                self.preflight_deadline
+            } else {
+                self.control
+                    .now()
+                    .checked_add(request.timeout_ms * 1_000_000)
+                    .ok_or_else(|| eyre!("resource wall deadline overflow"))?
+            };
             self.control.check(deadline)?;
             self.control
                 .request_deadline_ns
@@ -250,13 +257,105 @@ impl Probe for ChildProbe {
     }
 }
 
-struct Pipe<W = ChildStdin, R = ChildStdout> {
+/// The pending owner has only a pathname. No output exists until its one
+/// admission exchange succeeds within the caller's original preflight deadline.
+fn serve_pipe<W: Write + AsFd, R: Read + AsFd>(
+    pending: Pipe<W, R, PathBuf>,
+    receiver: mpsc::Receiver<Work>,
+    expected: allocation::Expected,
+    admission_request: Request,
+    admission_deadline: u64,
+    admission_reply: tokio::sync::oneshot::Sender<Result<allocation::Writers>>,
+) {
+    let control = Arc::clone(&pending.control);
+    control
+        .request_deadline_ns
+        .store(admission_deadline, Ordering::Release);
+    'session: {
+        let (admitted, writers) =
+            match pending.admit(admission_request, admission_deadline, &expected) {
+                Ok(admitted) => admitted,
+                Err(error) => {
+                    let _ = admission_reply.send(Err(error));
+                    break 'session;
+                }
+            };
+        if admission_reply.send(Ok(writers)).is_err() {
+            break 'session;
+        }
+        let Some(first) = receive_work(&receiver, &control) else {
+            break 'session;
+        };
+        if first.request.kind != Kind::Preflight
+            || first.request.sequence != 0
+            || first.request.timeout_ms != admission_request.timeout_ms
+            || first.deadline != admission_deadline
+        {
+            let _ = first
+                .reply
+                .send(Err(eyre!("resource request sequence is invalid")));
+            break 'session;
+        }
+        let mut io = match admitted.begin_preflight(first.deadline) {
+            Ok(io) => io,
+            Err(error) => {
+                let _ = first.reply.send(Err(error));
+                break 'session;
+            }
+        };
+        let mut next = Some(first);
+        let mut sequence = 0;
+        loop {
+            let work = match next.take().or_else(|| receive_work(&receiver, &control)) {
+                Some(work) => work,
+                None => break,
+            };
+            let identity_ok = work.request.sequence == sequence
+                && ((sequence == 0 && work.request.kind == Kind::Preflight)
+                    || (sequence > 0 && matches!(work.request.kind, Kind::Sample | Kind::Finish)));
+            let result = if identity_ok {
+                io.exchange(work.request, work.deadline)
+            } else {
+                Err(eyre!("resource request sequence is invalid"))
+            };
+            let finished = result.is_err() || work.request.kind == Kind::Finish;
+            if !finished {
+                io.control
+                    .request_deadline_ns
+                    .store(io.control.lifetime_ns, Ordering::Release);
+            }
+            if work.reply.send(result).is_err() || finished {
+                break;
+            }
+            sequence += 1;
+        }
+    }
+    control.stop.store(true, Ordering::Release);
+}
+
+fn receive_work(receiver: &mpsc::Receiver<Work>, control: &Control) -> Option<Work> {
+    loop {
+        if control
+            .check(control.request_deadline_ns.load(Ordering::Acquire))
+            .is_err()
+        {
+            return None;
+        }
+        match receiver.recv_timeout(TURN) {
+            Ok(work) => return Some(work),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
+        }
+    }
+}
+
+struct Pipe<W = ChildStdin, R = ChildStdout, C = Captures> {
     stdin: Option<W>,
     stdout: R,
     control: Arc<Control>,
-    captures: Captures,
+    captures: C,
 }
-impl<W: Write + AsFd, R: Read + AsFd> Pipe<W, R> {
+impl<W: Write + AsFd, R: Read + AsFd, C> Pipe<W, R, C> {
     fn poll(&self, writing: bool, deadline: u64) -> Result<()> {
         self.control.check(deadline)?;
         let mut descriptors = Vec::with_capacity(2);
@@ -280,7 +379,7 @@ impl<W: Write + AsFd, R: Read + AsFd> Pipe<W, R> {
             Err(_) => Err(eyre!("resource pipe readiness failed")),
         }
     }
-    fn exchange(&mut self, request: Request, deadline: u64) -> Result<Response> {
+    fn exchange_frame(&mut self, request: Request, deadline: u64) -> Result<Vec<u8>> {
         self.control.check(deadline)?;
         // A worker may only answer after this request; stale prefetched frames
         // cannot satisfy a later sequence even when their JSON looks plausible.
@@ -326,12 +425,68 @@ impl<W: Write + AsFd, R: Read + AsFd> Pipe<W, R> {
                 Err(_) => bail!("resource response read failed"),
             }
         }
+        self.control.check(deadline)?;
+        Ok(bytes)
+    }
+}
+struct AdmittedPath {
+    path: PathBuf,
+    deadline: u64,
+}
+impl<W: Write + AsFd, R: Read + AsFd> Pipe<W, R, PathBuf> {
+    fn admit(
+        mut self,
+        request: Request,
+        deadline: u64,
+        expected: &allocation::Expected,
+    ) -> Result<(Pipe<W, R, AdmittedPath>, allocation::Writers)> {
+        if request.kind != Kind::Admit || request.sequence != 0 {
+            bail!("resource admission requires the first admit request");
+        }
+        let bytes = self.exchange_frame(request, deadline)?;
+        let writers = allocation::parse(expected, &bytes)?;
+        self.control.check(deadline)?;
+        Ok((
+            Pipe {
+                stdin: self.stdin,
+                stdout: self.stdout,
+                control: self.control,
+                captures: AdmittedPath {
+                    path: self.captures,
+                    deadline,
+                },
+            },
+            writers,
+        ))
+    }
+}
+impl<W: Write + AsFd, R: Read + AsFd> Pipe<W, R, AdmittedPath> {
+    fn begin_preflight(self, deadline: u64) -> Result<Pipe<W, R>> {
+        if deadline != self.captures.deadline {
+            bail!("resource preflight changed admission deadline");
+        }
+        self.control.check(deadline)?;
+        let captures =
+            Captures::create_with_hook(&self.captures.path, |_| self.control.check(deadline))?;
+        self.control.check(deadline)?;
+        Ok(Pipe {
+            stdin: self.stdin,
+            stdout: self.stdout,
+            control: self.control,
+            captures,
+        })
+    }
+}
+impl<W: Write + AsFd, R: Read + AsFd> Pipe<W, R> {
+    fn exchange(&mut self, request: Request, deadline: u64) -> Result<Response> {
+        let bytes = self.exchange_frame(request, deadline)?;
         let response = parse_response(request, &bytes)?;
         if let Some(manifest) = &response.manifest {
             self.captures
                 .authenticate(request, &response, manifest, &self.control, deadline)?;
         }
         if request.kind == Kind::Finish {
+            let mut byte = [0_u8; 1];
             drop(self.stdin.take());
             let mut eof = false;
             loop {
@@ -458,6 +613,7 @@ struct Captures {
     parent: CaptureParent,
 }
 impl Captures {
+    #[cfg(test)]
     fn create(path: &Path) -> Result<Self> {
         Self::create_with_hook(path, |_| Ok(()))
     }
@@ -654,3 +810,6 @@ mod transport_tests;
 
 #[cfg(test)]
 mod parent_tests;
+
+#[cfg(test)]
+mod admission_tests;

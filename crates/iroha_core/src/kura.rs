@@ -255,6 +255,7 @@ fn kagemusha_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
     )
 }
 include!("kura/startup_finality_support.rs");
+include!("kura/read_only_evidence.rs");
 /// Finality artifact returned by Kura's authenticated, cryptographically verified reader.
 ///
 /// The private field prevents other crate modules from fabricating durable-read
@@ -46616,4 +46617,6 @@ pub(crate) mod tests {
     include!("kura/tests/15_remaining_physical_writer_tests.rs");
     include!("kura/tests/15a_merge_recovery_resource_failure_tests.rs");
     include!("kura/tests/16_resource_file_admission_tests.rs");
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    include!("kura/tests/17_read_only_evidence_tests.rs");
 }

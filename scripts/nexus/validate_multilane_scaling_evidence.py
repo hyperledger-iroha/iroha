@@ -27,6 +27,10 @@ from fractions import Fraction
 from pathlib import Path, PurePosixPath
 from typing import Any, NoReturn, Sequence
 
+from resource_bundle import ControlBinding
+from resource_evidence_budget import EvidenceBudget, select_run_budget
+from resource_experiment import ResourceExperiment, RunReplayInput
+
 
 EVIDENCE_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.evidence.v1"
 RUN_SCHEMA = "iroha.sumeragi_v2.multilane_scaling.run.v1"
@@ -187,6 +191,8 @@ _RUN_ARTIFACT_FIELDS = {
     "metrics_snapshot",
     "load_generator_log",
     "transaction_trace",
+    "collector_journal",
+    "canonical_proof",
 }
 _COUNT_FIELDS = {"offered_count", "accepted_count", "committed_count"}
 _TRACE_FIELDS = {
@@ -246,31 +252,268 @@ def _reject_constant(value: str) -> NoReturn:
     _fail(f"nonfinite JSON numeric literal is forbidden: {value}")
 
 
-def load_json(path: Path, label: str) -> Any:
-    """Load strict UTF-8 JSON, rejecting duplicate keys and nonfinite literals."""
+@dataclass(frozen=True, slots=True)
+class ResourceAdmission:
+    """Independent launcher authority; no member is learned from a capture."""
 
+    budget: EvidenceBudget
+    controls: tuple[ControlBinding, ...]
+    runs: tuple[RunReplayInput, ...]
+    expected_executable_sha256: str
+    reported: bool
+
+
+_STATIC_ROLES = ('identity', 'configuration', 'trial_harness', 'validator',
+                 'localnet', 'load_generator', 'nexus_load_bundle')
+_SUPPORT_ROLES = ('nexus_load_test_manifest', 'lifecycle_snapshot',
+                  'metrics_snapshot', 'load_generator_log')
+MAX_METADATA_JSON_BYTES = 4 * 1024 * 1024
+MAX_RAW_RUN_JSON_BYTES = 32 * 1024 * 1024
+MAX_TRACE_JSON_BYTES = 256 * 1024 * 1024
+
+
+class EvidenceControls:
+    """Resolve semantic roles to original admitted bindings without path opens.
+
+    The G-SCALE schema fixes static labels and each run's four support labels.
+    The five principal run allocations carry their own explicit role labels.
+    References must match both the original path and independently pinned hash.
+    """
+
+    def __init__(self, owner: ResourceExperiment, admission: ResourceAdmission):
+        if type(owner) is not ResourceExperiment or type(admission) is not ResourceAdmission:
+            _fail('exact retained resource admission required')
+        self.owner = owner
+        self.admission = admission
+        self.budget = select_run_budget(admission.budget, 1, 'one_lane').experiment
+        if {item.label for item in self.budget.static_files} != set(_STATIC_ROLES):
+            _fail('G-SCALE requires exactly the seven independently pinned static roles')
+        if len(self.budget.control_budgets) != 2:
+            _fail('G-SCALE control allocations must be exactly manifest and report')
+        self.bindings = {item.label: item for item in admission.controls}
+        self.caps = {item.label: item.max_bytes for item in
+                     (*self.budget.control_budgets,
+                      *(item for run in self.budget.runs for item in run.files))}
+        self.caps.update({item.label: item.size_bytes for item in self.budget.static_files})
+        for run in self.budget.runs:
+            expected = {f'pair-{run.pair_index:02}.{run.variant}.{role}' for role in _SUPPORT_ROLES}
+            if {item.label for item in run.support} != expected:
+                _fail('G-SCALE run requires exactly its four canonical support roles')
+
+    def binding(self, label: str) -> ControlBinding:
+        """Return the exact original role binding; no inferred path is accepted."""
+        try:
+            return self.bindings[label]
+        except KeyError:
+            _fail('independently admitted control role is missing')
+
+    def read(self, binding: ControlBinding, *, max_bytes: int) -> bytes:
+        """Enforce the semantic cap and the original role's smaller allocation."""
+        if type(max_bytes) is not int or not 0 <= max_bytes <= MAX_BUNDLE_FILE_BYTES:
+            _fail('invalid semantic control byte cap')
+        if type(binding) is not ControlBinding or self.bindings.get(binding.label) is not binding:
+            _fail('control is not an original admitted role binding')
+        return self.owner.read_control(binding, max_bytes=min(max_bytes, self.caps[binding.label]))
+
+
+def load_json(binding: ControlBinding, label: str, *, controls: EvidenceControls,
+              max_bytes: int) -> Any:
+    """Decode strict bounded UTF-8 JSON from the retained semantic reader."""
+    raw = controls.read(binding, max_bytes=max_bytes)
+    return _decode_json_bytes(raw, label, max_bytes=max_bytes)
+
+
+def _decode_json_bytes(raw: bytes, label: str, *, max_bytes: int) -> Any:
+    """Bound a single JSON decode before depth, numeric and UTF-8 validation."""
+    if (type(raw) is not bytes or type(max_bytes) is not int
+            or not 0 < len(raw) <= max_bytes <= MAX_BUNDLE_FILE_BYTES):
+        _fail(f'{label} exceeds its JSON byte limit')
+    depth, quoted, escaped = 0, False, False
+    for byte in raw:
+        if quoted:
+            if escaped: escaped = False
+            elif byte == 92: escaped = True
+            elif byte == 34: quoted = False
+        elif byte == 34: quoted = True
+        elif byte in (91, 123):
+            depth += 1
+            if depth > 64: _fail(f'{label} exceeds JSON depth limit')
+        elif byte in (93, 125):
+            depth -= 1
+            if depth < 0: _fail(f'{label} is not strict UTF-8 JSON')
+    if depth != 0 or quoted:
+        _fail(f'{label} is not strict UTF-8 JSON')
+    def integer(token):
+        if len(token) > 128: _fail(f'{label} exceeds JSON numeric token limit')
+        return int(token)
+    def real(token):
+        if len(token) > 128: _fail(f'{label} exceeds JSON numeric token limit')
+        value = float(token)
+        if not math.isfinite(value): _fail(f'{label} contains a nonfinite JSON number')
+        return value
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise EvidenceError(f"{label} cannot be read: {path}: {error}") from error
-    try:
-        return json.loads(
-            text,
-            object_pairs_hook=_strict_object,
-            parse_constant=_reject_constant,
-        )
-    except (json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise EvidenceError(f"{label} is not strict UTF-8 JSON: {path}: {error}") from error
+        return json.loads(raw.decode('utf-8'), object_pairs_hook=_strict_object,
+                          parse_int=integer, parse_float=real, parse_constant=_reject_constant)
+    except EvidenceError:
+        raise
+    except (ValueError, UnicodeError, RecursionError):
+        _fail(f'{label} is not strict UTF-8 JSON')
 
 
-def sha256_file(path: Path) -> str:
-    """Return the lowercase SHA-256 digest of a regular file."""
+def _reconcile_journal_trace(journal: bytes, rows: list[dict[str, Any]], *, pair_index: int,
+                             variant: str, seed: str, geometry, submission_lag_bound_ns: int) -> tuple[str, ...]:
+    """Bind the validated trace to the collector's ordered durable workload rows.
 
-    digest = hashlib.sha256()
-    with path.open("rb") as source:
-        while chunk := source.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
+    Resource replay separately authenticates all capture references and Clock
+    events. This pass retains only the fixed account pool and its at-most-64
+    observed postcondition digests, without collecting journal lines in memory.
+    It establishes agreement with the collector log, not canonical state proof.
+    """
+    if (type(journal) is not bytes or not 0 < len(journal) <= MAX_BUNDLE_FILE_BYTES
+            or not journal.endswith(b'\n') or type(rows) is not list
+            or not 0 < len(rows) <= MAX_TRANSACTION_TRACE_ROWS):
+        _fail('journal/trace bounded framing is invalid')
+    if (type(submission_lag_bound_ns) is not int
+            or not 0 <= submission_lag_bound_ns < 1 << 63):
+        _fail('independent submission lag bound is invalid')
+    accounts: tuple[str, ...] = ()
+    preflight_digests: list[str] = []
+    scheduled = final = postconditions = 0
+    clock_started = resource_finished = post_started = finished = False
+    offset = line_index = account_offset = effects = 0
+
+    def equal(actual, expected):
+        if type(actual) is not type(expected):
+            _fail('collector journal disagrees with the exact trace or workload')
+        if type(expected) is dict:
+            if actual.keys() != expected.keys():
+                _fail('collector journal disagrees with the exact trace or workload')
+            for key, value in expected.items():
+                equal(actual[key], value)
+        elif type(expected) is list:
+            if len(actual) != len(expected):
+                _fail('collector journal disagrees with the exact trace or workload')
+            for left, right in zip(actual, expected, strict=True):
+                equal(left, right)
+        elif actual != expected:
+            _fail('collector journal disagrees with the exact trace or workload')
+
+    def plan_for(row):
+        return {name: row[name] for name in ('cohort', 'sequence', 'logical_id', 'scheduled_offset_ns')} | {
+            'account_index': (row['sequence'] - 1 + account_offset) % len(accounts)}
+
+    while offset < len(journal):
+        end = journal.find(b'\n', offset)
+        if end < 0 or not 0 < end - offset <= 16 * 1024 or finished:
+            _fail('journal event framing or terminal order is invalid')
+        row = _require_object(_decode_json_bytes(journal[offset:end], 'collector event',
+                                                max_bytes=16 * 1024), 'collector event')
+        offset = end + 1
+        event = row.get('event')
+        if line_index == 0:
+            equal(event, 'plan')
+            equal(row.get('pair_index'), pair_index)
+            equal(row.get('variant'), variant)
+            equal(row.get('seed'), seed)
+            equal(row.get('scheduled_requests'), len(rows))
+            equal(row.get('workload'), 'self_owned_account_metadata_insert_v1')
+            equal(row.get('account_selection'), '(zero_based_cohort_sequence + first8le(sha256(gscale-account-offset-v1:seed))) modulo pool_length')
+            equal(row.get('max_effects_per_account'), 1024)
+            equal(row.get('submission_lag_bound_ns'), submission_lag_bound_ns)
+            for name in ('warmup_ns', 'measurement_ns', 'drain_ns', 'preparation_ahead_ns'):
+                equal(row.get(name), getattr(geometry, name))
+            pool = _require_list(row.get('accounts'), 'collector account pool')
+            if not 4 <= len(pool) <= 64 or len(pool) % 4:
+                _fail('collector account pool must contain complete four-account groups')
+            authorities = []
+            for item in pool:
+                item = _require_object(item, 'collector account')
+                _require_exact_fields(item, {'authority'}, 'collector account')
+                authority = _require_text(item['authority'], 'collector authority')
+                if len(authority) > 2048: _fail('collector authority exceeds its bound')
+                authorities.append(authority)
+            accounts = tuple(authorities)
+            if len(set(accounts)) != len(accounts): _fail('collector account pool duplicates authority')
+            warmup = sum(item['cohort'] == 'warmup' for item in rows)
+            if warmup % len(accounts) or (len(rows) - warmup) % len(accounts):
+                _fail('collector cohorts do not contain complete account-pool rounds')
+            effects = len(rows) // len(accounts)
+            if not 1 <= effects <= 1024: _fail('collector useful-effect count exceeds its bound')
+            account_offset = int.from_bytes(hashlib.sha256(
+                f'gscale-account-offset-v1:{seed}'.encode('ascii')).digest()[:8], 'little') % len(accounts)
+        elif event == 'plan':
+            _fail('collector has more than one workload plan')
+        elif event == 'scheduled':
+            if clock_started or scheduled >= len(rows): _fail('scheduled journal rows are missing or reordered')
+            _require_exact_fields(row, {'event', 'index', 'plan'}, 'scheduled journal row')
+            equal(row['index'], scheduled)
+            equal(row['plan'], plan_for(rows[scheduled]))
+            scheduled += 1
+        elif event == 'workload_account_preflight':
+            index = len(preflight_digests)
+            if clock_started or scheduled != len(rows) or index >= len(accounts):
+                _fail('workload preflight is incomplete or outside its clock boundary')
+            _require_exact_fields(row, {'event', 'authority', 'account_index', 'expected_effects',
+                'expected_account_sha256', 'expected_account_frame_bytes'}, 'workload preflight')
+            equal(row['authority'], accounts[index])
+            equal(row['account_index'], index)
+            equal(row['expected_effects'], effects)
+            size = _require_int(row['expected_account_frame_bytes'], 'account frame bytes', minimum=1)
+            if size > 256 * 1024: _fail('workload account frame exceeds its bound')
+            preflight_digests.append(_require_digest(row['expected_account_sha256'], 'expected account digest'))
+        elif event == 'clock_started':
+            if clock_started or scheduled != len(rows) or len(preflight_digests) != len(accounts):
+                _fail('Clock started before complete scheduled workload preflight')
+            clock_started = True
+        elif event == 'resource_collection_finished':
+            if not clock_started or resource_finished: _fail('resource finish journal order is invalid')
+            resource_finished = True
+        elif event == 'workload_postconditions_started':
+            if not resource_finished or post_started: _fail('workload postcondition start order is invalid')
+            post_started = True
+        elif event == 'workload_account_postcondition':
+            if not post_started or postconditions >= len(accounts):
+                _fail('workload postcondition cohort is incomplete or reordered')
+            _require_exact_fields(row, {'event', 'authority', 'account_index', 'verified_effects',
+                'account_sha256', 'read_source'}, 'workload postcondition')
+            equal(row['authority'], accounts[postconditions])
+            equal(row['account_index'], postconditions)
+            equal(row['verified_effects'], effects)
+            equal(row['account_sha256'], preflight_digests[postconditions])
+            equal(row['read_source'], 'signed_find_account_by_id_after_complete_drain')
+            postconditions += 1
+        elif event == 'request_final':
+            if postconditions != len(accounts) or final >= len(rows):
+                _fail('final workload rows are incomplete or reordered')
+            expected = rows[final]
+            equal(expected['acknowledgment']['status'], 'Accepted')
+            if type(expected['applied']) is not dict: _fail('complete collector lacks StateApplied')
+            equal(row.get('plan'), plan_for(expected))
+            scheduled_ns = _offset_ns(expected['scheduled_offset_ns'], 'scheduled offset')
+            offered_ns = _offset_ns(expected['offer_offset_ns'], 'offer offset')
+            actual_lag = offered_ns - scheduled_ns
+            equal(expected['submission_lag_ns'], actual_lag)
+            if not 0 <= actual_lag <= submission_lag_bound_ns:
+                _fail('collector offer exceeds the independently declared submission lag')
+            for name, value in (
+                ('hash', expected['hash']), ('offer_offset_ns', expected['offer_offset_ns']),
+                ('acknowledgment_offset_ns', expected['acknowledgment']['offset_ns']),
+                ('applied_offset_ns', expected['applied']['offset_ns']),
+                ('block_height', expected['applied']['block_height']),
+                ('submission_finished', True), ('failure', None),
+            ):
+                equal(row.get(name), value)
+            _require_int(row.get('status_attempts'), 'status attempts')
+            final += 1
+        elif event == 'collection_finished':
+            if final != len(rows): _fail('collector terminal row omits scheduled transactions')
+            equal(row.get('passed'), True)
+            equal(row.get('failure'), None)
+            finished = True
+        line_index += 1
+    if not finished: _fail('collector journal is missing its complete terminal row')
+    return accounts
+
 
 
 def derive_seed(namespace: str, pair_index: int) -> str:
@@ -329,101 +572,6 @@ def _require_safe_relative_path(value: Any, label: str) -> str:
     return relative
 
 
-def _scan_bundle(root: Path) -> tuple[set[str], set[str]]:
-    """Enumerate a bounded bundle without following links or special files."""
-
-    try:
-        root_metadata = root.lstat()
-    except OSError as error:
-        raise EvidenceError(
-            f"evidence bundle root cannot be inspected: {root}: {error}"
-        ) from error
-    if stat.S_ISLNK(root_metadata.st_mode) or not stat.S_ISDIR(
-        root_metadata.st_mode
-    ):
-        _fail(f"evidence bundle root must be a non-symlink directory: {root}")
-
-    files: set[str] = set()
-    directories: set[str] = set()
-    inodes: dict[tuple[int, int], str] = {}
-    total_bytes = 0
-
-    def visit(directory: Path, prefix: PurePosixPath | None) -> None:
-        nonlocal total_bytes
-        try:
-            entries = sorted(os.scandir(directory), key=lambda entry: entry.name)
-        except OSError as error:
-            raise EvidenceError(
-                f"evidence bundle directory cannot be enumerated: {directory}: {error}"
-            ) from error
-        for entry in entries:
-            component = entry.name
-            if _SAFE_PATH_COMPONENT_RE.fullmatch(component) is None:
-                _fail(
-                    "evidence bundle contains an unsafe path component: "
-                    f"{component!r}"
-                )
-            relative_path = (
-                PurePosixPath(component)
-                if prefix is None
-                else prefix / component
-            )
-            relative = relative_path.as_posix()
-            try:
-                metadata = entry.stat(follow_symlinks=False)
-            except OSError as error:
-                raise EvidenceError(
-                    f"evidence bundle entry cannot be inspected: {relative}: {error}"
-                ) from error
-            if stat.S_ISLNK(metadata.st_mode):
-                _fail(f"evidence bundle contains a symlink: {relative}")
-            if stat.S_ISDIR(metadata.st_mode):
-                directories.add(relative)
-                visit(Path(entry.path), relative_path)
-                continue
-            if not stat.S_ISREG(metadata.st_mode):
-                _fail(f"evidence bundle contains a nonregular entry: {relative}")
-            if metadata.st_nlink != 1:
-                _fail(f"evidence bundle file has a hard-link alias: {relative}")
-            inode = (metadata.st_dev, metadata.st_ino)
-            alias = inodes.get(inode)
-            if alias is not None:
-                _fail(
-                    "evidence bundle files are hard-link aliases: "
-                    f"{alias} and {relative}"
-                )
-            inodes[inode] = relative
-            if metadata.st_size > MAX_BUNDLE_FILE_BYTES:
-                _fail(
-                    f"evidence bundle file exceeds {MAX_BUNDLE_FILE_BYTES} bytes: "
-                    f"{relative}"
-                )
-            total_bytes += metadata.st_size
-            if total_bytes > MAX_BUNDLE_TOTAL_BYTES:
-                _fail(
-                    "evidence bundle exceeds aggregate size limit "
-                    f"{MAX_BUNDLE_TOTAL_BYTES} bytes"
-                )
-            files.add(relative)
-            if len(files) > MAX_BUNDLE_FILE_COUNT:
-                _fail(
-                    "evidence bundle exceeds file-count limit "
-                    f"{MAX_BUNDLE_FILE_COUNT}"
-                )
-
-    visit(root, None)
-    return files, directories
-
-
-def _expected_bundle_directories(files: set[str]) -> set[str]:
-    directories: set[str] = set()
-    for relative in files:
-        parent = PurePosixPath(relative).parent
-        while parent != PurePosixPath("."):
-            directories.add(parent.as_posix())
-            parent = parent.parent
-    return directories
-
 
 def _require_int(value: Any, label: str, *, minimum: int = 0) -> int:
     if type(value) is not int or value < minimum:
@@ -460,38 +608,19 @@ def _require_digest(value: Any, label: str) -> str:
     return digest
 
 
-def _require_ref(
-    value: Any,
-    root: Path,
-    label: str,
-    *,
-    referenced_paths: set[str] | None = None,
-) -> Path:
+def _require_ref(value: Any, controls: EvidenceControls, label: str, *,
+                 expected_label: str, referenced_paths: set[str] | None = None) -> ControlBinding:
     ref = _require_object(value, label)
     _require_exact_fields(ref, _FILE_REF_FIELDS, label)
-    relative = _require_safe_relative_path(ref["path"], f"{label}.path")
-    expected_digest = _require_digest(ref["sha256"], f"{label}.sha256")
-    relative_path = PurePosixPath(relative)
-
-    candidate = root
-    for part in relative_path.parts:
-        candidate = candidate / part
-        try:
-            if candidate.is_symlink():
-                _fail(f"{label}.path traverses a symlink: {relative}")
-        except OSError as error:
-            raise EvidenceError(f"{label}.path cannot be inspected: {relative}: {error}") from error
-    if not candidate.is_file():
-        _fail(f"{label}.path is not a regular file: {relative}")
-    actual_digest = sha256_file(candidate)
-    if actual_digest != expected_digest:
-        _fail(
-            f"{label}.sha256 mismatch for {relative}: "
-            f"recorded={expected_digest}, actual={actual_digest}"
-        )
+    relative = _require_safe_relative_path(ref['path'], f'{label}.path')
+    expected_digest = _require_digest(ref['sha256'], f'{label}.sha256')
+    binding = controls.binding(expected_label)
+    if relative != binding.path or expected_digest != binding.sha256:
+        _fail(f'{label} differs from its independently admitted role, path or digest')
     if referenced_paths is not None:
-        referenced_paths.add(relative)
-    return candidate
+        referenced_paths.add(binding.path)
+    return binding
+
 
 
 def _require_timestamp(value: Any, label: str) -> None:
@@ -650,7 +779,7 @@ def _validate_run_trace(
     raw: dict[str, Any],
     metrics: RunMetrics,
     *,
-    evidence_root: Path,
+    controls: EvidenceControls,
     workload: dict[str, Any],
     budgets: dict[str, Any],
     seen_transaction_hashes: set[str],
@@ -660,8 +789,10 @@ def _validate_run_trace(
     label = f"pair {metrics.pair_index} {metrics.variant}"
     period, warmup_ns, measurement_ns, drain_ns, lag_bound = _schedule(workload)
     trace = _require_object(load_json(
-        evidence_root / raw["artifacts"]["transaction_trace"]["path"],
-        f"{label} transaction trace",
+        _require_ref(raw["artifacts"]["transaction_trace"], controls,
+                     f"{label} transaction trace", expected_label=select_run_budget(
+                         controls.budget, metrics.pair_index, metrics.variant).run.transaction_trace.label),
+        f"{label} transaction trace", controls=controls, max_bytes=MAX_TRACE_JSON_BYTES,
     ), f"{label} transaction trace")
     _require_exact_fields(trace, _TRACE_FIELDS, f"{label} transaction trace")
     expected_header = {
@@ -815,6 +946,13 @@ def _validate_run_trace(
     _reconcile_event_samples(samples, events["drain"], label=f"{label}.drain.samples", final_inclusive=True)
     if len(cohort_latencies) != metrics.accepted_count + totals["accepted_count"]:
         _fail(f"{label} accepted cohort accounting disagrees with complete StateApplied observations")
+    allocation = select_run_budget(controls.budget, metrics.pair_index, metrics.variant)
+    journal_binding = _require_ref(raw['artifacts']['collector_journal'], controls,
+        f'{label} collector journal', expected_label=allocation.journal.label)
+    scope_index = (metrics.pair_index - 1) * 2 + int(metrics.variant == 'four_lane')
+    _reconcile_journal_trace(controls.read(journal_binding, max_bytes=MAX_BUNDLE_FILE_BYTES), rows,
+        pair_index=metrics.pair_index, variant=metrics.variant, seed=raw['seed'],
+        geometry=controls.admission.runs[scope_index].geometry, submission_lag_bound_ns=lag_bound)
     return replace(
         metrics,
         p95_latency_ms=_nearest_rank_p95(cohort_latencies),
@@ -839,8 +977,8 @@ def _validate_raw_run(
     identity: dict[str, Any],
     workload: dict[str, Any],
     budgets: dict[str, Any],
-    evidence_root: Path,
-    seen_support_paths: set[Path],
+    controls: EvidenceControls,
+    seen_support_paths: set[ControlBinding],
     referenced_paths: set[str],
 ) -> RunMetrics:
     run = _require_object(raw, label)
@@ -851,12 +989,14 @@ def _validate_raw_run(
         _fail(f"{label}.pair_index does not match its manifest pair")
     if run["variant"] != variant:
         _fail(f"{label}.variant does not match its manifest variant")
-    if run["active_execution_lanes"] != active_lanes:
+    if _require_int(run["active_execution_lanes"], f"{label}.active_execution_lanes", minimum=1) != active_lanes:
         _fail(f"{label}.active_execution_lanes does not match the required variant")
     if run["seed"] != seed:
         _fail(f"{label}.seed does not match the deterministic pair seed")
+    validate_identity(run["identity_before"], f"{label}.identity_before")
     if run["identity_before"] != identity:
         _fail(f"{label}.identity_before drifted from the pinned bundle identity")
+    validate_identity(run["identity_after"], f"{label}.identity_after")
     if run["identity_after"] != identity:
         _fail(f"{label}.identity_after drifted from the pinned bundle identity")
 
@@ -877,12 +1017,19 @@ def _validate_raw_run(
 
     artifacts = _require_object(run["artifacts"], f"{label}.artifacts")
     _require_exact_fields(artifacts, _RUN_ARTIFACT_FIELDS, f"{label}.artifacts")
-    artifact_paths: dict[str, Path] = {}
+    allocation = select_run_budget(controls.budget, pair_index, variant)
+    artifact_labels = {
+        "transaction_trace": allocation.run.transaction_trace.label,
+        "collector_journal": allocation.journal.label,
+        "canonical_proof": allocation.run.canonical_proof.label,
+        **{role: f"pair-{pair_index:02}.{variant}.{role}" for role in _SUPPORT_ROLES},
+    }
+    artifact_paths: dict[str, ControlBinding] = {}
     for name in sorted(_RUN_ARTIFACT_FIELDS):
         path = _require_ref(
             artifacts[name],
-            evidence_root,
-            f"{label}.artifacts.{name}",
+            controls,
+            f"{label}.artifacts.{name}", expected_label=artifact_labels[name],
             referenced_paths=referenced_paths,
         )
         if path in seen_support_paths:
@@ -892,11 +1039,12 @@ def _validate_raw_run(
     nexus_manifest = _require_object(
         load_json(
             artifact_paths["nexus_load_test_manifest"],
-            f"{label} Nexus lane-load manifest",
+            f"{label} Nexus lane-load manifest", controls=controls,
+            max_bytes=MAX_METADATA_JSON_BYTES,
         ),
         f"{label} Nexus lane-load manifest",
     )
-    if nexus_manifest.get("version") != 1:
+    if _require_int(nexus_manifest.get("version"), f"{label} Nexus lane-load manifest.version", minimum=1) != 1:
         _fail(f"{label} Nexus lane-load manifest must have version 1")
     if nexus_manifest.get("lanes") != list(lane_ids):
         _fail(f"{label} Nexus lane-load manifest lanes do not match active execution lanes")
@@ -1080,9 +1228,10 @@ def _validate_raw_run(
     )
 
 
-def validate_evidence(
+def _validate_admitted_evidence(
     manifest_path: Path,
     *,
+    controls: EvidenceControls,
     expected_source_revision: str | None = None,
     expected_workspace_source_sha256: str | None = None,
     expected_validator_sha256: str | None = None,
@@ -1111,36 +1260,25 @@ def validate_evidence(
     ):
         if value is not None:
             _require_digest(value, label)
-    retained_root: Path | None = None
     if expected_repository_root is not None:
-        if (
-            not expected_repository_root.is_absolute()
-            or Path(os.path.abspath(expected_repository_root))
-            != expected_repository_root
-            or expected_repository_root.is_symlink()
-            or not expected_repository_root.is_dir()
-            or expected_repository_root.resolve() != expected_repository_root
-        ):
-            _fail(
-                "expected repository root must be one absolute canonical "
-                "non-symlink directory"
-            )
-        retained_root = expected_repository_root
-
-    if manifest_path.is_symlink() or not manifest_path.is_file():
-        _fail(f"evidence manifest must be a regular non-symlink file: {manifest_path}")
-    manifest_path = manifest_path.resolve()
-    if manifest_path.name != "scaling_evidence.json":
-        _fail("evidence manifest must use the canonical scaling_evidence.json name")
+        _fail('repository path trust is retired; supply independently pinned static controls')
+    if (not manifest_path.is_absolute() or str(manifest_path) != os.path.abspath(manifest_path)
+            or manifest_path.name != "scaling_evidence.json"):
+        _fail('evidence manifest must use the absolute canonical scaling_evidence.json path')
     root = manifest_path.parent
-    bundle_files, bundle_directories = _scan_bundle(root)
+    if root != controls.owner._root:
+        _fail('manifest root differs from retained experiment root')
+    manifest_binding = controls.binding(controls.budget.control_budgets[0].label)
+    if manifest_binding.path != 'scaling_evidence.json':
+        _fail('manifest must bind the canonical scaling_evidence.json control')
     referenced_paths: set[str] = set()
-    manifest = _require_object(load_json(manifest_path, "evidence manifest"), "evidence manifest")
+    manifest = _require_object(load_json(manifest_binding, "evidence manifest", controls=controls,
+                                        max_bytes=MAX_METADATA_JSON_BYTES), "evidence manifest")
     _require_exact_fields(manifest, _MANIFEST_FIELDS, "evidence manifest")
     if manifest["schema"] != EVIDENCE_SCHEMA:
         _fail(f"evidence manifest.schema must be {EVIDENCE_SCHEMA!r}")
     _require_timestamp(manifest["generated_at_utc"], "evidence manifest.generated_at_utc")
-    if manifest["pair_count"] != EXPECTED_PAIR_COUNT:
+    if _require_int(manifest["pair_count"], "evidence manifest.pair_count", minimum=1) != EXPECTED_PAIR_COUNT:
         _fail(f"evidence manifest.pair_count must be exactly {EXPECTED_PAIR_COUNT}")
 
     namespace = _require_text(manifest["seed_namespace"], "evidence manifest.seed_namespace")
@@ -1151,11 +1289,13 @@ def validate_evidence(
 
     identity_path = _require_ref(
         manifest["identity"],
-        root,
-        "evidence manifest.identity",
+        controls,
+        "evidence manifest.identity", expected_label="identity",
         referenced_paths=referenced_paths,
     )
-    identity = validate_identity(load_json(identity_path, "pinned identity"), "pinned identity")
+    identity = validate_identity(load_json(identity_path, "pinned identity", controls=controls, max_bytes=MAX_METADATA_JSON_BYTES), "pinned identity")
+    if identity["software"]["irohad_sha256"] != controls.admission.expected_executable_sha256:
+        _fail('pinned identity differs from the independently measured executable')
     if (
         expected_source_revision is not None
         and identity["software"]["source_revision"] != expected_source_revision
@@ -1192,15 +1332,15 @@ def validate_evidence(
         )
     config_path = _require_ref(
         manifest["configuration"],
-        root,
-        "evidence manifest.configuration",
+        controls,
+        "evidence manifest.configuration", expected_label="configuration",
         referenced_paths=referenced_paths,
     )
-    if sha256_file(config_path) != identity["software"]["nexus_config_sha256"]:
+    if config_path.sha256 != identity["software"]["nexus_config_sha256"]:
         _fail("configuration artifact does not match identity.software.nexus_config_sha256")
     if (
         expected_configuration_sha256 is not None
-        and sha256_file(config_path) != expected_configuration_sha256
+        and config_path.sha256 != expected_configuration_sha256
     ):
         _fail(
             "evidence manifest.configuration does not match the expected "
@@ -1261,6 +1401,11 @@ def validate_evidence(
         )
     _schedule(workload_values)
 
+    _, warmup_ns, measurement_ns, drain_ns, _ = _schedule(workload_values)
+    for scope in controls.admission.runs:
+        if (scope.geometry.warmup_ns, scope.geometry.measurement_ns, scope.geometry.drain_ns) != (warmup_ns, measurement_ns, drain_ns):
+            _fail('workload timing differs from the independently admitted Clock geometry')
+
     budgets = _require_object(manifest["budgets"], "evidence manifest.budgets")
     _require_exact_fields(budgets, _BUDGET_FIELDS, "evidence manifest.budgets")
     budget_values = {
@@ -1298,13 +1443,13 @@ def validate_evidence(
 
     trial_harness_path = _require_ref(
         manifest["trial_harness"],
-        root,
-        "evidence manifest.trial_harness",
+        controls,
+        "evidence manifest.trial_harness", expected_label="trial_harness",
         referenced_paths=referenced_paths,
     )
     if (
         expected_trial_harness_sha256 is not None
-        and sha256_file(trial_harness_path) != expected_trial_harness_sha256
+        and trial_harness_path.sha256 != expected_trial_harness_sha256
     ):
         _fail(
             "evidence manifest.trial_harness does not match the expected "
@@ -1312,13 +1457,13 @@ def validate_evidence(
         )
     validator_path = _require_ref(
         manifest["validator"],
-        root,
-        "evidence manifest.validator",
+        controls,
+        "evidence manifest.validator", expected_label="validator",
         referenced_paths=referenced_paths,
     )
     if (
         expected_validator_sha256 is not None
-        and sha256_file(validator_path) != expected_validator_sha256
+        and validator_path.sha256 != expected_validator_sha256
     ):
         _fail(
             "evidence manifest.validator does not match the expected retained "
@@ -1336,22 +1481,10 @@ def validate_evidence(
             _fail(f"{label} does not identify required tool {role}:{source_path}")
         artifact_path = _require_ref(
             entry["artifact"],
-            root,
-            f"{label}.artifact",
+            controls,
+            f"{label}.artifact", expected_label=role,
             referenced_paths=referenced_paths,
         )
-        if retained_root is not None:
-            retained_path = retained_root.joinpath(*PurePosixPath(source_path).parts)
-            if (
-                retained_path.is_symlink()
-                or not retained_path.is_file()
-                or retained_path.resolve() != retained_path
-                or sha256_file(artifact_path) != sha256_file(retained_path)
-            ):
-                _fail(
-                    f"{label}.artifact does not match retained repository tool "
-                    f"{source_path}"
-                )
 
     runs = _require_list(manifest["runs"], "evidence manifest.runs")
     expected_run_count = EXPECTED_PAIR_COUNT * 2
@@ -1366,9 +1499,9 @@ def validate_evidence(
         for pair_index in range(1, EXPECTED_PAIR_COUNT + 1)
         for variant, active_lanes in (("one_lane", 1), ("four_lane", 4))
     ]
-    seen_raw_paths: set[Path] = set()
-    seen_log_paths: set[Path] = set()
-    seen_support_paths: set[Path] = set()
+    seen_raw_paths: set[ControlBinding] = set()
+    seen_log_paths: set[ControlBinding] = set()
+    seen_support_paths: set[ControlBinding] = set()
     metrics: list[RunMetrics] = []
     raw_runs: list[dict[str, Any]] = []
     for sequence, (entry_raw, expected) in enumerate(
@@ -1380,16 +1513,16 @@ def validate_evidence(
         entry = _require_object(entry_raw, label)
         _require_exact_fields(entry, _RUN_ENTRY_FIELDS, label)
         actual_identity = (
-            entry["pair_index"],
+            _require_int(entry["pair_index"], f"{label}.pair_index", minimum=1),
             entry["variant"],
-            entry["active_execution_lanes"],
+            _require_int(entry["active_execution_lanes"], f"{label}.active_execution_lanes", minimum=1),
         )
         if actual_identity != expected:
             _fail(
                 "evidence manifest.runs has missing, duplicate, or unordered pairs; "
                 f"entry {sequence} must be {expected}, got {actual_identity}"
             )
-        if entry["sequence"] != sequence:
+        if _require_int(entry["sequence"], f"{label}.sequence", minimum=1) != sequence:
             _fail(f"{label}.sequence must be {sequence}")
         seed = derive_seed(namespace, pair_index)
         if entry["seed"] != seed:
@@ -1403,14 +1536,16 @@ def validate_evidence(
 
         raw_path = _require_ref(
             entry["raw_samples"],
-            root,
-            f"{label}.raw_samples",
+            controls,
+            f"{label}.raw_samples", expected_label=select_run_budget(
+                controls.budget, pair_index, variant).run.raw_run.label,
             referenced_paths=referenced_paths,
         )
         log_path = _require_ref(
             entry["command_log"],
-            root,
-            f"{label}.command_log",
+            controls,
+            f"{label}.command_log", expected_label=select_run_budget(
+                controls.budget, pair_index, variant).run.trial_log.label,
             referenced_paths=referenced_paths,
         )
         if raw_path in seen_raw_paths:
@@ -1421,7 +1556,7 @@ def validate_evidence(
         seen_log_paths.add(log_path)
         if raw_path == log_path:
             _fail(f"{label} cannot use the raw sample file as its command log")
-        raw = load_json(raw_path, f"{label} raw samples")
+        raw = load_json(raw_path, f"{label} raw samples", controls=controls, max_bytes=MAX_RAW_RUN_JSON_BYTES)
         raw_runs.append(raw)
         metrics.append(
             _validate_raw_run(
@@ -1434,7 +1569,7 @@ def validate_evidence(
                 identity=identity,
                 workload=workload_values,
                 budgets=budget_values,
-                evidence_root=root,
+                controls=controls,
                 seen_support_paths=seen_support_paths,
                 referenced_paths=referenced_paths,
             )
@@ -1470,14 +1605,18 @@ def validate_evidence(
             )
         one = _validate_run_trace(
             raw_runs[(pair_index - 1) * 2], one,
-            evidence_root=root, workload=workload_values, budgets=budget_values,
+            controls=controls, workload=workload_values, budgets=budget_values,
             seen_transaction_hashes=seen_transaction_hashes,
         )
         four = _validate_run_trace(
             raw_runs[(pair_index - 1) * 2 + 1], four,
-            evidence_root=root, workload=workload_values, budgets=budget_values,
+            controls=controls, workload=workload_values, budgets=budget_values,
             seen_transaction_hashes=seen_transaction_hashes,
         )
+        one = replace(one, maxima=vars_maxima(controls.owner.reconcile_run(
+            pair_index, 'one_lane', raw_runs[(pair_index - 1) * 2], budget_values)))
+        four = replace(four, maxima=vars_maxima(controls.owner.reconcile_run(
+            pair_index, 'four_lane', raw_runs[(pair_index - 1) * 2 + 1], budget_values)))
         one_runs.append(one)
         four_runs.append(four)
         pairs.append(
@@ -1538,24 +1677,15 @@ def validate_evidence(
             f"ratio={latency_ratio:.12g} > {MAX_P95_LATENCY_RATIO}"
         )
 
-    expected_files = referenced_paths | {"scaling_evidence.json"}
-    if "validation_report.json" in bundle_files:
-        expected_files.add("validation_report.json")
-    unexpected_files = sorted(bundle_files - expected_files)
-    missing_files = sorted(expected_files - bundle_files)
-    if unexpected_files or missing_files:
-        _fail(
-            "evidence bundle file inventory differs from the canonical manifest; "
-            f"missing={missing_files}, unexpected={unexpected_files}"
-        )
-    expected_directories = _expected_bundle_directories(expected_files)
-    unexpected_directories = sorted(bundle_directories - expected_directories)
-    missing_directories = sorted(expected_directories - bundle_directories)
-    if unexpected_directories or missing_directories:
-        _fail(
-            "evidence bundle directory inventory differs from canonical paths; "
-            f"missing={missing_directories}, unexpected={unexpected_directories}"
-        )
+    expected_files = referenced_paths | {'scaling_evidence.json'}
+    if controls.admission.reported:
+        report = controls.binding(controls.budget.control_budgets[1].label)
+        if report.path != 'validation_report.json':
+            _fail('report must bind canonical validation_report.json control')
+        expected_files.add(report.path)
+    actual_controls = {item.path for item in controls.admission.controls}
+    if expected_files != actual_controls:
+        _fail('semantic references differ from the exact admitted control inventory')
 
     return {
         "pair_count": EXPECTED_PAIR_COUNT,
@@ -1573,6 +1703,29 @@ def validate_evidence(
         "maximum_p95_latency_ratio": MAX_P95_LATENCY_RATIO,
         "pairs": pairs,
     }
+
+
+def vars_maxima(value) -> dict[str, int]:
+    """Expose only the four independently replayed all-peer observations."""
+    return {name: getattr(value, name) for name in _BUDGET_FIELDS}
+
+
+def validate_evidence(manifest_path: Path, *, admission: ResourceAdmission, **expected) -> dict[str, Any]:
+    """Require retained raw replay; canonical proof integration is still pending.
+
+    This private integration checkpoint cannot issue release qualification.
+    """
+    if type(admission) is not ResourceAdmission:
+        _fail('independent resource admission is mandatory')
+    with ResourceExperiment(manifest_path.parent, admission.budget, admission.controls,
+                            admission.runs, expected_executable_sha256=admission.expected_executable_sha256,
+                            reported=admission.reported) as owner:
+        controls = EvidenceControls(owner, admission)
+        owner.collect_replay()
+        _validate_admitted_evidence(manifest_path, controls=controls, **expected)
+        # TODO: Wire the bounded Kagami proof consumer and independently pinned
+        # run plan before returning metrics or publishing any release PASS.
+        _fail('canonical proof verifier integration is incomplete')
 
 
 def _write_report(path: Path, report: dict[str, Any]) -> None:
@@ -1778,55 +1931,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
-    manifest_path = args.manifest
-    try:
-        metrics = validate_evidence(
-            manifest_path,
-            expected_source_revision=args.expected_source_revision,
-            expected_workspace_source_sha256=args.expected_workspace_source_sha256,
-            expected_validator_sha256=args.expected_validator_sha256,
-            expected_trial_harness_sha256=args.expected_trial_harness_sha256,
-            expected_configuration_sha256=args.expected_configuration_sha256,
-            expected_irohad_sha256=args.expected_irohad_sha256,
-            expected_iroha_cli_sha256=args.expected_iroha_cli_sha256,
-            expected_repository_root=args.expected_repository_root,
-        )
-    except (EvidenceError, OSError) as error:
-        report = {
-            "schema": REPORT_SCHEMA,
-            "result": "fail",
-            "manifest_sha256": (
-                sha256_file(manifest_path)
-                if manifest_path.is_file() and not manifest_path.is_symlink()
-                else None
-            ),
-            "errors": [str(error)],
-            "metrics": None,
-        }
-        if args.report is not None:
-            _write_report(args.report, report)
-        if not args.quiet:
-            print(f"[g-scale] FAIL: {error}", file=sys.stderr)
-        return 1
-
-    report = {
-        "schema": REPORT_SCHEMA,
-        "result": "pass",
-        "manifest_sha256": sha256_file(manifest_path),
-        "errors": [],
-        "metrics": metrics,
-    }
-    if args.report is not None:
-        _write_report(args.report, report)
+    # TODO: Bind the launcher's inherited authority descriptor and compiled
+    # canonical proof verifier before this entrypoint can publish any report.
     if not args.quiet:
-        print(
-            "[g-scale] PASS: "
-            f"throughput={metrics['four_to_one_median_throughput_ratio']:.3f}x "
-            f"(required >= {MIN_THROUGHPUT_RATIO:.2f}x), "
-            f"p95-latency={metrics['four_to_one_p95_latency_ratio']:.3f}x "
-            f"(required <= {MAX_P95_LATENCY_RATIO:.2f}x)"
-        )
-    return 0
+        print('[g-scale] FAIL: mandatory launcher and canonical proof integration is incomplete', file=sys.stderr)
+    return 2
 
 
 if __name__ == "__main__":

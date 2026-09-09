@@ -22,7 +22,7 @@ _SOURCE_COMPONENTS = {
         "provider_ingest_runtime/tests/capture_source.rs",
         "provider_ingest_runtime/tests/runtime.rs",
     ),
-    "actual.rs": ("actual/sorafs_pop_credentials.rs",),
+    "actual.rs": ("actual/sorafs_pop_credentials.rs", "actual_sorafs_gateway.rs"),
 }
 
 

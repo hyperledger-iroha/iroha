@@ -1,5 +1,6 @@
 use super::*;
 include!("moderation_canonical_quarantine_tests.rs");
+include!("moderation/quarantine_plaintext_tests.rs");
 use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
 use iroha_data_model::sorafs::moderation::{
     MODERATION_MODEL_WORKING_MEMORY_BYTES_V1, MODERATION_REPRO_MANIFEST_VERSION_V1,
@@ -1128,7 +1129,7 @@ fn moderation_quarantine_object_seal_open_preserves_object_id() {
     assert_eq!(envelope.object_id, expected_object_id);
     let opened = open_moderation_quarantine_object(&envelope, &record, &binding, &wrapper)
         .expect("open object");
-    assert_eq!(opened, payload);
+    assert_eq!(opened.as_slice(), payload);
 }
 #[test]
 fn moderation_quarantine_key_operation_errors_are_stable_and_payload_free() {
@@ -1363,8 +1364,8 @@ fn moderation_quarantine_object_authenticates_ranges_and_chunk_order() {
         open_moderation_quarantine_object_range(&envelope, &record, &binding, &wrapper, start..end)
             .expect("open authenticated cross-chunk range");
     assert_eq!(
-        opened,
-        payload[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()]
+        opened.as_slice(),
+        &payload[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()]
     );
     let mut reordered = envelope.clone();
     reordered.chunks.swap(0, 1);
@@ -1493,7 +1494,8 @@ fn moderation_quarantine_object_rewrap_keeps_ciphertext_and_identity_stable() {
             &binding,
             &replacement_wrapper,
         )
-        .expect("open rewrapped object"),
+        .expect("open rewrapped object")
+        .as_slice(),
         payload
     );
     assert!(matches!(

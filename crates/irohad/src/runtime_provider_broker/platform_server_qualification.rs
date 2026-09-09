@@ -1747,14 +1747,33 @@ fn verify_peer_uid(observed_uid: u32, expected_uid: u32) -> Result<(), BrokerErr
     }
     Ok(())
 }
+#[cfg(test)]
 fn connect_verified(policy: &EndpointPolicy) -> Result<UnixStream, BrokerError> {
+    connect_verified_before(policy, BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?)
+}
+fn connect_verified_before(
+    policy: &EndpointPolicy,
+    deadline: BrokerDeadlineV1,
+) -> Result<UnixStream, BrokerError> {
+    deadline.remaining()?;
     let before = endpoint_identity(policy)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_io()
+        .enable_time()
         .build()
         .map_err(|_| BrokerError::Unavailable)?;
+    deadline.remaining()?;
+    // Callers must enter this synchronous transport from a blocking worker. Connection backlog,
+    // peer credentials and the later handshake all consume the original exchange deadline.
     let asynchronous = runtime
-        .block_on(tokio::net::UnixStream::connect(&policy.path))
+        .block_on(async {
+            tokio::time::timeout_at(
+                tokio::time::Instant::from_std(deadline.expires_at()),
+                tokio::net::UnixStream::connect(&policy.path),
+            )
+            .await
+        })
+        .map_err(|_| BrokerError::Unavailable)?
         .map_err(|_| BrokerError::Unavailable)?;
     let peer_credentials = asynchronous
         .peer_cred()
@@ -1770,14 +1789,16 @@ fn connect_verified(policy: &EndpointPolicy) -> Result<UnixStream, BrokerError> 
     stream
         .set_nonblocking(false)
         .map_err(|_| BrokerError::Unavailable)?;
+    let remaining = deadline.remaining()?;
     stream
-        .set_read_timeout(Some(BROKER_IO_TIMEOUT_V1))
+        .set_read_timeout(Some(remaining))
         .map_err(|_| BrokerError::Unavailable)?;
     stream
-        .set_write_timeout(Some(BROKER_IO_TIMEOUT_V1))
+        .set_write_timeout(Some(remaining))
         .map_err(|_| BrokerError::Unavailable)?;
     Ok(stream)
 }
+
 fn configured_observation<'state>(
     state: &'state BrokerServerStateV1,
     binding: &ProviderBindingWireV1,

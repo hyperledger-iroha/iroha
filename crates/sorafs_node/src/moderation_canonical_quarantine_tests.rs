@@ -53,7 +53,9 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
                 expected_wrap_context
             );
             assert_eq!(
-                open_moderation_quarantine_object(&restored, &record, &binding, &original).unwrap(),
+                open_moderation_quarantine_object(&restored, &record, &binding, &original)
+                    .unwrap()
+                    .as_slice(),
                 payload
             );
             assert_eq!(
@@ -64,8 +66,9 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
                     &original,
                     65_000..66_000
                 )
-                .unwrap(),
-                payload[65_000..66_000]
+                .unwrap()
+                .as_slice(),
+                &payload[65_000..66_000]
             );
             let (rebound_record, rebound_bytes) = rewrap_moderation_quarantine_object(
                 &restored,
@@ -96,7 +99,8 @@ fn quarantine_envelope_canonical_aead_and_rewrap_ignore_caller_layout() {
                     &binding,
                     &replacement
                 )
-                .unwrap(),
+                .unwrap()
+                .as_slice(),
                 payload
             );
             assert_eq!(norito::core::get_decode_flags(), read_flags);
@@ -339,7 +343,9 @@ fn quarantine_envelope_maximum_valid_schema_fits_derived_allocation_budget() {
     assert_eq!(envelope.wrapping_key_id, maximum_key_id);
     validate_quarantine_object_envelope(&envelope).unwrap();
     assert_eq!(
-        open_moderation_quarantine_object(&envelope, &record, &binding, &wrapper).unwrap(),
+        open_moderation_quarantine_object(&envelope, &record, &binding, &wrapper)
+            .unwrap()
+            .as_slice(),
         payload
     );
     drop(payload);

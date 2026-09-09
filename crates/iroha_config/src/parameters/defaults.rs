@@ -1952,7 +1952,7 @@ pub mod sorafs {
             pub const DEFAULT_RATE_LIMIT_BYTES: u64 = 8 * 1024 * 1024; // 8 MiB/s
             /// Default allowed requests per minute for token refresh.
             pub const DEFAULT_REQUESTS_PER_MINUTE: u32 = 120;
-            /// Maximum durable callback rows admitted by the external gateway owner.
+            /// Durable callback row and local queued/reserved cleanup ticket ceiling.
             pub const ADMISSION_MAX_PENDING: u32 = 65_536;
             /// Maximum active token quota windows admitted by the external gateway owner.
             pub const ADMISSION_MAX_TRACKED_TOKENS: u32 = 65_536;

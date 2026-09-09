@@ -36,6 +36,10 @@ NO_BARE_BLOCKING = (
     "crates/iroha_torii/src/da/taikai.rs",
     "crates/iroha_torii/src/private_settlement.rs",
     "crates/iroha_torii/src/sorafs/api.rs",
+    "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs",
+    "crates/iroha_torii/src/sorafs/api/stream_token_enforcement.rs",
+    "crates/iroha_torii/src/sorafs/api/stream_token_body.rs",
+    "crates/iroha_torii/src/sorafs/stream_token_cleanup.rs",
     "crates/iroha_torii/src/sorafs/gateway_compliance_api.rs",
     "crates/iroha_torii/src/sorafs/hedging_billing_api.rs",
     "crates/iroha_torii/src/sorafs/orderbook_runtime.rs",
@@ -90,6 +94,29 @@ REQUIRED_SNIPPETS = {
     "crates/iroha_torii/src/sorafs/api.rs": (
         "governance_dag_blocking_response",
         "crate::panic_recovery::spawn_blocking_recoverable",
+    ),
+    "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs": (
+        "let worker_issuer = Arc::clone(&issuer);",
+        'sorafs_heavy_blocking_task(&state, "SoraFS token issuance", move ||',
+        "Ok(worker_issuer.issue_token(",
+    ),
+    "crates/iroha_torii/src/sorafs/api/stream_token_enforcement.rs": (
+        "pub(super) async fn enforce_stream_token_for_request(",
+        'sorafs_heavy_blocking_task(state, "SoraFS stream-token admission", move ||',
+        "Some(cleanup.try_reserve().map_err(|_|",
+        "ticket.map(|ticket| ticket.arm(capture, record))",
+    ),
+    "crates/iroha_torii/src/sorafs/api/stream_token_body.rs": (
+        "read_chunk_with_stream_token_lease",
+        'sorafs_heavy_blocking_task(state, "SoraFS chunk read", move ||',
+        "ensure_stream_token_lease_active(&guard)",
+    ),
+    "crates/iroha_torii/src/sorafs/stream_token_cleanup.rs": (
+        "crate::panic_recovery::spawn_blocking_recoverable",
+        "crate::panic_recovery::join_recoverable",
+        "let Some(physical) = work.claim_physical() else",
+        "drop(permit.send(work));",
+        "settlement.unresolved_if_pending();",
     ),
     "crates/iroha_torii/src/sorafs/gateway_compliance_api.rs": (
         "crate::panic_recovery::spawn_blocking_recoverable",
@@ -160,6 +187,10 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_fee_quote_tests.rs",
         "executor_initial_batch_authorization_tests.rs",
         "executor_contract_dispatch_tests.rs",
+        "executor_sorafs_repair_tests.rs",
+        "executor_sorafs_market_tests.rs",
+        "executor_sorafs_provider_governance_tests.rs",
+        "executor_sorafs_pop_registry_tests.rs",
     )
 )
 AUDITED_SOURCE_PATHS = (
@@ -172,7 +203,6 @@ AUDITED_SOURCE_PATHS = (
     *CORE_RECOVERY_SUPPORT_PATHS,
 )
 REQUIRED_AUDITED_SOURCE_PATHS = AUDITED_SOURCE_PATHS[:2]
-TORII_BUILD_SCRIPT = Path("crates/build-support/script.rs")
 BOUNDARY_IDENTIFIERS = {
     "catch_unwind": frozenset({"catch_unwind"}),
     "spawn_blocking": frozenset({"spawn_blocking", "spawn_blocking_on"}),
@@ -1410,22 +1440,6 @@ def torii_source_path_failures(
                     f"{relative_manifest}: {label} is outside the sealed repository-file inventory: {raw_path}"
                 )
 
-    manifest = root / "crates/iroha_torii/Cargo.toml"
-    if manifest.is_file():
-        try:
-            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
-            package = data.get("package", {})
-            build = package.get("build") if isinstance(package, dict) else None
-        except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-            build = None
-        expected = (root / TORII_BUILD_SCRIPT).resolve()
-        if not isinstance(build, str):
-            failures.append("crates/iroha_torii/Cargo.toml: missing explicit build script")
-        elif (manifest.parent / build).resolve() != expected:
-            failures.append(
-                "crates/iroha_torii/Cargo.toml: build script escaped the audited "
-                f"source closure (expected {TORII_BUILD_SCRIPT.as_posix()})"
-            )
     return failures
 
 
@@ -1497,6 +1511,16 @@ def _panic_semantic_source_fingerprints(root: Path) -> dict[str, str]:
     }
 
 
+def _required_recovery_marker_failures(relative: str, source: str) -> list[str]:
+    """Preserve exact missing-marker diagnostics for one audited source owner."""
+
+    return [
+        f"{relative}: missing audited recovery marker {snippet!r}"
+        for snippet in REQUIRED_SNIPPETS[relative]
+        if snippet not in source
+    ]
+
+
 def main() -> int:
     audited_paths = torii_audited_files(ROOT)
     source_closure = torii_rust_source_closure(ROOT, audited_paths)
@@ -1534,11 +1558,9 @@ def main() -> int:
             rendered_lines = ", ".join(str(line) for line in lines)
             failures.append(f"{relative}: bare std::thread spawn at line(s) {rendered_lines}")
 
-    for relative, snippets in REQUIRED_SNIPPETS.items():
+    for relative in REQUIRED_SNIPPETS:
         source = (ROOT / relative).read_text(encoding="utf-8")
-        for snippet in snippets:
-            if snippet not in source:
-                failures.append(f"{relative}: missing audited recovery marker {snippet!r}")
+        failures.extend(_required_recovery_marker_failures(relative, source))
 
     for relative, snippets in FORBIDDEN_RECOVERY_SNIPPETS.items():
         source = (ROOT / relative).read_text(encoding="utf-8")

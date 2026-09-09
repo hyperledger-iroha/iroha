@@ -2,6 +2,7 @@
 
 KURA_PRODUCTION_COMPONENT_FILES = (
     Path("crates/iroha_core/src/kura/startup_finality_support.rs"),
+    Path("crates/iroha_core/src/kura/read_only_evidence.rs"),
     Path("crates/iroha_core/src/kura/bound_progress_and_retained_support.rs"),
     Path("crates/iroha_core/src/kura/autonomous_reservation_bounds.rs"),
     Path("crates/iroha_core/src/kura/certified_bundle_capacity_reservation_types.rs"),
@@ -109,6 +110,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
     Path('crates/iroha_data_model/src/block/consensus_v2_tests.rs'): (Path('consensus_v2_json_tests.rs'),),
     Path('crates/iroha_core/src/kura.rs'): (
         Path('kura/startup_finality_support.rs'),
+        Path('kura/read_only_evidence.rs'),
         Path('kura/bound_progress_and_retained_support.rs'),
         Path('kura/autonomous_reservation_bounds.rs'),
         Path('kura/certified_bundle_capacity_reservation_types.rs'),
@@ -210,6 +212,7 @@ REVIEWED_RUST_INCLUDE_MANIFESTS = {
         Path('kura/tests/15_remaining_physical_writer_tests.rs'),
         Path('kura/tests/15a_merge_recovery_resource_failure_tests.rs'),
         Path('kura/tests/16_resource_file_admission_tests.rs'),
+        Path('kura/tests/17_read_only_evidence_tests.rs'),
     ),
     Path('crates/iroha_core/src/kura/autonomous_application_evidence.rs'): (Path('passive_diagnostic_reads.rs'),),
     Path('crates/iroha_core/src/kura/tests/10_native_amx_and_roster.rs'): (Path('10c_native_amx_latest_index_support_and_bounds.rs'),),

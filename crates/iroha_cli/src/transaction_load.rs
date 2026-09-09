@@ -7,7 +7,7 @@
 use std::{
     cmp::Reverse,
     collections::{BTreeMap, BTreeSet, BinaryHeap},
-    fs::{File, OpenOptions},
+    fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{Arc, mpsc},
@@ -31,7 +31,10 @@ use tokio::time::Instant;
 
 use crate::{Run, RunContext};
 
+mod allocation;
+mod output;
 mod resource;
+mod signed_request;
 mod workload;
 
 const NS: i64 = 1_000_000_000;
@@ -504,9 +507,11 @@ struct SdkBackend {
     accounts: Vec<AccountClient>,
     metadata: Metadata,
     fee: FeePaymentIntent,
+    journal: Arc<JournalSender>,
+    warmup_count: usize,
 }
 impl Backend for SdkBackend {
-    type Payload = PreparedTransactionPayload;
+    type Payload = signed_request::DurablyPrepared;
     fn prepare(
         self: Arc<Self>,
         plan: Planned,
@@ -535,12 +540,16 @@ impl Backend for SdkBackend {
                 .await?;
             crate::validate_executable_fee_payment(&payload.instructions, &quote.intent)?;
             payload.fee_payment = quote.intent;
-            let encoded =
-                tokio::task::spawn_blocking(move || -> Result<PreparedTransactionPayload> {
-                    let transaction = account.sign_transaction(payload)?;
-                    Ok(PreparedTransactionPayload::from_transaction(&transaction))
-                })
-                .await??;
+            let captured_plan = plan.clone();
+            let warmup_count = self.warmup_count;
+            let captured = tokio::task::spawn_blocking(move || {
+                let transaction = account.sign_transaction(payload)?;
+                signed_request::capture(transaction, captured_plan, warmup_count)
+            })
+            .await??;
+            // Persistence latency counts against the unchanged preparation/offer
+            // schedule. A failed or canceled receipt can never produce a payload.
+            let encoded = captured.retain(self.journal.as_ref()).await?;
             Ok(Prepared {
                 hash: encoded.hash(),
                 payload: encoded,
@@ -554,8 +563,10 @@ impl Backend for SdkBackend {
         payload: Prepared<Self::Payload>,
     ) -> BoxFuture<'static, Result<TransactionHash>> {
         async move {
-            self.accounts[payload.account_index]
-                .submit_prepared_transaction_payload(&payload.payload)
+            let account_index = payload.account_index;
+            let transport = payload.payload.into_transport(payload.hash)?;
+            self.accounts[account_index]
+                .submit_prepared_transaction_payload(&transport)
                 .await
         }
         .boxed()
@@ -580,8 +591,26 @@ trait Recorder: Send + Sync + 'static {
 enum JournalCommand {
     Record(Value),
     Barrier(mpsc::SyncSender<()>),
+    RetainSignedRequest(
+        signed_request::SignedRequest,
+        tokio::sync::oneshot::Sender<signed_request::DurableReceipt>,
+    ),
 }
 struct JournalSender(mpsc::SyncSender<JournalCommand>);
+impl JournalSender {
+    async fn retain_signed_request(
+        &self,
+        request: signed_request::SignedRequest,
+    ) -> Result<signed_request::DurableReceipt> {
+        let (acknowledgment, completed) = tokio::sync::oneshot::channel();
+        self.0
+            .try_send(JournalCommand::RetainSignedRequest(request, acknowledgment))
+            .map_err(|_| eyre!("bounded signed request writer is saturated or unavailable"))?;
+        completed
+            .await
+            .map_err(|_| eyre!("signed request did not receive durable acknowledgment"))
+    }
+}
 impl Recorder for JournalSender {
     fn record(&self, event: Value) -> Result<()> {
         self.0
@@ -594,44 +623,82 @@ struct Journal {
     worker: std::thread::JoinHandle<Result<()>>,
 }
 fn new_owned_file(path: &Path) -> Result<File> {
-    let parent = path.parent().ok_or_else(|| eyre!("output has no parent"))?;
-    if parent.canonicalize()? != parent {
-        bail!("output requires an absolute canonical existing parent");
-    }
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let file = options
-        .open(path)
-        .wrap_err("output must be a new regular file")?;
-    File::open(parent)?.sync_all()?;
-    Ok(file)
+    output::new_owned_file(path)
 }
-fn bounded_write(writer: &mut impl Write, written: &mut usize, bytes: &[u8]) -> Result<()> {
+
+fn bounded_write(
+    writer: &mut impl Write,
+    written: &mut usize,
+    bytes: &[u8],
+    limit: usize,
+) -> Result<()> {
     let total = written
         .checked_add(bytes.len())
         .ok_or_else(|| eyre!("artifact byte count overflow"))?;
-    if total > MAX_FILE_BYTES {
-        bail!("collector artifact exceeds 256 MiB; truncation is forbidden");
+    if limit == 0 || limit > MAX_FILE_BYTES || total > limit {
+        bail!("collector artifact exceeds its admitted allocation; truncation is forbidden");
     }
     writer.write_all(bytes)?;
     *written = total;
     Ok(())
 }
 impl Journal {
-    fn start(path: &Path, capacity: usize) -> Result<Self> {
+    fn start(
+        path: &Path,
+        capacity: usize,
+        allocation: allocation::JournalAllocation,
+    ) -> Result<Self> {
+        #[cfg(test)]
+        {
+            Self::start_inner(path, capacity, allocation, None)
+        }
+        #[cfg(not(test))]
+        {
+            Self::start_inner(path, capacity, allocation)
+        }
+    }
+    #[cfg(test)]
+    fn start_with_post_sync_hook(
+        path: &Path,
+        capacity: usize,
+        allocation: allocation::JournalAllocation,
+        hook: impl FnMut(usize) + Send + 'static,
+    ) -> Result<Self> {
+        Self::start_inner(path, capacity, allocation, Some(Box::new(hook)))
+    }
+    fn start_inner(
+        path: &Path,
+        capacity: usize,
+        allocation: allocation::JournalAllocation,
+        #[cfg(test)] mut post_sync_hook: Option<Box<dyn FnMut(usize) + Send>>,
+    ) -> Result<Self> {
+        let limit = allocation.max_bytes;
         let file = new_owned_file(path)?;
         let (sender, receiver) = mpsc::sync_channel::<JournalCommand>(capacity);
         let worker = std::thread::spawn(move || {
             let mut writer = BufWriter::new(file);
             let mut written = 0;
+            let mut retained_requests = BTreeSet::new();
             for command in receiver {
                 let event = match command {
                     JournalCommand::Record(event) => event,
+                    JournalCommand::RetainSignedRequest(request, acknowledgment) => {
+                        if acknowledgment.is_closed() || !retained_requests.insert(request.index())
+                        {
+                            bail!("signed request acknowledgment is canceled or identity repeats");
+                        }
+                        #[cfg(test)]
+                        let post_sync_index = request.index();
+                        let receipt = request.persist(&mut writer, &mut written, limit)?;
+                        #[cfg(test)]
+                        if let Some(hook) = post_sync_hook.as_mut() {
+                            hook(post_sync_index);
+                        }
+                        acknowledgment.send(receipt).map_err(|_| {
+                            eyre!("signed request durable acknowledgment was canceled")
+                        })?;
+                        continue;
+                    }
                     JournalCommand::Barrier(acknowledgment) => {
                         writer.flush()?;
                         writer.get_ref().sync_all()?;
@@ -639,12 +706,13 @@ impl Journal {
                         continue;
                     }
                 };
-                let bytes = json::to_vec(&event)?;
+                let mut bytes = json::to_vec(&event)?;
                 if bytes.len() > MAX_EVENT_BYTES {
                     bail!("diagnostic event exceeds bounded record size");
                 }
-                bounded_write(&mut writer, &mut written, &bytes)?;
-                bounded_write(&mut writer, &mut written, b"\n")?;
+                // Reserve the entire JSONL record including its delimiter before writing.
+                bytes.push(b'\n');
+                bounded_write(&mut writer, &mut written, &bytes, limit)?;
             }
             writer.flush()?;
             writer.get_ref().sync_all()?;
@@ -1201,16 +1269,17 @@ async fn collect_phase<B: Backend, C: Clock, R: Recorder>(
     Ok(())
 }
 
-fn publish_trace(path: &Path, args: &Args, records: &[Record]) -> Result<()> {
-    // The no-clobber hard-link publication happens only after complete serialization
-    // and fsync. On failure the owned partial file remains diagnostic evidence.
-    let name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or_else(|| eyre!("trace output name must be UTF-8"))?;
-    let stage = path.with_file_name(format!("{name}.collecting"));
-    let file = new_owned_file(&stage)?;
-    let mut writer = BufWriter::new(file);
+fn publish_trace(
+    path: &Path,
+    args: &Args,
+    records: &[Record],
+    allocation: allocation::TraceAllocation,
+) -> Result<()> {
+    let limit = allocation.max_bytes;
+    // Retain the original parent and stage descriptor through no-replace publication.
+    // On failure the owned partial file remains diagnostic evidence.
+    let mut staged = output::TraceOutput::create(path, limit)?;
+    let mut writer = BufWriter::new(staged.file_mut());
     let mut written = 0;
     let header = norito::json!({"schema": TRACE_SCHEMA, "pair_index": (args.pair_index),
         "variant": (args.variant.text()), "seed": (args.seed),
@@ -1221,25 +1290,23 @@ fn publish_trace(path: &Path, args: &Args, records: &[Record]) -> Result<()> {
     if bytes.pop() != Some(b'}') {
         bail!("trace header did not encode as a JSON object");
     }
-    bounded_write(&mut writer, &mut written, &bytes)?;
-    bounded_write(&mut writer, &mut written, b",\"transactions\":[")?;
+    bounded_write(&mut writer, &mut written, &bytes, limit)?;
+    bounded_write(&mut writer, &mut written, b",\"transactions\":[", limit)?;
     for (index, record) in records.iter().enumerate() {
         if index != 0 {
-            bounded_write(&mut writer, &mut written, b",")?;
+            bounded_write(&mut writer, &mut written, b",", limit)?;
         }
         bounded_write(
             &mut writer,
             &mut written,
             &json::to_vec(&record.trace_value()?)?,
+            limit,
         )?;
     }
-    bounded_write(&mut writer, &mut written, b"]}\n")?;
+    bounded_write(&mut writer, &mut written, b"]}\n", limit)?;
     writer.flush()?;
-    writer.get_ref().sync_all()?;
-    std::fs::hard_link(&stage, path)
-        .wrap_err("trace publication requires an absent destination")?;
-    std::fs::remove_file(&stage)?;
-    File::open(path.parent().ok_or_else(|| eyre!("trace parent missing"))?)?.sync_all()?;
+    drop(writer);
+    staged.publish()?;
     Ok(())
 }
 
@@ -1263,6 +1330,8 @@ impl Run for Args {
         let schedule = Schedule::from_args(&self)?;
         let bounds = Bounds::from_args(&self)?;
         let resource_plan = resource::Plan::new(&self.resource, &schedule, &bounds)?;
+        let expected_budget =
+            allocation::Expected::new(&self, &schedule, resource_plan.interval_ns)?;
         let configs = if self.account_configs.is_empty() {
             vec![context.config().clone()]
         } else {
@@ -1284,7 +1353,7 @@ impl Run for Args {
             if config.network_id != context.config().network_id {
                 bail!("account pool changes the selected network");
             }
-            let client = Client::new(config);
+            let client = Client::builder(config).build()?;
             let account = client
                 .account_client()
                 .map_err(|_| eyre!("account context cannot be bound"))?;
@@ -1302,13 +1371,31 @@ impl Run for Args {
             .iter()
             .map(|account| norito::json!({"authority": (account.authority().to_string())}))
             .collect();
+        let metadata = context.transaction_metadata().cloned().unwrap_or_default();
+        let fee = context.transaction_fee_payment()?;
+        let warmup_count = schedule.count(Cohort::Warmup)?;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .max_blocking_threads(bounds.preparations)
+            .enable_all()
+            .build()?;
+        // One retained child admits every output allocation before any writer
+        // or capture directory can be opened. Its original deadline stays armed.
+        let (resource_session, writers) = runtime.block_on(resource::Session::admit(
+            &self.resource,
+            resource_plan,
+            expected_budget,
+        ))?;
+        resource_session.check_admission_deadline()?;
+        let journal = Journal::start(&self.diagnostic_out, self.journal_capacity, writers.journal)?;
         let backend = Arc::new(SdkBackend {
             clients,
             accounts,
-            metadata: context.transaction_metadata().cloned().unwrap_or_default(),
-            fee: context.transaction_fee_payment()?,
+            metadata,
+            fee,
+            journal: journal.sender.clone(),
+            warmup_count,
         });
-        let journal = Journal::start(&self.diagnostic_out, self.journal_capacity)?;
         journal.blocking_record(norito::json!({"event": "plan", "schema": "iroha.sumeragi_v2.multilane_scaling.collector_journal.v1",
             "pair_index": (self.pair_index), "variant": (self.variant.text()), "seed": (self.seed),
             "accounts": public_accounts, "account_selection": (workload::ACCOUNT_SELECTION),
@@ -1318,18 +1405,15 @@ impl Run for Args {
             "preparation_lookahead": (bounds.lookahead), "preparation_concurrency": (bounds.preparations),
             "preparation_ahead_ns": (bounds.ahead_ns), "max_submissions": (bounds.submissions),
             "max_in_flight": (bounds.in_flight), "max_status_requests": (bounds.observations), "poll_interval_ns": (bounds.poll_ns)}))?;
-        for (index, record) in records.iter().enumerate() {
-            journal.blocking_record(
-                norito::json!({"event": "scheduled", "index": index, "plan": (record.plan.value())}),
-            )?;
-        }
         journal.flush_before_collection()?;
-        let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .max_blocking_threads(bounds.preparations)
-            .enable_all()
-            .build()?;
         let outcome = runtime.block_on(async {
+            resource_session.preflight(resource_plan, journal.sender.as_ref()).await?;
+            // These rows are still durable before Clock starts, but cannot spend
+            // or reset the one admission/preflight deadline.
+            for (index, record) in records.iter().enumerate() {
+                journal.blocking_record(norito::json!({"event": "scheduled", "index": index, "plan": (record.plan.value())}))?;
+            }
+            journal.flush_before_collection()?;
             for client in &backend.clients {
                 client.refresh_capabilities().await.map_err(|_| {
                     eyre!("capability preflight failed; external error detail is not retained")
@@ -1338,12 +1422,6 @@ impl Run for Args {
             let baselines = tokio::task::block_in_place(|| {
                 workload::preflight(backend.as_ref(), &records, journal.sender.as_ref())
             })?;
-            let resource_session = resource::Session::preflight(
-                &self.resource,
-                resource_plan,
-                journal.sender.as_ref(),
-            )
-            .await?;
             let initial_offset = schedule
                 .start(Cohort::Warmup)
                 .checked_sub(bounds.ahead_ns)
@@ -1414,9 +1492,11 @@ impl Run for Args {
             norito::json!({"event": "collection_finished", "passed": (outcome.is_ok()),
             "failure": (outcome.as_ref().err().map(ToString::to_string))}),
         )?;
+        // Release the backend's sender before joining the sole journal owner.
+        drop(backend);
         journal.finish()?;
         outcome?;
-        publish_trace(&self.trace_out, &self, &records)?;
+        publish_trace(&self.trace_out, &self, &records, writers.trace)?;
         context.println(format!(
             "Recorded {} exact scheduled transaction outcomes to {}",
             records.len(),

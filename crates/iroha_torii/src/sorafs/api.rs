@@ -1,6 +1,7 @@
 #![cfg(feature = "app_api")]
 #![allow(clippy::result_large_err)]
 //! HTTP handlers for SoraFS discovery endpoints.
+mod stream_token_body;
 mod stream_token_enforcement;
 use axum::{
     Json,
@@ -225,6 +226,10 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+use stream_token_body::{
+    ensure_stream_token_lease_active, read_chunk_with_stream_token_lease,
+    stream_token_response_body,
 };
 use stream_token_enforcement::{RangeFetchConcurrencyGuard, enforce_stream_token_for_request};
 #[cfg(test)]
@@ -25863,332 +25868,7 @@ pub(crate) async fn handle_get_sorafs_cid_path(
     }
     response
 }
-#[cfg(feature = "app_api")]
-fn required_canonical_stream_header(
-    headers: &HeaderMap,
-    name: &'static str,
-    display_name: &'static str,
-    maximum_bytes: usize,
-) -> Result<String, Response> {
-    let value = match single_header_value(headers, name) {
-        Ok(Some(value)) => value,
-        Ok(None) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("missing {display_name} header"),
-            ));
-        }
-        Err(()) => {
-            return Err(json_error(
-                StatusCode::BAD_REQUEST,
-                format!("{display_name} header must occur exactly once"),
-            ));
-        }
-    }
-    .to_str()
-    .map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("{display_name} header must contain valid ASCII"),
-        )
-    })?;
-    if value.is_empty()
-        || value.len() > maximum_bytes
-        || !value.bytes().all(|b| b.is_ascii_graphic())
-    {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            format!("{display_name} header must contain 1-{maximum_bytes} visible ASCII bytes"),
-        ));
-    }
-    Ok(value.to_owned())
-}
-#[cfg(feature = "app_api")]
-fn is_canonical_lower_hex(value: &str, maximum_bytes: usize) -> bool {
-    !value.is_empty()
-        && value.len() <= maximum_bytes
-        && value.len().is_multiple_of(2)
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-}
-#[cfg(feature = "app_api")]
-fn authenticated_stream_token_quota_subject(
-    authenticated_operator: Option<
-        Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>,
-    >,
-) -> Result<StreamTokenQuotaSubject, Response> {
-    let Some(Extension(authenticated_operator)) = authenticated_operator else {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "stream token issuance requires an exact-network operator signature",
-        ));
-    };
-    Ok(StreamTokenQuotaSubject::from_authenticated_operator(
-        &authenticated_operator.0,
-    ))
-}
-#[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_storage_token_authenticated(
-    authenticated_operator: Option<
-        Extension<crate::operator_signatures::AuthenticatedOperatorPublicKey>,
-    >,
-    State(state): State<SharedAppState>,
-    headers: HeaderMap,
-    JsonOnly(req): JsonOnly<StreamTokenRequestDto>,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return storage_disabled_response();
-    }
-    let Some(issuer) = state.stream_token_issuer() else {
-        return feature_disabled("stream token issuance is not enabled on this node");
-    };
-    let quota_subject = match authenticated_stream_token_quota_subject(authenticated_operator) {
-        Ok(subject) => subject,
-        Err(response) => return response,
-    };
-    let client_id = match required_canonical_stream_header(
-        &headers,
-        HEADER_SORA_CLIENT,
-        "X-SoraFS-Client",
-        MAX_CLIENT_ID_BYTES,
-    ) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    let nonce = match required_canonical_stream_header(
-        &headers,
-        HEADER_SORA_NONCE,
-        "X-SoraFS-Nonce",
-        MAX_NONCE_BYTES,
-    ) {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    if !is_canonical_lower_hex(&req.manifest_id_hex, 256) {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "manifest_id_hex must be canonical lowercase hexadecimal and no more than 256 bytes",
-        );
-    }
-    if !is_canonical_lower_hex(&req.provider_id_hex, 64) || req.provider_id_hex.len() != 64 {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "provider_id_hex must be exactly 64 lowercase hexadecimal characters",
-        );
-    }
-    let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
-        Ok(manifest_id) => manifest_id,
-        Err(response) => return response,
-    };
-    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
-        Ok(manifest) => manifest,
-        Err(err) => return node_storage_error_response(err),
-    };
-    let provider_id = match decode_hex_32(&req.provider_id_hex) {
-        Ok(bytes) => bytes,
-        Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
-    };
-    if provider_id.iter().all(|byte| *byte == 0) {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "provider_id_hex must not be all zero",
-        );
-    }
-    match state.sorafs_node.capacity_usage().provider_id {
-        Some(local_provider_id) if local_provider_id == provider_id => {}
-        Some(_) => {
-            return json_error(
-                StatusCode::FORBIDDEN,
-                "stream token provider does not match this gateway",
-            );
-        }
-        None => {
-            return json_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "stream token provider identity is not configured",
-            );
-        }
-    }
-    let overrides = TokenOverrides {
-        ttl_secs: req.ttl_secs,
-        max_streams: req.max_streams,
-        rate_limit_bytes: req.rate_limit_bytes,
-        requests_per_minute: req.requests_per_minute,
-    };
-    let token_issue = match issuer.issue_token(
-        quota_subject,
-        manifest.manifest_cid().to_vec(),
-        provider_id,
-        manifest.chunk_profile_handle().to_string(),
-        overrides,
-    ) {
-        Ok(token) => token,
-        Err(err) => {
-            return match &err {
-                StreamTokenIssuerError::IssuanceQuotaExceeded {
-                    limit,
-                    retry_after_secs,
-                    ..
-                } => {
-                    let mut response = json_error(
-                        StatusCode::TOO_MANY_REQUESTS,
-                        format!(
-                            "stream token issuance quota exceeded (limit {limit} requests per minute)"
-                        ),
-                    );
-                    let headers = response.headers_mut();
-                    if let Ok(value) = HeaderValue::from_str(&retry_after_secs.to_string()) {
-                        headers.insert(header::RETRY_AFTER, value);
-                    }
-                    headers.insert(
-                        header::HeaderName::from_static(HEADER_SORA_CLIENT),
-                        header_value(&client_id, "X-SoraFS-Client"),
-                    );
-                    headers.insert(
-                        header::HeaderName::from_static(HEADER_SORA_NONCE),
-                        header_value(&nonce, "X-SoraFS-Nonce"),
-                    );
-                    headers.insert(
-                        header::HeaderName::from_static(HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
-                        header_value("0", "X-SoraFS-Issuance-Quota-Remaining"),
-                    );
-                    response
-                }
-                StreamTokenIssuerError::InvalidPolicy { .. }
-                | StreamTokenIssuerError::InvalidBody(_) => {
-                    json_error(StatusCode::BAD_REQUEST, err.to_string())
-                }
-                StreamTokenIssuerError::IssuanceQuotaCapacityExceeded { .. }
-                | StreamTokenIssuerError::IssuanceQuotaStateUnavailable
-                | StreamTokenIssuerError::ClockRollback { .. } => {
-                    error!(?err, "stream token issuance quota state unavailable");
-                    let mut response = json_error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "stream token issuance is temporarily unavailable",
-                    );
-                    response
-                        .headers_mut()
-                        .insert(RETRY_AFTER, HeaderValue::from_static("1"));
-                    response
-                }
-                StreamTokenIssuerError::RuntimeSignerUnavailable
-                | StreamTokenIssuerError::HardwareEvidenceInvalid
-                | StreamTokenIssuerError::HardwareStateChanged
-                | StreamTokenIssuerError::HardwareFinalityUnavailable
-                | StreamTokenIssuerError::HardwareClockRollback => {
-                    error!("stream token runtime signer unavailable");
-                    let mut response = json_error(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "stream token issuance is temporarily unavailable",
-                    );
-                    response
-                        .headers_mut()
-                        .insert(RETRY_AFTER, HeaderValue::from_static("1"));
-                    response
-                }
-                StreamTokenIssuerError::RuntimeSignerRefused
-                | StreamTokenIssuerError::RuntimeSignerOutputInvalid => {
-                    error!("stream token runtime signer rejected issuance");
-                    json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to issue stream token",
-                    )
-                }
-                _ => {
-                    error!(?err, "failed to issue stream token");
-                    json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "failed to issue stream token",
-                    )
-                }
-            };
-        }
-    };
-    let body_value = stream_token_body_json(&token_issue.token.body);
-    let token_base64 = match encode_token_base64(&token_issue.token) {
-        Ok(encoded) => encoded,
-        Err(err) => {
-            error!(?err, "failed to encode stream token payload");
-            return json_error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "failed to encode stream token",
-            );
-        }
-    };
-    let mut response_headers = HeaderMap::new();
-    response_headers.insert(
-        header::HeaderName::from_static(HEADER_SORA_NONCE),
-        header_value(&nonce, "X-SoraFS-Nonce"),
-    );
-    response_headers.insert(
-        header::HeaderName::from_static(HEADER_SORA_CLIENT),
-        header_value(&client_id, "X-SoraFS-Client"),
-    );
-    response_headers.insert(
-        header::HeaderName::from_static(HEADER_SORA_TOKEN_ID),
-        header_value(&token_issue.token.body.token_id, "X-SoraFS-Token-Id"),
-    );
-    response_headers.insert(
-        header::HeaderName::from_static(HEADER_SORA_VERIFYING_KEY),
-        header_value(
-            &hex::encode(issuer.verifying_key_bytes()),
-            "X-SoraFS-Verifying-Key",
-        ),
-    );
-    let quota_header = token_issue.remaining_quota.to_string();
-    response_headers.insert(
-        header::HeaderName::from_static(HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
-        header_value(&quota_header, "X-SoraFS-Issuance-Quota-Remaining"),
-    );
-    response_headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    let token_value = json_object(vec![
-        json_entry("body", body_value),
-        json_entry(
-            "signature_hex",
-            Value::String(hex::encode(&token_issue.token.signature)),
-        ),
-        json_entry("encoded", Value::String(token_base64.clone())),
-    ]);
-    let response = json_object(vec![
-        json_entry("token", token_value),
-        json_entry("token_base64", Value::String(token_base64)),
-    ]);
-    (StatusCode::OK, response_headers, JsonBody(response)).into_response()
-}
-#[cfg(feature = "app_api")]
-fn stream_token_body_json(body: &StreamTokenBodyV1) -> Value {
-    let mut obj = Map::new();
-    obj.insert("token_id".into(), Value::from(body.token_id.clone()));
-    obj.insert(
-        "manifest_cid_hex".into(),
-        Value::from(body.manifest_cid.encode_hex::<String>()),
-    );
-    obj.insert(
-        "provider_id_hex".into(),
-        Value::from(body.provider_id.encode_hex::<String>()),
-    );
-    obj.insert(
-        "profile_handle".into(),
-        Value::from(body.profile_handle.clone()),
-    );
-    obj.insert("max_streams".into(), Value::from(body.max_streams));
-    obj.insert("ttl_epoch".into(), Value::from(body.ttl_epoch));
-    obj.insert(
-        "rate_limit_bytes".into(),
-        Value::from(body.rate_limit_bytes),
-    );
-    obj.insert("issued_at".into(), Value::from(body.issued_at));
-    obj.insert(
-        "requests_per_minute".into(),
-        Value::from(body.requests_per_minute),
-    );
-    obj.insert(
-        "token_pk_version".into(),
-        Value::from(body.token_pk_version),
-    );
-    Value::Object(obj)
-}
+include!("api/storage_token_issuance.rs");
 #[derive(Debug)]
 struct ProofStreamInflightGuard {
     telemetry: MaybeTelemetry,
@@ -27797,7 +27477,9 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         &manifest,
         request_nonce,
         stream_token_route,
-    ) {
+    )
+    .await
+    {
         Ok(result) => result,
         Err(response) => return response,
     };
@@ -27848,8 +27530,9 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     let worker_provider_id = provider_id;
     let range_start = byte_range.start;
     let range_length = usize::try_from(length).expect("CAR range length was bounded to usize");
-    let (car_stats, car_bytes, verified_chunk_count) =
+    let (car_stats, car_bytes, verified_chunk_count, stream_token_guard) =
         match sorafs_heavy_blocking_task(&state, "SoraFS CAR range", move || {
+            ensure_stream_token_lease_active(&stream_token_guard)?;
             let manifest_payload = worker_manifest
                 .load_manifest()
                 .map_err(storage_backend_error)?;
@@ -28045,15 +27728,13 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
                 ));
             }
             record_storage_metrics(&worker_state);
-            Ok((car_stats, car_bytes, verified_chunk_count))
+            ensure_stream_token_lease_active(&stream_token_guard)?;
+            Ok((car_stats, car_bytes, verified_chunk_count, stream_token_guard))
         })
         .await
         {
             Ok(result) => result,
-            Err(response) => {
-                drop(stream_token_guard);
-                return response;
-            }
+            Err(response) => return response,
         };
     let mut response_headers = HeaderMap::new();
     response_headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(MIME_CAR));
@@ -28182,24 +27863,11 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             }
         }
     }
-    const RESPONSE_CHUNK_BYTES: usize = 64 * 1024;
-    let car_bytes = Bytes::from(car_bytes);
-    let body = Body::from_stream(stream::unfold(
-        (stream_token_guard, car_bytes, 0_usize),
-        |(stream_token_guard, car_bytes, offset)| async move {
-            if offset >= car_bytes.len() {
-                return None;
-            }
-            let end = offset
-                .saturating_add(RESPONSE_CHUNK_BYTES)
-                .min(car_bytes.len());
-            let chunk = car_bytes.slice(offset..end);
-            Some((
-                Ok::<Bytes, Infallible>(chunk),
-                (stream_token_guard, car_bytes, end),
-            ))
-        },
-    ));
+    let body = stream_token_response_body(
+        stream_token_guard,
+        Bytes::from(car_bytes),
+        state.shutdown_signal.clone(),
+    );
     (response_status, response_headers, body).into_response()
 }
 #[cfg(feature = "app_api")]
@@ -28317,7 +27985,9 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         &manifest,
         request_nonce,
         stream_token_route,
-    ) {
+    )
+    .await
+    {
         Ok(result) => result,
         Err(response) => return response,
     };
@@ -28360,14 +28030,17 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
             }
         }
     }
-    let (_, bytes) = match state
-        .sorafs_node
-        .read_chunk_by_digest(&storage_manifest_id, &digest)
+    let (stream_token_guard, bytes) = match read_chunk_with_stream_token_lease(
+        &state,
+        storage_manifest_id,
+        digest,
+        stream_token_guard,
+    )
+    .await
     {
         Ok(result) => result,
-        Err(err) => return node_storage_error_response(err),
+        Err(response) => return response,
     };
-    record_storage_metrics(&state);
     let end = record
         .offset
         .checked_add(u64::from(record.length))
@@ -28492,8 +28165,12 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
             }
         }
     }
-    drop(stream_token_guard);
-    (response_status, response_headers, bytes).into_response()
+    let body = stream_token_response_body(
+        stream_token_guard,
+        Bytes::from(bytes),
+        state.shutdown_signal.clone(),
+    );
+    (response_status, response_headers, body).into_response()
 }
 #[cfg(feature = "app_api")]
 fn decode_bounded_pdp_base64(
@@ -39127,118 +38804,9 @@ mod advert_tests {
         )
         .expect("reconcile capacity declaration");
     }
-    struct TokenTestContext {
-        app: SharedAppState,
-        manifest_id_hex: String,
-        provider_id_hex: String,
-        verifying_key_hex: String,
-        client_id: String,
-        _storage_dir: TempDir,
-    }
-
-    impl TokenTestContext {
-        fn manifest(&self) -> sorafs_node::store::StoredManifest {
-            self.app
-                .sorafs_node
-                .manifest_metadata(&self.manifest_id_hex)
-                .expect("manifest")
-        }
-
-        fn token_request(&self, overrides: TokenOverrides) -> StreamTokenRequestDto {
-            StreamTokenRequestDto {
-                manifest_id_hex: self.manifest_id_hex.clone(),
-                provider_id_hex: self.provider_id_hex.clone(),
-                ttl_secs: overrides.ttl_secs,
-                max_streams: overrides.max_streams,
-                rate_limit_bytes: overrides.rate_limit_bytes,
-                requests_per_minute: overrides.requests_per_minute,
-            }
-        }
-
-        async fn car_range(&self, headers: HeaderMap, port: u16) -> Response {
-            api_test_route!(get_storage_car_range; State(self.app.clone()); Path(self.manifest_id_hex.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))))
-        }
-    }
-
-    fn token_test_context() -> TokenTestContext {
-        token_test_context_with_payload(b"stream token payload fixture".to_vec())
-    }
-    #[cfg(feature = "telemetry")]
-    fn isolated_test_telemetry() -> crate::routing::MaybeTelemetry {
-        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
-        let telemetry = iroha_core::telemetry::Telemetry::new(metrics, true);
-        crate::routing::MaybeTelemetry::from_profile(
-            Some(telemetry),
-            iroha_config::parameters::actual::TelemetryProfile::Full,
-        )
-    }
-    fn token_test_context_with_payload(payload: Vec<u8>) -> TokenTestContext {
-        token_test_context_with_payload_and_signer_mode(payload, ApiTestStreamTokenSignerMode::Sign)
-    }
-    fn token_test_context_with_payload_and_signer_mode(
-        payload: Vec<u8>,
-        signer_mode: ApiTestStreamTokenSignerMode,
-    ) -> TokenTestContext {
-        let mut app = Arc::try_unwrap(mk_app_state_for_tests())
-            .unwrap_or_else(|_| panic!("exclusive app state required"));
-        #[cfg(feature = "telemetry")]
-        {
-            app.telemetry = isolated_test_telemetry();
-        }
-        let (node, storage_dir) = sorafs_node_with_temp_storage();
-        let manifest = manifest_for_payload(0x42, &payload);
-        let plan = CarBuildPlan::single_file(&payload).expect("plan");
-        let mut reader = payload.as_slice();
-        let manifest_id_hex = node
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("ingest manifest");
-        app.sorafs_node = node;
-        let provider_id = [0xAB; 32];
-        let provider_id_hex = hex::encode(provider_id);
-        // Tests exercise manifest envelope gating explicitly; disable by default here
-        // so individual cases can opt in to stricter enforcement.
-        app.sorafs_gateway_config.require_manifest_envelope = false;
-        let issuer = stream_token_issuer_for_tests_with_mode(signer_mode, provider_id, 7);
-        let issuer = Arc::new(issuer);
-        let verifying_key_hex = hex::encode(issuer.verifying_key_bytes());
-        app.stream_token_issuer = Some(issuer);
-        let chunker_handle = format!(
-            "{}.{}@{}",
-            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
-        );
-        seed_capacity_declaration(&app.sorafs_node, provider_id, &chunker_handle);
-        app.sorafs_gateway_config.enforce_admission = false;
-        refresh_api_test_gateway_security(&mut app);
-
-        let client_id = "gateway-beta".to_string();
-        let app = Arc::new(app);
-        TokenTestContext {
-            app,
-            manifest_id_hex,
-            provider_id_hex,
-            verifying_key_hex,
-            client_id,
-            _storage_dir: storage_dir,
-        }
-    }
-    async fn issue_token_base64(context: &TokenTestContext, overrides: TokenOverrides) -> String {
-        let mut headers = HeaderMap::new();
-        insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "issuer-nonce");
-
-        let request = context.token_request(overrides);
-        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request));
-        assert_eq!(response.status(), StatusCode::OK);
-        let (_, body) = response.into_parts();
-        let body_bytes = body::to_bytes(body, usize::MAX)
-            .await
-            .expect("collect token body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode token response");
-        value
-            .json_str(&["token_base64"])
-            .expect("token base64 present")
-            .to_string()
-    }
+    include!("api/storage_token_issuance_fixtures.rs");
+    include!("api/stream_token_cleanup_tests.rs");
+    include!("api/stream_token_custody_admission_tests.rs");
     fn signed_test_token(body: StreamTokenBodyV1) -> String {
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&[0x51; 32]);
         let token = StreamTokenV1::sign(body, &signing_key).expect("sign stream token fixture");
@@ -41197,503 +40765,8 @@ mod advert_tests {
             .expect("restart must retain payload bytes");
         assert_eq!(restored, payload);
     }
-    #[tokio::test]
-    async fn storage_token_issues_signed_response() {
-        let context = token_test_context();
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-token-1");
-        insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id);
-
-        let request = context.token_request(TokenOverrides::default());
-        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request));
-        assert_eq!(response.status(), StatusCode::OK);
-        let headers = response.headers().clone();
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_NONCE),
-            Some("nonce-token-1")
-        );
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_CLIENT),
-            Some(context.client_id.as_str())
-        );
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_VERIFYING_KEY),
-            Some(context.verifying_key_hex.as_str())
-        );
-        let token_id = headers
-            .get(HEADER_SORA_TOKEN_ID)
-            .and_then(|value| value.to_str().ok())
-            .expect("token id header");
-        assert!(!token_id.is_empty());
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
-            Some("2")
-        );
-        assert_eq!(
-            api_test_header_str(&headers, CACHE_CONTROL),
-            Some("no-store")
-        );
-
-        let value = api_test_response_json(response).await;
-        let token_obj = value.json_object(&["token"]).expect("token object");
-        let signature_hex = token_obj
-            .json_str(&["signature_hex"])
-            .expect("signature hex");
-        assert_eq!(signature_hex.len(), 64 * 2);
-        assert!(signature_hex.chars().all(|c| c.is_ascii_hexdigit()));
-        let body_obj = token_obj.json_object(&["body"]).expect("token body");
-        assert!(
-            body_obj.json_str(&["token_id"]).is_some(),
-            "token body must include token_id"
-        );
-        let token_base64 = value
-            .json_str(&["token_base64"])
-            .expect("token base64 present");
-        assert!(!token_base64.is_empty());
-        let decoded = decode_token_base64(token_base64).expect("decode token base64");
-        assert_eq!(
-            decoded.body.token_id,
-            body_obj.json_str(&["token_id"]).expect("token id"),
-        );
-        decoded
-            .verify(
-                context
-                    .app
-                    .stream_token_issuer
-                    .as_ref()
-                    .expect("issuer configured")
-                    .verifying_key(),
-            )
-            .expect("runtime-signed token must verify");
-    }
-    #[tokio::test]
-    async fn storage_token_runtime_signer_failures_are_payload_free_and_fail_closed() {
-        async fn issue_with_mode(mode: ApiTestStreamTokenSignerMode) -> axum::response::Response {
-            let context = token_test_context_with_payload_and_signer_mode(
-                b"runtime signer failure fixture".to_vec(),
-                mode,
-            );
-            let mut headers = HeaderMap::new();
-            insert_static_api_test_header(
-                &mut headers,
-                HEADER_SORA_NONCE,
-                "runtime-signer-failure",
-            );
-            insert_static_api_test_header(
-                &mut headers,
-                HEADER_SORA_CLIENT,
-                "gateway-runtime-signer-test",
-            );
-            let request = StreamTokenRequestDto {
-                manifest_id_hex: context.manifest_id_hex,
-                provider_id_hex: context.provider_id_hex,
-                ttl_secs: None,
-                max_streams: None,
-                rate_limit_bytes: None,
-                requests_per_minute: None,
-            };
-            api_test_route!(post_storage_token; State(context.app); headers; JsonOnly(request))
-        }
-        let unavailable = issue_with_mode(ApiTestStreamTokenSignerMode::Unavailable).await;
-        assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            api_test_header_str(unavailable.headers(), RETRY_AFTER),
-            Some("1")
-        );
-        let unavailable_value = api_test_response_json(unavailable).await;
-        assert_json_fields!(unavailable_value; json_str ["error"] => Some("stream token issuance is temporarily unavailable"));
-        let drifted = issue_with_mode(ApiTestStreamTokenSignerMode::QualificationDrift).await;
-        assert_eq!(drifted.status(), StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            api_test_header_str(drifted.headers(), RETRY_AFTER),
-            Some("1")
-        );
-        let drifted_body = api_test_response_body(drifted).await;
-        let drifted_value: Value =
-            norito::json::from_slice(&drifted_body).expect("decode drifted response");
-        assert_json_fields!(drifted_value; json_str ["error"] => Some("stream token issuance is temporarily unavailable"));
-        assert!(!String::from_utf8_lossy(&drifted_body).contains("qualification"));
-        for mode in [
-            ApiTestStreamTokenSignerMode::Refused,
-            ApiTestStreamTokenSignerMode::WrongSignature,
-        ] {
-            let response = issue_with_mode(mode).await;
-            assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-            assert!(response.headers().get(RETRY_AFTER).is_none());
-            let response_body = api_test_response_body(response).await;
-            let response_value: Value =
-                norito::json::from_slice(&response_body).expect("decode signer failure response");
-            assert_json_fields!(response_value; json_str ["error"] => Some("failed to issue stream token"));
-            let rendered = String::from_utf8_lossy(&response_body);
-            assert!(!rendered.contains("pkcs11:"));
-            assert!(!rendered.contains("runtime signer"));
-            assert!(!rendered.contains("signature"));
-        }
-    }
-    #[tokio::test]
-    async fn storage_token_requires_nonce_header() {
-        let context = token_test_context();
-        let request = context.token_request(TokenOverrides::default());
-        let response = api_test_route!(post_storage_token; State(context.app.clone()); { let mut headers = HeaderMap::new(); insert_api_test_header(&mut headers, HEADER_SORA_CLIENT, &context.client_id); headers }; JsonOnly(request));
-        let value = api_test_response_json_with_status(response, StatusCode::BAD_REQUEST).await;
-        let error_message = value.json_str(&["error"]).expect("error string");
-        assert!(
-            error_message.contains("missing X-SoraFS-Nonce"),
-            "unexpected error message: {error_message}"
-        );
-    }
-    #[tokio::test]
-    async fn storage_token_rejects_noncanonical_or_oversized_request_fields() {
-        let context = token_test_context();
-        let request = || context.token_request(TokenOverrides::default());
-        for (name, value) in [
-            (HEADER_SORA_CLIENT, "x".repeat(MAX_CLIENT_ID_BYTES + 1)),
-            (HEADER_SORA_CLIENT, "client with spaces".to_string()),
-            (HEADER_SORA_NONCE, "x".repeat(MAX_NONCE_BYTES + 1)),
-            (HEADER_SORA_NONCE, "nonce with spaces".to_string()),
-        ] {
-            let mut headers = HeaderMap::new();
-            insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
-            insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
-            headers.insert(
-                header::HeaderName::from_static(name),
-                HeaderValue::from_str(&value).expect("test header"),
-            );
-            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request()));
-            assert_eq!(
-                response.status(),
-                StatusCode::BAD_REQUEST,
-                "value={value:?}"
-            );
-        }
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
-        let mut noncanonical_manifest = request();
-        noncanonical_manifest.manifest_id_hex.push('A');
-        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers.clone(); JsonOnly(noncanonical_manifest));
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let mut noncanonical_provider = request();
-        noncanonical_provider.provider_id_hex.make_ascii_uppercase();
-        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(noncanonical_provider));
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-    #[tokio::test]
-    async fn storage_token_rejects_provider_mismatch_and_unsafe_overrides() {
-        let context = token_test_context();
-        let headers = || {
-            let mut headers = HeaderMap::new();
-            insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "client-a");
-            insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-a");
-            headers
-        };
-        let request = |provider_id_hex: String, overrides: TokenOverrides| StreamTokenRequestDto {
-            manifest_id_hex: context.manifest_id_hex.clone(),
-            provider_id_hex,
-            ttl_secs: overrides.ttl_secs,
-            max_streams: overrides.max_streams,
-            rate_limit_bytes: overrides.rate_limit_bytes,
-            requests_per_minute: overrides.requests_per_minute,
-        };
-        for provider in [[0_u8; 32], [0xAC; 32]] {
-            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers(); JsonOnly(request(hex::encode(provider), TokenOverrides::default())));
-            assert!(
-                matches!(
-                    response.status(),
-                    StatusCode::BAD_REQUEST | StatusCode::FORBIDDEN
-                ),
-                "unexpected provider-binding status: {}",
-                response.status()
-            );
-        }
-        for overrides in [
-            TokenOverrides {
-                ttl_secs: Some(0),
-                ..TokenOverrides::default()
-            },
-            TokenOverrides {
-                max_streams: Some(0),
-                ..TokenOverrides::default()
-            },
-            TokenOverrides {
-                rate_limit_bytes: Some(0),
-                ..TokenOverrides::default()
-            },
-            TokenOverrides {
-                requests_per_minute: Some(0),
-                ..TokenOverrides::default()
-            },
-            TokenOverrides {
-                requests_per_minute: Some(4),
-                ..TokenOverrides::default()
-            },
-        ] {
-            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers(); JsonOnly(request(context.provider_id_hex.clone(), overrides)));
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        }
-    }
-    #[tokio::test]
-    async fn stream_token_enforcement_rejects_temporal_policy_and_binding_attacks() {
-        let context = token_test_context();
-        let manifest = context.manifest();
-        let valid_encoded = issue_token_base64(&context, TokenOverrides::default()).await;
-        let valid = decode_token_base64(&valid_encoded).expect("decode issued token");
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system time")
-            .as_secs();
-        let mut cases = Vec::new();
-        let mut body = valid.body.clone();
-        body.issued_at = now + MAX_TOKEN_FUTURE_SKEW_SECS + 10;
-        body.ttl_epoch = body.issued_at + 60;
-        cases.push((body, StatusCode::UNAUTHORIZED));
-        let mut body = valid.body.clone();
-        body.issued_at = now.saturating_sub(60);
-        body.ttl_epoch = now;
-        cases.push((body, StatusCode::UNAUTHORIZED));
-        let mut body = valid.body.clone();
-        body.ttl_epoch = body.issued_at;
-        cases.push((body, StatusCode::BAD_REQUEST));
-        let mut body = valid.body.clone();
-        body.max_streams = 0;
-        cases.push((body, StatusCode::BAD_REQUEST));
-        let mut body = valid.body.clone();
-        body.token_pk_version += 1;
-        cases.push((body, StatusCode::UNAUTHORIZED));
-        let mut body = valid.body.clone();
-        body.provider_id = [0xAC; 32];
-        cases.push((body, StatusCode::FORBIDDEN));
-        for (body, expected_status) in cases {
-            let encoded = signed_test_token(body);
-            let response = enforce_stream_token_for_request(
-                &context.app,
-                &enforcement_headers(&encoded),
-                &manifest,
-                "test-enforcement-nonce",
-                enforcement_route(1),
-            )
-            .expect_err("adversarial token must be rejected");
-            assert_eq!(response.status(), expected_status);
-        }
-        let mut tampered = valid;
-        tampered.signature[0] ^= 0x80;
-        let tampered = encode_token_base64(&tampered).expect("encode tampered token");
-        let response = enforce_stream_token_for_request(
-            &context.app,
-            &enforcement_headers(&tampered),
-            &manifest,
-            "test-enforcement-nonce",
-            enforcement_route(1),
-        )
-        .expect_err("tampered signature rejected");
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-        let oversized = "A".repeat(MAX_STREAM_TOKEN_BASE64_BYTES + 1);
-        let response = enforce_stream_token_for_request(
-            &context.app,
-            &enforcement_headers(&oversized),
-            &manifest,
-            "test-enforcement-nonce",
-            enforcement_route(1),
-        )
-        .expect_err("oversized token header rejected");
-        assert_eq!(
-            response.status(),
-            StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE
-        );
-        let response = enforce_stream_token_for_request(
-            &context.app,
-            &enforcement_headers("not-base64"),
-            &manifest,
-            "test-enforcement-nonce",
-            enforcement_route(1),
-        )
-        .expect_err("malformed token header rejected");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let mut duplicate_headers = enforcement_headers(&valid_encoded);
-        duplicate_headers.append(
-            header::HeaderName::from_static(HEADER_SORA_STREAM_TOKEN),
-            header_value(&valid_encoded, "X-SoraFS-Stream-Token"),
-        );
-        let response = enforce_stream_token_for_request(
-            &context.app,
-            &duplicate_headers,
-            &manifest,
-            "test-duplicate-token-header",
-            enforcement_route(1),
-        )
-        .expect_err("duplicate token headers must be rejected before admission");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-    #[tokio::test]
-    async fn storage_token_requires_an_authenticated_operator_identity() {
-        let context = token_test_context();
-        let request = || context.token_request(TokenOverrides::default());
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "operator-auth-test");
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "operator-auth-nonce");
-        let missing = api_test_route!(post_storage_token_authenticated; None; State(context.app.clone()); headers.clone(); JsonOnly(request()));
-        assert_eq!(missing.status(), StatusCode::FORBIDDEN);
-        let valid = api_test_route!(post_storage_token_authenticated; test_stream_token_operator(); State(context.app.clone()); headers; JsonOnly(request()));
-        assert_eq!(valid.status(), StatusCode::OK);
-        assert_eq!(
-            api_test_header_str(valid.headers(), HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
-            Some("2"),
-            "rejected unauthenticated calls must not consume operator quota"
-        );
-    }
-    #[tokio::test]
-    async fn storage_token_client_label_rotation_cannot_escape_operator_quota() {
-        let context = token_test_context();
-        let request_builder = || context.token_request(TokenOverrides::default());
-        let expected = ["2", "1", "0"];
-        for (idx, quota_remaining) in expected.into_iter().enumerate() {
-            let mut headers = HeaderMap::new();
-            insert_api_test_header(
-                &mut headers,
-                HEADER_SORA_NONCE,
-                format!("nonce-quota-{idx}"),
-            );
-            insert_api_test_header(
-                &mut headers,
-                HEADER_SORA_CLIENT,
-                format!("rotating-label-{idx}"),
-            );
-            let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request_builder()));
-            assert_eq!(response.status(), StatusCode::OK);
-            let remaining = response
-                .headers()
-                .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
-                .and_then(|value| value.to_str().ok())
-                .expect("quota header");
-            assert_eq!(remaining, quota_remaining);
-        }
-        let mut headers = HeaderMap::new();
-        insert_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-quota-3");
-        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "fresh-label-after-quota");
-
-        let response = api_test_route!(post_storage_token; State(context.app.clone()); headers; JsonOnly(request_builder()));
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
-        let retry_after = response
-            .headers()
-            .get(RETRY_AFTER)
-            .and_then(|value| value.to_str().ok())
-            .expect("retry-after header");
-        assert!(retry_after.parse::<u64>().unwrap_or(0) > 0);
-        let quota_header = response
-            .headers()
-            .get(HEADER_SORA_ISSUANCE_QUOTA_REMAINING)
-            .and_then(|value| value.to_str().ok())
-            .expect("quota header on 429");
-        assert_eq!(quota_header, "0");
-    }
-    #[tokio::test]
-    async fn storage_token_returns_not_found_when_disabled() {
-        let mut app = Arc::try_unwrap(mk_app_state_for_tests())
-            .unwrap_or_else(|_| panic!("exclusive app state required"));
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        let payload = b"disabled issuer payload";
-        let manifest = manifest_for_payload(0x17, payload);
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let mut reader = &payload[..];
-        let manifest_id_hex = node
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("ingest manifest");
-        app.sorafs_node = node;
-        // Leave stream_token_issuer unset to emulate disabled tokens.
-        let state = Arc::new(app);
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-disabled");
-        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-disabled");
-        let request = StreamTokenRequestDto {
-            manifest_id_hex,
-            provider_id_hex: hex::encode([0xEF; 32]),
-            ttl_secs: None,
-            max_streams: None,
-            rate_limit_bytes: None,
-            requests_per_minute: None,
-        };
-        let response =
-            api_test_route!(post_storage_token; State(state); headers; JsonOnly(request));
-        let value = api_test_response_json_with_status(response, StatusCode::NOT_FOUND).await;
-        let error_message = value.json_str(&["error"]).expect("error string");
-        assert!(
-            error_message.contains("stream token issuance is not enabled"),
-            "unexpected error: {error_message}"
-        );
-    }
-    #[tokio::test]
-    async fn storage_token_requires_client_header() {
-        let (app, _dir, manifest_id) = token_enabled_state();
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-test");
-        let request = StreamTokenRequestDto {
-            manifest_id_hex: manifest_id,
-            provider_id_hex: hex::encode([0x55; 32]),
-            ttl_secs: None,
-            max_streams: None,
-            rate_limit_bytes: None,
-            requests_per_minute: None,
-        };
-        let response = api_test_route!(post_storage_token; State(app); headers; JsonOnly(request));
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-    #[tokio::test]
-    async fn storage_token_emits_expected_headers() {
-        let (app, _dir, manifest_id) = token_enabled_state();
-        let verifying_hex = {
-            let issuer = app
-                .stream_token_issuer
-                .as_ref()
-                .expect("issuer configured for tests");
-            hex::encode(issuer.verifying_key_bytes())
-        };
-        let mut headers = HeaderMap::new();
-        insert_static_api_test_header(&mut headers, HEADER_SORA_NONCE, "nonce-123");
-        insert_static_api_test_header(&mut headers, HEADER_SORA_CLIENT, "gateway-alpha");
-
-        let request = StreamTokenRequestDto {
-            manifest_id_hex: manifest_id,
-            provider_id_hex: hex::encode([0x66; 32]),
-            ttl_secs: Some(900),
-            max_streams: Some(3),
-            rate_limit_bytes: Some(1_048_576),
-            requests_per_minute: Some(2),
-        };
-        let response =
-            api_test_route!(post_storage_token; State(app.clone()); headers; JsonOnly(request));
-        assert_eq!(response.status(), StatusCode::OK);
-        let headers = response.headers().clone();
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_NONCE),
-            Some("nonce-123")
-        );
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_CLIENT),
-            Some("gateway-alpha")
-        );
-        assert!(
-            api_test_header_str(&headers, HEADER_SORA_TOKEN_ID).is_some(),
-            "token id header must be present"
-        );
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_VERIFYING_KEY),
-            Some(verifying_hex.as_str())
-        );
-        assert_eq!(
-            api_test_header_str(&headers, HEADER_SORA_ISSUANCE_QUOTA_REMAINING),
-            Some("2")
-        );
-        assert_eq!(
-            api_test_header_str(&headers, CACHE_CONTROL),
-            Some("no-store")
-        );
-
-        let value = api_test_response_json(response).await;
-        assert!(
-            value.get("token").is_some(),
-            "response should contain token payload"
-        );
-    }
+    include!("api/storage_token_issuance_tests.rs");
+    include!("api/storage_token_worker_tests.rs");
     #[tokio::test]
     async fn car_range_requires_stream_token() {
         let context = token_test_context();
@@ -42127,49 +41200,7 @@ mod advert_tests {
         let response = context.car_range(headers, 8094).await;
         assert_eq!(response.status(), StatusCode::PARTIAL_CONTENT);
     }
-    #[derive(Clone, Copy)]
-    enum CapabilityRangeKind {
-        Car,
-        Chunk,
-    }
-
-    impl CapabilityRangeKind {
-        fn headers(
-            self,
-            chunker_handle: &str,
-            content_length: u64,
-            chunk_digest_hex: Option<&str>,
-            token_base64: &str,
-            nonce: &str,
-        ) -> HeaderMap {
-            match self {
-                Self::Car => car_range_headers(chunker_handle, content_length, token_base64, nonce),
-                Self::Chunk => chunk_range_headers(
-                    chunker_handle,
-                    chunk_digest_hex.expect("chunk metadata present"),
-                    token_base64,
-                    nonce,
-                ),
-            }
-        }
-
-        async fn request(
-            self,
-            context: &TokenTestContext,
-            chunk_digest_hex: Option<String>,
-            headers: HeaderMap,
-            port: u16,
-        ) -> Response {
-            match self {
-                Self::Car => {
-                    api_test_route!(get_storage_car_range; State(context.app.clone()); Path(context.manifest_id_hex.clone()); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))))
-                }
-                Self::Chunk => {
-                    api_test_route!(get_storage_chunk; State(context.app.clone()); Path(( context.manifest_id_hex.clone(), chunk_digest_hex.expect("chunk metadata present"), )); headers; ConnectInfo(SocketAddr::from(([127, 0, 0, 1], port))))
-                }
-            }
-        }
-    }
+    include!("api/stream_token_body_route_tests.rs");
 
     async fn assert_range_capability_enforcement(kind: CapabilityRangeKind) {
         let fixture = make_signed_advert();
@@ -42701,6 +41732,7 @@ mod advert_tests {
             "test-concurrency-nonce-1",
             route,
         )
+        .await
         .expect("first request permitted");
         assert!(
             first_guard.has_permit(),
@@ -42713,6 +41745,7 @@ mod advert_tests {
             "test-concurrency-nonce-2",
             route,
         )
+        .await
         .expect_err("second request must be rejected while guard held");
         assert_eq!(second.status(), StatusCode::TOO_MANY_REQUESTS);
         drop(first_guard);
@@ -42723,6 +41756,7 @@ mod advert_tests {
             "test-concurrency-nonce-3",
             route,
         )
+        .await
         .expect("request should succeed after guard dropped");
         assert!(
             retry_guard.has_permit(),
@@ -42827,6 +41861,7 @@ mod advert_tests {
             "test-quota-nonce-1",
             route,
         )
+        .await
         .expect("first quota request permitted");
         drop(quota_guard);
         let quota_retry = enforce_stream_token_for_request(
@@ -42836,6 +41871,7 @@ mod advert_tests {
             "test-quota-nonce-2",
             route,
         )
+        .await
         .expect_err("quota enforcement should reject second request");
         assert_eq!(quota_retry.status(), StatusCode::TOO_MANY_REQUESTS);
         let quota_metrics = context.app.telemetry.metrics().await;
@@ -42864,6 +41900,7 @@ mod advert_tests {
             "test-rate-nonce",
             route,
         )
+        .await
         .expect_err("rate limit should reject oversized fetch");
         assert_eq!(rate_error.status(), StatusCode::TOO_MANY_REQUESTS);
         let final_metrics = context.app.telemetry.metrics().await;

@@ -35,8 +35,7 @@ fn leaf(entry: FastpqSourceExecutionEntryV1) -> FastpqOrdinarySourceStatementLea
         source: source(),
         statement_index: 0,
         entry_index: 0,
-        transcript_index: 0,
-        entry_transcript_count: 1,
+        entry_transcript_count: 3,
         entry_hash: entry.entry_hash,
         execution_kind: entry.execution_kind,
         route: entry.route,
@@ -213,7 +212,7 @@ fn source_entry_manifest_binds_nontransfer_entries_with_unchanged_leaf_root() {
 #[test]
 fn source_entry_manifest_rejects_leaf_fields_outside_its_expected_entry() {
     let entries = entries();
-    for mutation in 0..6 {
+    for mutation in 0..8 {
         let mut changed = leaf(entries[0]);
         match mutation {
             0 => changed.entry_hash = entries[1].entry_hash,
@@ -222,6 +221,20 @@ fn source_entry_manifest_rejects_leaf_fields_outside_its_expected_entry() {
             3 => changed.dataspace_id = DataSpaceId::new(9),
             4 => changed.entry_index = 1,
             5 => changed.entry_index = u32::MAX,
+            6 => {
+                let FastpqSourceRouteV1::Lane(mut route) = changed.route else {
+                    unreachable!()
+                };
+                route.lane_id = LaneId::new(3);
+                changed.route = FastpqSourceRouteV1::Lane(route);
+            }
+            7 => {
+                let FastpqSourceRouteV1::Lane(mut route) = changed.route else {
+                    unreachable!()
+                };
+                route.lane_incarnation = Hash::new(b"substituted original entry incarnation");
+                changed.route = FastpqSourceRouteV1::Lane(route);
+            }
             _ => unreachable!(),
         }
         assert!(
@@ -338,6 +351,25 @@ fn source_entry_archive_checks_independent_nontransfer_entries_and_empty_project
         0,
         1,
     ));
+}
+
+#[test]
+fn source_entry_manifest_write_rejects_more_bundles_than_executed_entries() {
+    let entries = entries();
+    let mut archive = archive(&entries, vec![leaf(entries[0])]);
+    for (executed_entry_count, statement_count) in [(0, 1), (1, 2)] {
+        archive.manifest.executed_entry_count = executed_entry_count;
+        archive.manifest.statement_count = statement_count;
+        // Even a matching ordinary root cannot make these inventory counts coherent.
+        assert!(!verify_fastpq_ordinary_source_statement_manifest_write_v1(
+            &archive.manifest,
+            source(),
+            &archive.manifest_siblings,
+            ordinary_root(&archive),
+            3,
+            3,
+        ));
+    }
 }
 
 #[test]

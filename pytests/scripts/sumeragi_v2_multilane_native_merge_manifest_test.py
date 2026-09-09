@@ -116,7 +116,7 @@ def test_native_participant_role_rejects_collapsed_phase_identity_checks(
     (
         (
             "native_amx_participant_application_role",
-            "compute_settlement_hash(&leg.participant_settlement)",
+            "leg .participant_settlement .computed_hash()",
             "Result::<_, &'static str>::Ok(leg.participant_settlement_hash)",
         ),
         *(
@@ -126,9 +126,10 @@ def test_native_participant_role_rejects_collapsed_phase_identity_checks(
                 "false",
             )
             for field, descriptor in (
-                ("lane_id", "lane_id"), ("dataspace_id", "dataspace_id"),
-                ("lane_incarnation", "lane_incarnation"),
-                ("block_height", "lane_block_height"),
+                ("lane_id()", "lane_id"), ("dataspace_id()", "dataspace_id"),
+                ("lane_incarnation()", "lane_incarnation"),
+                ("participant_lane_block_height()", "lane_block_height"),
+                ("authority_context_height()", "proposal_height"),
             )
         ),
         *(

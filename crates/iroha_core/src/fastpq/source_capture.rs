@@ -117,7 +117,7 @@ pub(crate) fn preflight_fastpq_source_transcripts(
 }
 
 mod budget;
-use budget::{FastpqSourceTranscriptUsage, measure_fastpq_source_statement_usage};
+use budget::measure_fastpq_source_statement_usage;
 
 fn source_statement_public_limits(
     limits: FastpqSourceStatementBuildLimits,
@@ -149,8 +149,9 @@ fn source_statement_public_limits(
 /// Derive a complete ordinary source manifest without accepting caller-provided leaf digests.
 ///
 /// The ordered archive includes entries without transfers. Every transcript-map key must
-/// match exactly one entry; every recorded transcript produces one leaf in original
-/// entry/transcript order. A transcript remains whole, including its multi-delta operation.
+/// match exactly one entry; every nonempty entry bundle produces one leaf in original
+/// entry order. Every transcript and delta remains whole and in original occurrence order.
+/// Common scales, key allocation and repeated-key chronology span the complete bundle.
 /// The supplied transaction-set commitment binds the ordered canonical transaction wires.
 /// The manifest independently binds every ordered source entry, including entries without
 /// transfers. Each statement uses its entry's dataspace plus the supplied slot and permission
@@ -173,6 +174,9 @@ fn source_statement_public_limits(
 /// # Errors
 /// Rejects incomplete, duplicate or inconsistent execution identities, empty bundles/deltas,
 /// exceeded bounds, and any rewrite of the finalized public transcript projection.
+/// TODO: support intervening supply/permission/metadata changes in the final complete
+/// execution relation. A transfer-only bundle with discontinuous balances is rejected;
+/// it is never split into separately accepted per-transcript leaves.
 pub fn derive_fastpq_ordinary_source_manifest_v1(
     source: FastpqSourceStatementContextV1,
     entries: &[FastpqSourceExecutionEntryV1],
@@ -208,9 +212,7 @@ pub fn derive_fastpq_ordinary_source_manifest_v1(
     if transcripts.keys().any(|key| !identities.contains(key)) {
         return Err("FASTPQ transcript bundle has no executed entry".into());
     }
-    let usage: FastpqSourceTranscriptUsage =
-        measure_fastpq_source_statement_usage(executed_entry_count, transcripts, limits)?;
-    let transcript_count = usage.transcripts;
+    measure_fastpq_source_statement_usage(executed_entry_count, transcripts, limits)?;
     let max_rows = limits
         .max_deltas
         .checked_mul(2)
@@ -220,7 +222,8 @@ pub fn derive_fastpq_ordinary_source_manifest_v1(
         .ok_or_else(|| "FASTPQ source tree limits overflow".to_owned())?;
     let max_statements = u32::try_from(limits.max_transcripts)
         .map_err(|_| "FASTPQ source transcript limit exceeds u32".to_owned())?;
-    let mut leaves = Vec::with_capacity(transcript_count);
+    // The complete-bundle preflight above precedes every leaf/tree allocation.
+    let mut leaves = Vec::with_capacity(transcripts.len());
     let mut output_bytes_remaining = limits.max_total_statement_bytes;
     for (entry_index, entry) in entries.iter().enumerate() {
         let Some(bundle) = transcripts.get(&entry.entry_hash) else {
@@ -236,38 +239,33 @@ pub fn derive_fastpq_ordinary_source_manifest_v1(
         .with_tx_set_hash(tx_set_hash);
         let entry_transcript_count = u32::try_from(bundle.len())
             .map_err(|_| "FASTPQ entry transcript count exceeds u32".to_owned())?;
-        for (transcript_index, transcript) in bundle.iter().enumerate() {
-            let produced = quantity_statement_from_finalized_transcripts(
-                inputs.clone(),
-                std::slice::from_ref(transcript),
-                public_limits,
-                tree_limits,
-            )
-            .map_err(|error| {
-                format!("FASTPQ source entry {entry_index} is not finalized: {error}")
-            })?;
-            let bytes = norito::core::to_bytes_bounded(
-                produced.statement(),
-                limits.max_statement_bytes.min(output_bytes_remaining),
-            )
-            .map_err(|error| {
-                format!("FASTPQ canonical source statement exceeds construction budget: {error}")
-            })?;
-            output_bytes_remaining -= bytes.len();
-            leaves.push(FastpqOrdinarySourceStatementLeafV1 {
-                source,
-                // Every count was checked against u32 before materializing any leaf.
-                statement_index: leaves.len() as u32,
-                entry_index: entry_index as u32,
-                transcript_index: transcript_index as u32,
-                entry_transcript_count,
-                entry_hash: entry.entry_hash,
-                execution_kind: entry.execution_kind,
-                route: entry.route,
-                dataspace_id: entry.dataspace_id,
-                statement_digest: Hash::new(&bytes).into(),
-            });
-        }
+        let produced = quantity_statement_from_finalized_transcripts(
+            inputs,
+            bundle,
+            public_limits,
+            tree_limits,
+        )
+        .map_err(|error| format!("FASTPQ source entry {entry_index} is not finalized: {error}"))?;
+        let bytes = norito::core::to_bytes_bounded(
+            produced.statement(),
+            limits.max_statement_bytes.min(output_bytes_remaining),
+        )
+        .map_err(|error| {
+            format!("FASTPQ canonical source statement exceeds construction budget: {error}")
+        })?;
+        output_bytes_remaining -= bytes.len();
+        leaves.push(FastpqOrdinarySourceStatementLeafV1 {
+            source,
+            // Every count was checked against u32 before materializing any leaf.
+            statement_index: leaves.len() as u32,
+            entry_index: entry_index as u32,
+            entry_transcript_count,
+            entry_hash: entry.entry_hash,
+            execution_kind: entry.execution_kind,
+            route: entry.route,
+            dataspace_id: entry.dataspace_id,
+            statement_digest: Hash::new(&bytes).into(),
+        });
     }
     let manifest = build_fastpq_ordinary_source_statement_manifest_v1(
         source,

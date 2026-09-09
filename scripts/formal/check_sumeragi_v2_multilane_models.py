@@ -22,6 +22,7 @@ FORMAL_CHECKER_DIR = Path(__file__).resolve().parent
 if str(FORMAL_CHECKER_DIR) not in sys.path:
     sys.path.insert(0, str(FORMAL_CHECKER_DIR))
 
+import sumeragi_v2_multilane_authority_recovery_contract as authority_recovery_contract
 import sumeragi_v2_multilane_autonomous_terminal_contract as autonomous_terminal_contract
 from sumeragi_v2_multilane_autonomous_terminal_contract import (
     AUTONOMOUS_TERMINAL_FORBIDDEN_SOURCE_CHECKS,
@@ -215,166 +216,6 @@ def _validate_queue_plan_autonomous_only_contract(
     )
 
 
-_INFLIGHT_CURRENT_PRODUCTION_BINDINGS = {
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "schedule_local_proposal",
-    ): (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "fn",
-        "schedule_local_proposal",
-        (
-            "executor.can_schedule_local_proposal()?",
-            "let attachments = candidate_attachments(",
-            "let assembly = assembler.assemble(CandidateRequest {",
-            "work_provider: &mut *lane_work",
-            "let candidate = match assembly",
-            "CandidateAssemblyOutcome::NoProposalWork(report)",
-            "report.work_deferred > 0",
-            "proposal_state.defer_candidate_work(",
-            "lane_work.bind_local_candidate(",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "candidate_work_requires_wait",
-    ): (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "fn",
-        "schedule_local_proposal",
-        (
-            "CandidateAssemblyOutcome::NoProposalWork(report)",
-            "if report.work_deferred > 0",
-            "proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "claim_certified_execution_proposal_turn",
-    ): (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "fn",
-        "schedule_local_proposal",
-        (
-            "if !executor.can_schedule_local_proposal()?",
-            "let assembly = assembler.assemble(CandidateRequest {",
-            "proposal_state.attempted = Some(owner)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-        "Kura::persist_lane_block_execution_input",
-    ): (
-        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-        "method",
-        "Kura::persist_lane_block_execution_input",
-        (
-            "let _prune_guard = self.prune_lock.lock();",
-            "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
-            "pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?",
-            "persist_lane_block_execution_input_under_prune_and_canonical_guards(",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-        "Kura::persist_lane_block_execution_input_under_prune_guard",
-    ): (
-        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-        "method",
-        "Kura::persist_lane_block_execution_input_under_prune_and_canonical_guards",
-        (
-            "ensure_prune_recovery_not_required()",
-            "recover_lane_block_execution_input_source(",
-            "if &verified != recovered",
-            "LaneBlockExecutionInputArtifact::new(verified)",
-            "read_autonomous_lane_block_artifact_with_recovery_policy(",
-            "authorize_autonomous_execution_input_persistence(",
-            "write_lane_block_execution_input_artifact(",
-            "execution_input_authorization",
-            "pending_canonical_bytes",
-        ),
-    ),
-}
-
-
-def _current_inflight_production_binding(
-    binding: tuple[str, str, str, tuple[str, ...]],
-) -> tuple[str, str, str, tuple[str, ...]]:
-    """Rebind one first-release layout owner to the merged implementation."""
-
-    relative, kind, symbol, tokens = binding
-    return _INFLIGHT_CURRENT_PRODUCTION_BINDINGS.get(
-        (relative, symbol), (relative, kind, symbol, tokens)
-    )
-
-
-INFLIGHT_LAYOUT_PRODUCTION_BINDINGS = tuple(
-    _current_inflight_production_binding(binding)
-    for binding in INFLIGHT_LAYOUT_PRODUCTION_BINDINGS
-)
-
-_INFLIGHT_CURRENT_ORDERED_BINDINGS = {
-    (
-        "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
-        "Kura::publish_certified_frontier_and_consume_capacity_locked",
-    ): (
-        "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
-        "method",
-        "Kura::publish_certified_frontier_and_consume_capacity_locked",
-        (
-            "publish_latest_certified_lane_block_frontier_locked(entry, artifact, authority)?",
-            "let durable_frontier = self",
-            "read_latest_certified_lane_block_frontier_structural_locked(entry, false)?",
-            "durable_frontier.frontier.artifact != *artifact",
-            "confirm_latest_certified_lane_block_frontier_read_locked(",
-            "consume_certified_bundle_frontier_capacity(artifact)?",
-            "FAIL_AFTER_NEXT_AUTONOMOUS_CERTIFIED_FRONTIER",
-            "Ok(frontier_changed)",
-        ),
-    ),
-    (
-        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-        "Kura::persist_lane_block_execution_input",
-    ): _INFLIGHT_CURRENT_PRODUCTION_BINDINGS[
-        (
-            "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-            "Kura::persist_lane_block_execution_input",
-        )
-    ],
-    (
-        "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-        "Kura::persist_lane_block_execution_input_under_prune_guard",
-    ): _INFLIGHT_CURRENT_PRODUCTION_BINDINGS[
-        (
-            "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
-            "Kura::persist_lane_block_execution_input_under_prune_guard",
-        )
-    ],
-    (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "schedule_local_proposal",
-    ): (
-        "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "fn",
-        "schedule_local_proposal",
-        (
-            "executor.can_schedule_local_proposal()?",
-            "let attachments = candidate_attachments(",
-            "let assembly = assembler.assemble(CandidateRequest {",
-            "work_provider: &mut *lane_work",
-            "let candidate = match assembly",
-            "CandidateAssemblyOutcome::NoProposalWork(report)",
-            "proposal_state.defer_candidate_work(",
-            "lane_work.bind_local_candidate(",
-        ),
-    ),
-}
-INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS = tuple(
-    _INFLIGHT_CURRENT_ORDERED_BINDINGS.get(
-        (relative, symbol), (relative, kind, symbol, tokens)
-    )
-    for relative, kind, symbol, tokens in INFLIGHT_LAYOUT_ORDERED_SOURCE_CHECKS
-)
 _CURRENT_NATIVE_RECOVERY_REPLACEMENT_BINDINGS = frozenset(
     (
         "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
@@ -3696,11 +3537,14 @@ def source_manifest_sha256(root: Path = DEFAULT_ROOT) -> str:
         *FORMAL_WORKFLOW_RELATIVES,
         Path("scripts/formal/check_sumeragi_v2_multilane_models.py"),
         Path("scripts/formal/sumeragi_v2_multilane_inflight_validation.py"),
+        Path("pytests/scripts/sumeragi_v2_inflight_binding_inventory_test.py"),
         Path("scripts/formal/sumeragi_v2_multilane_cli.py"),
         Path(
             "scripts/formal/"
             "sumeragi_v2_multilane_autonomous_terminal_contract.py"
         ),
+        Path("scripts/formal/sumeragi_v2_multilane_authority_recovery_contract.py"),
+        Path("pytests/scripts/sumeragi_v2_multilane_authority_recovery_test.py"),
         *native_merge_manifest.NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES,
         *passive_recovery_contract.PASSIVE_RECOVERY_SOURCE_RELATIVES,
         Path("scripts/formal/sumeragi_v2_multilane_queue_plan_contract.py"),
@@ -5510,6 +5354,9 @@ def _validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
         errors,
     )
     validate_autonomous_terminal_recovery_contract(
+        root, models, errors, _rust_binding_item
+    )
+    authority_recovery_contract.validate_authority_recovery_contract(
         root, models, errors, _rust_binding_item
     )
     _validate_stable_generation_diagnostics_contract(root, models, errors)

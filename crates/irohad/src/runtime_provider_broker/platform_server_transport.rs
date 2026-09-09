@@ -1064,18 +1064,22 @@ fn connect_broker_connection(
     requested_catalog: Vec<ProviderBindingWireV1>,
     io_timeout: Option<Duration>,
 ) -> Result<(BrokerConnection, Vec<ProviderObservationWireV1>), BrokerError> {
-    let mut stream = connect_verified(policy)?;
-    if let Some(io_timeout) = io_timeout {
-        if io_timeout.is_zero() {
-            return Err(BrokerError::Unavailable);
-        }
-        stream
-            .set_read_timeout(Some(io_timeout))
-            .map_err(|_| BrokerError::Unavailable)?;
-        stream
-            .set_write_timeout(Some(io_timeout))
-            .map_err(|_| BrokerError::Unavailable)?;
-    }
+    connect_broker_connection_before(
+        policy,
+        chain_id,
+        network_id,
+        requested_catalog,
+        BrokerDeadlineV1::new(io_timeout.unwrap_or(BROKER_IO_TIMEOUT_V1))?,
+    )
+}
+fn connect_broker_connection_before(
+    policy: &EndpointPolicy,
+    chain_id: &str,
+    network_id: NetworkId,
+    requested_catalog: Vec<ProviderBindingWireV1>,
+    deadline: BrokerDeadlineV1,
+) -> Result<(BrokerConnection, Vec<ProviderObservationWireV1>), BrokerError> {
+    let mut stream = connect_verified_before(policy, deadline)?;
     let mut client_nonce = [0_u8; 32];
     rand::TryRngCore::try_fill_bytes(&mut rand::rngs::OsRng, &mut client_nonce)
         .map_err(|_| BrokerError::Unavailable)?;
@@ -1088,14 +1092,22 @@ fn connect_broker_connection(
         &request,
         MAX_HANDSHAKE_FRAME_BYTES_V1,
     )?;
-    write_length_prefixed(&mut stream, &request_frame, MAX_HANDSHAKE_FRAME_BYTES_V1)?;
-    let response_frame = read_length_prefixed(&mut stream, MAX_HANDSHAKE_FRAME_BYTES_V1)?;
+    write_length_prefixed(
+        &mut DeadlineUnixStreamV1::new(&mut stream, deadline),
+        &request_frame,
+        MAX_HANDSHAKE_FRAME_BYTES_V1,
+    )?;
+    let response_frame = read_length_prefixed(
+        &mut DeadlineUnixStreamV1::new(&mut stream, deadline),
+        MAX_HANDSHAKE_FRAME_BYTES_V1,
+    )?;
     let response = decode_frame::<HandshakeResponseV1>(
         &response_frame,
         FRAME_KIND_HANDSHAKE_RESPONSE_V1,
         MAX_HANDSHAKE_FRAME_BYTES_V1,
     )?;
     validate_handshake_response(&request, &response)?;
+    deadline.remaining()?;
     Ok((
         BrokerConnection {
             stream,
@@ -1114,12 +1126,27 @@ impl BrokerSession {
         network_id: NetworkId,
         requested_catalog: Vec<ProviderBindingWireV1>,
     ) -> Result<(Arc<Self>, Vec<ProviderObservationWireV1>), BrokerError> {
-        let (connection, observations) = connect_broker_connection(
+        Self::connect_before(
+            policy,
+            chain_id,
+            network_id,
+            requested_catalog,
+            BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?,
+        )
+    }
+    fn connect_before(
+        policy: &EndpointPolicy,
+        chain_id: &str,
+        network_id: NetworkId,
+        requested_catalog: Vec<ProviderBindingWireV1>,
+        deadline: BrokerDeadlineV1,
+    ) -> Result<(Arc<Self>, Vec<ProviderObservationWireV1>), BrokerError> {
+        let (connection, observations) = connect_broker_connection_before(
             policy,
             chain_id,
             network_id,
             requested_catalog.clone(),
-            None,
+            deadline,
         )?;
         Ok((
             Arc::new(Self {
@@ -1133,11 +1160,9 @@ impl BrokerSession {
         ))
     }
     fn reconnect(&self) -> Result<(), BrokerError> {
+        let deadline = BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?;
         {
-            let current = self
-                .connection
-                .lock()
-                .map_err(|_| BrokerError::Unavailable)?;
+            let current = deadline.lock(&self.connection)?;
             if let Some(reason) = current
                 .poison_reason
                 .filter(|reason| *reason != BrokerError::Unavailable)
@@ -1145,17 +1170,14 @@ impl BrokerSession {
                 return Err(reason);
             }
         }
-        let (connection, _) = connect_broker_connection(
+        let (connection, _) = connect_broker_connection_before(
             &self.endpoint,
             &self.chain_id,
             self.network_id,
             self.requested_catalog.clone(),
-            None,
+            deadline,
         )?;
-        let mut current = self
-            .connection
-            .lock()
-            .map_err(|_| BrokerError::Unavailable)?;
+        let mut current = deadline.lock(&self.connection)?;
         if let Some(reason) = current
             .poison_reason
             .filter(|reason| *reason != BrokerError::Unavailable)
@@ -1242,10 +1264,6 @@ impl BrokerSession {
             mutating,
         )
     }
-    #[expect(
-        clippy::too_many_lines,
-        reason = "one request owns its full authenticated exchange"
-    )]
     fn call_with_scrubbed_payload(
         &self,
         binding: &ProviderBindingWireV1,
@@ -1254,6 +1272,29 @@ impl BrokerSession {
         payload: ScrubbedBytes,
         mutating: bool,
     ) -> Result<ScrubbedBytes, BrokerError> {
+        self.call_before(
+            binding,
+            metadata_digest,
+            operation,
+            payload,
+            mutating,
+            BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1)?,
+        )
+    }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one request owns its full authenticated exchange"
+    )]
+    fn call_before(
+        &self,
+        binding: &ProviderBindingWireV1,
+        metadata_digest: [u8; 32],
+        operation: u16,
+        payload: ScrubbedBytes,
+        mutating: bool,
+        deadline: BrokerDeadlineV1,
+    ) -> Result<ScrubbedBytes, BrokerError> {
+        deadline.remaining()?;
         let frame_limit = operation_frame_limit(operation);
         // Reserve the full audited operation ceiling before retaining
         // the caller's payload or constructing any canonical request
@@ -1262,10 +1303,7 @@ impl BrokerSession {
         let decode_admission = DecodeResourceAdmissionV1::acquire_operation(operation)?;
         decode_admission.reserve_retained_bytes(payload.len(), frame_limit)?;
         let decode_scope = decode_admission.enter();
-        let mut connection = self
-            .connection
-            .lock()
-            .map_err(|_| BrokerError::Unavailable)?;
+        let mut connection = deadline.lock(&self.connection)?;
         if let Some(reason) = connection.poison_reason {
             return Err(reason);
         }
@@ -1283,10 +1321,16 @@ impl BrokerSession {
             payload,
         )?;
         let request_frame = encode_frame(FRAME_KIND_OPERATION_REQUEST_V1, &request, frame_limit)?;
+        deadline.remaining()?;
         // Retire the identifier before the first write so a partially
         // dispatched request can never be replayed with the same id.
         connection.next_request_id = next_request_id;
-        if write_operation_request_frame(&mut connection.stream, &request, &request_frame).is_err()
+        if write_operation_request_frame(
+            &mut DeadlineUnixStreamV1::new(&mut connection.stream, deadline),
+            &request,
+            &request_frame,
+        )
+        .is_err()
         {
             let error = if mutating {
                 BrokerError::Ambiguous
@@ -1298,7 +1342,7 @@ impl BrokerSession {
         }
         drop(request_frame);
         let Ok(response_frame) = read_length_prefixed_with_decode_admission(
-            &mut connection.stream,
+            &mut DeadlineUnixStreamV1::new(&mut connection.stream, deadline),
             frame_limit,
             &decode_admission,
         ) else {
@@ -1330,6 +1374,15 @@ impl BrokerSession {
                 BrokerError::Ambiguous
             } else {
                 error
+            };
+            connection.poison_reason = Some(error);
+            return Err(error);
+        }
+        if deadline.remaining().is_err() {
+            let error = if mutating {
+                BrokerError::Ambiguous
+            } else {
+                BrokerError::Unavailable
             };
             connection.poison_reason = Some(error);
             return Err(error);

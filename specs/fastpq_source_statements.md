@@ -47,11 +47,14 @@ Completeness and identity uniqueness require the execution owner.
 
 ## Manifest and bounded opening
 
-A statement leaf commits source network/height, statement and entry positions,
-original transcript index and complete per-entry count, all four source-entry
-fields, and the canonical path-free statement digest. Multiple deltas in one
-original transcript remain one occurrence. All leaves for one entry have matching
-source fields and consecutive transcript indices covering its exact count.
+One statement leaf commits a complete nonempty execution-entry transcript bundle:
+source network/height, statement and entry positions, complete per-entry transcript
+count, all four source-entry fields, and the canonical path-free whole-bundle
+statement digest. There is no transcript-index field. Original transcript/delta
+grouping and order remain inside the statement; common asset scales, repeated-key
+chronology and key allocation span the complete bundle. Entry indices are strictly
+increasing and statement indices are consecutive. Empty execution entries remain
+in the complete inventory digest without a synthetic leaf.
 
 The manifest contains source network/height, executed-entry count,
 `source_entries_digest`, statement count and application-Merkle root. The builder
@@ -66,7 +69,8 @@ count-aware application-Merkle path, including ragged trees. One source opening
 also has exactly 256 ordinary-write SMT siblings. Verification checks the exact
 expected leaf and ordinary root; it does not authenticate the root's finality.
 
-The unqualified first-release manifest layout includes the entry digest. Earlier
+The sole first-release source leaf binds complete entry bundles and has no
+transcript index; the manifest includes the complete entry digest. Earlier
 prototype layouts must reject during canonical decoding even when they reused
 the same nominal schema name. No compatibility fallback or compact production
 profile is enabled by this layout.
@@ -132,6 +136,8 @@ identities, optional digests and occurrence grouping must remain unchanged.
 Six limits cover entries, cumulative transcripts, cumulative deltas, canonical
 private-input bytes, largest public-statement frame and cumulative statement
 bytes. Shared public preparation checks all six before private-tree construction.
+It measures each complete entry bundle before any private tree or leaf allocation;
+fragment measurements from the same entry cannot be added as separate statements.
 It measures real canonical quantity frames and identities; only fixed-width
 context placeholders are used for byte measurement. Missing singleton digests
 reject rather than being enlarged after accounting. Final per-statement encoding
@@ -146,11 +152,14 @@ exact occurrence coverage and repeated-key balance continuity precede private
 SMT materialization. Tree limits bound updates, unique keys, occupied nodes and
 path allocation. Statements are built and dropped one at a time.
 
-Statement roots describe touched balances for one whole recorded operation. They
-exclude the ordinary-write tree that contains the manifest. Legal mint/burn work
-between transfer operations does not establish transfer-only continuity across
-those operations. Whole-ledger balances, supply and authorization require their
-own authenticated execution relations.
+Statement roots describe touched balances for the complete execution-entry transfer
+bundle. They exclude the ordinary-write tree that contains the manifest. Legal
+mint/burn work between transfers can break the transfer-only chronology; the
+whole-bundle source manifest then rejects before private-tree construction. It
+does not split the entry into separately accepted operation leaves. TODO: cover
+intervening supply, permission and metadata changes in the final complete execution
+relation. Whole-ledger balances, supply and authorization require their own
+authenticated execution relations.
 
 Final witness capture, extraction and commit recheck the owned inventory,
 canonical wire cache, dataspace cache and exact finalized public transcript

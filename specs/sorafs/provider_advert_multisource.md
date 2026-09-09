@@ -102,7 +102,7 @@ Test coverage highlights:
 |--------|------|--------|-------------|
 | `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Counts provider adverts exposing the range capability and associated features. |
 | `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Number of throttled range fetch attempts grouped by the policy that rejected the request. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Active range fetch streams guarded by token concurrency limits. |
+| `torii_sorafs_range_fetch_concurrency_current` | Gauge | — | Accepted request guards through storage work and application response bodies, until EOF/error/cancellation; excludes queued external release acknowledgements and socket buffering. |
 
 Grafana panels (dashboard UID `sorafs-fetch`) chart throttle rates over 5-minute
 windows and expose concurrency gauges with alert thresholds. Example queries:

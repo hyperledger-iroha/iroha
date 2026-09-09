@@ -25,7 +25,7 @@ REVIEWED_RUST_INCLUDE_MANIFEST_RELATIVE = Path(
     "scripts/formal/sumeragi_v2_proof_ledger_source_seal_contracts.py"
 )
 REVIEWED_RUST_INCLUDE_MANIFEST_SHA256 = (
-    "a44128a8954a656ed0a8c75050f599dc949ac766af9054d86761682c9db24e2d"
+    "8a9cfb67399b7f3a81c42344c8eeb7dd8c160643d9832346a75331a73772d6ee"
 )
 API_AUTHORITY_SEPARATION_SOURCE_CHECKS = (
     (
@@ -328,7 +328,7 @@ WIRE_RELEASE_INVARIANT_SOURCE_CHECKS = (
             "native-amx-rust-fixture-check command 0",
             "regenerate Native AMX Rust fixture authority twice into disjoint "
             "private roots and byte-authenticate both outputs",
-            "for sdk_diagnostics_test_count in 129 88 34 50 59; do",
+            "for sdk_diagnostics_test_count in 129 90 34 50 59; do",
             "SumeragiV2WireFixtureTest",
         ),
     ),

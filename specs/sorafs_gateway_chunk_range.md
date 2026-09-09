@@ -39,7 +39,28 @@ Chunk responses MUST include:
   - Expiration (epoch seconds)
   - Rate-limit budget (req/min, bytes/s)
 - Verification path checks token signature + admission envelope.
-- On violation (expired, over budget) respond `429` with reason `stream_token_exhausted`.
+- An already expired token returns `401`; authenticated request, byte-rate or
+  concurrency exhaustion returns `429` with its specific reason. Admission or
+  current-custody unavailability returns `503` and `Retry-After: 1`.
+- CAR and chunk leases stay owned by physical storage work and then by the
+  application response body until EOF, error or cancellation. Cancelling an HTTP
+  waiter does not release a lease while its storage worker is still running.
+  Query/heavy permits cover the actual admission and storage operation; response
+  bodies retain the separate bounded cleanup ticket.
+- The exact accepted lease expiry is the earlier of signed token expiry and
+  `validated_at_unix_ms + qualified lease_ttl_ms`. Body production checks that
+  authenticated deadline and the fixed monotonic deadline anchored before
+  admission. Host-clock rollback before the validation timestamp fails closed.
+  Expiry and shutdown wake a previously polled body and stop subsequent frames.
+  Expiry detected before response production returns `503`; after headers, it
+  terminates the body with an error. The full response must not be reported as
+  successfully delivered when its body terminates early.
+- This ownership boundary covers application body consumption. It cannot retract
+  bytes already passed to Hyper or the socket. An unpolled body conservatively
+  holds its cleanup ticket until the HTTP owner drops it. Physical worker
+  completion, cleanup acknowledgement, transport buffering and deployment
+  throughput are distinct measurements; these source rules do not qualify a
+  hard real-time network deadline or finite arbitrary-provider shutdown.
 
 ## Telemetry
 

@@ -1354,6 +1354,9 @@ mod tests {
             wait_for_network_permits_to_drain(
                 "serialized_network_drop_completes_on_current_thread_runtime",
             );
+            // Report completion only after runtime destruction, while the parent
+            // still holds its environment guards and bounded completion wait.
+            drop(rt);
             let _ = tx.send(());
         });
         assert!(
