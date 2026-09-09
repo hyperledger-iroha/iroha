@@ -646,10 +646,13 @@ fn install_lane_manifest_registry_for_test(
 }
 /// Test-only wire twin of the private core committee record.
 ///
-/// The explicit schema name keeps its Norito header identical to the record
+/// The explicit frame identity keeps its Norito header identical to the record
 /// decoded by `State`; field order and types intentionally mirror that record.
-#[derive(norito::Encode)]
-#[norito(schema_name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
+#[derive(norito::Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1",
+    frame = "iroha_core::state::AutoscaleLaneCommitteeV1"
+)]
 struct AutoscaleLaneCommitteeFixtureV1 {
     version: u8,
     validator_set_hash_version: u16,
@@ -2144,12 +2147,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     })
 }
 #[cfg(feature = "telemetry")]
-pub async fn mk_norito_rpc_test_harness(
-    cfg: NoritoRpcTransport,
-) -> (SharedAppState, Arc<iroha_telemetry::metrics::Metrics>) {
-    let app = mk_app_state_for_tests_with_options(None, None, Some(cfg), None);
-    let metrics = iroha_telemetry::metrics::global_or_default();
-    (app, metrics)
+pub async fn mk_norito_rpc_test_harness(cfg: NoritoRpcTransport) -> SharedAppState {
+    mk_app_state_for_tests_with_options(None, None, Some(cfg), None)
 }
 #[tokio::test]
 async fn runtime_handlers_ok_without_token_and_rate_limit() {

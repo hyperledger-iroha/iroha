@@ -1,3 +1,5 @@
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::BodyFrameBindingV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct BodyFrameBindingV1 {

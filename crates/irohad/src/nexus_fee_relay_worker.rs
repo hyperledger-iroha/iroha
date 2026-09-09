@@ -76,11 +76,15 @@ const WORKER_STATE_MAX_TOTAL_PROOF_BYTES: usize = 32 * 1024 * 1024;
 const WORKER_STATE_MAX_KEY_BYTES: usize = 4 * 1024;
 const WORKER_STATE_MAX_DECODE_ALLOCATED_BYTES: usize = 128 * 1024 * 1024;
 const WORKER_STATE_MAX_DECODE_DEPTH: usize = 32;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableWorkerState")]
 #[derive(Clone, Debug, Default, Decode, Encode)]
 struct DurableWorkerState {
     relays: BTreeMap<String, DurableRelayWork>,
     allocations: BTreeMap<String, DurableAllocationWork>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableRelayWork")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableRelayWork {
     envelope: LaneRelayEnvelope,
@@ -93,6 +97,8 @@ enum RelayAttemptDecision {
     Rejected,
     Ready(Box<LaneRelayEnvelope>),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableAllocationWork")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableAllocationWork {
     program_id: FeeSponsorProgramId,
@@ -117,6 +123,8 @@ struct AllocationCandidatePlanV1<'a> {
     expiry_height: u64,
     routes: &'a [(DataSpaceId, [u8; 32])],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::FeeSponsorVaultLeaseBinding")]
 #[derive(Encode)]
 struct FeeSponsorVaultLeaseBinding {
     version: u8,
@@ -128,6 +136,8 @@ struct FeeSponsorVaultLeaseBinding {
     source_state_root: Hash,
     expires_at_height: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableWorkStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 enum DurableWorkStatus {
     Pending,

@@ -137,6 +137,7 @@ impl ToriiHarness {
                     time_source,
                     false,
                 )
+                .expect("test telemetry resource registration")
                 .0,
             )
         } else {

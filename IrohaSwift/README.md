@@ -156,8 +156,11 @@ export SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
 make bridge-xcframework
 ```
 
-The build requires Python 3.12, uses only the repository-root `Cargo.lock`, and
-rejects in-tree or symbolic Cargo targets. A nonempty external isolated target
+The build requires Python 3.12 and an explicit `--lockfile-path`. The Make target
+selects the repository-root `Cargo.lock` for ordinary development. Privacy production
+builds and release qualification require a separately materialized, read-only external
+snapshot of the same canonical reviewed graph. The root source lock and selected
+build lock have independent file identities and equal authenticated bytes. In-tree or symbolic Cargo targets are rejected. A nonempty external isolated target
 is supported; builds sharing that target or output are serialized by held locks,
 and every Apple slice is freshly invoked. The archive owner requires the explicit
 epoch, snapshots the complete authenticated generation under the output lock, and
@@ -282,15 +285,19 @@ export CARGO_NET_OFFLINE=true
 export RUSTC_BOOTSTRAP=1
 export RUSTC="$(rustup which --toolchain 1.93.1 rustc)"
 export RUSTDOC="$(rustup which --toolchain 1.93.1 rustdoc)"
-scripts/build_norito_xcframework.sh --privacy-production-enabled
+scripts/build_norito_xcframework.sh \
+  --lockfile-path /absolute/non-symlink/path/to/reviewed-release-lock/Cargo.lock \
+  --privacy-production-enabled
 ```
 
 That option passes the existing `privacy-production-enabled` Cargo feature to
 every Apple slice and marks the XCFramework plus its artifact manifest. The
 `Mobile SDK Artifacts` manual workflow exposes the same default-off option.
 The builder always compiles all five target libraries into the one caller-selected target,
-uses the root `Cargo.lock`, and fails closed if `xcodebuild` cannot package them.
-There is no skip-build, preserved-target, alternate-lock, or manual-packaging mode.
+uses the explicitly selected `Cargo.lock`, and fails closed if `xcodebuild` cannot
+package them. The validator, Swift pin projector, and archive owner require the
+same explicit `--lockfile-path`; omitted, symbolic, source-contained alternate,
+and unreviewed external selections are rejected.
 
 The KAGEMUSHA V1 pull-request lane preserves that build envelope while avoiding a
 hosted-runner timeout: five isolated macOS jobs each build one attested target
@@ -1341,15 +1348,15 @@ The confidential-v2 Swift wallet helpers expose
 `ConfidentialNoteEncryption.encryptNote`,
 `ConfidentialNoteDecryption.decryptNote`,
 `ConfidentialNoteDecryption.decryptNoteWithOwnerTag`,
-`PrivacyConfidentialWitnessV1`, typed witness encoders,
 `LocalZkAssetMerklePathProvider`, and
 `ToriiClient.getMerklePathForCommitment(asset:commitment:canonicalAuth:)`. Every note
 decryption requires the configured exact `NetworkId` and derives the expected
 owner tag from the supplied spend key; diversified notes must use the explicit
 expected-owner-tag overload. Decrypted note plaintext rejects noncanonical
-length varints before reconstructing the opening. Confidential note and witness
-byte-vector contents keep their raw
-bytes after the vector length. Direct verifier-record hashes use packed fixed
+length varints before reconstructing the opening. Confidential note byte-vector
+contents keep their raw bytes after the vector length. Proof witnesses remain
+owned by each native engine; Swift has no generic confidential witness archive
+or native proof-construction route. Direct verifier-record hashes use packed fixed
 arrays, hashes inside `Option` or `Vec` use ConstVec element framing, and all
 Iroha `Hash` values retain their marker bit. The verifier-record `status` field
 uses the canonical four-byte `u32` enum discriminant. Swift

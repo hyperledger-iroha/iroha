@@ -22,8 +22,8 @@ where
     assert_eq!(T::nominal_name(), nominal);
     assert_eq!(T::frame_name(), nominal);
     let identity_hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), identity_hash);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), identity_hash);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), identity_hash);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), identity_hash);
     if let Some(captured_hash) = captured_hash {
         assert_eq!(identity_hash, captured_hash);
     }

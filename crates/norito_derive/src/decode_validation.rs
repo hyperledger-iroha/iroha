@@ -8,12 +8,6 @@ pub(super) fn value(hook: Option<&Path>, value: TokenStream) -> TokenStream {
     hook.map_or_else(|| quote!(Ok(#value)), |path| quote!(#path(#value)))
 }
 
-pub(super) fn binding(hook: Option<&Path>, name: &Ident) -> TokenStream {
-    hook.map_or_else(TokenStream::new, |path| {
-        quote! { let #name = #path(#name)?; }
-    })
-}
-
 pub(super) fn unit_methods(ident: &Ident, hook: Option<&Path>) -> TokenStream {
     let Some(path) = hook else {
         return quote! {
@@ -119,16 +113,12 @@ mod tests {
                     &input.generics,
                     &data.fields,
                     &input.attrs,
-                    None,
-                    true,
                 ),
                 Data::Enum(data) => crate::derive_enum_deserialize(
                     &input.ident,
                     &input.generics,
                     data,
                     &input.attrs,
-                    None,
-                    true,
                 ),
                 Data::Union(_) => unreachable!(),
             };
@@ -149,7 +139,7 @@ mod tests {
                     #[norito(validate = "Self::checked", decode_from_slice)]
                     struct Record<T> { value: T }
                 },
-                2,
+                1,
             ),
             (
                 syn::parse_quote! {
@@ -166,7 +156,7 @@ mod tests {
                         value: T,
                     }
                 },
-                2,
+                1,
             ),
             (
                 syn::parse_quote! {
@@ -190,16 +180,12 @@ mod tests {
                     &input.generics,
                     &data.fields,
                     &input.attrs,
-                    None,
-                    true,
                 ),
                 Data::Enum(data) => crate::derive_enum_deserialize(
                     &input.ident,
                     &input.generics,
                     data,
                     &input.attrs,
-                    None,
-                    true,
                 ),
                 Data::Union(_) => unreachable!(),
             };

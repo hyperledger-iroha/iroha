@@ -1,6 +1,6 @@
 //! Configuration related to Snapshot specifically
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, SerializePayload,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
 };
@@ -31,7 +31,6 @@ impl JsonDeserialize for Mode {
         })
     }
 }
-impl NoritoSerialize for Mode {}
 impl SerializePayload for Mode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
@@ -44,7 +43,6 @@ impl SerializePayload for Mode {
         self.encoded_len_hint()
     }
 }
-impl NoritoDeserialize<'_> for Mode {}
 impl<'de> DeserializePayload<'de> for Mode {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("stored snapshot mode must parse")

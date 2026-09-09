@@ -8,7 +8,6 @@ impl IrohaRuntimeProviderBindingsV1 {
             if matches!(
                 binding.slot,
                 IrohaRuntimeProviderSlotV1::GovernanceDagSigner
-                    | IrohaRuntimeProviderSlotV1::StreamTokenSigner
                     | IrohaRuntimeProviderSlotV1::ProofOutcomeTransactionSigner
                     | IrohaRuntimeProviderSlotV1::RepairTransactionSigner
                     | IrohaRuntimeProviderSlotV1::ReserveTransactionSigner

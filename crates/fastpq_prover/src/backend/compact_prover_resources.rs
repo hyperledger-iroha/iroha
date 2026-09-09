@@ -64,7 +64,7 @@ pub(super) fn segment_charge(statement_bytes: usize, child_frame_bytes: usize) -
     // cover the three complete oracle trees, geometric FRI trees, row chunks
     // and tree-building leaves. Fallible parallel collections additionally
     // retain Result slots before extracting successful values. Full trees use
-    // 48-byte field digests even when their commitment hash is SHAKE256.
+    // full six-lane 48-byte field digests.
     add(&mut charge, &[8, lde_rows, size_of::<GoldilocksFp4V1>()])?;
     add(
         &mut charge,
@@ -84,7 +84,7 @@ pub(super) fn segment_charge(statement_bytes: usize, child_frame_bytes: usize) -
     add(&mut charge, &[MAX_PROVER_JOBS, MAX_PROVER_LEDGER_NODES, 8])?;
     add(&mut charge, &[MAX_PROVER_JOBS, 2, COLUMN_COUNT, 8])?;
     add(&mut charge, &[MAX_PROVER_JOBS, CONSTRAINTS, 8])?;
-    // SHAKE row commitments serialize one row per indexed job. Query assembly
+    // Six-lane row commitments serialize one row per indexed job. Query assembly
     // later owns another row pair, after evaluator jobs have been dropped.
     add(&mut charge, &[MAX_PROVER_JOBS, COLUMN_COUNT, 8])?;
     add(&mut charge, &[2, COLUMN_COUNT, 8])?;

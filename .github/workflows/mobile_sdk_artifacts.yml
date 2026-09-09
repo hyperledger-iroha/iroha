@@ -300,9 +300,9 @@ jobs:
       - name: Make reviewed Iroha source read-only
         run: chmod -R a-w "$GITHUB_WORKSPACE"
       - name: Build NoritoBridge XCFramework
-        run: scripts/build_norito_xcframework.sh
+        run: scripts/build_norito_xcframework.sh --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
       - name: Validate Apple mobile SDK artifact
-        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
       - name: Test Swift SDK
         working-directory: IrohaSwift
         run: >-
@@ -310,7 +310,7 @@ jobs:
           --disable-automatic-resolution
           --scratch-path "$MOBILE_SDK_SWIFT_SCRATCH_DIR"
       - name: Package Apple mobile SDK artifact
-        run: bash scripts/package_mobile_sdk_artifacts.sh --apple --version "$MOBILE_SDK_VERSION"
+        run: bash scripts/package_mobile_sdk_artifacts.sh --apple --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock" --version "$MOBILE_SDK_VERSION"
       - name: CocoaPods authenticated archive and source lint (no capability skip)
         env:
           SWIFT_POD_REPORT_DIR: ${{ runner.temp }}/iroha-swift-pod-report

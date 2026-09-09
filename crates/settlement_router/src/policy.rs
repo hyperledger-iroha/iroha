@@ -31,8 +31,17 @@ pub enum BufferPolicyError {
 }
 /// Capacity of the dataspace buffer expressed in exact XOR and coverage hours.
 #[derive(
-    Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "settlement_router::policy::BufferCapacity")]
 pub struct BufferCapacity {
     /// Nominal available XOR.
     pub available_xor: XorQuantity,
@@ -60,6 +69,8 @@ pub struct BufferCapacity {
     xor_only,
     halt
 )]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::policy::BufferPolicy")]
 pub struct BufferPolicy {
     /// Percentage threshold that triggers an alert (defaults to 75%).
     #[norito(rename = "alert_pct")]

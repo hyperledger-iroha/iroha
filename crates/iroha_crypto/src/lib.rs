@@ -28,7 +28,7 @@ pub mod kex;
 mod merkle;
 #[cfg(feature = "pqc")]
 mod mldsa_seed;
-/// ML-DSA-65 typed-key operations with the shared portable AArch64 fallback.
+/// ML-DSA-65 typed-key operations with the shared portable `AArch64` fallback.
 #[cfg(feature = "pqc")]
 pub use soranet_pq::{sign_mldsa65_detached, verify_mldsa65_detached};
 mod multihash;
@@ -1923,7 +1923,7 @@ impl From<PublicKeyFull> for PublicKeyCompact {
         Self::new(public_key.algorithm(), &public_key.payload())
     }
 }
-impl norito::core::NoritoSerialize for PublicKeyCompact {}
+
 impl norito::core::SerializePayload for PublicKeyCompact {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.structural_components()
@@ -1949,7 +1949,7 @@ impl norito::core::SerializePayload for PublicKeyCompact {
         )
     }
 }
-impl norito::core::NoritoDeserialize<'_> for PublicKeyCompact {}
+
 impl<'de> norito::core::DeserializePayload<'de> for PublicKeyCompact {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PublicKeyCompact decode")
@@ -2535,7 +2535,7 @@ impl FromStr for PublicKey {
         Self::from_bytes(algorithm, &payload)
     }
 }
-impl norito::core::NoritoSerialize for PublicKey {}
+
 impl norito::core::SerializePayload for PublicKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.0, writer)
@@ -2549,7 +2549,7 @@ impl norito::core::SerializePayload for PublicKey {
         norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for PublicKey {}
+
 impl<'de> norito::core::DeserializePayload<'de> for PublicKey {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PublicKey decode")
@@ -3141,14 +3141,14 @@ impl norito::json::JsonDeserialize for ExposedPrivateKey {
             .map_err(|err| norito::json::Error::Message(err.to_string()))
     }
 }
-impl norito::core::NoritoSerialize for ExposedPrivateKey {}
+
 impl norito::core::SerializePayload for ExposedPrivateKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let normalized = self.normalize();
         norito::core::SerializePayload::serialize(&normalized, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for ExposedPrivateKey {}
+
 impl<'de> norito::core::DeserializePayload<'de> for ExposedPrivateKey {
     fn deserialize(archived: &'de norito::core::Archived<ExposedPrivateKey>) -> Self {
         Self::try_deserialize(archived).expect("ExposedPrivateKey normalization")

@@ -289,7 +289,7 @@ pub mod codec {
         static EXACT_CALLS: AtomicUsize = AtomicUsize::new(0);
         #[derive(Clone, Copy)]
         struct Hinted(u8);
-        impl NoritoSerialize for Hinted {}
+
         impl SerializePayload for Hinted {
             fn serialize(
                 &self,
@@ -307,7 +307,7 @@ pub mod codec {
             }
         }
         struct ExactLenOnly(u8);
-        impl NoritoSerialize for ExactLenOnly {}
+
         impl SerializePayload for ExactLenOnly {
             fn serialize(
                 &self,
@@ -322,7 +322,7 @@ pub mod codec {
             }
         }
         struct HugeHint(u8);
-        impl NoritoSerialize for HugeHint {}
+
         impl SerializePayload for HugeHint {
             fn serialize(
                 &self,
@@ -336,7 +336,7 @@ pub mod codec {
             }
         }
         struct AlwaysFails;
-        impl NoritoSerialize for AlwaysFails {}
+
         impl SerializePayload for AlwaysFails {
             fn serialize(
                 &self,
@@ -349,6 +349,8 @@ pub mod codec {
         }
         #[derive(Debug, PartialEq, Eq, NoritoSerialize, crate::NoritoDeserialize)]
         #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+        #[derive(crate::NoritoSchema)]
+        #[norito_schema(name = "norito.test.lib.AdaptiveFixedFields")]
         struct AdaptiveFixedFields {
             tag: u8,
             digest: [u8; 32],
@@ -8736,7 +8738,7 @@ where
     use core::Header;
     let header = Header::read(&mut reader)?;
     core::prepare_header_decode(header.flags, false)?;
-    if header.schema != <T as NoritoSerialize>::schema_hash() {
+    if header.schema != norito::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
     let payload_len = core::payload_len_to_usize(header.length)?;
@@ -8818,7 +8820,7 @@ where
             &[Compression::None],
         ));
     }
-    if header.schema != <T as NoritoSerialize>::schema_hash() {
+    if header.schema != norito::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
     let payload_len = core::payload_len_to_usize(header.length)?;
@@ -9211,7 +9213,7 @@ where
         reader,
         move |_| Ok(acc),
         f,
-        <Top<T> as NoritoDeserialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<Top<T>>(),
         core::payload_alignment_padding_for::<Top<T>>(),
     )
 }
@@ -9237,7 +9239,7 @@ where
     type Top<U> = Vec<U>;
     core::stream::inspect_sequence_len_from_reader(
         reader,
-        <Top<T> as NoritoDeserialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<Top<T>>(),
         core::payload_alignment_padding_for::<Top<T>>(),
         max_elements,
     )
@@ -9267,7 +9269,7 @@ where
             acc.push(item);
             acc
         },
-        core::compute_schema_hash::<Vec<T>>(),
+        crate::schema::identity::frame_hash::<Vec<T>>(),
         core::payload_alignment_padding_for::<Vec<T>>(),
     )
 }
@@ -9299,7 +9301,7 @@ where
             acc.push_back(item);
             acc
         },
-        core::compute_schema_hash::<VecDeque<T>>(),
+        crate::schema::identity::frame_hash::<VecDeque<T>>(),
         core::payload_alignment_padding_for::<VecDeque<T>>(),
     )
 }
@@ -9319,7 +9321,7 @@ where
             acc.push_back(item);
             acc
         },
-        core::compute_schema_hash::<LinkedList<T>>(),
+        crate::schema::identity::frame_hash::<LinkedList<T>>(),
         core::payload_alignment_padding_for::<LinkedList<T>>(),
     )
 }
@@ -9351,7 +9353,7 @@ where
             acc.insert(item);
             acc
         },
-        core::compute_schema_hash::<HashSet<T>>(),
+        crate::schema::identity::frame_hash::<HashSet<T>>(),
         core::payload_alignment_padding_for::<HashSet<T>>(),
     )
 }
@@ -9371,7 +9373,7 @@ where
             acc.insert(item);
             acc
         },
-        core::compute_schema_hash::<BTreeSet<T>>(),
+        crate::schema::identity::frame_hash::<BTreeSet<T>>(),
         core::payload_alignment_padding_for::<BTreeSet<T>>(),
     )
 }
@@ -9663,7 +9665,7 @@ where
 {
     stream_map_collect_core(
         reader,
-        core::compute_schema_hash::<HashMap<K, V>>(),
+        crate::schema::identity::frame_hash::<HashMap<K, V>>(),
         core::payload_alignment_padding_for::<HashMap<K, V>>(),
         |entries| {
             let bytes = entries
@@ -9694,7 +9696,7 @@ where
 {
     stream_map_collect_core(
         reader,
-        core::compute_schema_hash::<BTreeMap<K, V>>(),
+        crate::schema::identity::frame_hash::<BTreeMap<K, V>>(),
         core::payload_alignment_padding_for::<BTreeMap<K, V>>(),
         |_| Ok(BTreeMap::new()),
         |map, key, value| {
@@ -9823,7 +9825,7 @@ where
         let header = Header::read(&mut reader)?;
         core::prepare_header_decode(header.flags, true)?;
         type Top<U> = Vec<U>;
-        if header.schema != <Top<T> as NoritoDeserialize>::schema_hash() {
+        if header.schema != norito::schema::identity::frame_hash::<Top<T>>() {
             return Err(Error::SchemaMismatch);
         }
         let payload_len = core::payload_len_to_usize(header.length)?;
@@ -10183,9 +10185,9 @@ where
     fn new_with_schema<R: Read + 'static>(
         mut reader: R,
         expected_schema: [u8; 16],
+        uncompressed_padding: usize,
     ) -> Result<Self, Error> {
         use core::{Header, header_flags};
-        use std::collections::{BTreeMap, HashMap};
         let header = Header::read(&mut reader)?;
         core::prepare_header_decode(header.flags, false)?;
         if header.schema != expected_schema {
@@ -10194,15 +10196,7 @@ where
         let payload_len = core::payload_len_to_usize(header.length)?;
         let flags = header.flags;
         let padding = match header.compression {
-            Compression::None => {
-                if expected_schema == core::compute_schema_hash::<HashMap<K, V>>() {
-                    core::payload_alignment_padding_for::<HashMap<K, V>>()
-                } else if expected_schema == core::compute_schema_hash::<BTreeMap<K, V>>() {
-                    core::payload_alignment_padding_for::<BTreeMap<K, V>>()
-                } else {
-                    0
-                }
-            }
+            Compression::None => uncompressed_padding,
             Compression::Zstd => 0,
         };
         if padding != 0 {
@@ -10378,7 +10372,11 @@ where
         K: Eq + std::hash::Hash + Ord,
     {
         type Top<KK, VV> = HashMap<KK, VV>;
-        Self::new_with_schema(reader, <Top<K, V> as NoritoDeserialize>::schema_hash())
+        Self::new_with_schema(
+            reader,
+            norito::schema::identity::frame_hash::<Top<K, V>>(),
+            core::payload_alignment_padding_for::<Top<K, V>>(),
+        )
     }
     /// Construct a bounded lazy iterator over a `HashMap` archive.
     ///
@@ -10403,7 +10401,11 @@ where
         K: Ord,
     {
         type Top<KK, VV> = BTreeMap<KK, VV>;
-        Self::new_with_schema(reader, <Top<K, V> as NoritoDeserialize>::schema_hash())
+        Self::new_with_schema(
+            reader,
+            norito::schema::identity::frame_hash::<Top<K, V>>(),
+            core::payload_alignment_padding_for::<Top<K, V>>(),
+        )
     }
     /// Construct a bounded lazy iterator over a `BTreeMap` archive.
     ///

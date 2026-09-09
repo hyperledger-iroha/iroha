@@ -94,7 +94,10 @@ shape against its canonical frame, and rejects proofs beyond explicit limits.
 Payload accounting and framed persistence use separate ceilings derived from
 the same canonical geometry. The CLI confirmation gate follows a queued hash
 through its exact Applied wire proof, retaining ambiguous expiry as pending and
-rejecting malformed or failed status responses without resubmission.
+retaining the last observation when a status read times out under the remaining
+confirmation budget. It continues polling within that deadline;
+shorter configured request timeouts, malformed responses and other lookup
+failures remain errors. Confirmation never resubmits the transaction.
 
 The next gate launches four validators from the freshly emitted native
 `iroha3d` binary using the same three-route fixture as the consensus integration

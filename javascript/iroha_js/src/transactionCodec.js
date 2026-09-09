@@ -27,22 +27,70 @@ import {
 } from "./numericV1.js";
 import { networkIdBytes } from "./networkId.js";
 import { NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
-import { GAME_INSTRUCTION_WIRE_IDS_V1, EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1 } from "./noritoGameCodecs.js";
+import { GAME_INSTRUCTION_WIRE_IDS_V1, EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1 } from "./noritoGameRegistry.js";
+
+const TEXT_MUST_CONTAIN_2 = " must contain ";
+const TEXT_CANONICAL = " canonical ";
+const TEXT_CONTRACT_ADDRESS = "contractAddress";
+const TEXT_DOES_NOT_MATCH = "does not match ";
+const TEXT_CREATION_TIME_MS_MUST_BE_A_U64 = "creationTimeMs must be a u64";
+const TEXT_INSTRUCTION = "instruction";
+const TEXT_EXECUTABLE = "executable";
+const TEXT_SIGNABLE_AUTHORITY = "signable.authority";
+const TEXT_MUST_BE_EXACTLY_32_BYTES = "must be exactly 32 bytes";
+const TEXT_PROGRAM_REVISION = "programRevision";
+
+
+const TEXT_VERIFYING_KEY_TRANSACTION = "verifying-key transaction ";
+const TEXT_TRANSACTION_PAYLOAD = "transaction payload.";
+const TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE = "iroha.instruction.v1::smart_contract_code::";
+const TEXT_INSTRUCTIONS = ".instructions[";
+const TEXT_FEE_PAYMENT_CHARGE_LIMITS = "feePayment.chargeLimits[";
+const TEXT_LARGER_PAYLOADS_REQUIRE_ONE_NATIVE_EXECUTION_PROOF_INSTRUCTION = ("larger payloads require one native execution-proof " + TEXT_INSTRUCTION);
+const TEXT_MUST_BE_A_PLAIN_OBJECT = " must be a plain object";
+const TEXT_TRANSACTION_PAYLOAD_2 = "transaction payload ";
+const TEXT_MUST_CONTAIN = TEXT_MUST_CONTAIN_2;
+const TEXT_EXECUTION_TRANSACTION = "execution transaction ";
+const TEXT_SIGNABLE_SIGNING_PUBLIC_KEY = "signable.signingPublicKey ";
+const TEXT_ENTRIES = "entries[";
+const TEXT_UTF_8_BYTES = " UTF-8 bytes";
+const TEXT_METADATA_EXCEEDS = "metadata exceeds ";
+const TEXT_EXCEEDS = " exceeds ";
+const TEXT_MUST_BE_A_CANONICAL_UNSIGNED_INTEGER = (" must be a" + TEXT_CANONICAL + "unsigned integer");
+const TEXT_REFERENCES_DETACHED_OR_INVALID_BYTES = " references detached or invalid bytes";
+
+
+// Reuse exact wire names and diagnostic fields throughout this module.
+const FIELD_NETWORK_ID = "networkId";
+const FIELD_AUTHORITY = "authority";
+const FIELD_METADATA = "metadata";
+const FIELD_CREATION_TIME_MS = "creationTimeMs";
+const FIELD_FEE_PAYMENT = "feePayment";
+const FIELD_NETWORK_PREFIX = "networkPrefix";
+const FIELD_CHAIN_DISCRIMINANT = "chainDiscriminant";
+const FIELD_INSTRUCTIONS = "instructions";
+const FIELD_INSTRUCTION = TEXT_INSTRUCTION;
+const FIELD_SIGNING_PUBLIC_KEY = "signingPublicKey";
+const FIELD_SIGNATURE = "signature";
+const WIRE_ID_IROHA_TRANSFER = "iroha.transfer";
+const CONTEXT_TRANSACTION_PAYLOAD_EXECUTABLE = (TEXT_TRANSACTION_PAYLOAD + TEXT_EXECUTABLE);
+const CONTEXT_TRANSACTION_PAYLOAD = "transaction payload";
+const FIELD_ADMISSION_INTENT = "admissionIntent";
 
 const COMPACT_LEN_FLAG = 0x02;
 const MALFORMED_PAYLOAD = "malformed_payload";
 const AUTHORITY_MISMATCH = "authority_mismatch";
 const INVALID_FEE_PAYMENT = "invalid_fee_payment";
 const INVALID_METADATA = "invalid_metadata";
-const UNSUPPORTED_INSTRUCTION = "unsupported_instruction";
-const UNSUPPORTED_EXECUTABLE = "unsupported_executable";
+const UNSUPPORTED_INSTRUCTION = ("unsupported_" + TEXT_INSTRUCTION);
+const UNSUPPORTED_EXECUTABLE = ("unsupported_" + TEXT_EXECUTABLE);
 const UNSUPPORTED_ALGORITHM = "unsupported_algorithm";
 const INVALID_PUBLIC_KEY = "invalid_public_key";
 const PAYLOAD_HASH_MISMATCH = "payload_hash_mismatch";
 const UNSUPPORTED_PAYLOAD = "unsupported_payload";
 const INVALID_SIGNATURE = "invalid_signature";
 const MALFORMED_SIGNED_TRANSACTION = "malformed_signed_transaction";
-const MALFORMED_INSTRUCTION = "malformed_instruction";
+const MALFORMED_INSTRUCTION = ("malformed_" + TEXT_INSTRUCTION);
 const INVALID_QUANTITY = "invalid_quantity";
 const UNSUPPORTED_AUTHORITY = "unsupported_authority";
 const BOUNDS_EXCEEDED = "bounds_exceeded";
@@ -51,22 +99,22 @@ const INVALID_ASSET = "invalid_asset";
 const INVALID_BYTES = "invalid_bytes";
 const INVALID_INTEGER = "invalid_integer";
 const INVALID_ACCOUNT = "invalid_account";
-const SIGNABLE_PAYLOAD_HASH_MISMATCH_MESSAGE = "signable.payloadHashHex does not match payloadBytes";
+const SIGNABLE_PAYLOAD_HASH_MISMATCH_MESSAGE = ("signable.payloadHashHex " + TEXT_DOES_NOT_MATCH + "payloadBytes");
 const SIGNABLE_ALGORITHM_MESSAGE = "signable.signatureAlgorithm must be ed25519";
 const NETWORK_SELECTOR_CONFLICT_MESSAGE = "provide only one of networkPrefix or chainDiscriminant";
 const SIGNABLE_NETWORK_ID_CONTEXT = "signable.networkId";
 const SIGNABLE_PUBLIC_KEY_CONTEXT = "signable.signingPublicKey";
-const PROOF_ATTACHMENT_UNSUPPORTED_MESSAGE = "transaction payload proof attachments are not supported by the browser codec";
-const APPROVED_SIGNER_MISMATCH_MESSAGE = "signable.signingPublicKey does not match the expected approved signing key";
+const PROOF_ATTACHMENT_UNSUPPORTED_MESSAGE = (TEXT_TRANSACTION_PAYLOAD_2 + "proof attachments are not supported by the browser codec");
+const APPROVED_SIGNER_MISMATCH_MESSAGE = (TEXT_SIGNABLE_SIGNING_PUBLIC_KEY + TEXT_DOES_NOT_MATCH + "the expected approved signing key");
 const SIGNABLE_PAYLOAD_HASH_CONTEXT = "signable.payloadHashHex";
 const SIGNABLE_PAYLOAD_BYTES_CONTEXT = "signable.payloadBytes";
-const APPROVED_AUTHORITY_MISMATCH_MESSAGE = "signable.authority does not match the expected approved authority";
+const APPROVED_AUTHORITY_MISMATCH_MESSAGE = ("signable.authority " + TEXT_DOES_NOT_MATCH + "the expected approved authority");
 const SIGNATURE_VERIFY_MESSAGE = "Ed25519 signature does not verify over the Iroha payload hash";
-const SIGNABLE_CONTROLLER_MISMATCH_MESSAGE = "signable.signingPublicKey does not control signable.authority";
-const PUBLIC_KEY_ARGUMENT_MISMATCH_MESSAGE = "signable.signingPublicKey does not match signingPublicKey";
-const ARGUMENT_CONTROLLER_MISMATCH_MESSAGE = "signingPublicKey does not control signable.authority";
-const SIGNABLE_PUBLIC_KEY_LENGTH_MESSAGE = "signable.signingPublicKey must be exactly 32 bytes";
-const SIGNABLE_AUTHORITY_PAYLOAD_MISMATCH_MESSAGE = "signable.authority does not match payloadBytes";
+const SIGNABLE_CONTROLLER_MISMATCH_MESSAGE = (TEXT_SIGNABLE_SIGNING_PUBLIC_KEY + "does not control " + TEXT_SIGNABLE_AUTHORITY);
+const PUBLIC_KEY_ARGUMENT_MISMATCH_MESSAGE = (TEXT_SIGNABLE_SIGNING_PUBLIC_KEY + TEXT_DOES_NOT_MATCH + "signingPublicKey");
+const ARGUMENT_CONTROLLER_MISMATCH_MESSAGE = ("signingPublicKey does not control " + TEXT_SIGNABLE_AUTHORITY);
+const SIGNABLE_PUBLIC_KEY_LENGTH_MESSAGE = (TEXT_SIGNABLE_SIGNING_PUBLIC_KEY + TEXT_MUST_BE_EXACTLY_32_BYTES);
+const SIGNABLE_AUTHORITY_PAYLOAD_MISMATCH_MESSAGE = ("signable.authority " + TEXT_DOES_NOT_MATCH + "payloadBytes");
 const UINT16_MAX = 0xffffn;
 const UINT32_MAX = 0xffff_ffffn;
 const UINT64_MAX = 0xffff_ffff_ffff_ffffn;
@@ -111,56 +159,56 @@ const TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG = 1;
 const SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS = new Set([
   ...GAME_INSTRUCTION_WIRE_IDS_V1,
   ...NFT_MARKET_INSTRUCTION_WIRE_IDS_V1,
-  "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk",
-  "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload",
-  "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload",
-  "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode",
-  "iroha.instruction.v1::smart_contract_code::CommitContractDeployment",
+  (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "UploadSmartContractCodeChunk"),
+  (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "FinalizeSmartContractCodeUpload"),
+  (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "CancelSmartContractCodeUpload"),
+  (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "RegisterSmartContractCode"),
+  (TEXT_IROHA_INSTRUCTION_V1_SMART_CONTRACT_CODE + "CommitContractDeployment"),
   "iroha.kagemusha.v1.top_up",
 ]);
 const TRANSFER_INPUT_FIELDS = new Set([
-  "networkId",
-  "authority",
+  FIELD_NETWORK_ID,
+  FIELD_AUTHORITY,
   "sourceAssetHoldingId",
   "sourceAssetId",
   "quantity",
   "destinationAccountId",
-  "metadata",
-  "creationTimeMs",
+  FIELD_METADATA,
+  FIELD_CREATION_TIME_MS,
   "ttlMs",
   "nonce",
-  "feePayment",
-  "networkPrefix",
-  "chainDiscriminant",
+  FIELD_FEE_PAYMENT,
+  FIELD_NETWORK_PREFIX,
+  FIELD_CHAIN_DISCRIMINANT,
 ]);
 const INSTRUCTION_INPUT_FIELDS = new Set([
-  "networkId",
-  "authority",
-  "instructions",
-  "metadata",
-  "creationTimeMs",
+  FIELD_NETWORK_ID,
+  FIELD_AUTHORITY,
+  FIELD_INSTRUCTIONS,
+  FIELD_METADATA,
+  FIELD_CREATION_TIME_MS,
   "ttlMs",
   "nonce",
-  "feePayment",
-  "networkPrefix",
-  "chainDiscriminant",
+  FIELD_FEE_PAYMENT,
+  FIELD_NETWORK_PREFIX,
+  FIELD_CHAIN_DISCRIMINANT,
 ]);
 const EXECUTABLE_BATCH_INPUT_FIELDS = new Set([
-  "networkId",
-  "authority",
+  FIELD_NETWORK_ID,
+  FIELD_AUTHORITY,
   "entries",
-  "metadata",
-  "creationTimeMs",
+  FIELD_METADATA,
+  FIELD_CREATION_TIME_MS,
   "ttlMs",
   "nonce",
-  "feePayment",
-  "networkPrefix",
-  "chainDiscriminant",
+  FIELD_FEE_PAYMENT,
+  FIELD_NETWORK_PREFIX,
+  FIELD_CHAIN_DISCRIMINANT,
 ]);
-const BATCH_INSTRUCTION_ENTRY_FIELDS = new Set(["kind", "instruction"]);
+const BATCH_INSTRUCTION_ENTRY_FIELDS = new Set(["kind", FIELD_INSTRUCTION]);
 const BATCH_CONTRACT_CALL_ENTRY_FIELDS = new Set([
   "kind",
-  "contractAddress",
+  TEXT_CONTRACT_ADDRESS,
   "expectedCodeHash",
   "entrypoint",
   "arguments",
@@ -168,7 +216,7 @@ const BATCH_CONTRACT_CALL_ENTRY_FIELDS = new Set([
 const FEE_PAYMENT_FIELDS = new Set([
   "payer",
   "programId",
-  "programRevision",
+  TEXT_PROGRAM_REVISION,
   "chargeLimits",
   "gasLimit",
 ]);
@@ -187,22 +235,22 @@ const LEGACY_FEE_METADATA_KEYS = Object.freeze([
   "gas_asset_id",
 ]);
 const SIGNABLE_FIELDS = new Set([
-  "networkId",
+  FIELD_NETWORK_ID,
   "payloadBytes",
   "payloadHashHex",
-  "authority",
-  "signingPublicKey",
+  FIELD_AUTHORITY,
+  FIELD_SIGNING_PUBLIC_KEY,
   "signatureAlgorithm",
 ]);
 const SIGNABLE_CONSTRAINT_FIELDS = new Set([
-  "networkId",
-  "authority",
-  "signingPublicKey",
+  FIELD_NETWORK_ID,
+  FIELD_AUTHORITY,
+  FIELD_SIGNING_PUBLIC_KEY,
 ]);
 const SIGNATURE_FIELDS = new Set([
   "algorithm",
   "alg",
-  "signature",
+  FIELD_SIGNATURE,
   "bytes",
   "payload",
 ]);
@@ -299,7 +347,7 @@ function fail(code, message) {
   throw new BrowserTransactionCodecError(code, message);
 }
 
-function exactNetworkId(value, context = "networkId") {
+function exactNetworkId(value, context = FIELD_NETWORK_ID) {
   try {
     return Buffer.from(networkIdBytes(value, context));
   } catch (error) {
@@ -314,7 +362,7 @@ function requireExpectedNetworkId(actual, expected, context) {
   if (!actual.equals(expected)) {
     fail(
       "network_id_mismatch",
-      `${context} does not match the application-pinned NetworkId`,
+      `${context} ${TEXT_DOES_NOT_MATCH}the application-pinned NetworkId`,
     );
   }
 }
@@ -329,11 +377,11 @@ function isPlainDataObject(value) {
 
 function assertPlainDataObject(value, context) {
   if (value === null || typeof value !== JS_TYPE_OBJECT || Array.isArray(value)) {
-    fail(INVALID_INPUT, `${context} must be a plain object`);
+    fail(INVALID_INPUT, `${context}${TEXT_MUST_BE_A_PLAIN_OBJECT}`);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
-    fail(INVALID_INPUT, `${context} must be a plain object`);
+    fail(INVALID_INPUT, `${context}${TEXT_MUST_BE_A_PLAIN_OBJECT}`);
   }
   for (const key of Reflect.ownKeys(value)) {
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
@@ -343,7 +391,7 @@ function assertPlainDataObject(value, context) {
       !descriptor.enumerable ||
       !Object.prototype.hasOwnProperty.call(descriptor, "value")
     ) {
-      fail(INVALID_INPUT, `${context} must contain only enumerable data fields`);
+      fail(INVALID_INPUT, `${context}${TEXT_MUST_CONTAIN}only enumerable data fields`);
     }
   }
   return value;
@@ -351,11 +399,11 @@ function assertPlainDataObject(value, context) {
 
 function snapshotAllowedFields(value, allowed, context) {
   if (value === null || typeof value !== JS_TYPE_OBJECT || Array.isArray(value)) {
-    fail(INVALID_INPUT, `${context} must be a plain object`);
+    fail(INVALID_INPUT, `${context}${TEXT_MUST_BE_A_PLAIN_OBJECT}`);
   }
   const prototype = Object.getPrototypeOf(value);
   if (prototype !== Object.prototype && prototype !== null) {
-    fail(INVALID_INPUT, `${context} must be a plain object`);
+    fail(INVALID_INPUT, `${context}${TEXT_MUST_BE_A_PLAIN_OBJECT}`);
   }
   const snapshot = Object.create(null);
   for (const key of Reflect.ownKeys(value)) {
@@ -366,7 +414,7 @@ function snapshotAllowedFields(value, allowed, context) {
       !descriptor.enumerable ||
       !Object.prototype.hasOwnProperty.call(descriptor, "value")
     ) {
-      fail(INVALID_INPUT, `${context} must contain only enumerable data fields`);
+      fail(INVALID_INPUT, `${context}${TEXT_MUST_CONTAIN}only enumerable data fields`);
     }
     if (!allowed.has(key)) {
       fail(INVALID_INPUT, `${context}.${key} is not supported`);
@@ -401,17 +449,17 @@ function exactString(value, context, { maxBytes, allowControls = false } = {}) {
     fail(INVALID_INPUT, `${context} must be a non-empty exact string`);
   }
   if (maxBytes !== undefined && value.length > maxBytes) {
-    fail(BOUNDS_EXCEEDED, `${context} exceeds ${maxBytes} UTF-8 bytes`);
+    fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${maxBytes}${TEXT_UTF_8_BYTES}`);
   }
   if (!isWellFormedUnicode(value)) {
-    fail(INVALID_INPUT, `${context} must contain only Unicode scalar values`);
+    fail(INVALID_INPUT, `${context}${TEXT_MUST_CONTAIN}only Unicode scalar values`);
   }
   if (value.trim() !== value) {
     fail(INVALID_INPUT, `${context} must be a non-empty exact string`);
   }
   const length = Buffer.byteLength(value, UTF8_ENCODING);
   if (maxBytes !== undefined && length > maxBytes) {
-    fail(BOUNDS_EXCEEDED, `${context} exceeds ${maxBytes} UTF-8 bytes`);
+    fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${maxBytes}${TEXT_UTF_8_BYTES}`);
   }
   if (!allowControls && /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
     fail(INVALID_INPUT, `${context} must not contain control characters`);
@@ -433,7 +481,7 @@ function accountInfo(value, context, expectedDiscriminant) {
   try {
     parsed = AccountAddress.parseEncoded(literal, expectedDiscriminant);
   } catch (error) {
-    fail(INVALID_ACCOUNT, `${context} is not a canonical I105 account: ${error.message}`);
+    fail(INVALID_ACCOUNT, `${context} is not a${TEXT_CANONICAL}I105 account: ${error.message}`);
   }
   const discriminant = parsed.chainDiscriminant;
   if (!Number.isInteger(discriminant)) {
@@ -446,7 +494,7 @@ function accountInfo(value, context, expectedDiscriminant) {
     fail(INVALID_ACCOUNT, `${context} could not be rendered canonically: ${error.message}`);
   }
   if (canonical !== literal) {
-    fail(INVALID_ACCOUNT, `${context} must use its exact canonical I105 form`);
+    fail(INVALID_ACCOUNT, `${context} must use its exact${TEXT_CANONICAL}I105 form`);
   }
   const controller = parsed.address.controllerInfo();
   if (
@@ -479,17 +527,17 @@ function normalizeUnsigned(value, maximum, context) {
   } else if (typeof value === JS_TYPE_STRING) {
     const maximumDigits = maximum.toString(10).length;
     if (value.length > maximumDigits) {
-      fail(BOUNDS_EXCEEDED, `${context} is outside its canonical range`);
+      fail(BOUNDS_EXCEEDED, `${context} is outside its${TEXT_CANONICAL}range`);
     }
     if (!/^(?:0|[1-9]\d*)$/u.test(value)) {
-      fail(INVALID_INTEGER, `${context} must be a canonical unsigned integer`);
+      fail(INVALID_INTEGER, `${context}${TEXT_MUST_BE_A_CANONICAL_UNSIGNED_INTEGER}`);
     }
     result = BigInt(value);
   } else {
-    fail(INVALID_INTEGER, `${context} must be a canonical unsigned integer`);
+    fail(INVALID_INTEGER, `${context}${TEXT_MUST_BE_A_CANONICAL_UNSIGNED_INTEGER}`);
   }
   if (result < 0n || result > maximum) {
-    fail(BOUNDS_EXCEEDED, `${context} is outside its canonical range`);
+    fail(BOUNDS_EXCEEDED, `${context} is outside its${TEXT_CANONICAL}range`);
   }
   return result;
 }
@@ -512,7 +560,7 @@ function normalizeQuantity(value) {
       quantity = new KotodamaQuantity(value.mantissa, value.scale);
     } else if (typeof value === JS_TYPE_STRING) {
       if (value.length > MAX_QUANTITY_LITERAL_CODE_UNITS) {
-        fail(BOUNDS_EXCEEDED, "quantity exceeds the canonical 511-bit positive bound");
+        fail(BOUNDS_EXCEEDED, ("quantity exceeds the" + TEXT_CANONICAL + "511-bit positive bound"));
       }
       quantity = NumericV1.decodeQuantityJson(value);
     } else if (typeof value === JS_TYPE_BIGINT) {
@@ -520,7 +568,7 @@ function normalizeQuantity(value) {
     } else {
       fail(
         INVALID_QUANTITY,
-        "quantity must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected",
+        ("quantity must be a KotodamaQuantity," + TEXT_CANONICAL + "quantity string, or bigint; JavaScript numbers are rejected"),
       );
     }
   } catch (error) {
@@ -528,7 +576,7 @@ function normalizeQuantity(value) {
     if (error.code === "mantissa_overflow" || error.code === "invalid_scale") {
       fail(BOUNDS_EXCEEDED, `quantity is outside the bounded Kotodama V1 domain (${error.code})`);
     }
-    fail(INVALID_QUANTITY, `quantity must be canonical and non-negative (${error.code})`);
+    fail(INVALID_QUANTITY, `quantity must be${TEXT_CANONICAL}and non-negative (${error.code})`);
   }
   const literal = quantity.toString();
   const mantissa = quantity.mantissa;
@@ -545,7 +593,7 @@ function normalizeFeeProgramName(value, context) {
     isRustUnicodeWhitespace(name) ||
     /[@#$]/u.test(name)
   ) {
-    fail(INVALID_FEE_PAYMENT, `${context} is not a canonical program Name`);
+    fail(INVALID_FEE_PAYMENT, `${context} is not a${TEXT_CANONICAL}program Name`);
   }
   return name;
 }
@@ -569,7 +617,7 @@ function normalizeFeeProgramId(value, authority, context) {
     `${context}.name`,
   );
   if (`${sponsor.literal}/${name}` !== literal) {
-    fail(INVALID_FEE_PAYMENT, `${context} must use its exact canonical form`);
+    fail(INVALID_FEE_PAYMENT, `${context} must use its exact${TEXT_CANONICAL}form`);
   }
   return { literal, sponsor, name };
 }
@@ -586,18 +634,18 @@ function normalizeFeeChargeLimits(value) {
     entry = snapshotAllowedFields(
       entry,
       FEE_CHARGE_LIMIT_FIELDS,
-      `feePayment.chargeLimits[${index}]`,
+      `${TEXT_FEE_PAYMENT_CHARGE_LIMITS}${index}]`,
     );
     const kind = exactString(
       entry.kind,
-      `feePayment.chargeLimits[${index}].kind`,
+      `${TEXT_FEE_PAYMENT_CHARGE_LIMITS}${index}].kind`,
       { maxBytes: 32 },
     );
     const tag = FEE_CHARGE_KIND_TAG[kind];
     if (tag === undefined) {
       fail(
         INVALID_FEE_PAYMENT,
-        `feePayment.chargeLimits[${index}].kind must be nexus or pipelineGas`,
+        `${TEXT_FEE_PAYMENT_CHARGE_LIMITS}${index}].kind must be nexus or pipelineGas`,
       );
     }
     if (tag <= previousTag) {
@@ -609,7 +657,7 @@ function normalizeFeeChargeLimits(value) {
     previousTag = tag;
     const assetDefinitionId = exactString(
       entry.assetDefinitionId,
-      `feePayment.chargeLimits[${index}].assetDefinitionId`,
+      `${TEXT_FEE_PAYMENT_CHARGE_LIMITS}${index}].assetDefinitionId`,
       { maxBytes: 128 },
     );
     assetDefinitionArchive(assetDefinitionId);
@@ -619,9 +667,9 @@ function normalizeFeeChargeLimits(value) {
 }
 
 function normalizeFeePayment(value, authority) {
-  value = snapshotAllowedFields(value, FEE_PAYMENT_FIELDS, "feePayment");
+  value = snapshotAllowedFields(value, FEE_PAYMENT_FIELDS, FIELD_FEE_PAYMENT);
   const payer = exactString(value.payer, "feePayment.payer", { maxBytes: 16 });
-  if (payer !== "authority" && payer !== "sponsor") {
+  if (payer !== FIELD_AUTHORITY && payer !== "sponsor") {
     fail(INVALID_FEE_PAYMENT, "feePayment.payer must be authority or sponsor");
   }
   const chargeLimits = normalizeFeeChargeLimits(value.chargeLimits);
@@ -631,11 +679,11 @@ function normalizeFeePayment(value, authority) {
     "feePayment.gasLimit",
     { nonZero: true },
   );
-  if (payer === "authority") {
+  if (payer === FIELD_AUTHORITY) {
     if (value.programId !== undefined || value.programRevision !== undefined) {
       fail(
         INVALID_FEE_PAYMENT,
-        "authority feePayment must not include programId or programRevision",
+        ("authority feePayment must not include programId or " + TEXT_PROGRAM_REVISION),
       );
     }
     return { payer, tag: 0, chargeLimits, gasLimit };
@@ -643,13 +691,13 @@ function normalizeFeePayment(value, authority) {
   if (value.programId === undefined || value.programRevision === undefined) {
     fail(
       INVALID_FEE_PAYMENT,
-      "sponsor feePayment requires programId and programRevision",
+      ("sponsor feePayment requires programId and " + TEXT_PROGRAM_REVISION),
     );
   }
   const programRevision = normalizeUnsigned(
     value.programRevision,
     UINT64_MAX,
-    "feePayment.programRevision",
+    ("feePayment." + TEXT_PROGRAM_REVISION),
   );
   if (programRevision === 0n) {
     fail(INVALID_FEE_PAYMENT, "feePayment.programRevision must be non-zero");
@@ -695,17 +743,17 @@ function normalizeMetadata(input) {
       fail(INVALID_METADATA, `metadata is not valid JSON: ${error.message}`);
     }
   }
-  assertPlainDataObject(value, "metadata");
+  assertPlainDataObject(value, FIELD_METADATA);
   const state = { nodes: 0, stack: new Set() };
-  const normalized = normalizeMetadataValue(value, "metadata", 0, state);
+  const normalized = normalizeMetadataValue(value, FIELD_METADATA, 0, state);
   if (Object.keys(normalized).length > MAX_METADATA_ENTRIES) {
-    fail(BOUNDS_EXCEEDED, `metadata exceeds ${MAX_METADATA_ENTRIES} top-level entries`);
+    fail(BOUNDS_EXCEEDED, `${TEXT_METADATA_EXCEEDS}${MAX_METADATA_ENTRIES} top-level entries`);
   }
   const json = canonicalJsonStringify(normalized);
   if (suppliedJson !== null && suppliedJson !== json) {
     fail(
       INVALID_METADATA,
-      "metadata JSON strings must already use the exact canonical encoding",
+      ("metadata JSON strings must already use the exact" + TEXT_CANONICAL + "encoding"),
     );
   }
   if (Buffer.byteLength(json, UTF8_ENCODING) > MAX_METADATA_JSON_BYTES) {
@@ -721,7 +769,7 @@ function compareUtf8Strings(left, right) {
 function normalizeMetadataValue(value, context, depth, state) {
   state.nodes += 1;
   if (state.nodes > MAX_METADATA_NODES) {
-    fail(BOUNDS_EXCEEDED, `metadata exceeds ${MAX_METADATA_NODES} values`);
+    fail(BOUNDS_EXCEEDED, `${TEXT_METADATA_EXCEEDS}${MAX_METADATA_NODES} values`);
   }
   if (depth > MAX_METADATA_DEPTH) {
     fail(BOUNDS_EXCEEDED, `metadata nesting exceeds ${MAX_METADATA_DEPTH}`);
@@ -736,11 +784,11 @@ function normalizeMetadataValue(value, context, depth, state) {
     ) {
       fail(
         BOUNDS_EXCEEDED,
-        `${context} string exceeds ${MAX_METADATA_JSON_BYTES} UTF-8 bytes`,
+        `${context} string exceeds ${MAX_METADATA_JSON_BYTES}${TEXT_UTF_8_BYTES}`,
       );
     }
     if (!isWellFormedUnicode(value)) {
-      fail(INVALID_METADATA, `${context} must contain only Unicode scalar values`);
+      fail(INVALID_METADATA, `${context}${TEXT_MUST_CONTAIN}only Unicode scalar values`);
     }
     return value;
   }
@@ -767,7 +815,7 @@ function normalizeMetadataValue(value, context, depth, state) {
     assertPlainDataObject(value, context);
     const keys = Object.keys(value);
     if (keys.length > MAX_METADATA_NODES - state.nodes) {
-      fail(BOUNDS_EXCEEDED, `metadata exceeds ${MAX_METADATA_NODES} values`);
+      fail(BOUNDS_EXCEEDED, `${TEXT_METADATA_EXCEEDS}${MAX_METADATA_NODES} values`);
     }
     for (let index = 0; index < keys.length; index += 1) {
       validateMetadataKey(keys[index], `${context} key ${index}`);
@@ -806,7 +854,7 @@ function normalizeMetadataArray(value, context, depth, state) {
     fail(INVALID_METADATA, `${context} has an invalid array length`);
   }
   if (length > MAX_METADATA_NODES - state.nodes) {
-    fail(BOUNDS_EXCEEDED, `metadata exceeds ${MAX_METADATA_NODES} values`);
+    fail(BOUNDS_EXCEEDED, `${TEXT_METADATA_EXCEEDS}${MAX_METADATA_NODES} values`);
   }
   const ownKeys = Reflect.ownKeys(value);
   if (ownKeys.length !== length + 1) {
@@ -825,7 +873,7 @@ function normalizeMetadataArray(value, context, depth, state) {
     ) {
       fail(
         INVALID_METADATA,
-        `${context} arrays must contain only dense data elements`,
+        `${context} arrays${TEXT_MUST_CONTAIN_2}only dense data elements`,
       );
     }
     output[index] = normalizeMetadataValue(
@@ -870,7 +918,7 @@ function validateMetadataKey(key, context) {
     /[@#$]/u.test(key) ||
     Buffer.byteLength(key, UTF8_ENCODING) > MAX_METADATA_KEY_BYTES
   ) {
-    fail(INVALID_METADATA, `${context} is not a canonical metadata Name`);
+    fail(INVALID_METADATA, `${context} is not a${TEXT_CANONICAL}metadata Name`);
   }
 }
 
@@ -1019,7 +1067,7 @@ function decodeBase58(value, context) {
 function assetDefinitionArchive(literal) {
   const bytes = decodeBase58(literal, "source asset definition");
   if (bytes.length !== 21 || bytes[0] !== ASSET_DEFINITION_ADDRESS_VERSION) {
-    fail(INVALID_ASSET, "source asset definition is not a canonical v1 address");
+    fail(INVALID_ASSET, ("source asset definition is not a" + TEXT_CANONICAL + "v1 address"));
   }
   const expectedChecksum = Buffer.from(blake3(bytes.subarray(0, 17))).subarray(0, 4);
   if (!bytes.subarray(17).equals(expectedChecksum)) {
@@ -1034,7 +1082,7 @@ function assetScopeArchive(scope) {
   }
   const match = /^dataspace:(0|[1-9]\d*)$/u.exec(scope);
   if (!match) {
-    fail(INVALID_ASSET, "asset scope must use canonical dataspace:<u64> syntax");
+    fail(INVALID_ASSET, ("asset scope must use" + TEXT_CANONICAL + "dataspace:<u64> syntax"));
   }
   const value = normalizeUnsigned(match[1], UINT64_MAX, "asset dataspace scope");
   return Buffer.concat([u32(1), field(field(u64(value)))]);
@@ -1146,7 +1194,7 @@ function transferInstructionArchive(source, quantity, destination) {
   const innerPayload = Buffer.concat([u32(2), field(body)]);
   const innerFrame = frameTransferPayload(innerPayload);
   return Buffer.concat([
-    field(stringValue("iroha.transfer")),
+    field(stringValue(WIRE_ID_IROHA_TRANSFER)),
     field(fieldU64(innerFrame)),
   ]);
 }
@@ -1159,10 +1207,10 @@ function normalizeTransactionInputAuthority(input) {
       : input.networkPrefix ?? input.chainDiscriminant;
   const authority = accountInfo(
     input.authority,
-    "authority",
+    FIELD_AUTHORITY,
     requestedDiscriminant === undefined
       ? undefined
-      : normalizeNetworkPrefix(requestedDiscriminant, "networkPrefix"),
+      : normalizeNetworkPrefix(requestedDiscriminant, FIELD_NETWORK_PREFIX),
   );
   return { networkId, authority };
 }
@@ -1179,7 +1227,7 @@ function normalizeTransactionInputTail(
   const creationTimeMs = normalizeUnsigned(
     input.creationTimeMs ?? Date.now(),
     UINT64_MAX,
-    "creationTimeMs",
+    FIELD_CREATION_TIME_MS,
   );
   const ttlMs = normalizeOptionalUnsigned(
     input.ttlMs ?? DEFAULT_TRANSACTION_TTL_MS,
@@ -1271,29 +1319,35 @@ function normalizeTransferInput(input) {
 // can enter the larger corridor; batches, WASM, attachments and unrelated instructions cannot.
 function assertTransactionPayloadByteBound(payload) {
   if (payload.length === 0 || payload.length > MAX_EXECUTION_PAYLOAD_BYTES) {
-    fail(BOUNDS_EXCEEDED, "transaction payload exceeds the compiled browser payload limit");
+    fail(BOUNDS_EXCEEDED, (TEXT_TRANSACTION_PAYLOAD_2 + "exceeds the compiled browser payload limit"));
   }
   if (payload.length <= MAX_PAYLOAD_BYTES) return;
   try {
-    const outer = new Reader(payload, "execution transaction payload");
-    for (const name of ["domain", "authority", "creationTimeMs"]) outer.readField(name);
-    const executable = new Reader(outer.readField("executable"), "execution transaction executable");
-    if (executable.readU32("variant") !== 0) fail(BOUNDS_EXCEEDED, "larger payloads require one native execution-proof instruction");
-    const instructions = new Reader(executable.readField("instructions"), "execution transaction instructions");
-    if (instructions.readU64("count") !== 1n) fail(BOUNDS_EXCEEDED, "larger payloads require one native execution-proof instruction");
+    const outer = new Reader(payload, (TEXT_EXECUTION_TRANSACTION + "payload"));
+    for (const name of ["domain", FIELD_AUTHORITY, FIELD_CREATION_TIME_MS]) outer.readField(name);
+    const executable = new Reader(outer.readField(TEXT_EXECUTABLE), (TEXT_EXECUTION_TRANSACTION + TEXT_EXECUTABLE));
+    if (executable.readU32("variant") !== 0) fail(BOUNDS_EXCEEDED, TEXT_LARGER_PAYLOADS_REQUIRE_ONE_NATIVE_EXECUTION_PROOF_INSTRUCTION);
+    const instructions = new Reader(executable.readField(FIELD_INSTRUCTIONS), (TEXT_EXECUTION_TRANSACTION + "instructions"));
+    if (instructions.readU64("count") !== 1n) fail(BOUNDS_EXCEEDED, TEXT_LARGER_PAYLOADS_REQUIRE_ONE_NATIVE_EXECUTION_PROOF_INSTRUCTION);
     const archive = instructions.readField("item[0]");
-    const instruction = new Reader(archive, "execution transaction instruction");
+    const instruction = new Reader(archive, (TEXT_EXECUTION_TRANSACTION + TEXT_INSTRUCTION));
     const wireId = validateStringArchive(instruction.readField("wireId"), "execution instruction wireId", { maxBytes: 256 });
     if (!LARGE_EXECUTION_WIRE_IDS.has(wireId)) fail(BOUNDS_EXCEEDED, "ordinary transaction payload exceeds one MiB");
     instructions.assertEof(); executable.assertEof();
-    validateCanonicalInstructionBox(archive, "execution transaction instruction");
+    validateCanonicalInstructionBox(archive, (TEXT_EXECUTION_TRANSACTION + TEXT_INSTRUCTION));
   } catch (error) {
     if (error instanceof BrowserTransactionCodecError && error.code === BOUNDS_EXCEEDED) throw error;
-    fail(BOUNDS_EXCEEDED, "larger payloads require one canonical native execution-proof instruction");
+    fail(BOUNDS_EXCEEDED, ("larger payloads require one" + TEXT_CANONICAL + "native execution-proof instruction"));
   }
 }
 
-function encodeTransactionPayload(normalized, executable) {
+function assertTransferPayloadByteBound(payload) {
+  if (payload.length === 0 || payload.length > MAX_PAYLOAD_BYTES) {
+    fail(BOUNDS_EXCEEDED, `payloadBytes${TEXT_MUST_CONTAIN_2}1..=${MAX_PAYLOAD_BYTES} bytes`);
+  }
+}
+
+function encodeTransactionPayload(normalized, executable, validatePayloadBound) {
   const payload = struct([
     networkTransactionDomainArchive(normalized.networkId),
     accountArchive(normalized.authority),
@@ -1306,7 +1360,7 @@ function encodeTransactionPayload(normalized, executable) {
     metadataArchive(normalized.metadata),
     Buffer.of(0),
   ]);
-  assertTransactionPayloadByteBound(payload);
+  validatePayloadBound(payload);
   return payload;
 }
 
@@ -1319,6 +1373,7 @@ function encodeTransferPayload(normalized) {
   return encodeTransactionPayload(
     normalized,
     Buffer.concat([u32(0), field(vector([instruction]))]),
+    assertTransferPayloadByteBound,
   );
 }
 
@@ -1338,7 +1393,7 @@ function normalizeInstructionTransactionInput(input) {
   ) {
     fail(
       BOUNDS_EXCEEDED,
-      `instructions must contain 1..=${MAX_BROWSER_INSTRUCTIONS} items`,
+      `instructions${TEXT_MUST_CONTAIN_2}1..=${MAX_BROWSER_INSTRUCTIONS} items`,
     );
   }
   const instructions = input.instructions.map((instruction, index) =>
@@ -1357,6 +1412,7 @@ function encodeInstructionTransactionPayload(normalized) {
   return encodeTransactionPayload(
     normalized,
     Buffer.concat([u32(0), field(vector(normalized.instructions))]),
+    assertTransactionPayloadByteBound,
   );
 }
 
@@ -1376,81 +1432,81 @@ function normalizeExecutableBatchTransactionInput(input) {
   ) {
     fail(
       BOUNDS_EXCEEDED,
-      `entries must contain 1..=${MAX_BROWSER_INSTRUCTIONS} items`,
+      `entries${TEXT_MUST_CONTAIN_2}1..=${MAX_BROWSER_INSTRUCTIONS} items`,
     );
   }
   let containsContractCall = false;
   const entries = input.entries.map((source, index) => {
-    source = assertPlainDataObject(source, `entries[${index}]`);
-    if (source.kind === "instruction") {
+    source = assertPlainDataObject(source, `${TEXT_ENTRIES}${index}]`);
+    if (source.kind === FIELD_INSTRUCTION) {
       const entry = snapshotAllowedFields(
         source,
         BATCH_INSTRUCTION_ENTRY_FIELDS,
-        `entries[${index}]`,
+        `${TEXT_ENTRIES}${index}]`,
       );
       const instruction = encodeCanonicalInstructionBox(
         entry.instruction,
-        `entries[${index}].instruction`,
+        `${TEXT_ENTRIES}${index}].${TEXT_INSTRUCTION}`,
       );
-      return { kind: "instruction", instruction };
+      return { kind: FIELD_INSTRUCTION, instruction };
     }
     if (source.kind !== "contractCall") {
       fail(
         INVALID_INPUT,
-        `entries[${index}].kind must be instruction or contractCall`,
+        `${TEXT_ENTRIES}${index}].kind must be instruction or contractCall`,
       );
     }
     const entry = snapshotAllowedFields(
       source,
       BATCH_CONTRACT_CALL_ENTRY_FIELDS,
-      `entries[${index}]`,
+      `${TEXT_ENTRIES}${index}]`,
     );
     containsContractCall = true;
     const contractAddressLiteral = exactString(
       entry.contractAddress,
-      `entries[${index}].contractAddress`,
+      `${TEXT_ENTRIES}${index}].${TEXT_CONTRACT_ADDRESS}`,
       { maxBytes: 256 },
     );
     let contractAddress;
     try {
       contractAddress = parseCanonicalContractAddress(
         contractAddressLiteral,
-        `entries[${index}].contractAddress`,
+        `${TEXT_ENTRIES}${index}].${TEXT_CONTRACT_ADDRESS}`,
       ).literal;
     } catch (error) {
       fail(
         INVALID_INPUT,
         error instanceof Error
           ? error.message
-          : `entries[${index}].contractAddress is invalid`,
+          : `${TEXT_ENTRIES}${index}].contractAddress is invalid`,
       );
     }
     const expectedCodeHash = bytes(
       entry.expectedCodeHash,
-      `entries[${index}].expectedCodeHash`,
+      `${TEXT_ENTRIES}${index}].expectedCodeHash`,
       { hex: true, maxBytes: 32 },
     );
     if (expectedCodeHash.length !== 32) {
       fail(
         INVALID_BYTES,
-        `entries[${index}].expectedCodeHash must be exactly 32 bytes`,
+        `${TEXT_ENTRIES}${index}].expectedCodeHash ${TEXT_MUST_BE_EXACTLY_32_BYTES}`,
       );
     }
     if ((expectedCodeHash[31] & 1) === 0) {
       fail(
         INVALID_BYTES,
-        `entries[${index}].expectedCodeHash must carry the canonical Iroha hash marker bit`,
+        `${TEXT_ENTRIES}${index}].expectedCodeHash must carry the${TEXT_CANONICAL}Iroha hash marker bit`,
       );
     }
     const entrypoint = exactString(
       entry.entrypoint,
-      `entries[${index}].entrypoint`,
+      `${TEXT_ENTRIES}${index}].entrypoint`,
       { maxBytes: MAX_CONTRACT_ENTRYPOINT_BYTES },
     );
     const argumentBytes =
       entry.arguments === undefined || entry.arguments === null
         ? null
-        : bytes(entry.arguments, `entries[${index}].arguments`, {
+        : bytes(entry.arguments, `${TEXT_ENTRIES}${index}].arguments`, {
             maxBytes: MAX_CONTRACT_ARGUMENT_RECORD_BYTES,
           });
     return {
@@ -1491,7 +1547,7 @@ function contractInvocationArchive(invocation) {
 }
 
 function executableBatchEntryArchive(entry) {
-  if (entry.kind === "instruction") {
+  if (entry.kind === FIELD_INSTRUCTION) {
     return Buffer.concat([u32(0), field(entry.instruction)]);
   }
   return Buffer.concat([u32(1), field(contractInvocationArchive(entry))]);
@@ -1504,36 +1560,37 @@ function encodeExecutableBatchTransactionPayload(normalized) {
       u32(4),
       field(vector(normalized.entries.map(executableBatchEntryArchive))),
     ]),
+    assertTransactionPayloadByteBound,
   );
 }
 
 function bytes(value, context, { hex = false, maxBytes } = {}) {
   if (Buffer.isBuffer(value)) {
     if (maxBytes !== undefined && value.length > maxBytes) {
-      fail(BOUNDS_EXCEEDED, `${context} exceeds ${maxBytes} bytes`);
+      fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${maxBytes} bytes`);
     }
     return Buffer.from(value);
   }
   if (ArrayBuffer.isView(value)) {
     if (maxBytes !== undefined && value.byteLength > maxBytes) {
-      fail(BOUNDS_EXCEEDED, `${context} exceeds ${maxBytes} bytes`);
+      fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${maxBytes} bytes`);
     }
     try {
       return Buffer.from(
         new Uint8Array(value.buffer, value.byteOffset, value.byteLength),
       );
     } catch {
-      fail(INVALID_BYTES, `${context} references detached or invalid bytes`);
+      fail(INVALID_BYTES, `${context}${TEXT_REFERENCES_DETACHED_OR_INVALID_BYTES}`);
     }
   }
   if (value instanceof ArrayBuffer) {
     if (maxBytes !== undefined && value.byteLength > maxBytes) {
-      fail(BOUNDS_EXCEEDED, `${context} exceeds ${maxBytes} bytes`);
+      fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${maxBytes} bytes`);
     }
     try {
       return Buffer.from(new Uint8Array(value));
     } catch {
-      fail(INVALID_BYTES, `${context} references detached or invalid bytes`);
+      fail(INVALID_BYTES, `${context}${TEXT_REFERENCES_DETACHED_OR_INVALID_BYTES}`);
     }
   }
   if (hex && typeof value === JS_TYPE_STRING) {
@@ -1557,7 +1614,7 @@ function irohaHash(value) {
 
 function exactHashHex(value, context) {
   if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{63}[13579bdf]$/u.test(value)) {
-    fail("invalid_hash", `${context} must be an exact canonical lowercase 32-byte Iroha hash`);
+    fail("invalid_hash", `${context} must be an exact${TEXT_CANONICAL}lowercase 32-byte Iroha hash`);
   }
   return value;
 }
@@ -1567,7 +1624,7 @@ function validateStringArchive(payload, context, { maxBytes } = {}) {
   const value = reader.readField(UTF8_ENCODING);
   reader.assertEof();
   if (maxBytes !== undefined && value.length > maxBytes) {
-    fail(BOUNDS_EXCEEDED, `${context} exceeds ${maxBytes} UTF-8 bytes`);
+    fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${maxBytes}${TEXT_UTF_8_BYTES}`);
   }
   let decoded;
   try {
@@ -1590,11 +1647,11 @@ function validateNetworkTransactionDomainArchive(payload, context) {
       `${context} must be TransactionDomain::Network`,
     );
   }
-  const networkId = reader.readField("networkId");
+  const networkId = reader.readField(FIELD_NETWORK_ID);
   if (networkId.length !== 32 || (networkId[31] & 1) === 0) {
     fail(
       MALFORMED_PAYLOAD,
-      `${context}.networkId must contain exactly 32 marked Iroha hash bytes`,
+      `${context}.networkId${TEXT_MUST_CONTAIN_2}exactly 32 marked Iroha hash bytes`,
     );
   }
   reader.assertEof();
@@ -1608,13 +1665,13 @@ function validateConstVecBytes(payload, context, expectedLength) {
   const reader = new Reader(payload, context);
   const count = reader.readU64("count");
   if (count !== BigInt(expectedLength)) {
-    fail(MALFORMED_PAYLOAD, `${context} must contain ${expectedLength} bytes`);
+    fail(MALFORMED_PAYLOAD, `${context}${TEXT_MUST_CONTAIN}${expectedLength} bytes`);
   }
   const output = Buffer.alloc(expectedLength);
   for (let index = 0; index < expectedLength; index += 1) {
     const item = reader.readField(`item[${index}]`);
     if (item.length !== 1) {
-      fail(MALFORMED_PAYLOAD, `${context}.item[${index}] must contain one byte`);
+      fail(MALFORMED_PAYLOAD, `${context}.item[${index}]${TEXT_MUST_CONTAIN_2}one byte`);
     }
     output[index] = item[0];
   }
@@ -1651,7 +1708,7 @@ function validateFixedByteArchive(payload, length, context) {
   for (let index = 0; index < length; index += 1) {
     const item = reader.readField(`item[${index}]`);
     if (item.length !== 1) {
-      fail(MALFORMED_PAYLOAD, `${context}.item[${index}] must contain one byte`);
+      fail(MALFORMED_PAYLOAD, `${context}.item[${index}]${TEXT_MUST_CONTAIN_2}one byte`);
     }
     output[index] = item[0];
   }
@@ -1673,7 +1730,7 @@ function validateScopeArchive(payload, context) {
   const inner = outer.readField("value");
   outer.assertEof();
   if (inner.length !== 8) {
-    fail(MALFORMED_PAYLOAD, `${context}.dataspace must contain a u64`);
+    fail(MALFORMED_PAYLOAD, `${context}.dataspace${TEXT_MUST_CONTAIN_2}a u64`);
   }
   reader.assertEof();
 }
@@ -1718,7 +1775,7 @@ function validateNumericArchive(payload, context) {
   mantissaReader.assertEof();
   const mantissa = twosBytesToBigint(mantissaBytes);
   if (mantissa <= 0n || !bigintToTwosBytes(mantissa).equals(mantissaBytes)) {
-    fail(MALFORMED_PAYLOAD, `${context}.mantissa is not canonical and positive`);
+    fail(MALFORMED_PAYLOAD, `${context}.mantissa is not${TEXT_CANONICAL}and positive`);
   }
   if (mantissa.toString(2).length > MAX_NUMERIC_BITS) {
     fail(BOUNDS_EXCEEDED, `${context}.mantissa exceeds ${MAX_NUMERIC_BITS} bits`);
@@ -1798,7 +1855,7 @@ function validateFeePaymentArchive(payload, context) {
       body.readField("programId"),
       `${context}.programId`,
     );
-    const revision = body.readField("programRevision");
+    const revision = body.readField(TEXT_PROGRAM_REVISION);
     if (revision.length !== 8 || revision.readBigUInt64LE(0) === 0n) {
       fail(MALFORMED_PAYLOAD, `${context}.programRevision must be non-zero u64`);
     }
@@ -1865,25 +1922,25 @@ function validateTransferExecutable(payload, context) {
   if (executable.readU32("variant") !== 0) {
     fail(UNSUPPORTED_EXECUTABLE, `${context} must use Executable::Instructions`);
   }
-  const instructions = new Reader(executable.readField("instructions"), `${context}.instructions`);
+  const instructions = new Reader(executable.readField(FIELD_INSTRUCTIONS), `${context}.instructions`);
   if (instructions.readU64("count") !== 1n) {
-    fail(UNSUPPORTED_EXECUTABLE, `${context} must contain exactly one instruction`);
+    fail(UNSUPPORTED_EXECUTABLE, `${context}${TEXT_MUST_CONTAIN}exactly one ${TEXT_INSTRUCTION}`);
   }
   const instruction = new Reader(
     instructions.readField("item[0]"),
-    `${context}.instructions[0]`,
+    `${context}${TEXT_INSTRUCTIONS}0]`,
   );
   const wireId = validateStringArchive(
     instruction.readField("wireId"),
-    `${context}.instructions[0].wireId`,
-    { maxBytes: Buffer.byteLength("iroha.transfer", UTF8_ENCODING) },
+    `${context}${TEXT_INSTRUCTIONS}0].wireId`,
+    { maxBytes: Buffer.byteLength(WIRE_ID_IROHA_TRANSFER, UTF8_ENCODING) },
   );
-  if (wireId !== "iroha.transfer") {
-    fail(UNSUPPORTED_INSTRUCTION, `${context} must contain iroha.transfer`);
+  if (wireId !== WIRE_ID_IROHA_TRANSFER) {
+    fail(UNSUPPORTED_INSTRUCTION, `${context}${TEXT_MUST_CONTAIN}iroha.transfer`);
   }
   const frameContainer = new Reader(
     instruction.readField("frameContainer"),
-    `${context}.instructions[0].frameContainer`,
+    `${context}${TEXT_INSTRUCTIONS}0].frameContainer`,
     false,
   );
   const frame = frameContainer.readField("frame");
@@ -1891,10 +1948,10 @@ function validateTransferExecutable(payload, context) {
   instruction.assertEof();
   instructions.assertEof();
   executable.assertEof();
-  const transferPayload = validateFrame(frame, `${context}.instructions[0].frame`);
+  const transferPayload = validateFrame(frame, `${context}${TEXT_INSTRUCTIONS}0].frame`);
   const transfer = new Reader(transferPayload, `${context}.transfer`);
   if (transfer.readU32("variant") !== 2) {
-    fail(UNSUPPORTED_INSTRUCTION, `${context} must contain Transfer::Asset`);
+    fail(UNSUPPORTED_INSTRUCTION, `${context}${TEXT_MUST_CONTAIN}Transfer::Asset`);
   }
   const body = new Reader(transfer.readField("body"), `${context}.transfer.body`);
   const sourceOwner = validateAssetArchive(
@@ -1914,36 +1971,36 @@ function validateBrowserInstructionExecutable(payload, context) {
     fail(UNSUPPORTED_EXECUTABLE, `${context} must use Executable::Instructions`);
   }
   const instructions = new Reader(
-    executable.readField("instructions"),
+    executable.readField(FIELD_INSTRUCTIONS),
     `${context}.instructions`,
   );
   const count = instructions.readU64("count");
   if (count === 0n || count > BigInt(MAX_BROWSER_INSTRUCTIONS)) {
     fail(
       BOUNDS_EXCEEDED,
-      `${context} must contain 1..=${MAX_BROWSER_INSTRUCTIONS} instructions`,
+      `${context}${TEXT_MUST_CONTAIN}1..=${MAX_BROWSER_INSTRUCTIONS} instructions`,
     );
   }
   for (let index = 0; index < Number(count); index += 1) {
     const instructionArchive = instructions.readField(`item[${index}]`);
     const instruction = new Reader(
       instructionArchive,
-      `${context}.instructions[${index}]`,
+      `${context}${TEXT_INSTRUCTIONS}${index}]`,
     );
     const wireId = validateStringArchive(
       instruction.readField("wireId"),
-      `${context}.instructions[${index}].wireId`,
+      `${context}${TEXT_INSTRUCTIONS}${index}].wireId`,
       { maxBytes: 256 },
     );
     if (!SUPPORTED_BROWSER_INSTRUCTION_WIRE_IDS.has(wireId)) {
       fail(
         UNSUPPORTED_INSTRUCTION,
-        `${context}.instructions[${index}] uses unsupported browser instruction ${wireId}`,
+        `${context}${TEXT_INSTRUCTIONS}${index}] uses unsupported browser instruction ${wireId}`,
       );
     }
     const frameContainer = new Reader(
       instruction.readField("frameContainer"),
-      `${context}.instructions[${index}].frameContainer`,
+      `${context}${TEXT_INSTRUCTIONS}${index}].frameContainer`,
       false,
     );
     frameContainer.readField("frame");
@@ -1954,7 +2011,7 @@ function validateBrowserInstructionExecutable(payload, context) {
     } catch (error) {
       fail(
         MALFORMED_INSTRUCTION,
-        `${context}.instructions[${index}] has an invalid inner frame: ${error.message}`,
+        `${context}${TEXT_INSTRUCTIONS}${index}] has an invalid inner frame: ${error.message}`,
       );
     }
   }
@@ -1989,7 +2046,7 @@ function validateContractArgumentOption(payload, context) {
   if (length > BigInt(MAX_CONTRACT_ARGUMENT_RECORD_BYTES)) {
     fail(
       BOUNDS_EXCEEDED,
-      `${context} exceeds ${MAX_CONTRACT_ARGUMENT_RECORD_BYTES} bytes`,
+      `${context}${TEXT_EXCEEDS}${MAX_CONTRACT_ARGUMENT_RECORD_BYTES} bytes`,
     );
   }
   record.readBytes(Number(length), "bytes");
@@ -1999,13 +2056,13 @@ function validateContractArgumentOption(payload, context) {
 function validateContractInvocationArchive(payload, context) {
   const invocation = new Reader(payload, context);
   const contractAddress = validateStringArchive(
-    invocation.readField("contractAddress"),
-    `${context}.contractAddress`,
+    invocation.readField(TEXT_CONTRACT_ADDRESS),
+    `${context}.${TEXT_CONTRACT_ADDRESS}`,
     { maxBytes: 256 },
   );
-  exactString(contractAddress, `${context}.contractAddress`, { maxBytes: 256 });
+  exactString(contractAddress, `${context}.${TEXT_CONTRACT_ADDRESS}`, { maxBytes: 256 });
   try {
-    parseCanonicalContractAddress(contractAddress, `${context}.contractAddress`);
+    parseCanonicalContractAddress(contractAddress, `${context}.${TEXT_CONTRACT_ADDRESS}`);
   } catch (error) {
     fail(
       MALFORMED_PAYLOAD,
@@ -2018,7 +2075,7 @@ function validateContractInvocationArchive(payload, context) {
   if (expectedCodeHash.length !== 32 || (expectedCodeHash[31] & 1) === 0) {
     fail(
       MALFORMED_PAYLOAD,
-      `${context}.expectedCodeHash must be a canonical 32-byte Iroha hash`,
+      `${context}.expectedCodeHash must be a${TEXT_CANONICAL}32-byte Iroha hash`,
     );
   }
   const entrypoint = validateStringArchive(
@@ -2049,7 +2106,7 @@ function validateExecutableBatch(payload, context) {
   if (count === 0n || count > BigInt(MAX_BROWSER_INSTRUCTIONS)) {
     fail(
       BOUNDS_EXCEEDED,
-      `${context} must contain 1..=${MAX_BROWSER_INSTRUCTIONS} entries`,
+      `${context}${TEXT_MUST_CONTAIN}1..=${MAX_BROWSER_INSTRUCTIONS} entries`,
     );
   }
   let containsContractCall = false;
@@ -2064,7 +2121,7 @@ function validateExecutableBatch(payload, context) {
     if (tag === 0) {
       validateCanonicalInstructionBox(
         value,
-        `${context}.entries[${index}].instruction`,
+        `${context}.entries[${index}].${TEXT_INSTRUCTION}`,
       );
     } else if (tag === 1) {
       containsContractCall = true;
@@ -2116,7 +2173,7 @@ function validateMetadataArchive(payload, context) {
   const reader = new Reader(payload, context);
   const count = reader.readU64("count");
   if (count > BigInt(MAX_METADATA_ENTRIES)) {
-    fail(BOUNDS_EXCEEDED, `${context} exceeds ${MAX_METADATA_ENTRIES} entries`);
+    fail(BOUNDS_EXCEEDED, `${context}${TEXT_EXCEEDS}${MAX_METADATA_ENTRIES} entries`);
   }
   const state = { nodes: 1, stack: new Set() };
   const normalizedMetadata = Object.create(null);
@@ -2142,7 +2199,7 @@ function validateMetadataArchive(payload, context) {
     if (Buffer.byteLength(jsonText, UTF8_ENCODING) > MAX_METADATA_JSON_BYTES) {
       fail(
         BOUNDS_EXCEEDED,
-        `${context}[${index}] JSON exceeds ${MAX_METADATA_JSON_BYTES} UTF-8 bytes`,
+        `${context}[${index}] JSON exceeds ${MAX_METADATA_JSON_BYTES}${TEXT_UTF_8_BYTES}`,
       );
     }
     json.assertEof();
@@ -2171,7 +2228,7 @@ function validateMetadataArchive(payload, context) {
   ) {
     fail(
       BOUNDS_EXCEEDED,
-      `${context} canonical JSON exceeds ${MAX_METADATA_JSON_BYTES} UTF-8 bytes`,
+      `${context}${TEXT_CANONICAL}JSON exceeds ${MAX_METADATA_JSON_BYTES}${TEXT_UTF_8_BYTES}`,
     );
   }
   return normalizedMetadata;
@@ -2186,15 +2243,16 @@ function validateTransactionPayload(
     payload,
     authorityLiteral,
     expectedNetworkId,
+    assertTransferPayloadByteBound,
     (executable, authorityPublicKey) => {
       const sourceOwner = validateTransferExecutable(
         executable,
-        "transaction payload.executable",
+        CONTEXT_TRANSACTION_PAYLOAD_EXECUTABLE,
       );
       if (!sourceOwner.equals(authorityPublicKey)) {
         fail(
           AUTHORITY_MISMATCH,
-          "source asset owner does not match transaction authority",
+          ("source asset owner " + TEXT_DOES_NOT_MATCH + "transaction authority"),
         );
       }
     },
@@ -2210,19 +2268,20 @@ function validateInstructionTransactionPayload(
     payload,
     authorityLiteral,
     expectedNetworkId,
+    assertTransactionPayloadByteBound,
     (executable) => {
       if (executable.length < 4) {
-        fail(MALFORMED_PAYLOAD, "transaction payload.executable is truncated");
+        fail(MALFORMED_PAYLOAD, (TEXT_TRANSACTION_PAYLOAD + "executable is truncated"));
       }
       if (executable.readUInt32LE(0) === 4) {
         return validateExecutableBatch(
           executable,
-          "transaction payload.executable",
+          CONTEXT_TRANSACTION_PAYLOAD_EXECUTABLE,
         );
       }
       validateBrowserInstructionExecutable(
         executable,
-        "transaction payload.executable",
+        CONTEXT_TRANSACTION_PAYLOAD_EXECUTABLE,
       );
       return { containsContractCall: false };
     },
@@ -2230,7 +2289,7 @@ function validateInstructionTransactionPayload(
       if (batchValidation.containsContractCall && feePayment.gasLimit === null) {
         fail(
           INVALID_FEE_PAYMENT,
-          "transaction payload feePayment.gasLimit is required for contract calls",
+          (TEXT_TRANSACTION_PAYLOAD_2 + "feePayment.gasLimit is required for contract calls"),
         );
       }
     },
@@ -2241,30 +2300,31 @@ function validateTransactionPayloadEnvelope(
   payload,
   authorityLiteral,
   expectedNetworkId,
+  validatePayloadBound,
   validateExecutable,
   validateFeePayment,
 ) {
-  assertTransactionPayloadByteBound(payload);
+  validatePayloadBound(payload);
   const assertedAuthority =
     authorityLiteral === null
       ? null
-      : accountInfo(authorityLiteral, "signable.authority");
-  const reader = new Reader(payload, "transaction payload");
+      : accountInfo(authorityLiteral, TEXT_SIGNABLE_AUTHORITY);
+  const reader = new Reader(payload, CONTEXT_TRANSACTION_PAYLOAD);
   const networkId = validateNetworkTransactionDomainArchive(
     reader.readField("domain"),
-    "transaction payload.domain",
+    (TEXT_TRANSACTION_PAYLOAD + "domain"),
   );
   if (expectedNetworkId !== null) {
     requireExpectedNetworkId(
       networkId,
       expectedNetworkId,
-      "transaction payload NetworkId",
+      (TEXT_TRANSACTION_PAYLOAD_2 + "NetworkId"),
     );
   }
-  const authorityArchive = reader.readField("authority");
+  const authorityArchive = reader.readField(FIELD_AUTHORITY);
   const authorityPublicKey = validateAccountArchive(
     authorityArchive,
-    "transaction payload.authority",
+    (TEXT_TRANSACTION_PAYLOAD + "authority"),
   );
   if (
     assertedAuthority !== null &&
@@ -2272,35 +2332,35 @@ function validateTransactionPayloadEnvelope(
   ) {
     fail(AUTHORITY_MISMATCH, SIGNABLE_AUTHORITY_PAYLOAD_MISMATCH_MESSAGE);
   }
-  const creationTime = reader.readField("creationTimeMs");
+  const creationTime = reader.readField(FIELD_CREATION_TIME_MS);
   if (creationTime.length !== 8) {
-    fail(MALFORMED_PAYLOAD, "transaction payload.creationTimeMs must be a u64");
+    fail(MALFORMED_PAYLOAD, (TEXT_TRANSACTION_PAYLOAD + TEXT_CREATION_TIME_MS_MUST_BE_A_U64));
   }
   const executableValidation = validateExecutable(
-    reader.readField("executable"),
+    reader.readField(TEXT_EXECUTABLE),
     authorityPublicKey,
   );
   validateRequiredTtlOption(
     reader.readField("ttlMs"),
-    "transaction payload.ttlMs",
+    (TEXT_TRANSACTION_PAYLOAD + "ttlMs"),
   );
-  validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
+  validateOption(reader.readField("nonce"), 4, (TEXT_TRANSACTION_PAYLOAD + "nonce"), {
     nonZero: true,
   });
   const feePayment = validateFeePaymentArchive(
-    reader.readField("feePayment"),
-    "transaction payload.feePayment",
+    reader.readField(FIELD_FEE_PAYMENT),
+    (TEXT_TRANSACTION_PAYLOAD + "feePayment"),
   );
   validateFeePayment?.(executableValidation, feePayment);
   validateTransactionAdmissionIntentArchive(
-    reader.readField("admissionIntent"),
+    reader.readField(FIELD_ADMISSION_INTENT),
     TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
-    "transaction payload.admissionIntent",
+    (TEXT_TRANSACTION_PAYLOAD + "admissionIntent"),
   );
   rejectLegacyFeeMetadata(
     validateMetadataArchive(
-      reader.readField("metadata"),
-      "transaction payload.metadata",
+      reader.readField(FIELD_METADATA),
+      (TEXT_TRANSACTION_PAYLOAD + "metadata"),
     ),
   );
   if (!reader.readField("attachments").equals(Buffer.of(0))) {
@@ -2338,6 +2398,40 @@ export function inspectCanonicalTransactionPayloadBindings(
   expectedAuthority,
   expectedAdmissionIntent,
 ) {
+  return inspectTransactionPayloadBindings(
+    payloadBytes,
+    expectedAuthority,
+    expectedAdmissionIntent,
+    MAX_EXECUTION_PAYLOAD_BYTES,
+    assertTransactionPayloadByteBound,
+  );
+}
+
+/**
+ * @internal Multisig and contract-call drafts retain the ordinary payload bound;
+ * their admission intent must still match the caller's explicit expectation.
+ */
+export function _inspectOrdinaryCanonicalTransactionPayloadBindings(
+  payloadBytes,
+  expectedAuthority,
+  expectedAdmissionIntent,
+) {
+  return inspectTransactionPayloadBindings(
+    payloadBytes,
+    expectedAuthority,
+    expectedAdmissionIntent,
+    MAX_PAYLOAD_BYTES,
+    assertTransferPayloadByteBound,
+  );
+}
+
+function inspectTransactionPayloadBindings(
+  payloadBytes,
+  expectedAuthority,
+  expectedAdmissionIntent,
+  maximumBytes,
+  validatePayloadBound,
+) {
   const expectedAdmissionTag = expectedAdmissionIntent === "ordinary"
     ? TRANSACTION_ADMISSION_ORDINARY_TAG
     : expectedAdmissionIntent === "queue_plan_synced"
@@ -2346,55 +2440,55 @@ export function inspectCanonicalTransactionPayloadBindings(
   if (expectedAdmissionTag === null) {
     fail(UNSUPPORTED_PAYLOAD, "transaction payload requires one explicit expected admission intent");
   }
-  const payload = bytes(payloadBytes, "transaction payload", {
-    maxBytes: MAX_EXECUTION_PAYLOAD_BYTES,
+  const payload = bytes(payloadBytes, CONTEXT_TRANSACTION_PAYLOAD, {
+    maxBytes: maximumBytes,
   });
-  assertTransactionPayloadByteBound(payload);
-  const reader = new Reader(payload, "transaction payload");
+  validatePayloadBound(payload);
+  const reader = new Reader(payload, CONTEXT_TRANSACTION_PAYLOAD);
   const networkId = validateNetworkTransactionDomainArchive(
     reader.readField("domain"),
-    "transaction payload.domain",
+    (TEXT_TRANSACTION_PAYLOAD + "domain"),
   );
-  const authorityArchive = reader.readField("authority");
+  const authorityArchive = reader.readField(FIELD_AUTHORITY);
   if (expectedAuthority !== null) {
     const expectedAuthorityArchive = Buffer.from(
       encodeAccountIdNoritoValue(
         expectedAuthority,
-        "transaction payload expected authority",
+        (TEXT_TRANSACTION_PAYLOAD_2 + "expected authority"),
       ),
     );
     if (!authorityArchive.equals(expectedAuthorityArchive)) {
       fail(
         AUTHORITY_MISMATCH,
-        "transaction payload authority does not match the requested signer",
+        (TEXT_TRANSACTION_PAYLOAD_2 + "authority " + TEXT_DOES_NOT_MATCH + "the requested signer"),
       );
     }
   }
-  const creationTimeArchive = reader.readField("creationTimeMs");
+  const creationTimeArchive = reader.readField(FIELD_CREATION_TIME_MS);
   if (creationTimeArchive.length !== 8) {
-    fail(MALFORMED_PAYLOAD, "transaction payload.creationTimeMs must be a u64");
+    fail(MALFORMED_PAYLOAD, (TEXT_TRANSACTION_PAYLOAD + TEXT_CREATION_TIME_MS_MUST_BE_A_U64));
   }
-  const executableArchive = reader.readField("executable");
+  const executableArchive = reader.readField(TEXT_EXECUTABLE);
   const ttlMs = validateOption(
     reader.readField("ttlMs"),
     8,
-    "transaction payload.ttlMs",
+    (TEXT_TRANSACTION_PAYLOAD + "ttlMs"),
     { nonZero: true },
   );
-  if (validateOption(reader.readField("nonce"), 4, "transaction payload.nonce", {
+  if (validateOption(reader.readField("nonce"), 4, (TEXT_TRANSACTION_PAYLOAD + "nonce"), {
     nonZero: true,
   }) !== null) {
-    fail(UNSUPPORTED_PAYLOAD, "transaction payload.nonce must be absent");
+    fail(UNSUPPORTED_PAYLOAD, (TEXT_TRANSACTION_PAYLOAD + "nonce must be absent"));
   }
-  const feePaymentArchive = reader.readField("feePayment");
+  const feePaymentArchive = reader.readField(FIELD_FEE_PAYMENT);
   validateTransactionAdmissionIntentArchive(
-    reader.readField("admissionIntent"),
+    reader.readField(FIELD_ADMISSION_INTENT),
     expectedAdmissionTag,
-    "transaction payload.admissionIntent",
+    (TEXT_TRANSACTION_PAYLOAD + "admissionIntent"),
   );
-  const metadataArchive = reader.readField("metadata");
+  const metadataArchive = reader.readField(FIELD_METADATA);
   rejectLegacyFeeMetadata(
-    validateMetadataArchive(metadataArchive, "transaction payload.metadata"),
+    validateMetadataArchive(metadataArchive, (TEXT_TRANSACTION_PAYLOAD + "metadata")),
   );
   if (!reader.readField("attachments").equals(Buffer.of(0))) {
     fail(UNSUPPORTED_PAYLOAD, PROOF_ATTACHMENT_UNSUPPORTED_MESSAGE);
@@ -2430,7 +2524,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   payloadBytes,
   constraints,
 ) {
-  const payload = bytes(payloadBytes, "verifying-key transaction payload", {
+  const payload = bytes(payloadBytes, (TEXT_VERIFYING_KEY_TRANSACTION + "payload"), {
     maxBytes: MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES,
   });
   if (
@@ -2439,7 +2533,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   ) {
     fail(
       BOUNDS_EXCEEDED,
-      `verifying-key transaction payload must contain 1..=${MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES} bytes`,
+      `${TEXT_VERIFYING_KEY_TRANSACTION}payload${TEXT_MUST_CONTAIN_2}1..=${MAX_VERIFYING_KEY_DRAFT_PAYLOAD_BYTES} bytes`,
     );
   }
   const expectedNetworkId = exactNetworkId(
@@ -2458,49 +2552,49 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
     );
   }
 
-  const reader = new Reader(payload, "verifying-key transaction payload");
+  const reader = new Reader(payload, (TEXT_VERIFYING_KEY_TRANSACTION + "payload"));
   const networkId = validateNetworkTransactionDomainArchive(
     reader.readField("domain"),
-    "verifying-key transaction payload.domain",
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.domain"),
   );
   if (!networkId.equals(expectedNetworkId)) {
     fail(
       "network_mismatch",
-      "verifying-key transaction payload changed the configured NetworkId",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload changed the configured NetworkId"),
     );
   }
-  const authorityArchive = reader.readField("authority");
+  const authorityArchive = reader.readField(FIELD_AUTHORITY);
   validateAccountArchive(
     authorityArchive,
-    "verifying-key transaction payload.authority",
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.authority"),
   );
   if (!authorityArchive.equals(accountArchive(expectedAuthority))) {
     fail(
       AUTHORITY_MISMATCH,
-      "verifying-key transaction payload changed the requested authority",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload changed the requested authority"),
     );
   }
-  const creationTime = reader.readField("creationTimeMs");
+  const creationTime = reader.readField(FIELD_CREATION_TIME_MS);
   if (creationTime.length !== 8) {
     fail(
       MALFORMED_PAYLOAD,
-      "verifying-key transaction payload.creationTimeMs must be a u64",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload." + TEXT_CREATION_TIME_MS_MUST_BE_A_U64),
     );
   }
 
   const executable = new Reader(
-    reader.readField("executable"),
-    "verifying-key transaction payload.executable",
+    reader.readField(TEXT_EXECUTABLE),
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload." + TEXT_EXECUTABLE),
   );
   if (executable.readU32("variant") !== 0) {
     fail(
       UNSUPPORTED_EXECUTABLE,
-      "verifying-key transaction payload must contain native instructions",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload" + TEXT_MUST_CONTAIN_2 + "native instructions"),
     );
   }
   const instructions = new Reader(
-    executable.readField("instructions"),
-    "verifying-key transaction payload.instructions",
+    executable.readField(FIELD_INSTRUCTIONS),
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.instructions"),
   );
   const instructionCount = instructions.readU64("count");
   if (
@@ -2509,7 +2603,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   ) {
     fail(
       BOUNDS_EXCEEDED,
-      "verifying-key transaction payload contains too many instructions",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload contains too many instructions"),
     );
   }
   const instructionArchives = [];
@@ -2521,7 +2615,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   if (instructionCount !== 1n) {
     fail(
       UNSUPPORTED_INSTRUCTION,
-      "verifying-key transaction payload must contain exactly one instruction",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload" + TEXT_MUST_CONTAIN_2 + "exactly one instruction"),
     );
   }
   const [instructionArchive] = instructionArchives;
@@ -2532,39 +2626,39 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   } catch (error) {
     fail(
       MALFORMED_INSTRUCTION,
-      `verifying-key transaction payload contains a non-canonical instruction: ${error.message}`,
+      `${TEXT_VERIFYING_KEY_TRANSACTION}payload contains a non-canonical instruction: ${error.message}`,
     );
   }
 
   validateRequiredTtlOption(
     reader.readField("ttlMs"),
-    "verifying-key transaction payload.ttlMs",
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.ttlMs"),
   );
   validateOption(
     reader.readField("nonce"),
     4,
-    "verifying-key transaction payload.nonce",
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.nonce"),
     { nonZero: true },
   );
   validateFeePaymentArchive(
-    reader.readField("feePayment"),
-    "verifying-key transaction payload.feePayment",
+    reader.readField(FIELD_FEE_PAYMENT),
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.feePayment"),
   );
   validateTransactionAdmissionIntentArchive(
-    reader.readField("admissionIntent"),
+    reader.readField(FIELD_ADMISSION_INTENT),
     TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG,
-    "verifying-key transaction payload.admissionIntent",
+    (TEXT_VERIFYING_KEY_TRANSACTION + "payload.admissionIntent"),
   );
   rejectLegacyFeeMetadata(
     validateMetadataArchive(
-      reader.readField("metadata"),
-      "verifying-key transaction payload.metadata",
+      reader.readField(FIELD_METADATA),
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload.metadata"),
     ),
   );
   if (!reader.readField("attachments").equals(Buffer.of(0))) {
     fail(
       UNSUPPORTED_PAYLOAD,
-      "verifying-key transaction payload must not contain proof attachments",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "payload must not contain proof attachments"),
     );
   }
   reader.assertEof();
@@ -2579,7 +2673,7 @@ export function decodeCanonicalVerifyingKeyTransactionPayload(
   ) {
     fail(
       UNSUPPORTED_INSTRUCTION,
-      `verifying-key transaction payload must contain exactly one ${variant} instruction`,
+      `${TEXT_VERIFYING_KEY_TRANSACTION}payload${TEXT_MUST_CONTAIN_2}exactly one ${variant} ${TEXT_INSTRUCTION}`,
     );
   }
   return verifyingKeys[variant];
@@ -2591,13 +2685,13 @@ function normalizeSignature(signature) {
     ArrayBuffer.isView(signature) ||
     signature instanceof ArrayBuffer
   ) {
-    return bytes(signature, "signature", { maxBytes: 64 });
+    return bytes(signature, FIELD_SIGNATURE, { maxBytes: 64 });
   }
-  signature = snapshotAllowedFields(signature, SIGNATURE_FIELDS, "signature");
+  signature = snapshotAllowedFields(signature, SIGNATURE_FIELDS, FIELD_SIGNATURE);
   if (signature.algorithm !== undefined && signature.alg !== undefined) {
     fail(INVALID_INPUT, "signature must not provide both algorithm and alg");
   }
-  const byteAliases = ["signature", "bytes", "payload"].filter(
+  const byteAliases = [FIELD_SIGNATURE, "bytes", "payload"].filter(
     (field) => signature[field] !== undefined,
   );
   if (byteAliases.length !== 1) {
@@ -2683,7 +2777,7 @@ export function buildBrowserVerifyingKeyTransactionPayload(input, operation) {
   if (normalized.instructions.length !== 1) {
     fail(
       UNSUPPORTED_INSTRUCTION,
-      "verifying-key transaction must contain exactly one instruction",
+      (TEXT_VERIFYING_KEY_TRANSACTION + "must contain exactly one " + TEXT_INSTRUCTION),
     );
   }
   const payload = encodeInstructionTransactionPayload(normalized);
@@ -2772,7 +2866,7 @@ function validateBrowserTransactionSignable(
     signable.networkId,
     SIGNABLE_NETWORK_ID_CONTEXT,
   );
-  const authorityLiteral = exactString(signable.authority, "signable.authority", {
+  const authorityLiteral = exactString(signable.authority, TEXT_SIGNABLE_AUTHORITY, {
     maxBytes: 512,
   });
   const authority = validatePayload(
@@ -2909,12 +3003,12 @@ function finalizeBrowserTransaction(
     signable.authority,
     expectedNetworkId,
   );
-  const publicKey = bytes(signingPublicKey, "signingPublicKey", {
+  const publicKey = bytes(signingPublicKey, FIELD_SIGNING_PUBLIC_KEY, {
     hex: true,
     maxBytes: 32,
   });
   if (publicKey.length !== 32) {
-    fail(INVALID_PUBLIC_KEY, "signingPublicKey must be exactly 32 bytes");
+    fail(INVALID_PUBLIC_KEY, ("signingPublicKey " + TEXT_MUST_BE_EXACTLY_32_BYTES));
   }
   if (signable.signingPublicKey != null) {
     const assertedPublicKey = bytes(
@@ -3018,7 +3112,7 @@ function signedTransactionPayload(signedTransaction) {
   }
   const bare = versioned.subarray(1);
   const reader = new Reader(bare, "signed transaction");
-  const signatureValue = new Reader(reader.readField("signature"), "signed transaction.signature");
+  const signatureValue = new Reader(reader.readField(FIELD_SIGNATURE), "signed transaction.signature");
   const rawSignature = validateConstVecBytes(
     signatureValue.readField("payload"),
     "signed transaction.signature.payload",

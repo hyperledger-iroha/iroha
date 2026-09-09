@@ -18,6 +18,8 @@ pub const STATE_CURSOR_SCHEMA_HASH_DOMAIN_V1: &[u8] = b"KOTODAMA_STATE_MAP_CURSO
 /// map, complete map schema, and canonical encoded key before using the continuation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::state_cursor::StateCursorV1")]
 pub struct StateCursorV1 {
     /// Exact host-provided contract instance identity.
     pub instance: String,
@@ -196,5 +198,17 @@ mod tests {
         invalid = cursor();
         invalid.map = "balances/child".parse().unwrap();
         assert!(!invalid.validate());
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::StateCursorV1>(
+            "iroha_data_model::smart_contract::state_cursor::StateCursorV1",
+        );
     }
 }

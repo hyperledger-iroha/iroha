@@ -23,6 +23,8 @@ struct PayloadRecord<T> {
 
 #[derive(crate::NoritoSerialize, crate::NoritoDeserialize, Debug, PartialEq)]
 #[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
+#[derive(crate::NoritoSchema)]
+#[norito_schema(name = "norito.test.core.payload_tests.FramedRecord")]
 struct FramedRecord<T: iroha_schema::IntoSchema> {
     value: T,
     items: Vec<Option<T>>,

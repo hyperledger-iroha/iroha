@@ -50,3 +50,31 @@ fn compression_tag_is_rejected_before_missing_or_uncompressed_payload() {
         ));
     }
 }
+
+/// A nested field with payload encoding and no typed-frame identity or marker.
+#[derive(norito::derive::SerializePayload)]
+pub(crate) struct PayloadOnly(pub(crate) u64);
+
+/// Check field bytes, exact lengths and counting across all supported layouts.
+pub(crate) fn assert_same_payload(
+    borrowed: &impl norito::SerializePayload,
+    owned: &impl norito::SerializePayload,
+) {
+    for flags in supported_layouts() {
+        let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+        let mut actual = Vec::new();
+        let mut expected = Vec::new();
+        norito::core::serialize_to_buffer(borrowed, &mut actual).expect("borrowed field");
+        norito::core::serialize_to_buffer(owned, &mut expected).expect("owned field");
+        assert_eq!(
+            actual, expected,
+            "field payload changed for flags {flags:#04x}"
+        );
+        assert_eq!(borrowed.encoded_len_exact(), owned.encoded_len_exact());
+        assert_eq!(borrowed.encoded_len_exact(), Some(actual.len()));
+        assert_eq!(
+            norito::core::encoded_payload_len(borrowed).unwrap(),
+            actual.len()
+        );
+    }
+}

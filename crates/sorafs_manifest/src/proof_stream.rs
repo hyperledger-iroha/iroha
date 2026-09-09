@@ -8,6 +8,8 @@ use thiserror::Error;
 /// Maximum `sample_count` accepted for PoR proof-stream requests.
 pub const MAX_PROOF_STREAM_SAMPLE_COUNT: u32 = 500;
 /// Streaming proof request envelope (PoR / PDP / PoTR).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::proof_stream::ProofStreamRequestV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub struct ProofStreamRequestV1 {
     /// Canonical manifest digest (BLAKE3-256).
@@ -146,6 +148,8 @@ impl ProofStreamRequestV1 {
     }
 }
 /// Supported proof kinds for streaming.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::proof_stream::ProofStreamKind")]
 #[derive(Debug, Clone, Copy, Default, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub enum ProofStreamKind {
     /// Proof-of-Retrievability samples.
@@ -157,6 +161,8 @@ pub enum ProofStreamKind {
     Potr,
 }
 /// Tier hints used by PDP/PoTR schedulers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::proof_stream::ProofStreamTier")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 pub enum ProofStreamTier {
     /// Hot tier (low latency).
@@ -927,3 +933,6 @@ mod tests {
         assert!(matches!(error, json::Error::DuplicateField { .. }));
     }
 }
+
+#[cfg(test)]
+include!("proof_stream/captured_owner_identity_tests.rs");

@@ -30,6 +30,8 @@ pub enum RetentionMetadataError {
     DerivedFieldsMismatch,
 }
 /// Retention sources applied to compute the effective expiry epoch.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::retention::RetentionSourceKindV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(tag = "source", rename_all = "snake_case")]
 pub enum RetentionSourceKindV1 {
@@ -60,6 +62,8 @@ impl fmt::Display for RetentionSourceKindV1 {
     }
 }
 /// Retention-source record persisted alongside manifest metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::retention::RetentionSourceV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct RetentionSourceV1 {
     /// Schema version (`RETENTION_SOURCE_VERSION_V1`).
@@ -396,3 +400,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("retention/captured_owner_identity_tests.rs");

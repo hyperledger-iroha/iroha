@@ -13,6 +13,8 @@ use norito::codec::{Decode, Encode};
 use std::{io, net::AddrParseError};
 use thiserror::Error;
 mod dial_policy;
+#[cfg(test)]
+mod frame_identity_tests;
 pub mod network;
 pub mod peer;
 mod preauth;

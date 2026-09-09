@@ -1974,7 +1974,7 @@ async fn runtime_metrics_and_node_capabilities_ok() {
     assert_eq!(caps.signed_transaction_schema_hash_hex.len(), 32);
     assert_eq!(
             caps.signed_transaction_schema_hash_hex,
-            hex::encode(<iroha_data_model::transaction::SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
+            hex::encode(norito::schema::identity::frame_hash::<iroha_data_model::transaction::SignedTransaction>())
         );
     assert!(caps.crypto.sm.acceleration.scalar);
     assert!(caps.query.aggregate.v1);

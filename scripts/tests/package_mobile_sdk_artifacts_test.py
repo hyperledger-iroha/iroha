@@ -155,6 +155,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             [
                 "/bin/bash",
                 str(self.repository / "scripts/package_mobile_sdk_artifacts.sh"),
+                "--lockfile-path", str(self.repository / "Cargo.lock"),
                 "--root",
                 str(self.repository),
                 *platform_arguments,
@@ -195,10 +196,13 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
                 import zipfile
 
                 parser = argparse.ArgumentParser()
+                parser.add_argument("--lockfile-path", required=True)
                 parser.add_argument("--xcframework", required=True)
                 parser.add_argument("--output", required=True)
                 parser.add_argument("--scratch-dir", required=True)
                 arguments = parser.parse_args()
+                if Path(arguments.lockfile_path) != Path(__file__).resolve().parents[1] / "Cargo.lock":
+                    raise SystemExit("selected lock was not forwarded to the archive owner")
                 source = Path(arguments.xcframework)
                 output = Path(arguments.output)
                 scratch = Path(arguments.scratch_dir)
@@ -563,6 +567,7 @@ class MobileSdkPackagePublisherTests(unittest.TestCase):
             [
                 "/bin/bash",
                 str(self.repository / "scripts/package_mobile_sdk_artifacts.sh"),
+                "--lockfile-path", str(self.repository / "Cargo.lock"),
                 "--root",
                 str(self.repository),
                 "--android",

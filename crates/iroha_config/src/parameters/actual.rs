@@ -5013,6 +5013,8 @@ impl_default!(Pipeline => {
 /// The complete projection contains every active or retired lane identifier ever
 /// observed by the state. Retired entries remain consensus-relevant because a
 /// later recreation derives its next incarnation from this retained generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 pub struct SumeragiV2LaneLifecycleEntry {
     /// Canonical lane identifier.
@@ -5915,6 +5917,8 @@ pub struct Kura {
     pub lane_history_retention: NonZeroUsize,
     /// Authenticated replica-advert retention, expiry, and refresh policy.
     pub replica_advert: KuraReplicaAdvertPolicy,
+    /// Immutable bounded content-addressed FASTPQ artifact storage policy.
+    pub fastpq_artifacts: KuraFastpqArtifactPolicy,
     /// Whether to append new blocks as JSONL to `blocks.jsonl` under the active Kura lane.
     pub debug_output_new_blocks: bool,
     /// Maximum merge-ledger entries cached in memory (0 = default).
@@ -5923,6 +5927,53 @@ pub struct Kura {
     pub fsync_mode: FsyncMode,
     /// Interval used when batching fsync calls.
     pub fsync_interval: Duration,
+}
+/// Immutable storage limits for opaque FASTPQ artifacts; these limits confer no proof authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct KuraFastpqArtifactPolicy {
+    /// Maximum complete artifact bytes, including its nominal encoded wrapper.
+    pub max_artifact_bytes: NonZeroUsize,
+    /// Maximum stable content records; one publication temporary is counted separately.
+    pub max_artifacts: NonZeroUsize,
+    /// Maximum actual stable plus temporary file bytes retained in the namespace.
+    pub max_total_bytes: NonZeroU64,
+}
+/// Invalid configured FASTPQ storage geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum KuraFastpqArtifactPolicyError {
+    /// The namespace cannot hold one maximum-size artifact.
+    #[error("FASTPQ artifact byte cap exceeds its aggregate storage byte cap")]
+    ArtifactExceedsAggregate,
+    /// A bounded read cannot represent its one-byte overflow probe.
+    #[error("FASTPQ artifact byte cap leaves no representable overflow probe")]
+    ArtifactReadOverflow,
+    /// The stable count cannot represent the additional publication temporary.
+    #[error("FASTPQ stable artifact count leaves no representable temporary slot")]
+    TemporaryCountOverflow,
+}
+impl KuraFastpqArtifactPolicy {
+    /// Validate the complete immutable storage policy before opening its namespace.
+    ///
+    /// # Errors
+    /// Rejects a per-artifact cap above the aggregate cap or unrepresentable
+    /// bounded-read and stable-plus-temporary geometry.
+    pub fn validate(self) -> core::result::Result<(), KuraFastpqArtifactPolicyError> {
+        let artifact_bytes = u64::try_from(self.max_artifact_bytes.get())
+            .map_err(|_| KuraFastpqArtifactPolicyError::ArtifactReadOverflow)?;
+        if artifact_bytes > self.max_total_bytes.get() {
+            return Err(KuraFastpqArtifactPolicyError::ArtifactExceedsAggregate);
+        }
+        if self.max_artifact_bytes.get().checked_add(1).is_none()
+            || artifact_bytes.checked_add(1).is_none()
+        {
+            return Err(KuraFastpqArtifactPolicyError::ArtifactReadOverflow);
+        }
+        self.max_artifacts
+            .get()
+            .checked_add(1)
+            .ok_or(KuraFastpqArtifactPolicyError::TemporaryCountOverflow)?;
+        Ok(())
+    }
 }
 /// Authenticated replica-advert policy used to authorize canonical body eviction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -10811,19 +10862,19 @@ pub struct SorafsMeteringSmoothing {
     /// Alpha applied to the PoR-success exponential moving average.
     pub por_success_alpha: Option<f64>,
 }
+mod stream_token_hardware;
+pub use stream_token_hardware::{
+    SorafsStreamTokenAttesterConfig, SorafsStreamTokenAuthorityConfig,
+    SorafsStreamTokenHardwareConfig, SorafsStreamTokenObserverConfig,
+};
+
 /// Stream-token issuance configuration for chunk-range gateways.
 #[derive(Debug, Clone)]
 pub struct SorafsTokenConfig {
     /// Enable stream-token issuance.
     pub enabled: bool,
-    /// Opaque runtime-only authenticated external signer handle.
-    pub signer_handle: Option<String>,
-    /// Exact Ed25519 public key bound to the runtime signer.
-    pub signer_public_key: Option<[u8; 32]>,
-    /// Exact non-zero deployment adapter revision bound to the runtime signer.
-    pub signer_revision: Option<u64>,
-    /// Exact non-zero digest of the runtime signer's public policy.
-    pub signer_policy_digest: Option<[u8; 32]>,
+    /// Complete hardware signer and independent attester/observer trust, absent when disabled.
+    pub hardware: Option<SorafsStreamTokenHardwareConfig>,
     /// Deployment-owned quota, sealed-sequence, and callback-outbox provider handle.
     pub admission_provider_handle: Option<String>,
     /// Exact non-zero external admission-provider contract revision.
@@ -10838,8 +10889,6 @@ pub struct SorafsTokenConfig {
     pub admission_reconcile_max_items: u32,
     /// Maximum lifetime of one cross-replica concurrency lease.
     pub admission_lease_ttl_ms: u64,
-    /// Public-key version advertised in issued tokens.
-    pub key_version: u32,
     /// Default TTL applied to tokens (seconds).
     pub default_ttl_secs: u64,
     /// Default concurrent-stream budget encoded per token.
@@ -10852,10 +10901,7 @@ pub struct SorafsTokenConfig {
 impl_default!(SorafsTokenConfig => {
         Self {
             enabled: defaults::sorafs::storage::tokens::ENABLED,
-            signer_handle: None,
-            signer_public_key: None,
-            signer_revision: None,
-            signer_policy_digest: None,
+            hardware: None,
             admission_provider_handle: None,
             admission_provider_revision: None,
             admission_provider_policy_digest: None,
@@ -10865,7 +10911,6 @@ impl_default!(SorafsTokenConfig => {
             admission_reconcile_max_items:
                 defaults::sorafs::storage::tokens::ADMISSION_RECONCILE_MAX_ITEMS,
             admission_lease_ttl_ms: defaults::sorafs::storage::tokens::ADMISSION_LEASE_TTL_MS,
-            key_version: defaults::sorafs::storage::tokens::KEY_VERSION,
             default_ttl_secs: defaults::sorafs::storage::tokens::DEFAULT_TTL_SECS,
             default_max_streams: defaults::sorafs::storage::tokens::DEFAULT_MAX_STREAMS,
             default_rate_limit_bytes: defaults::sorafs::storage::tokens::DEFAULT_RATE_LIMIT_BYTES,

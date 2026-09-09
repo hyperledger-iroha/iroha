@@ -1188,6 +1188,8 @@ impl ChunkSlice {
 }
 const POR_COMMITMENT_VERSION_V1: u8 = 1;
 const POR_COMMITMENT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.node.por.commitment.digest.v1\0";
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::store::StoredPorCommitmentV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct StoredPorCommitmentV1 {
     version: u8,
@@ -1276,6 +1278,8 @@ impl StoredPorCommitmentV1 {
         Ok(hasher.finalize().into())
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::store::ManifestIndex")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ManifestIndex {
     version: u8,
@@ -1324,6 +1328,8 @@ struct ManifestIndexEntry {
     #[norito(default)]
     last_access: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::store::StoredManifestRecord")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct StoredManifestRecord {
     manifest_id: String,

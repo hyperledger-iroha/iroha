@@ -1235,7 +1235,7 @@ mod tests {
             .as_object()
             .expect("daily-limit permission object");
         assert_eq!(daily_limit_object.len(), 3);
-        assert_eq!(daily_limit_object["account_domain"].as_str(), Some("hbl"));
+        assert_eq!(daily_limit_object["account_domain"], norito::json!(["hbl"]));
         assert_eq!(daily_limit_object["account_dataspace"].as_u64(), Some(10));
         let broad_legacy_scope = norito::json!({
             "asset_definition": (availability.asset_definition.to_string()),

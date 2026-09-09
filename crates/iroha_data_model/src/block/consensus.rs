@@ -1820,11 +1820,7 @@ impl TryFrom<NativeAmxParticipantSettlementWire> for NativeAmxParticipantSettlem
         )
     }
 }
-impl norito::core::NoritoDeserialize<'_> for NativeAmxParticipantSettlement {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for NativeAmxParticipantSettlement {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -2140,11 +2136,7 @@ impl TryFrom<NativeAmxAttestationQcV2Wire> for NativeAmxAttestationQcV2 {
         )
     }
 }
-impl norito::core::NoritoDeserialize<'_> for NativeAmxAttestationQcV2 {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for NativeAmxAttestationQcV2 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("native AMX attestation QC wire invariant must hold")

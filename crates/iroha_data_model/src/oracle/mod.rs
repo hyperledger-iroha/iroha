@@ -31,6 +31,8 @@ pub const DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT: u32 = 3;
 /// `DeFi` oracle domain for cover policy observation payloads.
 pub const DEFI_ORACLE_DOMAIN_COVER_POLICY: u32 = 4;
 /// Key used to store `DeFi` oracle attestations by contract ABI domain and subject id.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::DefiOracleAttestationKey")]
 #[derive(
     Clone,
     Copy,
@@ -127,6 +129,8 @@ pub struct DefiOracleAttestationSource {
 /// `source_events` can link the attestation back to retained native feed events for full
 /// auditability. Empty `source_events` are also valid for direct provider-signed attestations when
 /// the provider account is itself the submitting authority and signature controller.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::DefiOracleAttestation")]
 #[derive(
     Clone,
     Debug,
@@ -172,6 +176,8 @@ pub struct DefiOracleAttestation {
     pub source_events: Vec<DefiOracleAttestationSource>,
 }
 /// Identifier for an oracle feed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::FeedId")]
 #[derive(
     Clone,
     Debug,
@@ -214,6 +220,8 @@ impl FromStr for FeedId {
     }
 }
 /// Version number for a feed configuration (monotonic per feed).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::FeedConfigVersion")]
 #[derive(
     Copy,
     Clone,
@@ -459,6 +467,8 @@ impl OracleChangeStatus {
     }
 }
 /// Identifier for oracle change proposals (hash).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleChangeId")]
 #[derive(
     Clone,
     Copy,
@@ -1696,6 +1706,8 @@ pub struct OracleReward {
     pub amount: Quantity,
 }
 /// Key identifying per-provider aggregation statistics for a feed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleProviderKey")]
 #[derive(
     Clone,
     Debug,
@@ -1831,6 +1843,8 @@ pub struct OracleProviderStatsRecord {
     pub stats: OracleProviderStats,
 }
 /// Identifier for an oracle dispute.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleDisputeId")]
 #[derive(
     Clone,
     Copy,

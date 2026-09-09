@@ -15,6 +15,8 @@ macro_rules! record {
     };
 }
 /// Closed native custody namespaces, with independent account derivation domains.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nft_market::NftCustodyPurposeV1")]
 #[derive(
     Debug,
     Clone,
@@ -48,6 +50,8 @@ pub enum NftCustodyPurposeV1 {
 }
 record! {
     /// Permanent custody identity and bounded reservation history for one NFT.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft_market::NftCustodyRecordV1")]
     pub struct NftCustodyRecordV1 {
         /// Version of the retained native format.
         pub version: u16,
@@ -117,6 +121,8 @@ pub enum NftSaleStatusV1 {
 }
 record! {
     /// Exact offer terms and permanent lifecycle decision.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::nft_market::NftSaleRecordV1")]
     pub struct NftSaleRecordV1 {
         /// Version of the retained format.
         pub version: u16,

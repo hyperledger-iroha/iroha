@@ -26,6 +26,8 @@ use tokio::{
     sync::{Barrier, mpsc},
     time::Duration,
 };
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p::TestMessage")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct TestMessage(String);
 // Classify test payloads into a generic topic
@@ -34,6 +36,8 @@ impl iroha_p2p::network::message::ClassifyTopic for TestMessage {
         iroha_p2p::network::message::Topic::Other
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p::MultiTopic")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct MultiTopic {
     chan: u8,

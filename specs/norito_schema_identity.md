@@ -1,9 +1,20 @@
 # Canonical Norito schema identity
 
-This is the reviewed first-release cutover design. The identity kernel and its
-initial fixtures are implemented; **active codec cutover and complete type
-coverage remain pending**. Implementing `NoritoSchema` alone does not change
-existing headers.
+Norito typed frames now use one declared identity in both directions. The codec,
+derive, model and workspace consumer migration compiles all workspace test
+targets. The [compilation repair](../docs/cargo_test_compile_validation.md)
+records focused regressions and separates these results from full runtime and
+feature qualification. This is a first-release cutover without alternate
+accepted hashes or compatibility paths.
+
+The corrected codec candidate passes 1,334 default tests and 1,336 tests with
+`schema-structural`, each with one existing ignored generator. Codec and derive
+test Clippy passes with warnings denied. All 60 derive unit tests, 14 strict JSON
+tests and four UI harness tests pass on the same source. Earlier separate
+captures retain passing Norito doctests and all 950 default SoraFS library tests,
+including the captured revocation preimage. These captures are not a full
+workspace or release qualification. See the
+[current cutover evidence](#active-identity-cutover-2026-09-09).
 
 The concrete model fixtures now preserve seven owned records and two
 encoding-only projections: Action, DataEvent, the three execution contexts,
@@ -39,6 +50,21 @@ projections, such as an owned wrapper advertising its inner type's frame, need
 an explicit manual identity implementation. Markers used by `HashOf<T>` and
 `SignatureOf<T>` need an identity, not a payload codec.
 
+Manual borrowed producers declare the logical value they serialize. An iterator
+implementation parameter does not enter that identity: a slice iterator and a
+chained iterator producing the same element type share the borrowed sequence
+identity and project the same `Vec<T>` root frame. Element types still compose
+nominally. Their bare payload implementation requires only payload codecs;
+typed framing separately requires the declared identity.
+
+HTTP producers and typed consumers use one shared wire definition. SCCP
+capability and recent-message records are owned by `iroha_sccp::api`; bounded
+PoR status pages are owned by `sorafs_manifest::por`. Torii, the Rust SDK and
+CLI import these owners directly. Duplicate SDK/server declarations and their
+competing frame identities are removed, without aliases or alternate accepted
+hashes. Declared producer names remain protocol identities independent of the
+Rust module that now owns their implementation.
+
 There will be no source-path registry, alternate accepted header names,
 compatibility dispatch or opt-in framing mode. Actual pre-cutover names must be
 captured under the pinned compiler: public imports can conceal private `model`
@@ -46,22 +72,29 @@ modules retained by `iroha_data_model_derive/src/model.rs`.
 
 ## Final trait and framing boundary
 
-`SerializePayload` now owns object-safe serialization and encoded-size methods.
-Bounded writers, packed fields and borrowed model/Core adapters use that
-contract. Bare `Encode` and sequence containers accept payload-only children;
-framed writers retain `NoritoSerialize`. The typed derive emits both contracts,
-while `#[derive(SerializePayload)]` emits only payload serialization and rejects
-frame-schema attributes. Manual implementations and qualified calls use the
-same ownership boundary; no old payload-method alias remains.
+`SerializePayload` owns object-safe serialization and encoded-size methods;
+`DeserializePayload<'a>` owns bounded value reconstruction. Bare `Encode` and
+`Decode`, sequence containers and canonical field decoders use these payload
+contracts without requiring frame identities on their children.
 
-`DeserializePayload<'a>` owns `deserialize` and `try_deserialize`, reconstructing
-values within the active bounded payload context. `NoritoDeserialize<'a>` is the
-typed marker above that contract and retains only the active frame hash. The
-`NoritoDeserialize`/`Decode` derive emits both implementations;
-`#[derive(DeserializePayload)]` emits only reconstruction and rejects
-`#[norito(schema_name = "...")]`. Payload-only records and their containers
-cannot acquire a typed frame decoder from their reconstruction implementation.
-Manual implementations and qualified reconstruction calls use the payload owner.
+The typed contracts are blanket implementations of the payload contract plus
+`NoritoSchema`:
+
+```rust,ignore
+pub trait NoritoSerialize: SerializePayload + NoritoSchema {}
+impl<T: SerializePayload + NoritoSchema + ?Sized> NoritoSerialize for T {}
+pub trait NoritoDeserialize<'a>: DeserializePayload<'a> + NoritoSchema {}
+impl<'a, T: DeserializePayload<'a> + NoritoSchema> NoritoDeserialize<'a> for T {}
+```
+
+Neither typed direction owns a hash method. Typed derives emit the payload
+implementation; `NoritoSchema` is declared separately. Payload-only records
+cannot acquire a typed frame API from reconstruction alone. The retired
+`#[norito(schema_name = "...")]` attribute is rejected; root projections belong
+in the canonical `#[norito_schema(...)]` declaration. All frame writers, readers,
+collection collectors and map iterators use `schema::identity::frame_hash`.
+Streaming padding follows the known container representation, without inspecting
+hashes to select a layout. Structural schema exports remain inspection data.
 
 Public `IdBox` and `BlockSignature` retain one typed frame API each, with their
 compiler-observed nominal identities and 24 immutable root/container frames.
@@ -69,10 +102,10 @@ compiler-observed nominal identities and 24 immutable root/container frames.
 payload contracts. `IdBox::try_deserialize` delegates to its carrier's fallible
 method, preserving unknown/truncated-tag errors without panicking. The
 [public-owner fixture contract](../crates/iroha_data_model/tests/fixtures/public_frame_owner_identities.md)
-records the exact captures and validation scope; these declarations do not
-activate the pending global identity transition.
+records the exact original captures and their validation scope. Model consumer
+migration and current-candidate qualification are still incomplete.
 
-The remaining atomic identity transition is:
+The implemented codec boundary is:
 
 1. `SerializePayload` and `DeserializePayload<'a>` retain their respective bare
    serialization and reconstruction responsibilities.
@@ -90,8 +123,6 @@ This keeps allocation-conscious bare streaming while preventing a type without
 an identity from entering a typed frame. `schema-structural` remains explicit
 inspection data, not a feature-selected active header digest.
 
-Until that transition, the active typed codec directions retain their existing
-`schema_hash` implementations. They are not yet bound to `NoritoSchema`.
 Bare `Decode` requires `for<'de> DeserializePayload<'de> + SerializePayload`;
 canonical field/container decoders use the payload contracts for reconstruction
 and byte comparison. Exact slice helpers combine `DeserializePayload` with
@@ -114,8 +145,316 @@ errors and the existing strict constructors. Their private `PolicyFields` and
 `MemberFields` carriers retain only JSON decoding and acquire no binary frame
 identity. Moving the generated reconstruction implementation to
 `DeserializePayload` retains this validation behavior and one reconstruction
-owner. The atomic identity transition and remaining owner/feature
-qualification are still pending.
+owner. Qualification of the remaining feature/runtime matrix is pending.
+
+## Active identity cutover (2026-09-09)
+
+The source-bound checkpoints below precede the workspace compilation repair
+linked above and retain their original validation scopes.
+
+The stack-overflow correction removes recursive participant ownership and makes
+`HashOf<T>` export the schema of its stored hash without traversing phantom `T`.
+All 32 Native AMX tests pass again after the model identity migration on source
+`b010aafd437eb82c5fd9a5adcd5c4c51379f85c5eaac6479be74a3aed6af0357`,
+including 4,096 sources through schema export, encoding, decoding, hashing and
+explicit drop. All 184 ABI tests pass on that same source. No stack-size override
+or optimization-level change is part of this correction.
+
+The complete model run on that source retains 3,718 passes, one failure and six
+ignored generators. Its sole failure exposed a separate generated named-slice
+decoder that ignored packed layout flags. Named slice decoding now delegates to
+one layout-aware payload decoder, preserving exact prefix consumption, typed
+validation errors and active resource budgets. Two independently failing
+regressions now pass across every advertised layout; decoder-only records need
+neither a serializer nor a frame identity. The corrected codec/derive suites and
+strict Clippy bind source
+`10eee68576a910c217093f70a0e3febf050af4ab3319ca0b5fc3be4617e8fa51`.
+The corrected dependent candidate binds source
+`433901ee984f27689625a8c217dec16f9364563966f8247ae4bc620be6d2be89`:
+3,720 model library tests pass with six existing generators ignored, all 184 ABI
+tests pass, and all 289 shared HTTP model library tests pass. The field regression
+and all 32 Native AMX cases also pass as explicit selections from the same model
+artifact. Both dependent library builds emit zero warnings. The shared crate's
+own default suite additionally passes its library and both integration targets,
+including the unchanged status and Android Connect wire fixtures.
+
+The shared HTTP model build identified two additional framed owners:
+`KagemushaOperationLookupV1` and `KagemushaOperationStatusV1`. Their declarations
+match four original serializer/decoder observations. All ten independently
+captured canonical root/Option/Vec frames match the candidate exactly and
+roundtrip. Bounded decoding and external finality anchoring remain enforced.
+Failed predecessor builds and the original one-failure model run remain retained;
+none is counted as a pass. The following SDK qualification advances that
+consumer batch; remaining workspace migration, strict dependent/workspace
+Clippy, model extraction and release qualification remain open.
+
+The SDK, SCCP and executor model now declare 136 additional production owners
+against 271 original serializer/decoder observations. Three required HTTP model
+owners add six observations for validation errors and DA ingest requests and
+receipts. All recorded owner bodies, field order and captured frame roots stay
+fixed. The shared library passes 293 tests, the model frame selection passes 25,
+DA passes nine and Native AMX passes all 32 on source
+`74380d062e594983f387cb2ef33f0c609bf01e46190c3cdc67570170c46202bf`.
+
+The original SDK and Torii request-witness implementations signed different
+complete frames despite equal bare payloads. Both now call one bounded borrowed
+encoder in `iroha_torii_shared`, retaining the captured SDK signing frame. The
+conflicting Torii frame is removed. The shared tests compare complete captured
+bytes, signatures, all advertised layouts and allocation bounds; Torii handler
+runtime qualification remains pending. Its bounded witness decoder retains the
+actual public model frame identity and existing resource limits.
+
+The complete SDK library passes 792 tests on source
+`852016adf21328a291d3f9e3ce50e60e0cdbbd52ed1dc30bc1266e8cee1dee0b`.
+The preceding 788-pass/three-failure run remains retained. Exact faucet metadata
+verification now includes the mandatory version-one claim marker already
+required by Torii and Core. Signed negative controls reject a missing marker,
+wrong version, wrong type and extra metadata. Expired test envelopes use coherent
+historical signed lifetimes; the proxy fixture explicitly restores blocking mode
+on its accepted socket without changing production transport or deadlines.
+The four focused checks and the complete SDK suite pass on that same source,
+with zero build warnings and no stack override. The C# follow-up replaces its
+obsolete reset binding with the canonical five-field operation binding, transcript
+and exact metadata, including the faucet version-one marker. Durable verification
+retains caller-trusted network, authority/policy and fee intent without checking
+current time. Signed positive TTL cannot outlive the authenticated operation;
+submission checks its deadline after asynchronous request preparation, immediately
+before the single HTTP dispatch. The shared signed fixture is unchanged.
+
+The C# build passes with zero warnings/errors and 187 unchanged inputs. Its 17 pure
+protocol tests pass. The broader 81-case selection passes 32 and fails 49 because
+the complete ABI-23 address validator is unavailable. Full signed expiry and faucet
+mutation execution remain unverified; broad negatives which stop at native absence
+are not downstream predicate evidence. The exact eight-path patch and independent
+parent review are retained under `target/architecture-redesign/csharp-prepared-protocol/`.
+JavaScript still lacks this prepared verification capability. Complete cross-SDK
+and native release qualification remains open.
+
+The crypto library passes 1,392 tests with three existing ignored cases on source
+`c94d02167d2634897ce8221f62292c2738007c5a91b0545241e7cfac2a4a0f85`;
+its scalar integration passes one. Two BFV tests in that run create explicit
+32/64 MiB test stacks. Unsetting `RUST_MIN_STACK` does not make those two tests
+default-stack evidence for that historical source. The subsequent correction
+and its qualification scope are recorded below.
+The grouped integration originally failed two
+stale empty-root expectations. Independent Blake2b reconstruction corrects those
+fixtures while preserving production hashing and its domain tags byte-for-byte.
+The corrected group passes all 200 tests with one existing ignored case on
+`852016adf21328a291d3f9e3ce50e60e0cdbbd52ed1dc30bc1266e8cee1dee0b`.
+These separate source records do not establish a single-source full crypto or
+release result. `consumer-candidate/sdk-and-crypto-corrections-checkpoint-3.json`
+binds the SDK and corrected crypto runs, logs and compiler artifacts.
+
+The final consumer batch binds one source, `701ddd6dbbc0088a1363671f9480ac9530ff5d94419175d908062f241898f004`,
+with 19,787 unchanged inputs and zero build warnings. Complete library runs
+pass 3,725 model, 792 SDK, 293 shared HTTP, 194 SCCP and 36 executor tests;
+all 3 SDK integration tests pass. Only the six existing model fixture generators
+are ignored. The model run includes the maximum-size Native AMX stack regression.
+All 42 changed consumer paths and the three independently reviewed stack-correction
+owners match the live working tree. The combined result is recorded in
+`consumer-candidate/canonical-consumer-qualification-checkpoint-4.json`.
+
+The node-support follow-up removes a duplicate Halo2 decoder that coupled bare
+payloads to frame identities and rejected valid caller suffixes. The three bare
+IPA records use Norito's generated bounded prefix decoder; public exact-slice
+entry points still reject trailing bytes. Only the outer verification envelope
+declares its captured frame identity. Its unchanged valid Pallas proof, complete
+root/Option/Vec frames, malformed-input and budget checks pass in all eight
+focused tests under both default and the crate's structural feature, on source
+`45cbe190596c4a2a62ac76c919599139511e39ec52701c4fef0f1e4caeac85f6`.
+
+Fifteen settlement wire owners now declare the identities measured from their
+original serializers and decoders. The timestamp/duration codecs and arithmetic
+are unchanged. All 18 library tests and three new wire-contract tests pass with
+zero build warnings on source
+`4cc08ce4a1d50f79cc5bd8957256c1d7743f5819734ef14e3cf68d193324f437`.
+The new cases preserve complete scalar/container frames, timestamp rejection,
+signed duration extremes and prefix/exact-boundary behavior. All 16 changed
+proof/settlement paths match the live working tree; both source records use the
+default stack. `consumer-candidate/node-support-wire-checkpoint-9.json` binds
+these results. This does not qualify the full proof engine or Core/Torii; their
+production graph and remaining codec consumers are still being migrated.
+
+The next compiler boundary declares only `EntrypointArgumentSchemaV1` and
+`RejectionExpectation`, the actual roots passed to the canonical framed ABI
+encoder. Their 40 original compiler-captured frames retain exact root, Option
+and Vec bytes and both directional hashes. Payload-only children remain
+unchanged. The combined library build has zero warnings on source
+`e662e6cd535965fa542971f1a03df7e0de8d02f1c0b5a98b9a937facaf06f384`
+with 19,797 unchanged inputs. All 1,091 compiler library tests and 28 entrypoint
+tests pass. The exact Native AMX module passes 26 tests, including the maximum
+4,096-source regression; a separate one-test selection repeats that regression.
+An earlier filter selected zero tests and supplies no regression evidence.
+All three stack-correction owners are unchanged and all runs use the default
+stack. `compiler-frame-owners-v1/qualification.json` and the independent
+`compiler-frame-parent-review-v1.json` retain the precise source/artifact scope.
+
+The next configuration patch removes ten obsolete frame markers from five
+payload-only types: Kura `InitMode`/`FsyncMode`, logger `Format`/`Directives`,
+and snapshot `Mode`. Their payload and JSON implementations are unchanged;
+no frame identity is invented. All 11 focused tests pass with zero build
+warnings on source
+`f4129b10bcca74a8912c3c4b6a8be0cf9113f06cf3c6ab420e88a488098bf3dc`.
+The five new tests cover exact fixed bare bytes, both explicit field layouts,
+JSON parity, invalid values and trailing-byte rejection. The initial five
+fixture failures remain recorded separately in `config-field-codec-v2/qualification.json`.
+
+Two direct hash-schema regressions guard the stack-overflow root cause: a
+referent sentinel rejects accidental phantom traversal, and a record containing
+`Option<HashOf<Self>>` has a finite schema from either root. All 46 selected
+hash/multihash tests and all 26 Native AMX tests pass on source
+`a0732816c7ca50812212459555cbe4270ee88cf52b102b151e864a9b95a4ba6a`,
+with 19,798 unchanged inputs and zero build warnings. This includes the
+4,096-source schema/codec/hash/drop regression. These selected tests have no
+enlarged-stack wrapper and run with `RUST_MIN_STACK` unset. BFV qualification is
+separately recorded below; the complete node graph and release remain open.
+The Core/Torii check on that same source passes configuration and stops at
+99 FASTPQ and two telemetry codec errors. That failed check is retained; the
+`hash-phantom-regression-v1/qualification.json` record distinguishes them from
+the passing stack regressions and the earlier configuration source.
+
+The BFV audit's oversized test function is decomposed into sixteen cohesive
+groups with concrete fixture owners and borrowed inputs. All 1,127 original
+statements, including the extracted shared helper, preserve their assertion
+tokens; the 799-entry diagnostic fixture is unchanged. Both 32/64 MiB thread
+wrappers are removed. Production BFV code is unchanged. On the same compiler,
+features and unoptimized test profile, the original function's fixed local
+reservation was 1,592,496 bytes; the new runner reserves 13,968 bytes and the
+largest group 274,944 bytes. These are emitted prologue measurements, not
+whole-stack or compiler-memory peaks.
+
+The zero-warning BFV build and its runtime evidence bind source
+`d22c04be7ccadc6d8c4cf6ac9ecd95d1e56b671bb27d3cf60222ce7b6a2cea26`.
+The byte-admission test passes all six original assertion paths on the default
+stack; all 46 hash/multihash regressions pass on the same artifact. The complete
+799-diagnostic audit is still running and is not a passing result. Its frozen
+source, statement preservation and emitted-frame evidence live under
+`bfv-stack-boundaries/`; `bfv-stack-parent-review-v1/` records independent
+fixture-ownership and compilation-unit checks. The separate next consumer
+snapshot leaves this running source and retained executable untouched.
+
+FASTPQ now declares only its actual frame owners, preserving separately captured
+nominal names and root projections. Thirteen obsolete attributes disappear from
+payload-only records. The manual Fp4 scalar retains its exact four canonical
+little-endian limbs and coefficient checks. Forty-five original complete frames
+cover public roots, Options and vectors; they reproduce exactly and reject
+wrong identities, truncation and suffixes. The retained-layer cache test compares
+opening payload bytes inside `Proof`, which owns their enclosing frame. The nine
+proof wire tests and all 61 backend test declarations remain; the production
+files are now 4,785 and 3,872 lines, with both extracted test modules below 3,000.
+Telemetry removes its unused duplicate bucket DTO and uses the existing
+`iroha_torii_shared::status::SchedulerLayerWidthBuckets` owner.
+
+The final focused builds have zero warnings on source
+`40daf5943871f74ff82af4edb17e92b41a434856e6e598d15829efacb871ec2c`
+with 19,819 unchanged inputs. All 118 selected FASTPQ tests and both bucket tests
+pass on the default stack. One existing CPU timing diagnostic is ignored.
+The first FASTPQ attempt's two test-boundary errors are retained separately;
+they do not count as passes. Original observations, frozen changes and independent
+review are under `fastpq-frame-reference-v2/`, `fastpq-frame-candidate-v1/`,
+`fastpq-backend-test-boundary-v1/` and `fastpq-frame-independent-review-v1.json`;
+the final build/runtime records are under `consumer-next-candidate/`.
+Source-size checking still fails with 235 findings and 171 unchanged exceptions.
+The Core/Torii check passes the corrected FASTPQ/telemetry boundaries and stops
+at two obsolete `IvmPath` frame markers in Genesis. Its build script also records
+the isolated source's unavailable Git commit marker; this is not a release build.
+Strict FASTPQ library/test Clippy stops in six unchanged dependency sites: one
+needless lifetime in Halo2 and five SoraFS API lints. This is a failed lint run,
+not qualification of the unreached FASTPQ lint target. The exact outcomes and
+26 qualified live owner paths are bound by `fastpq-frame-candidate-v1/qualification.json`.
+This is scoped codec/stack evidence, not proof-system, compiler-memory, workspace
+or release qualification.
+
+Genesis paths now use String payload decoding directly, preserving caller layout,
+prefix consumption and nested resource limits. Fallible archived decoding returns
+typed String errors. The three containing records use Norito's generated prefix
+decoders; their fields, valid serializers, JSON codecs and validation remain
+unchanged. No standalone path frame is introduced. Nine regressions cover exact
+bytes, all advertised record layouts, containers, malformed input, exact-tail
+rejection, inherited allocation/field limits and restored caller state.
+
+The complete Genesis library passes 118 tests with four existing diagnostic cases
+ignored, on source
+`968229f704aa81498f7a1dbdf81f55ef6b5ae62890e03a79a8eadcc023289ac4`,
+with 19,820 unchanged inputs and zero build warnings. Full-suite corrections supply
+mandatory protocol/authority fields in test fixtures, align the SM signing/curve
+fixture, verify eight example registrations after the generated parameter prefix
+and all four validator PoPs, and compare canonical registry wire IDs while rejecting
+Rust-name aliases. The Taira source template supplies three missing null enum-content
+fields. Production validation is unchanged. Formatting and codec guards pass.
+`genesis-payload-candidate-v1/qualification.json` binds the six live source owners,
+retained artifact and runtime. The initial import error, one incorrect canonical
+field-length expectation and seven full-suite fixture failures remain recorded.
+The earlier node check reaches 14 IVM and 273 P2P codec errors on its separate
+`0b80bd5776b049c87552cd8567e98a8c50e8d1e88d7b9169a180efa2fdf82ab5`
+source. Final-source strict Clippy stops at nine service-model documentation sites.
+A separate comment-only correction fixes those sites and strict service-model
+Clippy passes for all targets on
+`d35b39e0ec72998f1f37ae464fdaeab07a310d1db0ca5d994ff1d083e7bd2a5a`.
+The same-source Genesis Clippy run then stops at three excessive-argument and two
+unit-error API sites in SoraFS. Both failed runs remain;
+`service-model-doc-markdown-v1/qualification.json` binds this narrow correction.
+There is no passing dependent/workspace lint, node or release qualification.
+
+The SCCP correction changes only three stale test provenance pins to the existing
+Tolk-owned StateInit fixture, authenticated against its generator and source
+history. Its independent minimal-feature run also passes all 194 tests, retaining
+one model-private helper warning when governance instructions are absent; the
+combined zero-warning build does not erase that separate feature-graph warning.
+
+The executor's original multisig hash failure exposed an extra JSON field-length
+prefix in Kotlin. One shared Rust-produced vector now binds the exact bytes and
+independently checked hash; Kotlin removes the redundant encoding layer and rejects
+the malformed form. Three Kotlin checks and one Java consumer of Kotlin pass after
+two of these four tests fail against the original adapter. The permission test
+also asserts the actual `AccountAliasDomain` JSON array without changing production
+serialization or its rejection controls. The broader JVM selection passes nine
+and fails ten because the mandatory ABI-23 native address validator is unavailable.
+Those native controls, duplicate Java retirement and complete JVM delivery remain
+unverified; see the [JVM inventory](jvm_consolidation_inventory.md#canonical-custom-instruction-bytes-2026-09-09).
+
+`SamplePayload` and the SoraFS revocation preimage now have explicit identities
+captured from the original compiler artifacts. Their canonical fixtures preserve
+original complete bytes; existing streaming and signing fixtures remain unchanged.
+Collection tests exercise explicit key identities, all seven collectors, both
+map iterators and rejection of substituted headers. Relocation tests compare
+complete frames and decode them through the relocated owner.
+
+Evidence under ignored `target/architecture-redesign/norito-identity-cutover/`
+retains source snapshots, overlays, actual compiler artifacts, runtime logs and
+failed attempts. Default Norito qualification binds source `477519a40a51aab11797ba39d084b2ba504aae2df46caeac42929a3bfd16aafe`;
+structural tests and Clippy bind `49ceaee184ae3934f775446122199201dae94fafbdc4cf6ca5819ae5c477f7a5`;
+SoraFS binds `8fd5d380f9079cf1166075a1ee77e3f38f791ad0e2f94ffe5723307f21f9ee50`.
+The final derive unit correction and doctests bind `5e710048ae3ba387ef32290863dc4f054500531123c333b8338b61bcc2f89a5e`.
+All runs use the default stack and retain their source/artifact identities.
+
+The subsequent model frame-owner capture observes 54 directions across 28 owners
+from source `728f117b6a49428099460043e0aa152947073d4581e773938d5f29b53328ecfe`.
+All selected probes pass; 91 instrumentation-only `unnameable_test_items` warnings
+remain recorded. All 28 owner bodies match that reference before declaration.
+The fixed [observations](../crates/iroha_data_model/tests/fixtures/frame_owner_identity_observations.md)
+and co-located tests retain the actual nominal names, roots and direction hashes.
+The model production check passes with zero warnings on consumer source
+`70bf43693cbd3c0c637b0d1808f8cc2b72f34c129fed9195b061ac6edc0b1572`.
+
+Bare AoS fields, canonical slice adapters, Register/Unregister children and version
+payload decoders require payload contracts; actual instruction frames keep their
+typed contracts. The config scalar suite passes 36 tests and version suites pass
+12 tests; strict all-target Clippy passes for both packages on their retained
+consumer snapshots. The model and ABI runtime results above retain their own
+source and artifact identities.
+
+The first check-profile candidate result reused a stale proc-macro artifact and
+is discarded as candidate evidence. Subsequent overlays advance source mtimes
+and actual rebuilds qualify the changed macro. Earlier race, launcher and
+assertion failures are retained with their corrections; none becomes a pass
+without executing the corrected artifact.
+
+The sections below retain preceding declaration and reconstruction checkpoints.
+Their pending-cutover statements and feature failures describe those historical
+source snapshots, not the current codec. Complete model/consumer closure,
+physical model extraction, memory measurements and release qualification remain
+open.
 
 ## Streaming wire declaration checkpoint
 
@@ -720,3 +1059,156 @@ results qualify this captured selection, not other features, the concurrent
 root workspace or a release. Remaining model/service owners, atomic frame
 identity selection, physical extraction, memory reduction and full native/
 consensus/workspace qualification remain outstanding.
+
+## Parameter owner declaration closure
+
+All 17 ordinary parameter frame owners now declare their actual captured
+identities. The three private suites in
+`parameter/captured_parameter_identity_tests.rs` retain every nominal name and
+both independently observed codec hashes. Existing item bodies, field order,
+validation, JSON behavior and the 23 parameter unit tests are unchanged. The
+source patch is
+`f2c09252ef2881e2e701fad035ef048e0c67c6b7cb270bd4f9ee56c77538b3c5`.
+
+The isolated candidate passes 529 selected tests: 468 model, 21 public frame,
+39 grouped integration and one allocation test. This includes all 26 parameter
+unit tests, four defaults/transaction-parameter integration tests, unchanged
+signed RPC fixtures, 525 public frames, 189 base frames and 32 Native AMX
+regressions on the default stack. One existing operator-only KAT generator stays
+ignored. Eight build/runtime/guard commands bind 19,345 identical source inputs.
+Formatting and the codec guard pass. Strict Clippy still fails with the same
+225 reported library errors; source-size checking retains the same 235 findings
+and 173 exceptions. These are scoped candidate results; remaining model/service
+identities, atomic codec selection, physical extraction and release gates remain
+open. The local evidence is under `parameter-frame-closure/`.
+
+## SoraFS owner and field boundary closure
+
+All 284 captured concrete SoraFS owners now declare their nominal/frame identities,
+retaining 275 serializer/decoder pairs and nine serializer-only capabilities. The
+explicit CancelAssetLock projection keeps its observed aggregate instruction
+frame. Thirty-two private suites retain the independently captured names and
+hashes; no decoder is added to signing or negative-fixture carriers.
+
+Seventeen borrowed Wire records now implement only `SerializePayload`. Twelve
+private field helpers lose independent frame markers and accept payload-only
+fields. The outer signing-frame adapters, field ordering and canonical signatures
+are preserved. Six new tests compare bytes and exact/counting lengths across all
+eight supported layouts, including fields with no typed-frame capability.
+
+Governance's field codecs and tests have their own files without changing logical
+type or test-module paths. Production is 4,965 lines, tests 2,413, and the borrowed
+field module 65; its obsolete 7,401-line exception is removed. The existing
+integration callers use canonical admission/orderbook/repair CLI options and an
+explicit isolated PDP output directory. The replication fixture expectation now
+contains the actual 32-byte order id. Existing fixture assertions are retained.
+
+The final 78-path source patch is
+`ee222ee98beafaf121aeb960407ac0d63a4aa4959e03b8c2c76684348935c030`.
+Ten commands bind the same 19,699 inputs without source drift or a stack override.
+All 1,271 selected test executions pass: 946 default SoraFS library tests, 101
+fixture/CLI integration tests, 187 SoraNet cryptography tests, and 37 minimal-feature
+identity/field tests. The default inventory retains all 908 preceding tests plus
+38 new tests. Minimal features omit the existing PQC-only hybrid-envelope suite;
+that suite passes under default features. No selected test is ignored. Four
+SoraNet dependency lints are repaired without changing signing semantics.
+
+Formatting and the codec guard pass. The complete source-size guard still fails
+with 239 findings and 172 exceptions. Full strict Clippy stops on eight unchanged
+`iroha_crypto` errors; package-only strict Clippy retains six existing SoraFS lint
+sites. These remain failures. The source-bound evidence and independent reviews
+are under `sorafs-frame-closure/`; only `final-source-review-v3` is the qualified
+source patch. Atomic frame-identity selection, remaining manual projections,
+physical model extraction, measured memory reductions, and full workspace/native/
+consensus release qualification remain open.
+
+## Orderbook signing-frame ownership
+
+The three private order-request, cancellation and settlement-receipt signing
+views now declare their captured nominal identities, including the erased
+lifetime slot, and their existing owned-record root projections. Generic
+containers retain the borrowed view's nominal identity. The nested signature
+view loses its unused typed-frame marker and retains only payload serialization.
+No borrowed decoder, alternate frame identity or compatibility path is added.
+Existing signing, validation and fixture bodies remain unchanged; six test-only
+fixture helpers gain sibling visibility so the new suite reuses the actual values.
+
+The immutable
+[`orderbook_signing_identity_frames.json`](../crates/sorafs_manifest/tests/fixtures/orderbook_signing_identity_frames.json)
+is 152,336 bytes, SHA-256
+`61bb1412c39eb7bbb7a299e46025ff8eba05c0897e67f526a7e81e33a3ef736b`.
+Its pre-declaration compiler capture passes on 19,745 unchanged isolated inputs.
+It records 15 canonical frames and 120 explicit-layout frames across the three
+roots, None/Some and empty/two-element vectors. Permanent tests compare declared
+names against those observations, preserving complete bytes, advertised flags,
+exact sizes, owned payload decoding and malformed-frame rejection. The temporary
+capture writer and its environment/file APIs are removed.
+
+The three-path source patch is
+`1aa3b0fa781c42152a7dfa3ca726360dd975823e09160a7562b0331d8e387e6c`.
+The final default library passes all 948 tests; the orderbook selection without
+default features passes 62. Both builds report zero warnings, and both runtime
+runs retain the same 19,746-input fingerprint
+`10ece0db8ac46f85ac58f8ac972b346ab3ab70620b60c3fa1a6b8ae8e801bf49`.
+No selected case is ignored and no stack override is used. The complete isolated
+capture source and exact compiler-produced test executables are retained locally.
+The final three source/fixture paths match their qualified isolated counterparts;
+this does not qualify other concurrent working-tree changes.
+
+Formatting and codec guards pass. The source-size guard still fails with 237
+findings and 171 exceptions, with no finding in the changed orderbook paths.
+Strict library Clippy fails at the same five baseline sites: three PoP proof APIs
+with eight arguments and two signer digest APIs returning unit errors. Test-target
+strict lint remains unqualified. No suppression or budget exception is added.
+
+Evidence is under `target/architecture-redesign/orderbook-signing-identity/`.
+The remaining manual signing owners are covered by the following checkpoint.
+Atomic identity selection, physical model extraction, measured build-memory
+reduction and full workspace/native/four-validator release qualification remain open.
+
+## Remaining SoraFS manual signing identities
+
+The twelve remaining production signing views declare their compiler-observed
+nominal identities and existing owned-record root projections. Their Option and
+Vec containers retain the borrowed view's nominal identity. The three local
+encoder sentinels declare their observed names in their original function scopes;
+their tests still reject before serialization. `PopSignatureSigningViewV1` now
+exposes only payload serialization. No decoder or alternate signing API is added.
+
+The immutable
+[`sorafs_signing_identity_frames.json`](../crates/sorafs_manifest/tests/fixtures/sorafs_signing_identity_frames.json)
+contains the exact 2,551,080 captured bytes, SHA-256
+`e1b310b6db9a51b84de89f0af7fd5e2cd11556ea4e00c5c94ee1303728917191`.
+Its 26 populated case groups cover 130 canonical frames and 1,040 explicit-layout
+frames. The separate
+[`sentinel fixture`](../crates/sorafs_manifest/tests/fixtures/sorafs_signing_identity_sentinels.jsonl)
+preserves the three actual observation lines without reserialization, SHA-256
+`0a4b18c8fb394f60905c4e625b899050cbd87598abad6ffec9249ea19cc46fd8`.
+Permanent comparisons check identities, complete bytes, payload counts, advertised
+layouts, owned decoding and malformed frames. The fifteen PoR rows retain their
+existing encode-only projections. PoTR's missing request ID is explicitly
+rejected with `MissingRequestId`; valid absent trace/note cases retain the required
+request ID. The initial capture's fixture error remains recorded as a failure.
+
+The bounded source inventory now contains eighteen manual typed serializers:
+fifteen production signing views, including the three orderbook views, and three
+test sentinels. All declare identities; no manual decoder remains in that
+inventory. This is not compiler-expanded or workspace-wide declaration closure.
+Original signing, validation and fixture bodies remain intact. Governance is
+4,994 production lines, within the unchanged 5,000-line limit.
+
+The isolated candidate passes all 950 default-feature and 941 minimal-feature
+library tests, with zero failed, ignored or filtered cases and no stack override.
+Both runs retain the same 19,755-input fingerprint
+`5cba542ee69d9b6448d795d5159affc65290d0b3618968c7df1f23df4ece90cc`.
+All seventeen final source/fixture paths match the qualified source snapshot.
+Formatting, codec and historical archive guards pass. Strict library/test Clippy
+still fails at five existing library API sites and one existing test-style site;
+the candidate adds no diagnostic. The full source-size guard retains 237 findings
+and 171 exceptions, with no finding in the changed files or policy changes.
+
+Source, executable, failed/successful capture and replay evidence is retained under
+`target/architecture-redesign/sorafs-signing-identity/`. These results do not qualify
+concurrent working-tree changes or a release. Atomic codec identity selection,
+remaining owner/feature closure, physical model extraction, measured memory
+reduction and full workspace/native/four-validator qualification remain open.

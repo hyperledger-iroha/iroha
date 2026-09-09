@@ -126,6 +126,8 @@ impl ChunkCommitment {
 /// Every field is required in both binary and JSON encodings. Its JSON object
 /// and the manifest-owned carrier objects nested within it reject unknown
 /// fields rather than interpreting pre-release layouts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::da::manifest::DaManifestV1")]
 #[derive(
     Clone,
     Debug,

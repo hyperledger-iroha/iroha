@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Freeze the fail-closed ABI-23 Kotlin/JVM and Java privacy contract."""
+"""Freeze the fail-closed ABI-23 Kotlin privacy owner and Java consumers."""
 
 from __future__ import annotations
 
@@ -7,7 +7,16 @@ import re
 import unittest
 from pathlib import Path
 
-from scripts import check_privacy_exact12_sdk_manifest_parity as manifest_parity
+import importlib.util
+import sys
+
+SPEC = importlib.util.spec_from_file_location(
+    "privacy_jvm_manifest_contract", Path(__file__).resolve().parents[1] / "check_privacy_exact12_sdk_manifest_parity.py"
+)
+assert SPEC is not None and SPEC.loader is not None
+manifest_parity = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = manifest_parity
+SPEC.loader.exec_module(manifest_parity)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -38,7 +47,7 @@ def workflow_job(source: str, name: str) -> str:
 
 
 class PrivacyJvmNativeContractTests(unittest.TestCase):
-    """Guard both JVM SDKs against native capability skips."""
+    """Guard both JVM languages against native capability skips."""
 
     def test_kotlin_native_tests_require_the_bridge_unconditionally(self) -> None:
         source = read(
@@ -77,8 +86,8 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
 
     def test_java_native_tests_require_the_bridge_unconditionally(self) -> None:
         source = read(
-            "java/iroha_android/src/test/java/org/hyperledger/iroha/android/"
-            "privacy/PrivacyNativeBridgeTest.java"
+            "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/"
+            "privacy/PrivacyNativeBridgeJavaConsumerTest.java"
         )
         for method, native_call, message in (
             (
@@ -92,8 +101,8 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
                 "exact-12 fixture JNI exports is required",
             ),
         ):
-            self.assertIn(f"    {method};", source)
-            start = source.index(f"private static void {method}")
+            self.assertIn(f"  @Test\n  public void {method}", source)
+            start = source.index(f"public void {method}")
             preflight = source[start : source.index(native_call, start)]
             self.assertIn(
                 "final boolean available = PrivacyNativeBridge.isNativeAvailable();",
@@ -112,9 +121,9 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, source)
 
-    def test_rust_bridge_exports_both_privacy_jni_namespaces(self) -> None:
+    def test_rust_bridge_exports_only_canonical_privacy_jni_namespace(self) -> None:
         source = read_rust_bridge_source()
-        for namespace in ("sdk", "android"):
+        for namespace in ("sdk",):
             prefix = (
                 "Java_org_hyperledger_iroha_"
                 f"{namespace}_privacy_PrivacyNativeBridge_"
@@ -127,6 +136,7 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
                 "nativeValidateExact12FixtureBundle",
             ):
                 self.assertEqual(1, source.count(prefix + method))
+        self.assertNotIn("Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_", source)
 
     def test_jvm_runner_authenticates_the_only_loadable_bridge(self) -> None:
         source = read("ci/check_privacy_jvm_sdk.sh")
@@ -137,7 +147,7 @@ class PrivacyJvmNativeContractTests(unittest.TestCase):
             'export LD_LIBRARY_PATH="${NATIVE_LIBRARY_DIR}"',
             '-Djava.library.path="${NATIVE_LIBRARY_DIR}"',
             "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeTest",
-            "org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest",
+            "org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeJavaConsumerTest",
         ):
             self.assertIn(marker, source)
 

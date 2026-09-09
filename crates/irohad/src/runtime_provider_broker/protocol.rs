@@ -230,8 +230,6 @@ const MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1: usize =
     MAX_NATIVE_TRANSACTION_PAYLOAD_BYTES_V1 + 1024 * 1024;
 const MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1: usize =
     MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1 + 128 * 1024;
-const MAX_STREAM_TOKEN_SIGNING_PAYLOAD_BYTES_V1: usize =
-    sorafs_manifest::STREAM_TOKEN_MAX_WIRE_BYTES_V1;
 const MAX_STREAM_TOKEN_FRAME_BYTES_V1: usize = 8 * 1024;
 const MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1: usize =
     sorafs_node::appeal_finance_transaction_forwarder::
@@ -799,10 +797,12 @@ macro_rules! impl_scrub_fields_on_drop {
 // redaction traits. Keep those choices explicit at each declaration while
 // generating the identical Norito wire-derive and field boilerplate here.
 macro_rules! define_broker_wire_struct {
-    (@emit [$derive:meta] $visibility:vis $name:ident {
+    (@emit [$derive:meta] $schema_name:literal $visibility:vis $name:ident {
         $($field_visibility:vis $field:ident: $field_type:ty),* $(,)?
     }) => {
         #[$derive]
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = $schema_name)]
         $visibility struct $name {
             $($field_visibility $field: $field_type),*
         }
@@ -985,7 +985,7 @@ impl ProviderBindingWireV1 {
                     authorization_lifetime_blocks: bindings.authorization_lifetime_blocks(),
                 },
             ),
-            stream_token_signer_public_key: binding.stream_token_signer_public_key(),
+            stream_token_hardware_binding: binding.stream_token_hardware_binding().cloned(),
             stream_token_gateway_admission_qualification: binding
                 .stream_token_gateway_admission_qualification(),
             stream_token_gateway_admission_max_pending: binding
@@ -1241,7 +1241,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             exact.authorization_lifetime_blocks,
         )
         .map_err(|_| BrokerError::BindingMismatch)?;
-        if binding.stream_token_signer_public_key.is_some()
+        if binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1295,7 +1295,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         || binding
             .stream_token_gateway_admission_reconcile_max_items
             .is_some();
-    let has_new_role_metadata = binding.stream_token_signer_public_key.is_some()
+    let has_new_role_metadata = binding.stream_token_hardware_binding.is_some()
         || has_stream_token_gateway_metadata
         || binding.appeal_finance_signer_binding.is_some()
         || binding.appeal_finance_checkpoint_binding.is_some()
@@ -1305,9 +1305,11 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         || binding.por_replay_archive_proof_limits.is_some()
         || binding.potr_runtime_binding.is_some();
     if stream_token {
-        let public_key = required_binding_value!(binding, stream_token_signer_public_key);
-        if public_key == [0; 32]
-            || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
+        let hardware = required_binding_ref!(binding, stream_token_hardware_binding);
+        if hardware.validate().is_err()
+            || hardware.custody().runtime_handle != binding.handle
+            || Some(hardware.custody().key_revision) != binding.revision
+            || Some(hardware.custody().policy_digest) != binding.policy_digest
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1334,7 +1336,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
                 binding.stream_token_gateway_admission_reconcile_max_items,
                 Some(1..=iroha_torii::sorafs::STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1)
             )
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1354,7 +1356,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || exact
                 .revoked_at_block_height
                 .is_some_and(|height| height <= exact.valid_from_block_height)
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
             || binding.pop_credential_runtime_binding.is_some()
@@ -1374,7 +1376,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || checkpoint_max_bytes
                 > u64::try_from(MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1)
                     .map_err(|_| BrokerError::Protocol)?
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.pop_credential_runtime_binding.is_some()
             || binding.por_replay_archive_binding.is_some()
@@ -1401,7 +1403,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || exact.wallet_recipient_public_key_digest == [0; 32]
             || exact.issuer_public_key == [0; 32]
             || iroha_crypto::ed25519_parse_public_key(&exact.issuer_public_key).is_err()
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1435,7 +1437,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || limits.max_successor_proof_bytes
                 > iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::
                     MAX_SUCCESSOR_PROOF_BYTES_LIMIT
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1449,7 +1451,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         let runtime = required_binding_ref!(binding, potr_runtime_binding);
         validate_potr_runtime_wire(runtime)?;
         potr_provider_binding_from_wire(binding)?;
-        if binding.stream_token_signer_public_key.is_some()
+        if binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1595,6 +1597,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         return Err(BrokerError::BindingMismatch);
     }
     if stream_token
+        || stream_token_gateway_admission
         || appeal_signer
         || appeal_checkpoint
         || pop_registry
@@ -1956,14 +1959,14 @@ fn validate_catalog_slot_ids(slot_ids: impl IntoIterator<Item = u16>) -> Result<
     }
     Ok(())
 }
-define_broker_wire_struct!(owned SignerMetadataWireV1 { publisher_peer_id: Vec<u8>, public_key: [u8; 32], });
-define_broker_wire_struct!(owned ProviderObservationWireV1 { binding: ProviderBindingWireV1, signer_metadata: Option<SignerMetadataWireV1>, governance_request_ingress_qualification: Option<GovernanceRequestIngressQualificationWireV1>, moderation_quarantine_active_key_id: Option<String>, provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>, provider_ingest_source_provider_ids: Vec<[u8; 32]>, potr_signer_public_key: Vec<u8>, evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>, evidence_viewer_archive_id: Option<[u8; 32]>, evidence_viewer_archive_public_key: Option<[u8; 32]>, moderation_checkpoint_attestation_public_key: Option<[u8; 32]>, moderation_panel_notification_archive_binding: Option<ModerationPanelNotificationArchiveBindingWireV1>, metadata_digest: [u8; 32], });
-define_broker_wire_struct!(owned HandshakeTranscriptFieldsV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], });
-define_broker_wire_struct!(owned HandshakeRequestV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], });
-define_broker_wire_struct!(owned ServerTranscriptFieldsV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], session_id: [u8; 32], observations: Vec<ProviderObservationWireV1>, });
-define_broker_wire_struct!(owned HandshakeResponseV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], session_id: [u8; 32], observations: Vec<ProviderObservationWireV1>, server_transcript_digest: [u8; 32], });
-define_broker_wire_struct!(owned OperationRequestFieldsV1 { session_id: [u8; 32], request_id: u64, binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], payload_len: u64, });
-define_broker_wire_struct!(sensitive OperationRequestV1 { session_id: [u8; 32], request_id: u64, binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], payload: Vec<u8>, request_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::SignerMetadataWireV1" SignerMetadataWireV1 { publisher_peer_id: Vec<u8>, public_key: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderObservationWireV1" ProviderObservationWireV1 { binding: ProviderBindingWireV1, signer_metadata: Option<SignerMetadataWireV1>, governance_request_ingress_qualification: Option<GovernanceRequestIngressQualificationWireV1>, moderation_quarantine_active_key_id: Option<String>, provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>, provider_ingest_source_provider_ids: Vec<[u8; 32]>, potr_signer_public_key: Vec<u8>, evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>, evidence_viewer_archive_id: Option<[u8; 32]>, evidence_viewer_archive_public_key: Option<[u8; 32]>, moderation_checkpoint_attestation_public_key: Option<[u8; 32]>, moderation_panel_notification_archive_binding: Option<ModerationPanelNotificationArchiveBindingWireV1>, metadata_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::HandshakeTranscriptFieldsV1" HandshakeTranscriptFieldsV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::HandshakeRequestV1" HandshakeRequestV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ServerTranscriptFieldsV1" ServerTranscriptFieldsV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], session_id: [u8; 32], observations: Vec<ProviderObservationWireV1>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::HandshakeResponseV1" HandshakeResponseV1 { chain_id: String, network_id: NetworkId, requested_catalog: Vec<ProviderBindingWireV1>, client_nonce: [u8; 32], catalog_digest: [u8; 32], client_transcript_digest: [u8; 32], session_id: [u8; 32], observations: Vec<ProviderObservationWireV1>, server_transcript_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::OperationRequestFieldsV1" OperationRequestFieldsV1 { session_id: [u8; 32], request_id: u64, binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], payload_len: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::OperationRequestV1" OperationRequestV1 { session_id: [u8; 32], request_id: u64, binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], payload: Vec<u8>, request_digest: [u8; 32], });
 impl_broker_debug_fields!(OperationRequestV1 as value {
     "request_id" => value.request_id,
     "slot" => value.binding.slot,
@@ -1971,8 +1974,8 @@ impl_broker_debug_fields!(OperationRequestV1 as value {
     "payload_len" => value.payload.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(OperationRequestV1 { payload });
-define_broker_wire_struct!(owned OperationResponseFieldsV1 { session_id: [u8; 32], request_id: u64, request_digest: [u8; 32], observed_binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], status: u8, result_digest: [u8; 32], result_len: u64, });
-define_broker_wire_struct!(sensitive OperationResponseV1 { session_id: [u8; 32], request_id: u64, request_digest: [u8; 32], observed_binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], status: u8, result_digest: [u8; 32], result: Vec<u8>, response_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::OperationResponseFieldsV1" OperationResponseFieldsV1 { session_id: [u8; 32], request_id: u64, request_digest: [u8; 32], observed_binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], status: u8, result_digest: [u8; 32], result_len: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::OperationResponseV1" OperationResponseV1 { session_id: [u8; 32], request_id: u64, request_digest: [u8; 32], observed_binding: ProviderBindingWireV1, provider_metadata_digest: [u8; 32], operation: u16, payload_digest: [u8; 32], status: u8, result_digest: [u8; 32], result: Vec<u8>, response_digest: [u8; 32], });
 impl_broker_debug_fields!(OperationResponseV1 as value {
     "request_id" => value.request_id,
     "slot" => value.observed_binding.slot,
@@ -1981,23 +1984,23 @@ impl_broker_debug_fields!(OperationResponseV1 as value {
     "result_len" => value.result.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(OperationResponseV1 { result });
-define_broker_wire_struct!(copy QualificationResultWireV1 { revision: u64, policy_digest: [u8; 32], });
-define_broker_wire_struct!(copy GovernanceRequestIngressQualificationWireV1 { provider: QualificationResultWireV1, binding: GovernanceRequestIngressBindingWireV1, receiver_policy_digest: [u8; 32], replay_namespace_digest: [u8; 32], replica_set_digest: [u8; 32], });
-define_broker_wire_struct!(sensitive BootleLanternAuthenticateRequestWireV1 { opaque_credential: Vec<u8>, action: u8, request_binding: [u8; 32], committed_height: u64, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::QualificationResultWireV1" QualificationResultWireV1 { revision: u64, policy_digest: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::GovernanceRequestIngressQualificationWireV1" GovernanceRequestIngressQualificationWireV1 { provider: QualificationResultWireV1, binding: GovernanceRequestIngressBindingWireV1, receiver_policy_digest: [u8; 32], replay_namespace_digest: [u8; 32], replica_set_digest: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BootleLanternAuthenticateRequestWireV1" BootleLanternAuthenticateRequestWireV1 { opaque_credential: Vec<u8>, action: u8, request_binding: [u8; 32], committed_height: u64, });
 impl_broker_debug_fields!(BootleLanternAuthenticateRequestWireV1 as value {
     "credential_len" => value.opaque_credential.len(),
     "action" => value.action,
     "committed_height" => value.committed_height,
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(BootleLanternAuthenticateRequestWireV1 { opaque_credential });
-define_broker_wire_struct!(copy BootleLanternAuthenticatedPrincipalWireV1 { principal_digest: [u8; 32], issued_at_height: u64, expires_at_height: u64, });
-define_broker_wire_struct!(owned BootleLanternPrepareAuthorizationRequestWireV1 { context: iroha_data_model::privacy::PrivacyStatementContextV1, canonical_genesis_hash: [u8; 32], policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1, requester_authorization_digest: [u8; 32], issued_at_height: u64, expires_at_height: u64, });
-define_broker_wire_struct!(sensitive BootleLanternAuthorizationWireV1 { authorization: Vec<u8>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::BootleLanternAuthenticatedPrincipalWireV1" BootleLanternAuthenticatedPrincipalWireV1 { principal_digest: [u8; 32], issued_at_height: u64, expires_at_height: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BootleLanternPrepareAuthorizationRequestWireV1" BootleLanternPrepareAuthorizationRequestWireV1 { context: iroha_data_model::privacy::PrivacyStatementContextV1, canonical_genesis_hash: [u8; 32], policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1, requester_authorization_digest: [u8; 32], issued_at_height: u64, expires_at_height: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BootleLanternAuthorizationWireV1" BootleLanternAuthorizationWireV1 { authorization: Vec<u8>, });
 impl_broker_debug_fields!(BootleLanternAuthorizationWireV1 as value {
     "authorization_len" => value.authorization.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(BootleLanternAuthorizationWireV1 { authorization });
-define_broker_wire_struct!(sensitive BootleLanternIssueRequestWireV1 { context: iroha_data_model::privacy::PrivacyStatementContextV1, canonical_genesis_hash: [u8; 32], policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1, authorization: Vec<u8>, request: Vec<u8>, current_height: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BootleLanternIssueRequestWireV1" BootleLanternIssueRequestWireV1 { context: iroha_data_model::privacy::PrivacyStatementContextV1, canonical_genesis_hash: [u8; 32], policy: iroha_data_model::privacy::BootleLanternIssuerPolicyV1, authorization: Vec<u8>, request: Vec<u8>, current_height: u64, });
 impl_broker_debug_fields!(BootleLanternIssueRequestWireV1 as value {
     "authorization_len" => value.authorization.len(),
     "request_len" => value.request.len(),
@@ -2007,7 +2010,7 @@ impl_scrub_fields_on_drop!(BootleLanternIssueRequestWireV1 {
     authorization,
     request
 });
-define_broker_wire_struct!(sensitive BootleLanternIssuanceResponseWireV1 { response: Vec<u8>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BootleLanternIssuanceResponseWireV1" BootleLanternIssuanceResponseWireV1 { response: Vec<u8>, });
 impl_broker_debug_fields!(BootleLanternIssuanceResponseWireV1 as value {
     "response_len" => value.response.len(),
 } => finish_non_exhaustive);
@@ -2140,9 +2143,9 @@ fn decode_bootle_lantern_issue_request(
         .map_err(|_| BrokerError::Rejected)?;
     Ok((request, authorization))
 }
-define_broker_wire_struct!(copy SoracloudSignerQualificationWireV1 { revision: u64, policy_digest: [u8; 32], active: bool, test_only: bool, });
-define_broker_wire_struct!(owned SoracloudProvenanceSignRequestWireV1 { purpose: u8, preimage: Vec<u8>, });
-define_broker_wire_struct!(copy PrivacyCyclePrfRequestWireV1 { version: u16, query_id: [u8; 32], policy_digest: [u8; 32], population_inventory_digest: [u8; 32], metric_schema_digest: [u8; 32], cycle_id: [u8; 16], cycle_start_unix: u64, cycle_end_unix: u64, binding_digest: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::SoracloudSignerQualificationWireV1" SoracloudSignerQualificationWireV1 { revision: u64, policy_digest: [u8; 32], active: bool, test_only: bool, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::SoracloudProvenanceSignRequestWireV1" SoracloudProvenanceSignRequestWireV1 { purpose: u8, preimage: Vec<u8>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PrivacyCyclePrfRequestWireV1" PrivacyCyclePrfRequestWireV1 { version: u16, query_id: [u8; 32], policy_digest: [u8; 32], population_inventory_digest: [u8; 32], metric_schema_digest: [u8; 32], cycle_id: [u8; 16], cycle_start_unix: u64, cycle_end_unix: u64, binding_digest: [u8; 32], });
 impl PrivacyCyclePrfRequestWireV1 {
     fn from_request(request: &sorafs_node::PrivacyCyclePrfRequestV1) -> Self {
         Self {
@@ -2179,12 +2182,12 @@ impl PrivacyCyclePrfRequestWireV1 {
         Ok(request)
     }
 }
-define_broker_wire_struct!(sensitive PrivacyCyclePrfOutputWireV1 { output: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::PrivacyCyclePrfOutputWireV1" PrivacyCyclePrfOutputWireV1 { output: [u8; 32], });
 impl_broker_debug_fields!(PrivacyCyclePrfOutputWireV1 as value {
     "output" => "<redacted>",
 } => finish);
 impl_scrub_fields_on_drop!(PrivacyCyclePrfOutputWireV1 { output });
-define_broker_wire_struct!(owned TransparencyRuntimeProviderBindingWireV1 { handle: String, revision: u64, policy_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::TransparencyRuntimeProviderBindingWireV1" TransparencyRuntimeProviderBindingWireV1 { handle: String, revision: u64, policy_digest: [u8; 32], });
 impl TransparencyRuntimeProviderBindingWireV1 {
     fn from_binding(binding: &sorafs_node::TransparencyRuntimeProviderBindingV1) -> Self {
         Self {
@@ -2206,7 +2209,7 @@ impl TransparencyRuntimeProviderBindingWireV1 {
         Ok(binding)
     }
 }
-define_broker_wire_struct!(copy PrivacyReleaseAnchorHeadWireV1 { query_id: [u8; 32], sequence: u64, release_id: [u8; 16], record_digest: [u8; 32], latest_publication_block_hash: Option<[u8; 32]>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PrivacyReleaseAnchorHeadWireV1" PrivacyReleaseAnchorHeadWireV1 { query_id: [u8; 32], sequence: u64, release_id: [u8; 16], record_digest: [u8; 32], latest_publication_block_hash: Option<[u8; 32]>, });
 impl PrivacyReleaseAnchorHeadWireV1 {
     fn from_head(head: sorafs_node::PrivacyReleaseAnchorHeadV1) -> Self {
         Self {
@@ -2232,7 +2235,7 @@ impl PrivacyReleaseAnchorHeadWireV1 {
         Ok(head)
     }
 }
-define_broker_wire_struct!(copy TransparencyLeaderLeaseScopeWireV1 { query_id: [u8; 32], cycle_id: [u8; 16], cycle_start_unix: u64, cycle_end_unix: u64, due_at_unix: u64, holder_identity: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::TransparencyLeaderLeaseScopeWireV1" TransparencyLeaderLeaseScopeWireV1 { query_id: [u8; 32], cycle_id: [u8; 16], cycle_start_unix: u64, cycle_end_unix: u64, due_at_unix: u64, holder_identity: [u8; 32], });
 impl TransparencyLeaderLeaseScopeWireV1 {
     fn from_scope(scope: sorafs_node::TransparencyLeaderLeaseScopeV1) -> Self {
         let window = scope.window();
@@ -2262,7 +2265,7 @@ impl TransparencyLeaderLeaseScopeWireV1 {
         Ok(scope)
     }
 }
-define_broker_wire_struct!(owned TransparencyLeaderLeaseGrantWireV1 { version: u16, lease_id: [u8; 32], scope: TransparencyLeaderLeaseScopeWireV1, fencing_token: u64, issued_at_unix: u64, expires_at_unix: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::TransparencyLeaderLeaseGrantWireV1" TransparencyLeaderLeaseGrantWireV1 { version: u16, lease_id: [u8; 32], scope: TransparencyLeaderLeaseScopeWireV1, fencing_token: u64, issued_at_unix: u64, expires_at_unix: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
 impl TransparencyLeaderLeaseGrantWireV1 {
     fn from_grant(grant: &sorafs_node::TransparencyLeaderLeaseGrantV1) -> Self {
         Self {
@@ -2296,7 +2299,7 @@ impl TransparencyLeaderLeaseGrantWireV1 {
         Ok(grant)
     }
 }
-define_broker_wire_struct!(owned TransparencyLeaderLeaseAcquireRequestWireV1 { scope: TransparencyLeaderLeaseScopeWireV1, acquire_at_unix: u64, expires_at_unix: u64, fencing_floor: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::TransparencyLeaderLeaseAcquireRequestWireV1" TransparencyLeaderLeaseAcquireRequestWireV1 { scope: TransparencyLeaderLeaseScopeWireV1, acquire_at_unix: u64, expires_at_unix: u64, fencing_floor: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
 impl TransparencyLeaderLeaseAcquireRequestWireV1 {
     fn from_request(request: &sorafs_node::TransparencyLeaderLeaseAcquireRequestV1) -> Self {
         Self {
@@ -2326,7 +2329,7 @@ impl TransparencyLeaderLeaseAcquireRequestWireV1 {
         Ok(request)
     }
 }
-define_broker_wire_struct!(owned TransparencyLeaderLeaseRenewRequestWireV1 { current_grant: TransparencyLeaderLeaseGrantWireV1, renew_at_unix: u64, expires_at_unix: u64, fencing_floor: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::TransparencyLeaderLeaseRenewRequestWireV1" TransparencyLeaderLeaseRenewRequestWireV1 { current_grant: TransparencyLeaderLeaseGrantWireV1, renew_at_unix: u64, expires_at_unix: u64, fencing_floor: u64, });
 impl TransparencyLeaderLeaseRenewRequestWireV1 {
     fn from_request(request: &sorafs_node::TransparencyLeaderLeaseRenewRequestV1) -> Self {
         Self {
@@ -2352,7 +2355,7 @@ impl TransparencyLeaderLeaseRenewRequestWireV1 {
         Ok(request)
     }
 }
-define_broker_wire_struct!(owned TransparencyLeaderLeaseReleaseRequestWireV1 { current_grant: TransparencyLeaderLeaseGrantWireV1, release_at_unix: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::TransparencyLeaderLeaseReleaseRequestWireV1" TransparencyLeaderLeaseReleaseRequestWireV1 { current_grant: TransparencyLeaderLeaseGrantWireV1, release_at_unix: u64, });
 impl TransparencyLeaderLeaseReleaseRequestWireV1 {
     fn from_request(request: &sorafs_node::TransparencyLeaderLeaseReleaseRequestV1) -> Self {
         Self {
@@ -2374,7 +2377,7 @@ impl TransparencyLeaderLeaseReleaseRequestWireV1 {
         Ok(request)
     }
 }
-define_broker_wire_struct!(owned TransparencyLeaderLeaseReleaseReceiptWireV1 { version: u16, lease_id: [u8; 32], scope: TransparencyLeaderLeaseScopeWireV1, fencing_token: u64, released_at_unix: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::TransparencyLeaderLeaseReleaseReceiptWireV1" TransparencyLeaderLeaseReleaseReceiptWireV1 { version: u16, lease_id: [u8; 32], scope: TransparencyLeaderLeaseScopeWireV1, fencing_token: u64, released_at_unix: u64, provider_binding: TransparencyRuntimeProviderBindingWireV1, });
 impl TransparencyLeaderLeaseReleaseReceiptWireV1 {
     fn from_receipt(receipt: &sorafs_node::TransparencyLeaderLeaseReleaseReceiptV1) -> Self {
         Self {
@@ -2408,7 +2411,7 @@ impl TransparencyLeaderLeaseReleaseReceiptWireV1 {
         Ok(receipt)
     }
 }
-define_broker_wire_struct!(copy FencedTransparencyTargetHeadWireV1 { version: u8, generation: u64, head_digest: [u8; 32], fencing_floor: u64, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::FencedTransparencyTargetHeadWireV1" FencedTransparencyTargetHeadWireV1 { version: u8, generation: u64, head_digest: [u8; 32], fencing_floor: u64, });
 impl FencedTransparencyTargetHeadWireV1 {
     fn from_head(head: sorafs_node::FencedTransparencyTargetHeadV1) -> Self {
         Self {
@@ -2434,7 +2437,7 @@ impl FencedTransparencyTargetHeadWireV1 {
         Ok(head)
     }
 }
-define_broker_wire_struct!(owned PrivacyPublicationAuthorizationWireV1 { leader_lease: TransparencyLeaderLeaseGrantWireV1, finalized_anchor: PrivacyReleaseAnchorHeadWireV1, release_sequence: u64, release_record_digest: [u8; 32], payload_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::PrivacyPublicationAuthorizationWireV1" PrivacyPublicationAuthorizationWireV1 { leader_lease: TransparencyLeaderLeaseGrantWireV1, finalized_anchor: PrivacyReleaseAnchorHeadWireV1, release_sequence: u64, release_record_digest: [u8; 32], payload_digest: [u8; 32], });
 impl PrivacyPublicationAuthorizationWireV1 {
     fn from_authorization(authorization: &sorafs_node::PrivacyPublicationAuthorizationV1) -> Self {
         Self {
@@ -2466,7 +2469,7 @@ impl PrivacyPublicationAuthorizationWireV1 {
         Ok(authorization)
     }
 }
-define_broker_wire_struct!(sensitive FencedPrivacyPublicationRequestWireV1 { version: u8, authorization: PrivacyPublicationAuthorizationWireV1, authorization_digest: [u8; 32], publication_idempotency_digest: [u8; 32], canonical_payload: Vec<u8>, payload_digest: [u8; 32], expected_authoritative_head: Option<FencedTransparencyTargetHeadWireV1>, fencing_token: u64, fencing_floor: u64, request_digest: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::FencedPrivacyPublicationRequestWireV1" FencedPrivacyPublicationRequestWireV1 { version: u8, authorization: PrivacyPublicationAuthorizationWireV1, authorization_digest: [u8; 32], publication_idempotency_digest: [u8; 32], canonical_payload: Vec<u8>, payload_digest: [u8; 32], expected_authoritative_head: Option<FencedTransparencyTargetHeadWireV1>, fencing_token: u64, fencing_floor: u64, request_digest: [u8; 32], });
 impl_broker_debug_fields!(FencedPrivacyPublicationRequestWireV1 as value {
     "version" => value.version,
     "authorization" => value.authorization,
@@ -2600,7 +2603,7 @@ fn decode_fenced_privacy_publication_with_admission(
     );
     norito::decode_canonical_with_limits(bytes, limits).map_err(|_| BrokerError::Rejected)
 }
-define_broker_wire_struct!(copy FencedPrivacyPublicationReceiptWireV1 { version: u8, request_digest: [u8; 32], publication_idempotency_digest: [u8; 32], payload_digest: [u8; 32], disposition: u8, included_head: FencedTransparencyTargetHeadWireV1, readback_head: FencedTransparencyTargetHeadWireV1, head_inclusion_digest: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::FencedPrivacyPublicationReceiptWireV1" FencedPrivacyPublicationReceiptWireV1 { version: u8, request_digest: [u8; 32], publication_idempotency_digest: [u8; 32], payload_digest: [u8; 32], disposition: u8, included_head: FencedTransparencyTargetHeadWireV1, readback_head: FencedTransparencyTargetHeadWireV1, head_inclusion_digest: [u8; 32], });
 impl FencedPrivacyPublicationReceiptWireV1 {
     fn from_receipt(receipt: &sorafs_node::FencedPrivacyPublicationReceiptV1) -> Self {
         Self {
@@ -2653,7 +2656,7 @@ impl FencedPrivacyPublicationReceiptWireV1 {
         Ok(receipt)
     }
 }
-define_broker_wire_struct!(copy FencedTransparencyPublicationInclusionWireV1 { version: u8, publication_idempotency_digest: [u8; 32], payload_digest: [u8; 32], included_head: FencedTransparencyTargetHeadWireV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::FencedTransparencyPublicationInclusionWireV1" FencedTransparencyPublicationInclusionWireV1 { version: u8, publication_idempotency_digest: [u8; 32], payload_digest: [u8; 32], included_head: FencedTransparencyTargetHeadWireV1, });
 impl FencedTransparencyPublicationInclusionWireV1 {
     fn from_inclusion(inclusion: sorafs_node::FencedTransparencyPublicationInclusionV1) -> Self {
         Self {
@@ -2681,7 +2684,7 @@ impl FencedTransparencyPublicationInclusionWireV1 {
         Ok(inclusion)
     }
 }
-define_broker_wire_struct!(owned FencedPrivacyHeadReadRequestWireV1 { version: u8, required_ancestors: Vec<FencedTransparencyTargetHeadWireV1>, required_publications: Vec<FencedTransparencyPublicationInclusionWireV1>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::FencedPrivacyHeadReadRequestWireV1" FencedPrivacyHeadReadRequestWireV1 { version: u8, required_ancestors: Vec<FencedTransparencyTargetHeadWireV1>, required_publications: Vec<FencedTransparencyPublicationInclusionWireV1>, });
 impl FencedPrivacyHeadReadRequestWireV1 {
     fn from_required_evidence(
         required_ancestors: &[sorafs_node::FencedTransparencyTargetHeadV1],
@@ -2734,7 +2737,7 @@ impl FencedPrivacyHeadReadRequestWireV1 {
         Ok((required_ancestors, required_publications))
     }
 }
-define_broker_wire_struct!(owned FencedTransparencyHeadAncestryProofWireV1 { version: u8, authoritative_head: Option<FencedTransparencyTargetHeadWireV1>, verified_ancestors: Vec<FencedTransparencyTargetHeadWireV1>, verified_publications: Vec<FencedTransparencyPublicationInclusionWireV1>, adapter_proof_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::FencedTransparencyHeadAncestryProofWireV1" FencedTransparencyHeadAncestryProofWireV1 { version: u8, authoritative_head: Option<FencedTransparencyTargetHeadWireV1>, verified_ancestors: Vec<FencedTransparencyTargetHeadWireV1>, verified_publications: Vec<FencedTransparencyPublicationInclusionWireV1>, adapter_proof_digest: [u8; 32], });
 impl FencedTransparencyHeadAncestryProofWireV1 {
     fn from_proof(proof: &sorafs_node::FencedTransparencyHeadAncestryProofV1) -> Self {
         Self {
@@ -2802,8 +2805,8 @@ impl FencedTransparencyHeadAncestryProofWireV1 {
         Ok(proof)
     }
 }
-define_broker_wire_struct!(copy PrivacyReleaseAnchorFinalizedHeadRequestWireV1 { query_id: [u8; 32], });
-define_broker_wire_struct!(owned PrivacyReleaseAnchorCompareAndSetRequestWireV1 { expected: PrivacyReleaseAnchorHeadWireV1, next: PrivacyReleaseAnchorHeadWireV1, lease: TransparencyLeaderLeaseGrantWireV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PrivacyReleaseAnchorFinalizedHeadRequestWireV1" PrivacyReleaseAnchorFinalizedHeadRequestWireV1 { query_id: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::PrivacyReleaseAnchorCompareAndSetRequestWireV1" PrivacyReleaseAnchorCompareAndSetRequestWireV1 { expected: PrivacyReleaseAnchorHeadWireV1, next: PrivacyReleaseAnchorHeadWireV1, lease: TransparencyLeaderLeaseGrantWireV1, });
 fn transparency_runtime_binding_from_wire(
     binding: &ProviderBindingWireV1,
 ) -> Result<sorafs_node::TransparencyRuntimeProviderBindingV1, BrokerError> {
@@ -2972,10 +2975,10 @@ const fn fenced_privacy_publish_error(
         | sorafs_node::FencedTransparencyPublishErrorV1::InvalidReceipt => BrokerError::Ambiguous,
     }
 }
-define_broker_wire_struct!(owned GovernanceRequestAuthHeaderWireV1 { name: String, value: String, });
-define_broker_wire_struct!(owned GovernanceRequestAuthRequestWireV1 { scope: u8, method: String, canonical_url: String, selected_headers: Vec<GovernanceRequestAuthHeaderWireV1>, body_length: u64, body_blake3: [u8; 32], request_digest: [u8; 32], });
-define_broker_wire_struct!(copy GovernanceRequestAuthResultWireV1 { scope: u8, issued_at_unix_secs: u64, expires_at_unix_secs: u64, nonce: [u8; 32], request_digest: [u8; 32], public_key: [u8; 32], signature: [u8; 64], });
-define_broker_wire_struct!(sensitive PotrSignRequestWireV1 { payload: Vec<u8>, expected_public_key: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::GovernanceRequestAuthHeaderWireV1" GovernanceRequestAuthHeaderWireV1 { name: String, value: String, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::GovernanceRequestAuthRequestWireV1" GovernanceRequestAuthRequestWireV1 { scope: u8, method: String, canonical_url: String, selected_headers: Vec<GovernanceRequestAuthHeaderWireV1>, body_length: u64, body_blake3: [u8; 32], request_digest: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::GovernanceRequestAuthResultWireV1" GovernanceRequestAuthResultWireV1 { scope: u8, issued_at_unix_secs: u64, expires_at_unix_secs: u64, nonce: [u8; 32], request_digest: [u8; 32], public_key: [u8; 32], signature: [u8; 64], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::PotrSignRequestWireV1" PotrSignRequestWireV1 { payload: Vec<u8>, expected_public_key: Vec<u8>, });
 impl_broker_debug_fields!(PotrSignRequestWireV1 as value {
     "payload_len" => value.payload.len(),
     "public_key_len" => value.expected_public_key.len(),
@@ -2985,7 +2988,7 @@ impl_scrub_fields_on_drop!(PotrSignRequestWireV1 {
     expected_public_key
 });
 impl_scrub_fields_on_drop!(VariableSignatureResultWireV1 { signature });
-define_broker_wire_struct!(copy DurationWireV1 { secs: u64, nanos: u32, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::DurationWireV1" DurationWireV1 { secs: u64, nanos: u32, });
 impl DurationWireV1 {
     fn from_duration(duration: Duration) -> Self {
         Self {
@@ -3000,7 +3003,7 @@ impl DurationWireV1 {
         Ok(Duration::new(self.secs, self.nanos))
     }
 }
-define_broker_wire_struct!(owned IpAddressWireV1 { family: u8, octets: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::IpAddressWireV1" IpAddressWireV1 { family: u8, octets: Vec<u8>, });
 impl From<std::net::IpAddr> for IpAddressWireV1 {
     fn from(address: std::net::IpAddr) -> Self {
         match address {
@@ -3038,7 +3041,7 @@ impl IpAddressWireV1 {
         }
     }
 }
-define_broker_wire_struct!(copy SystemTimeWireV1 { unix_secs: u64, nanos: u32, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::SystemTimeWireV1" SystemTimeWireV1 { unix_secs: u64, nanos: u32, });
 impl SystemTimeWireV1 {
     fn from_system_time(value: std::time::SystemTime) -> Result<Self, BrokerError> {
         let duration = value
@@ -3060,8 +3063,8 @@ impl SystemTimeWireV1 {
             .ok_or(BrokerError::Rejected)
     }
 }
-define_broker_wire_struct!(owned GatewayAcmeOrderRequestWireV1 { hostnames: Vec<String>, account_email: Option<String>, directory_url: String, dns_provider_id: Option<String>, dns01: bool, tls_alpn_01: bool, });
-define_broker_wire_struct!(sensitive GatewayAcmeOrderOutcomeWireV1 { outcome: u8, certificate_pem: String, private_key_pem: String, ech_config: Option<Vec<u8>>, not_after: Option<SystemTimeWireV1>, retry_after: Option<DurationWireV1>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::GatewayAcmeOrderRequestWireV1" GatewayAcmeOrderRequestWireV1 { hostnames: Vec<String>, account_email: Option<String>, directory_url: String, dns_provider_id: Option<String>, dns01: bool, tls_alpn_01: bool, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::GatewayAcmeOrderOutcomeWireV1" GatewayAcmeOrderOutcomeWireV1 { outcome: u8, certificate_pem: String, private_key_pem: String, ech_config: Option<Vec<u8>>, not_after: Option<SystemTimeWireV1>, retry_after: Option<DurationWireV1>, });
 fn scrub_secret_string(value: &mut String) {
     let mut bytes = std::mem::take(value).into_bytes();
     bytes.fill(0);
@@ -3082,28 +3085,28 @@ impl Drop for GatewayAcmeOrderOutcomeWireV1 {
         }
     }
 }
-define_broker_wire_struct!(owned GatewayComplianceResolveRequestWireV1 { hostname: String, timeout: DurationWireV1, });
-define_broker_wire_struct!(owned GatewayComplianceResolveOutcomeWireV1 { outcome: u8, addresses: Vec<IpAddressWireV1>, found: u64, maximum: u64, });
-define_broker_wire_struct!(owned GatewayComplianceFetchRequestWireV1 { url: String, pinned_addresses: Vec<IpAddressWireV1>, connect_timeout: DurationWireV1, total_timeout: DurationWireV1, max_encoded_bytes: u64, });
-define_broker_wire_struct!(sensitive GatewayComplianceFetchOutcomeWireV1 { outcome: u8, status: u16, redirect_location: Option<String>, connected_address: Option<IpAddressWireV1>, peer_spki_sha256: [u8; 32], content_encoding: u8, body: Vec<u8>, elapsed: Option<DurationWireV1>, found: u64, maximum: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::GatewayComplianceResolveRequestWireV1" GatewayComplianceResolveRequestWireV1 { hostname: String, timeout: DurationWireV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::GatewayComplianceResolveOutcomeWireV1" GatewayComplianceResolveOutcomeWireV1 { outcome: u8, addresses: Vec<IpAddressWireV1>, found: u64, maximum: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::GatewayComplianceFetchRequestWireV1" GatewayComplianceFetchRequestWireV1 { url: String, pinned_addresses: Vec<IpAddressWireV1>, connect_timeout: DurationWireV1, total_timeout: DurationWireV1, max_encoded_bytes: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::GatewayComplianceFetchOutcomeWireV1" GatewayComplianceFetchOutcomeWireV1 { outcome: u8, status: u16, redirect_location: Option<String>, connected_address: Option<IpAddressWireV1>, peer_spki_sha256: [u8; 32], content_encoding: u8, body: Vec<u8>, elapsed: Option<DurationWireV1>, found: u64, maximum: u64, });
 impl_broker_debug_fields!(GatewayComplianceFetchOutcomeWireV1 as value {
     "outcome" => value.outcome,
     "status" => value.status,
     "body_len" => value.body.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(GatewayComplianceFetchOutcomeWireV1 { body });
-define_broker_wire_struct!(move_sensitive PopAuthenticateRequestWireV1 { opaque_credential: Vec<u8>, action: u8, request_binding: [u8; 32], now_epoch: u64, });
+define_broker_wire_struct!(move_sensitive "irohad::runtime_provider_broker::protocol::PopAuthenticateRequestWireV1" PopAuthenticateRequestWireV1 { opaque_credential: Vec<u8>, action: u8, request_binding: [u8; 32], now_epoch: u64, });
 impl_broker_debug_fields!(PopAuthenticateRequestWireV1 as value {
     "opaque_credential" => "[REDACTED]",
     "action" => value.action,
     "now_epoch" => value.now_epoch,
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(PopAuthenticateRequestWireV1 { opaque_credential });
-define_broker_wire_struct!(copy PopAuthenticatedPrincipalWireV1 { principal_digest: [u8; 32], expires_at_epoch: u64, caller_signed_transaction: bool, });
-define_broker_wire_struct!(owned PopRegistrySubmitRequestWireV1 { idempotency_key: [u8; 32], operation: sorafs_node::pop_credentials::PopRegistryOperationV1, });
-define_broker_wire_struct!(copy PopRegistryNextRequestWireV1 { cursor: Option<sorafs_node::pop_credentials::PopFinalizedCursorV1>, });
-define_broker_wire_struct!(owned PopRegistryNextResultWireV1 { projection: Option<sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1>, });
-define_broker_wire_struct!(sensitive PopMembershipWitnessWireV1 { holder_secret: [u8; 32], credential_siblings: Vec<[u8; 32]>, credential_directions: Vec<bool>, revocation_siblings: Vec<[u8; 32]>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PopAuthenticatedPrincipalWireV1" PopAuthenticatedPrincipalWireV1 { principal_digest: [u8; 32], expires_at_epoch: u64, caller_signed_transaction: bool, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::PopRegistrySubmitRequestWireV1" PopRegistrySubmitRequestWireV1 { idempotency_key: [u8; 32], operation: sorafs_node::pop_credentials::PopRegistryOperationV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PopRegistryNextRequestWireV1" PopRegistryNextRequestWireV1 { cursor: Option<sorafs_node::pop_credentials::PopFinalizedCursorV1>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::PopRegistryNextResultWireV1" PopRegistryNextResultWireV1 { projection: Option<sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::PopMembershipWitnessWireV1" PopMembershipWitnessWireV1 { holder_secret: [u8; 32], credential_siblings: Vec<[u8; 32]>, credential_directions: Vec<bool>, revocation_siblings: Vec<[u8; 32]>, });
 impl_broker_debug_fields!(PopMembershipWitnessWireV1 as value {
     "private_witness" => "[REDACTED]",
 } => finish_non_exhaustive);
@@ -3149,46 +3152,46 @@ impl PopMembershipWitnessWireV1 {
         witness
     }
 }
-define_broker_wire_struct!(copy PopIssuanceDraftRequestWireV1 { request_id: [u8; 32], now_epoch: u64, });
-define_broker_wire_struct!(sensitive PopIssuanceDraftResultWireV1 { request_id: [u8; 32], credential: sorafs_manifest::pop_credentials::PopCredentialV1, commitment_root: sorafs_manifest::pop_credentials::PopCommitmentRootV1, revocation_list: sorafs_manifest::pop_credentials::PopRevocationListV1, witness: PopMembershipWitnessWireV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PopIssuanceDraftRequestWireV1" PopIssuanceDraftRequestWireV1 { request_id: [u8; 32], now_epoch: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::PopIssuanceDraftResultWireV1" PopIssuanceDraftResultWireV1 { request_id: [u8; 32], credential: sorafs_manifest::pop_credentials::PopCredentialV1, commitment_root: sorafs_manifest::pop_credentials::PopCommitmentRootV1, revocation_list: sorafs_manifest::pop_credentials::PopRevocationListV1, witness: PopMembershipWitnessWireV1, });
 impl_broker_debug_fields!(PopIssuanceDraftResultWireV1 as value {
     "request_id" => value.request_id,
     "private_issuance_material" => "[REDACTED]",
 } => finish_non_exhaustive);
-define_broker_wire_struct!(move_sensitive PopWalletWrapDekRequestWireV1 { context: [u8; 32], dek: [u8; 32], });
+define_broker_wire_struct!(move_sensitive "irohad::runtime_provider_broker::protocol::PopWalletWrapDekRequestWireV1" PopWalletWrapDekRequestWireV1 { context: [u8; 32], dek: [u8; 32], });
 impl_broker_debug_fields!(PopWalletWrapDekRequestWireV1 as value {
     "dek" => "[REDACTED]",
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(PopWalletWrapDekRequestWireV1 { dek });
-define_broker_wire_struct!(move_sensitive PopWalletWrapDekResultWireV1 { wrapped_dek: Vec<u8>, });
+define_broker_wire_struct!(move_sensitive "irohad::runtime_provider_broker::protocol::PopWalletWrapDekResultWireV1" PopWalletWrapDekResultWireV1 { wrapped_dek: Vec<u8>, });
 impl_broker_debug_fields!(PopWalletWrapDekResultWireV1 as value {
     "wrapped_dek_len" => value.wrapped_dek.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(PopWalletWrapDekResultWireV1 { wrapped_dek });
-define_broker_wire_struct!(move_sensitive PopWalletUnwrapDekRequestWireV1 { key_id: String, context: [u8; 32], wrapped_dek: Vec<u8>, });
+define_broker_wire_struct!(move_sensitive "irohad::runtime_provider_broker::protocol::PopWalletUnwrapDekRequestWireV1" PopWalletUnwrapDekRequestWireV1 { key_id: String, context: [u8; 32], wrapped_dek: Vec<u8>, });
 impl_broker_debug_fields!(PopWalletUnwrapDekRequestWireV1 as value {
     "key_id" => value.key_id,
     "wrapped_dek_len" => value.wrapped_dek.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(PopWalletUnwrapDekRequestWireV1 { wrapped_dek });
-define_broker_wire_struct!(move_sensitive PopWalletUnwrapDekResultWireV1 { dek: [u8; 32], });
+define_broker_wire_struct!(move_sensitive "irohad::runtime_provider_broker::protocol::PopWalletUnwrapDekResultWireV1" PopWalletUnwrapDekResultWireV1 { dek: [u8; 32], });
 impl_broker_debug_fields!(PopWalletUnwrapDekResultWireV1 as value {
     "dek" => "[REDACTED]",
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(PopWalletUnwrapDekResultWireV1 { dek });
-define_broker_wire_struct!(owned PopWalletWitnessRequestWireV1 { credential_commitment: [u8; 32], projection: sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1, });
-define_broker_wire_struct!(copy PopFinalizedTimeResultWireV1 { finalized_block_height: u64, finalized_block_hash: [u8; 32], finalized_epoch: u64, observed_epoch: u64, });
-define_broker_wire_struct!(owned PorReplayArchiveAppendRequestWireV1 { canonical_record: Vec<u8>, expected_previous_head: Option<[u8; 32]>, });
-define_broker_wire_struct!(copy PorReplayArchiveLookupRequestWireV1 { challenge_id: [u8; 32], expected_checkpoint_head: sorafs_node::PorFinalizedReplayArchiveReceiptV1, max_successor_receipts: u32, max_successor_proof_bytes: u64, });
-define_broker_wire_struct!(owned PorReplayArchiveLookupOutcomeWireV1 { outcome: u8, canonical_record: Vec<u8>, receipt: Option<sorafs_node::PorFinalizedReplayArchiveReceiptV1>, declared_successor_receipts: u32, canonical_successor_receipts: Vec<u8>, absence_proof: Option<sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1>, });
-define_broker_wire_struct!(owned AppealFinanceCheckpointCompareAndSwapWireV1 { expected_revision: Option<[u8; 32]>, next: sorafs_node::appeal_finance_transaction_forwarder:: AppealFinanceSealedCheckpointRecordV1, });
-define_broker_wire_struct!(copy EvidenceViewerIssueChallengeRequestWireV1 { binding_digest: [u8; 32], issued_at_unix_ms: u64, expires_at_unix_ms: u64, });
-define_broker_wire_struct!(sensitive EvidenceViewerSecretResultWireV1 { secret: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::PopWalletWitnessRequestWireV1" PopWalletWitnessRequestWireV1 { credential_commitment: [u8; 32], projection: sorafs_node::pop_credentials::PopFinalizedRegistryProjectionV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PopFinalizedTimeResultWireV1" PopFinalizedTimeResultWireV1 { finalized_block_height: u64, finalized_block_hash: [u8; 32], finalized_epoch: u64, observed_epoch: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::PorReplayArchiveAppendRequestWireV1" PorReplayArchiveAppendRequestWireV1 { canonical_record: Vec<u8>, expected_previous_head: Option<[u8; 32]>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::PorReplayArchiveLookupRequestWireV1" PorReplayArchiveLookupRequestWireV1 { challenge_id: [u8; 32], expected_checkpoint_head: sorafs_node::PorFinalizedReplayArchiveReceiptV1, max_successor_receipts: u32, max_successor_proof_bytes: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::PorReplayArchiveLookupOutcomeWireV1" PorReplayArchiveLookupOutcomeWireV1 { outcome: u8, canonical_record: Vec<u8>, receipt: Option<sorafs_node::PorFinalizedReplayArchiveReceiptV1>, declared_successor_receipts: u32, canonical_successor_receipts: Vec<u8>, absence_proof: Option<sorafs_node::PorFinalizedReplayArchiveAbsenceProofV1>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::AppealFinanceCheckpointCompareAndSwapWireV1" AppealFinanceCheckpointCompareAndSwapWireV1 { expected_revision: Option<[u8; 32]>, next: sorafs_node::appeal_finance_transaction_forwarder:: AppealFinanceSealedCheckpointRecordV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::EvidenceViewerIssueChallengeRequestWireV1" EvidenceViewerIssueChallengeRequestWireV1 { binding_digest: [u8; 32], issued_at_unix_ms: u64, expires_at_unix_ms: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerSecretResultWireV1" EvidenceViewerSecretResultWireV1 { secret: Vec<u8>, });
 impl_broker_debug_fields!(EvidenceViewerSecretResultWireV1 as value {
     "secret_len" => value.secret.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(EvidenceViewerSecretResultWireV1 { secret });
-define_broker_wire_struct!(sensitive EvidenceViewerVerifyAndConsumeRequestWireV1 { challenge: Vec<u8>, assertion: Vec<u8>, binding_digest: [u8; 32], rp_id: String, allowed_origins: Vec<String>, now_unix_ms: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerVerifyAndConsumeRequestWireV1" EvidenceViewerVerifyAndConsumeRequestWireV1 { challenge: Vec<u8>, assertion: Vec<u8>, binding_digest: [u8; 32], rp_id: String, allowed_origins: Vec<String>, now_unix_ms: u64, });
 impl_broker_debug_fields!(EvidenceViewerVerifyAndConsumeRequestWireV1 as value {
     "challenge_len" => value.challenge.len(),
     "assertion_len" => value.assertion.len(),
@@ -3207,7 +3210,7 @@ fn validate_evidence_viewer_verify_and_consume_wire(
     }
     Ok(())
 }
-define_broker_wire_struct!(copy EvidenceViewerWebAuthnResultWireV1 { attestation_digest: [u8; 32], credential_id_digest: [u8; 32], authenticator_counter: u64, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::EvidenceViewerWebAuthnResultWireV1" EvidenceViewerWebAuthnResultWireV1 { attestation_digest: [u8; 32], credential_id_digest: [u8; 32], authenticator_counter: u64, });
 fn scrub_evidence_viewer_string(value: &mut String) {
     let mut bytes = std::mem::take(value).into_bytes();
     bytes.fill(0);
@@ -3220,14 +3223,14 @@ fn scrub_evidence_viewer_grant_claims(
     scrub_evidence_viewer_string(&mut claims.round_id);
     scrub_evidence_viewer_string(&mut claims.viewer_account);
 }
-define_broker_wire_struct!(sensitive EvidenceViewerGrantIssueRequestWireV1 { claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerGrantIssueRequestWireV1" EvidenceViewerGrantIssueRequestWireV1 { claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1, });
 impl_broker_debug_fields!(EvidenceViewerGrantIssueRequestWireV1 as value {} => finish_non_exhaustive);
 impl Drop for EvidenceViewerGrantIssueRequestWireV1 {
     fn drop(&mut self) {
         scrub_evidence_viewer_grant_claims(&mut self.claims);
     }
 }
-define_broker_wire_struct!(sensitive EvidenceViewerGrantVerifyRequestWireV1 { token: Vec<u8>, claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1, now_unix_ms: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerGrantVerifyRequestWireV1" EvidenceViewerGrantVerifyRequestWireV1 { token: Vec<u8>, claims: sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1, now_unix_ms: u64, });
 impl_broker_debug_fields!(EvidenceViewerGrantVerifyRequestWireV1 as value {
     "token_len" => value.token.len(),
 } => finish_non_exhaustive);
@@ -3238,10 +3241,10 @@ impl Drop for EvidenceViewerGrantVerifyRequestWireV1 {
         let _ = std::hint::black_box(&self.token);
     }
 }
-define_broker_wire_struct!(sensitive EvidenceViewerGrantRevokeRequestWireV1 { token_digest: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerGrantRevokeRequestWireV1" EvidenceViewerGrantRevokeRequestWireV1 { token_digest: [u8; 32], });
 impl_broker_debug_fields!(EvidenceViewerGrantRevokeRequestWireV1 as value {} => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(EvidenceViewerGrantRevokeRequestWireV1 { token_digest });
-define_broker_wire_struct!(sensitive EvidenceViewerEraseRequestWireV1 { operation_id: [u8; 32], quarantine_id: [u8; 16], object_id: [u8; 16], evidence_digest: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerEraseRequestWireV1" EvidenceViewerEraseRequestWireV1 { operation_id: [u8; 32], quarantine_id: [u8; 16], object_id: [u8; 16], evidence_digest: [u8; 32], });
 impl_broker_debug_fields!(EvidenceViewerEraseRequestWireV1 as value {} => finish_non_exhaustive);
 impl Drop for EvidenceViewerEraseRequestWireV1 {
     fn drop(&mut self) {
@@ -3257,8 +3260,8 @@ impl Drop for EvidenceViewerEraseRequestWireV1 {
         ));
     }
 }
-define_broker_wire_struct!(copy EvidenceViewerEraseResultWireV1 { commit_digest: [u8; 32], });
-define_broker_wire_struct!(sensitive EvidenceViewerCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::EvidenceViewerEraseResultWireV1" EvidenceViewerEraseResultWireV1 { commit_digest: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerCheckpointCompareAndSwapRequestWireV1" EvidenceViewerCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
 impl_broker_debug_fields!(EvidenceViewerCheckpointCompareAndSwapRequestWireV1 as value {
     "expected_revision" => value.expected_revision,
     "next_record_len" => value.next_record.len(),
@@ -3272,7 +3275,7 @@ impl Drop for EvidenceViewerCheckpointCompareAndSwapRequestWireV1 {
         let _ = std::hint::black_box((&self.expected_revision, &self.next_record));
     }
 }
-define_broker_wire_struct!(sensitive EvidenceViewerArchiveInstallRequestWireV1 { operation_id: [u8; 32], receipt_message: [u8; 32], canonical_artifact: Vec<u8>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerArchiveInstallRequestWireV1" EvidenceViewerArchiveInstallRequestWireV1 { operation_id: [u8; 32], receipt_message: [u8; 32], canonical_artifact: Vec<u8>, });
 impl_broker_debug_fields!(EvidenceViewerArchiveInstallRequestWireV1 as value {
     "canonical_artifact_len" => value.canonical_artifact.len(),
 } => finish_non_exhaustive);
@@ -3288,22 +3291,22 @@ impl Drop for EvidenceViewerArchiveInstallRequestWireV1 {
         ));
     }
 }
-define_broker_wire_struct!(sensitive EvidenceViewerArchiveReadRequestWireV1 { operation_id: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerArchiveReadRequestWireV1" EvidenceViewerArchiveReadRequestWireV1 { operation_id: [u8; 32], });
 impl_broker_debug_fields!(EvidenceViewerArchiveReadRequestWireV1 as value {} => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(EvidenceViewerArchiveReadRequestWireV1 { operation_id });
-define_broker_wire_struct!(sensitive EvidenceViewerArchiveReadbackWireV1 { canonical_artifact: Vec<u8>, signature: [u8; 64], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::EvidenceViewerArchiveReadbackWireV1" EvidenceViewerArchiveReadbackWireV1 { canonical_artifact: Vec<u8>, signature: [u8; 64], });
 impl_broker_debug_fields!(EvidenceViewerArchiveReadbackWireV1 as value {
     "canonical_artifact_len" => value.canonical_artifact.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(EvidenceViewerArchiveReadbackWireV1 { canonical_artifact });
 const MODERATION_PANEL_NOTIFICATION_ARCHIVE_BROKER_WIRE_VERSION_V1: u16 = 1;
-define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveQualifyRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveQualifyRequestWireV1" ModerationPanelNotificationArchiveQualifyRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, });
 impl_broker_debug_fields!(ModerationPanelNotificationArchiveQualifyRequestWireV1 as value {
     "version" => value.version,
     "slot" => value.slot,
 } => finish_non_exhaustive);
-define_broker_wire_struct!(copy ModerationPanelNotificationArchiveQualificationWireV1 { version: u16, slot: u16, revision: u64, policy_digest: [u8; 32], archive_id: [u8; 32], public_key: [u8; 32], });
-define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveInstallRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, operation_id: [u8; 32], receipt_message: [u8; 32], canonical_artifact: Vec<u8>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveQualificationWireV1" ModerationPanelNotificationArchiveQualificationWireV1 { version: u16, slot: u16, revision: u64, policy_digest: [u8; 32], archive_id: [u8; 32], public_key: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveInstallRequestWireV1" ModerationPanelNotificationArchiveInstallRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, operation_id: [u8; 32], receipt_message: [u8; 32], canonical_artifact: Vec<u8>, });
 impl_broker_debug_fields!(ModerationPanelNotificationArchiveInstallRequestWireV1 as value {
     "version" => value.version,
     "slot" => value.slot,
@@ -3321,23 +3324,23 @@ impl Drop for ModerationPanelNotificationArchiveInstallRequestWireV1 {
         ));
     }
 }
-define_broker_wire_struct!(copy ModerationPanelNotificationArchiveInstallResultWireV1 { version: u16, slot: u16, signature: [u8; 64], });
-define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveReadRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, operation_id: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveInstallResultWireV1" ModerationPanelNotificationArchiveInstallResultWireV1 { version: u16, slot: u16, signature: [u8; 64], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveReadRequestWireV1" ModerationPanelNotificationArchiveReadRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, operation_id: [u8; 32], });
 impl_broker_debug_fields!(ModerationPanelNotificationArchiveReadRequestWireV1 as value {
     "version" => value.version,
     "slot" => value.slot,
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveReadRequestWireV1 { operation_id });
-define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveReadbackWireV1 { version: u16, slot: u16, canonical_artifact: Vec<u8>, signature: [u8; 64], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveReadbackWireV1" ModerationPanelNotificationArchiveReadbackWireV1 { version: u16, slot: u16, canonical_artifact: Vec<u8>, signature: [u8; 64], });
 impl_broker_debug_fields!(ModerationPanelNotificationArchiveReadbackWireV1 as value {
     "version" => value.version,
     "slot" => value.slot,
     "canonical_artifact_len" => value.canonical_artifact.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveReadbackWireV1 { canonical_artifact });
-define_broker_wire_struct!(owned ModerationPanelNotificationSourceAttestRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, statement: sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1, });
-define_broker_wire_struct!(copy ModerationPanelNotificationSourceAttestResultWireV1 { version: u16, slot: u16, statement_digest: [u8; 32], signature: [u8; 64], });
-define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveHeadPublishRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1, canonical_head: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationSourceAttestRequestWireV1" ModerationPanelNotificationSourceAttestRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, statement: sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationSourceAttestResultWireV1" ModerationPanelNotificationSourceAttestResultWireV1 { version: u16, slot: u16, statement_digest: [u8; 32], signature: [u8; 64], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveHeadPublishRequestWireV1" ModerationPanelNotificationArchiveHeadPublishRequestWireV1 { version: u16, slot: u16, network_id: NetworkId, head: sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1, canonical_head: Vec<u8>, });
 impl_broker_debug_fields!(ModerationPanelNotificationArchiveHeadPublishRequestWireV1 as value {
     "version" => value.version,
     "slot" => value.slot,
@@ -3347,8 +3350,8 @@ impl_broker_debug_fields!(ModerationPanelNotificationArchiveHeadPublishRequestWi
 impl_scrub_fields_on_drop!(ModerationPanelNotificationArchiveHeadPublishRequestWireV1 {
     canonical_head
 });
-define_broker_wire_struct!(copy ModerationPanelNotificationArchiveHeadPublishResultWireV1 { version: u16, slot: u16, operation_id: [u8; 32], head_digest: [u8; 32], chain_commitment: [u8; 32], outcome: u8, });
-define_broker_wire_struct!(sensitive ModerationPanelNotificationArchiveHeadReadResultWireV1 { version: u16, slot: u16, canonical_head: Option<Vec<u8>>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveHeadPublishResultWireV1" ModerationPanelNotificationArchiveHeadPublishResultWireV1 { version: u16, slot: u16, operation_id: [u8; 32], head_digest: [u8; 32], chain_commitment: [u8; 32], outcome: u8, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationArchiveHeadReadResultWireV1" ModerationPanelNotificationArchiveHeadReadResultWireV1 { version: u16, slot: u16, canonical_head: Option<Vec<u8>>, });
 impl_broker_debug_fields!(ModerationPanelNotificationArchiveHeadReadResultWireV1 as value {
     "version" => value.version,
     "slot" => value.slot,
@@ -3362,66 +3365,66 @@ impl Drop for ModerationPanelNotificationArchiveHeadReadResultWireV1 {
         }
     }
 }
-define_broker_wire_struct!(sensitive ModerationQuarantineWrapDekRequestWireV1 { context_digest: [u8; 32], dek: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationQuarantineWrapDekRequestWireV1" ModerationQuarantineWrapDekRequestWireV1 { context_digest: [u8; 32], dek: [u8; 32], });
 impl_broker_debug_fields!(ModerationQuarantineWrapDekRequestWireV1 as value {} => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(ModerationQuarantineWrapDekRequestWireV1 { dek });
-define_broker_wire_struct!(sensitive ModerationQuarantineWrapDekResultWireV1 { wrapped_dek: Vec<u8>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationQuarantineWrapDekResultWireV1" ModerationQuarantineWrapDekResultWireV1 { wrapped_dek: Vec<u8>, });
 impl_broker_debug_fields!(ModerationQuarantineWrapDekResultWireV1 as value {
     "wrapped_dek_len" => value.wrapped_dek.len(),
 } => finish);
 impl_scrub_fields_on_drop!(ModerationQuarantineWrapDekResultWireV1 { wrapped_dek });
-define_broker_wire_struct!(sensitive ModerationQuarantineUnwrapDekRequestWireV1 { key_id: String, context_digest: [u8; 32], wrapped_dek: Vec<u8>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationQuarantineUnwrapDekRequestWireV1" ModerationQuarantineUnwrapDekRequestWireV1 { key_id: String, context_digest: [u8; 32], wrapped_dek: Vec<u8>, });
 impl_broker_debug_fields!(ModerationQuarantineUnwrapDekRequestWireV1 as value {
     "wrapped_dek_len" => value.wrapped_dek.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(ModerationQuarantineUnwrapDekRequestWireV1 { wrapped_dek });
-define_broker_wire_struct!(sensitive ModerationQuarantineUnwrapDekResultWireV1 { dek: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationQuarantineUnwrapDekResultWireV1" ModerationQuarantineUnwrapDekResultWireV1 { dek: [u8; 32], });
 impl_broker_debug_fields!(ModerationQuarantineUnwrapDekResultWireV1 as value {} => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(ModerationQuarantineUnwrapDekResultWireV1 { dek });
-define_broker_wire_struct!(sensitive ModerationDurableHandoffRequestWireV1 { handoff: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1, canonical_handoff: Vec<u8>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationDurableHandoffRequestWireV1" ModerationDurableHandoffRequestWireV1 { handoff: sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1, canonical_handoff: Vec<u8>, });
 impl_broker_debug_fields!(ModerationDurableHandoffRequestWireV1 as value {
     "canonical_handoff_len" => value.canonical_handoff.len(),
 } => finish_non_exhaustive);
-define_broker_wire_struct!(copy ModerationDurableHandoffOutcomeWireV1 { outcome: u8, });
-define_broker_wire_struct!(sensitive ModerationDurablePanelNotificationRequestWireV1 { notification: sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1, canonical_notification: Vec<u8>, lease_expires_at_unix_ms: u64, attempt: u32, attempt_limit: u32, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ModerationDurableHandoffOutcomeWireV1" ModerationDurableHandoffOutcomeWireV1 { outcome: u8, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::ModerationDurablePanelNotificationRequestWireV1" ModerationDurablePanelNotificationRequestWireV1 { notification: sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1, canonical_notification: Vec<u8>, lease_expires_at_unix_ms: u64, attempt: u32, attempt_limit: u32, });
 impl_broker_debug_fields!(ModerationDurablePanelNotificationRequestWireV1 as value {
     "canonical_notification_len" => value.canonical_notification.len(),
     "attempt" => value.attempt,
     "attempt_limit" => value.attempt_limit,
 } => finish_non_exhaustive);
-define_broker_wire_struct!(copy_sensitive ModerationPanelNotificationReceiptWireV1 { notification_id: [u8; 32], receipt_digest: [u8; 32], delivered_at_unix_ms: u64, });
+define_broker_wire_struct!(copy_sensitive "irohad::runtime_provider_broker::protocol::ModerationPanelNotificationReceiptWireV1" ModerationPanelNotificationReceiptWireV1 { notification_id: [u8; 32], receipt_digest: [u8; 32], delivered_at_unix_ms: u64, });
 impl_broker_debug_fields!(ModerationPanelNotificationReceiptWireV1 as value {} => finish_non_exhaustive);
-define_broker_wire_struct!(copy SealedLoadRequestWireV1 { slot: u8, });
-define_broker_wire_struct!(owned SealedRecordWireV1 { generation: u64, revision: [u8; 32], payload: Vec<u8>, });
-define_broker_wire_struct!(owned SealedCompareAndSwapRequestWireV1 { slot: u8, expected_revision: Option<[u8; 32]>, next: SealedRecordWireV1, });
-define_broker_wire_struct!(copy SealedDeleteRequestWireV1 { slot: u8, expected_revision: [u8; 32], });
-define_broker_wire_struct!(owned ProviderIngestResolverQualificationWireV1 { revision: u64, policy_digest: [u8; 32], signer_binding: ProviderIngestSignerBindingWireV1, });
-define_broker_wire_struct!(copy ProviderIngestRuntimeQualificationWireV1 { revision: u64, policy_digest: [u8; 32], });
-define_broker_wire_struct!(owned ProviderIngestSignerRequestContextWireV1 { provider_owner: Vec<u8>, signer_policy_id: [u8; 32], signer_policy_revision: u64, signer_policy_predecessor_digest: Option<[u8; 32]>, signer_policy_digest: [u8; 32], expected_assignment_revision: u64, finalized_height: u64, finalized_block_hash: [u8; 32], });
-define_broker_wire_struct!(owned ProviderIngestResolveSignerRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, });
-define_broker_wire_struct!(copy ProviderIngestResolveSignerResultWireV1 { eligible: bool, });
-define_broker_wire_struct!(owned ProviderIngestSignRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, transaction_payload: Vec<u8>, });
-define_broker_wire_struct!(owned ProviderIngestSignResultWireV1 { signed_transaction: Vec<u8>, });
-define_broker_wire_struct!(owned ProviderIngestCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
-define_broker_wire_struct!(owned ReputationJournalCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
-define_broker_wire_struct!(owned ProviderIngestRetentionLoadRequestWireV1 { network_id: NetworkId, });
-define_broker_wire_struct!(owned ProviderIngestRetentionCompareAndSwapRequestWireV1 { network_id: NetworkId, expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
-define_broker_wire_struct!(owned ReputationRetentionLoadRequestWireV1 { network_id: NetworkId, });
-define_broker_wire_struct!(owned ReputationRetentionCompareAndSwapRequestWireV1 { network_id: NetworkId, expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
-define_broker_wire_struct!(owned ReputationJournalSupportsAuthorityRequestWireV1 { authority: iroha_data_model::account::AccountId, });
-define_broker_wire_struct!(owned ReputationJournalTransactionRequestWireV1 { sequence: u64, network_id: iroha_data_model::NetworkId, authority: iroha_data_model::account::AccountId, event_id: iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1, source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1, attempt: u32, idempotency_key: [u8; 32], instruction_kind: u8, canonical_instruction: Vec<u8>, });
-define_broker_wire_struct!(copy ReputationJournalTransactionSubmitResultWireV1 { outcome: u8, receipt: [u8; 32], });
-define_broker_wire_struct!(owned ReputationThresholdSigningRequestWireV1 { sequence: u64, material_digest: [u8; 32], idempotency_key: [u8; 32], material: sorafs_node::reputation::ReputationUnsignedSigningMaterialV1, });
-define_broker_wire_struct!(owned ReputationGovernanceDagPublicationRequestWireV1 { sequence: u64, material_digest: [u8; 32], signed_result_digest: [u8; 32], idempotency_key: [u8; 32], canonical_signed_result: Vec<u8>, });
-define_broker_wire_struct!(owned ReputationReconcileResultWireV1 { outcome: u8, canonical_result: Vec<u8>, failure_receipt: [u8; 32], });
-define_broker_wire_struct!(owned BillingAdapterIdentityWireV1 { handle: String, });
-define_broker_wire_struct!(owned BillingStatementSignerIdentityWireV1 { provider_handle: String, signer_id: String, public_key: [u8; 32], });
-define_broker_wire_struct!(owned BillingStatementPublisherIdentityWireV1 { provider_handle: String, publisher_id: String, route_id: String, public_key: [u8; 32], });
-define_broker_wire_struct!(copy BillingFinalizedQueryCapabilitiesWireV1 { supplies_period_closes: bool, });
-define_broker_wire_struct!(copy BillingQueryPositionWireV1 { next_sequence: u64, journal_commitment: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>, });
-define_broker_wire_struct!(owned BillingQueryPageRequestWireV1 { position: BillingQueryPositionWireV1, max_events: u32, });
-define_broker_wire_struct!(owned BillingQueryPeriodCloseRequestWireV1 { period_end_unix: u64, position: BillingQueryPositionWireV1, });
-define_broker_wire_struct!(sensitive BillingVerifyPageRequestWireV1 { network_id: iroha_data_model::NetworkId, previous: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>, page: sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::SealedLoadRequestWireV1" SealedLoadRequestWireV1 { slot: u8, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::SealedRecordWireV1" SealedRecordWireV1 { generation: u64, revision: [u8; 32], payload: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::SealedCompareAndSwapRequestWireV1" SealedCompareAndSwapRequestWireV1 { slot: u8, expected_revision: Option<[u8; 32]>, next: SealedRecordWireV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::SealedDeleteRequestWireV1" SealedDeleteRequestWireV1 { slot: u8, expected_revision: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestResolverQualificationWireV1" ProviderIngestResolverQualificationWireV1 { revision: u64, policy_digest: [u8; 32], signer_binding: ProviderIngestSignerBindingWireV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ProviderIngestRuntimeQualificationWireV1" ProviderIngestRuntimeQualificationWireV1 { revision: u64, policy_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestSignerRequestContextWireV1" ProviderIngestSignerRequestContextWireV1 { provider_owner: Vec<u8>, signer_policy_id: [u8; 32], signer_policy_revision: u64, signer_policy_predecessor_digest: Option<[u8; 32]>, signer_policy_digest: [u8; 32], expected_assignment_revision: u64, finalized_height: u64, finalized_block_hash: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestResolveSignerRequestWireV1" ProviderIngestResolveSignerRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ProviderIngestResolveSignerResultWireV1" ProviderIngestResolveSignerResultWireV1 { eligible: bool, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestSignRequestWireV1" ProviderIngestSignRequestWireV1 { context: ProviderIngestSignerRequestContextWireV1, transaction_payload: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestSignResultWireV1" ProviderIngestSignResultWireV1 { signed_transaction: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestCheckpointCompareAndSwapRequestWireV1" ProviderIngestCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationJournalCheckpointCompareAndSwapRequestWireV1" ReputationJournalCheckpointCompareAndSwapRequestWireV1 { expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestRetentionLoadRequestWireV1" ProviderIngestRetentionLoadRequestWireV1 { network_id: NetworkId, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestRetentionCompareAndSwapRequestWireV1" ProviderIngestRetentionCompareAndSwapRequestWireV1 { network_id: NetworkId, expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationRetentionLoadRequestWireV1" ReputationRetentionLoadRequestWireV1 { network_id: NetworkId, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationRetentionCompareAndSwapRequestWireV1" ReputationRetentionCompareAndSwapRequestWireV1 { network_id: NetworkId, expected_revision: Option<[u8; 32]>, next_record: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationJournalSupportsAuthorityRequestWireV1" ReputationJournalSupportsAuthorityRequestWireV1 { authority: iroha_data_model::account::AccountId, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationJournalTransactionRequestWireV1" ReputationJournalTransactionRequestWireV1 { sequence: u64, network_id: iroha_data_model::NetworkId, authority: iroha_data_model::account::AccountId, event_id: iroha_data_model::sorafs::reputation::ReputationJournalEventIdV1, source_id: iroha_data_model::sorafs::reputation::ReputationJournalSourceIdV1, attempt: u32, idempotency_key: [u8; 32], instruction_kind: u8, canonical_instruction: Vec<u8>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ReputationJournalTransactionSubmitResultWireV1" ReputationJournalTransactionSubmitResultWireV1 { outcome: u8, receipt: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationThresholdSigningRequestWireV1" ReputationThresholdSigningRequestWireV1 { sequence: u64, material_digest: [u8; 32], idempotency_key: [u8; 32], material: sorafs_node::reputation::ReputationUnsignedSigningMaterialV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationGovernanceDagPublicationRequestWireV1" ReputationGovernanceDagPublicationRequestWireV1 { sequence: u64, material_digest: [u8; 32], signed_result_digest: [u8; 32], idempotency_key: [u8; 32], canonical_signed_result: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ReputationReconcileResultWireV1" ReputationReconcileResultWireV1 { outcome: u8, canonical_result: Vec<u8>, failure_receipt: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BillingAdapterIdentityWireV1" BillingAdapterIdentityWireV1 { handle: String, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BillingStatementSignerIdentityWireV1" BillingStatementSignerIdentityWireV1 { provider_handle: String, signer_id: String, public_key: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BillingStatementPublisherIdentityWireV1" BillingStatementPublisherIdentityWireV1 { provider_handle: String, publisher_id: String, route_id: String, public_key: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::BillingFinalizedQueryCapabilitiesWireV1" BillingFinalizedQueryCapabilitiesWireV1 { supplies_period_closes: bool, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::BillingQueryPositionWireV1" BillingQueryPositionWireV1 { next_sequence: u64, journal_commitment: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BillingQueryPageRequestWireV1" BillingQueryPageRequestWireV1 { position: BillingQueryPositionWireV1, max_events: u32, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BillingQueryPeriodCloseRequestWireV1" BillingQueryPeriodCloseRequestWireV1 { period_end_unix: u64, position: BillingQueryPositionWireV1, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BillingVerifyPageRequestWireV1" BillingVerifyPageRequestWireV1 { network_id: iroha_data_model::NetworkId, previous: Option<sorafs_node::hedging_billing_service::HedgingBillingJournalCommitmentV1>, page: sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1, });
 impl_broker_debug_fields!(BillingVerifyPageRequestWireV1 as value {
     "network_id" => value.network_id,
     "previous_next_sequence" => value .previous .map(|commitment| commitment.journal_next_sequence),
@@ -3429,31 +3432,32 @@ impl_broker_debug_fields!(BillingVerifyPageRequestWireV1 as value {
     "page_next_sequence" => value.page.next_sequence,
     "event_count" => value.page.events.len(),
 } => finish_non_exhaustive);
-define_broker_wire_struct!(owned BillingVerifyPeriodCloseRequestWireV1 { network_id: iroha_data_model::NetworkId, close: sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1, });
-define_broker_wire_struct!(owned BillingVerifyEpochTransitionRequestWireV1 { network_id: iroha_data_model::NetworkId, transition: sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1, });
-define_broker_wire_struct!(copy BillingSignDigestRequestWireV1 { digest: [u8; 32], });
-define_broker_wire_struct!(copy BillingSignDigestResultWireV1 { signature: [u8; 64], });
-define_broker_wire_struct!(sensitive BillingPublishStatementRequestWireV1 { idempotency_key: [u8; 32], signed_statement_digest: [u8; 32], statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BillingVerifyPeriodCloseRequestWireV1" BillingVerifyPeriodCloseRequestWireV1 { network_id: iroha_data_model::NetworkId, close: sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::BillingVerifyEpochTransitionRequestWireV1" BillingVerifyEpochTransitionRequestWireV1 { network_id: iroha_data_model::NetworkId, transition: sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::BillingSignDigestRequestWireV1" BillingSignDigestRequestWireV1 { digest: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::BillingSignDigestResultWireV1" BillingSignDigestResultWireV1 { signature: [u8; 64], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BillingPublishStatementRequestWireV1" BillingPublishStatementRequestWireV1 { idempotency_key: [u8; 32], signed_statement_digest: [u8; 32], statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, });
 impl_broker_debug_fields!(BillingPublishStatementRequestWireV1 as value {
     "idempotency_key" => value.idempotency_key,
     "signed_statement_digest" => value.signed_statement_digest,
 } => finish_non_exhaustive);
-define_broker_wire_struct!(copy BillingLookupRequestWireV1 { record_id: [u8; 32], });
-define_broker_wire_struct!(sensitive BillingAuthoritativePublicationWireV1 { signed_statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, receipt: sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::BillingLookupRequestWireV1" BillingLookupRequestWireV1 { record_id: [u8; 32], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BillingAuthoritativePublicationWireV1" BillingAuthoritativePublicationWireV1 { signed_statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, receipt: sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1, });
 impl_broker_debug_fields!(BillingAuthoritativePublicationWireV1 as value {
     "statement_id" => value .signed_statement .governed_statement .statement .statement_id,
 } => finish_non_exhaustive);
-define_broker_wire_struct!(sensitive BillingAcknowledgementRequestWireV1 { statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, acknowledgement: sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BillingAcknowledgementRequestWireV1" BillingAcknowledgementRequestWireV1 { statement: sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1, acknowledgement: sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1, });
 impl_broker_debug_fields!(BillingAcknowledgementRequestWireV1 as value {
     "statement_id" => value.acknowledgement.statement_id,
     "authentication_proof_len" => value.acknowledgement.authentication_proof.len(),
 } => finish_non_exhaustive);
-define_broker_wire_struct!(copy BillingLoadEpochRequestWireV1 { epoch_sequence: u64, });
-define_broker_wire_struct!(sensitive BillingCompareAndSwapEpochRequestWireV1 { expected_revision: Option<[u8; 32]>, next: sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessRecordV1, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::BillingLoadEpochRequestWireV1" BillingLoadEpochRequestWireV1 { epoch_sequence: u64, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::BillingCompareAndSwapEpochRequestWireV1" BillingCompareAndSwapEpochRequestWireV1 { expected_revision: Option<[u8; 32]>, next: sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessRecordV1, });
 impl_broker_debug_fields!(BillingCompareAndSwapEpochRequestWireV1 as value {
     "expected_revision" => value.expected_revision,
     "epoch_sequence" => value.next.epoch_sequence,
     "checkpoint_len" => value.next.checkpoint_bytes.len(),
 } => finish_non_exhaustive);
 include!("protocol_codec_and_bindings.rs");
+include!("stream_token_hardware_protocol.rs");
 include!("protocol_operation_validation.rs");

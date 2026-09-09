@@ -97,6 +97,10 @@ impl ReserveTransactionForwarderPolicyV1 {
     }
 }
 /// Exact finalized reserve projection required to validate an operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transaction_forwarder::ReserveTransactionProjectionV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveTransactionProjectionV1 {
     /// Provider registration, bound to the separate finalized provider registry.
@@ -214,6 +218,8 @@ pub enum ReserveTransactionKindV1 {
     DecideAppeal,
 }
 /// Validated native reserve operation retained for isolated external signing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reserve_transaction_forwarder::ReserveOperationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveOperationV1 {
     /// Register one provider reserve partition.
@@ -697,6 +703,10 @@ struct StoredDeadReserveTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transaction_forwarder::ReserveTransactionForwarderCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReserveTransactionForwarderCheckpointV1 {
     version: u8,

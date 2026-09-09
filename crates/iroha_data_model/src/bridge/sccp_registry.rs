@@ -5303,7 +5303,11 @@ mod tests {
     }
     #[test]
     fn policyless_norito_destination_deployments_are_rejected() {
-        #[derive(norito::derive::NoritoSerialize)]
+        #[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::bridge::sccp_registry::PolicylessEvmDestinationDeploymentV1",
+            frame = "iroha_data_model::bridge::sccp_registry::SccpEvmDestinationDeploymentV1"
+        )]
         struct PolicylessEvmDestinationDeploymentV1 {
             token_address: [u8; 20],
             token_code_hash: [u8; 32],
@@ -5315,7 +5319,11 @@ mod tests {
             route_code_hash: [u8; 32],
             taira_to_token_multiplier: u64,
         }
-        #[derive(norito::derive::NoritoSerialize)]
+        #[derive(norito::derive::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "test::iroha_data_model::bridge::sccp_registry::PolicylessTronDestinationDeploymentV1",
+            frame = "iroha_data_model::bridge::sccp_registry::SccpTronDestinationDeploymentV1"
+        )]
         struct PolicylessTronDestinationDeploymentV1 {
             token_address: [u8; 20],
             token_code_hash: [u8; 32],
@@ -5328,7 +5336,7 @@ mod tests {
             taira_to_token_multiplier: u64,
         }
         let evm = deployment(1);
-        let mut evm_bytes = norito::to_bytes(&PolicylessEvmDestinationDeploymentV1 {
+        let evm_bytes = norito::to_bytes(&PolicylessEvmDestinationDeploymentV1 {
             token_address: evm.token_address,
             token_code_hash: evm.token_code_hash,
             verifier_address: evm.verifier_address,
@@ -5340,15 +5348,24 @@ mod tests {
             taira_to_token_multiplier: evm.taira_to_token_multiplier,
         })
         .expect("policy-less EVM deployment encodes");
-        evm_bytes[6..22].copy_from_slice(
-            &<SccpEvmDestinationDeploymentV1 as norito::NoritoSerialize>::schema_hash(),
+        assert_eq!(
+            norito::schema::identity::frame_hash::<PolicylessEvmDestinationDeploymentV1>(),
+            norito::schema::identity::frame_hash::<SccpEvmDestinationDeploymentV1>(),
+            "malformed fixture must use the production frame identity"
+        );
+        assert_eq!(
+            norito::core::Header::read(evm_bytes.as_slice())
+                .expect("read malformed fixture header")
+                .schema,
+            norito::schema::identity::frame_hash::<SccpEvmDestinationDeploymentV1>(),
+            "malformed fixture header must reach the production decoder"
         );
         assert!(
             norito::decode_from_bytes::<SccpEvmDestinationDeploymentV1>(&evm_bytes).is_err(),
             "policy-less EVM deployment must not decode as the canonical V1 shape"
         );
         let tron = tron_deployment();
-        let mut tron_bytes = norito::to_bytes(&PolicylessTronDestinationDeploymentV1 {
+        let tron_bytes = norito::to_bytes(&PolicylessTronDestinationDeploymentV1 {
             token_address: tron.token_address,
             token_code_hash: tron.token_code_hash,
             verifier_address: tron.verifier_address,
@@ -5360,8 +5377,17 @@ mod tests {
             taira_to_token_multiplier: tron.taira_to_token_multiplier,
         })
         .expect("policy-less TRON deployment encodes");
-        tron_bytes[6..22].copy_from_slice(
-            &<SccpTronDestinationDeploymentV1 as norito::NoritoSerialize>::schema_hash(),
+        assert_eq!(
+            norito::schema::identity::frame_hash::<PolicylessTronDestinationDeploymentV1>(),
+            norito::schema::identity::frame_hash::<SccpTronDestinationDeploymentV1>(),
+            "malformed fixture must use the production frame identity"
+        );
+        assert_eq!(
+            norito::core::Header::read(tron_bytes.as_slice())
+                .expect("read malformed fixture header")
+                .schema,
+            norito::schema::identity::frame_hash::<SccpTronDestinationDeploymentV1>(),
+            "malformed fixture header must reach the production decoder"
         );
         assert!(
             norito::decode_from_bytes::<SccpTronDestinationDeploymentV1>(&tron_bytes).is_err(),

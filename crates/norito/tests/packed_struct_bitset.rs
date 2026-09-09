@@ -13,36 +13,44 @@ fn encode_bare_with_flags<T: NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
     norito::core::serialize_to_buffer(value, &mut payload).expect("serialize");
     payload
 }
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.SelfDelimExample")]
 struct SelfDelimExample {
     id: u32,
     maybe: Option<u64>,
     values: Vec<u8>,
     labels: BTreeMap<String, u32>,
 }
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.Nested")]
 struct Nested {
     name: String,
 }
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.NeedsSize")]
 struct NeedsSize {
     id: u32,
     nested: Nested,
 }
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.Tiny")]
 struct Tiny(u32);
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.NamedTiny")]
 struct NamedTiny {
     inner: Tiny,
 }
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.TupleTiny")]
 struct TupleTiny(Tiny);
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.NamedMixed")]
 struct NamedMixed {
     fixed: u32,
     inner: Tiny,
 }
-#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_bitset.TupleMixed")]
 struct TupleMixed(u32, Tiny);
 fn decode_bare_with_flags<T>(payload: &[u8], flags: u8) -> Result<T, Error>
 where

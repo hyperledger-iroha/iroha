@@ -16,8 +16,6 @@ mod consensus_threshold;
 mod envelope;
 #[cfg(unix)]
 mod journal;
-/// Opaque key operations fenced by independent custody state and durable reservations.
-pub mod operation;
 mod protocol;
 #[cfg(unix)]
 mod runtime_adapters;
@@ -68,7 +66,7 @@ pub use runtime_adapters::{
     ExternalSoftwareSignerBillingStatementAdapterV1, ExternalSoftwareSignerEvidenceViewerAdapterV1,
     ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerPopIssuerAdapterV1,
     ExternalSoftwareSignerPopRegistryV1, ExternalSoftwareSignerPotrGatewayAdapterV1,
-    ExternalSoftwareSignerPotrProviderAdapterV1, ExternalSoftwareSignerStreamTokenAdapterV1,
+    ExternalSoftwareSignerPotrProviderAdapterV1,
 };
 #[cfg(unix)]
 pub use runtime_backends::ExternalSoftwareSignerBackendsV1;

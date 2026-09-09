@@ -80,6 +80,8 @@ impl KaigiPrivateParticipationV1 {
     JsonDeserialize,
 )]
 #[norito(reuse_archived)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::kaigi::participation::KaigiPrivateParticipationLedgerV1")]
 pub struct KaigiPrivateParticipationLedgerV1 {
     entries: Vec<KaigiPrivateParticipationV1>,
 }
@@ -541,5 +543,17 @@ mod tests {
             active_commitment: None,
         });
         assert!(ledger.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::kaigi::participation::KaigiPrivateParticipationLedgerV1,
+        >("iroha_data_model::kaigi::participation::KaigiPrivateParticipationLedgerV1");
     }
 }

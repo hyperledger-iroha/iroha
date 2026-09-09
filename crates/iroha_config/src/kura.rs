@@ -1,6 +1,6 @@
 //! Configuration tools related to Kura specifically.
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, SerializePayload,
     core::{self as ncore, Archived},
     json::{self, JsonDeserialize, JsonSerialize},
 };
@@ -48,7 +48,6 @@ impl JsonDeserialize for InitMode {
         })
     }
 }
-impl NoritoSerialize for InitMode {}
 impl SerializePayload for InitMode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
@@ -61,7 +60,6 @@ impl SerializePayload for InitMode {
         self.encoded_len_hint()
     }
 }
-impl NoritoDeserialize<'_> for InitMode {}
 impl<'de> DeserializePayload<'de> for InitMode {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("stored init mode must parse")
@@ -96,7 +94,6 @@ impl JsonDeserialize for FsyncMode {
         })
     }
 }
-impl NoritoSerialize for FsyncMode {}
 impl SerializePayload for FsyncMode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         let text = self.to_string();
@@ -109,7 +106,6 @@ impl SerializePayload for FsyncMode {
         self.encoded_len_hint()
     }
 }
-impl NoritoDeserialize<'_> for FsyncMode {}
 impl<'de> DeserializePayload<'de> for FsyncMode {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("stored fsync mode must parse")

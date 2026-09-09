@@ -198,11 +198,8 @@ mod tests {
         assert_eq!(<NewNft as norito::NoritoSchema>::nominal_name(), nominal);
         assert_eq!(<NewNft as norito::NoritoSchema>::frame_name(), nominal);
         assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
-        assert_eq!(<NewNft as norito::NoritoSerialize>::schema_hash(), expected);
-        assert_eq!(
-            <NewNft as norito::NoritoDeserialize>::schema_hash(),
-            expected
-        );
+        assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
+        assert_eq!(norito::schema::identity::frame_hash::<NewNft>(), expected);
     }
 
     #[test]

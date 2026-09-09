@@ -94,10 +94,7 @@ fn simulate_transfer(
         return;
     };
     let iroha = network.client();
-    let mut status = iroha
-        .client()
-        .get_status()
-        .expect("failed to read initial status");
+    let mut status = iroha.status().get().expect("failed to read initial status");
     let mut last_non_empty_height = status.blocks_non_empty;
     let (alice_id, mouse_id) = generate_two_ids();
     let create_mouse = create_mouse(mouse_id.clone());

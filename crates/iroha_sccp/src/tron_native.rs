@@ -124,7 +124,9 @@ fn scaled_tron_token_amount_word(taira_amount: u128) -> [u8; 32] {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::tron_native::TronNativeWitnessV1")]
 pub struct TronNativeWitnessV1 {
     /// Canonical TRON account address, including the `0x41` network prefix.
     #[norito(with = "crate::json_utils::bytes_hex")]
@@ -146,7 +148,9 @@ pub struct TronNativeWitnessV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::tron_native::TronNativeDposAnchorV1")]
 pub struct TronNativeDposAnchorV1 {
     /// Anchor schema version.  The first release accepts exactly `1`.
     pub version: u8,
@@ -199,7 +203,9 @@ pub struct TronNativeDposAnchorV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::tron_native::TronNativeSignedHeaderV1")]
 pub struct TronNativeSignedHeaderV1 {
     /// Exact deterministic protobuf serialization of `BlockHeader.raw`.
     #[norito(with = "crate::json_utils::bytes_hex")]
@@ -218,7 +224,9 @@ pub struct TronNativeSignedHeaderV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::tron_native::TronNativeFinalityProofV1")]
 pub struct TronNativeFinalityProofV1 {
     /// Proof schema version.  The first release accepts exactly `1`.
     pub version: u8,
@@ -252,7 +260,9 @@ pub struct TronNativeFinalityWorkEstimateV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::tron_native::TronNativeTransactionProofV1")]
 pub struct TronNativeTransactionProofV1 {
     /// Zero-based transaction position in the native block transaction list.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -277,7 +287,9 @@ pub struct TronNativeTransactionProofV1 {
     norito::derive::NoritoDeserialize,
     norito::derive::JsonSerialize,
     norito::derive::JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_sccp::tron_native::TronNativeSourceProofV1")]
 pub struct TronNativeSourceProofV1 {
     /// Native `DPoS` continuation that makes the transaction block solid.
     pub finality: TronNativeFinalityProofV1,

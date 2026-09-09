@@ -7,7 +7,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import org.hyperledger.iroha.android.model.instructions.InstructionKind;
-import org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1;
+import org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1;
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityAdmissionV1;
 import org.hyperledger.iroha.sdk.privacy.PrivacyExact12CapabilityTupleAdmissionV1;
 
@@ -107,10 +107,9 @@ public final class InstructionBox {
       final PrivacyExact12CapabilityTupleAdmissionV1 admission,
       final PrivacyProtocolIdV1 protocolId,
       final byte[] payloadBytes) {
-    final org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 sdkProtocolId =
-        sdkProtocolId(protocolId);
+    Objects.requireNonNull(protocolId, "protocolId");
     PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
-        admission, sdkProtocolId, payloadBytes);
+        admission, protocolId, payloadBytes);
     return new InstructionBox(
         new WireInstructionPayload(PRIVACY_SUBMIT_PROOF_WIRE_ID_V1, payloadBytes),
         admission,
@@ -128,15 +127,9 @@ public final class InstructionBox {
           "Exact12 submit-proof construction requires committed native admission");
     }
     PrivacyExact12CapabilityAdmissionV1.requireForConstruction(
-        privacyAdmission, sdkProtocolId(privacyProtocolId), wire.payloadBytes());
+        privacyAdmission, privacyProtocolId, wire.payloadBytes());
   }
 
-  private static org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1 sdkProtocolId(
-      final PrivacyProtocolIdV1 protocolId) {
-    Objects.requireNonNull(protocolId, "protocolId");
-    return org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1.fromCanonicalLabel(
-        protocolId.canonicalLabel());
-  }
 
   /**
    * Builds an {@link InstructionBox} from Norito decoded components.

@@ -2639,7 +2639,7 @@ async fn incoming_queue_plan_synced_exact_retry_survives_height_advance() {
 }
 #[cfg(feature = "connect")]
 #[tokio::test]
-async fn incoming_queue_plan_synced_historical_context_without_owned_claim_fails_closed() {
+async fn incoming_queue_plan_synced_stable_historical_context_acquires_durable_claim() {
     let journal_dir =
         tempfile::tempdir().expect("create stale unowned admission journal directory");
     let journal_path = journal_dir.path().join("queue_plan_journal.norito");
@@ -2648,29 +2648,101 @@ async fn incoming_queue_plan_synced_historical_context_without_owned_claim_fails
     app.queue
         .install_plan_journal(&journal_path, 1024 * 1024, true)
         .expect("install stale unowned admission queue plan journal");
-    let journal_len_before_rejection = std::fs::metadata(&journal_path)
-        .expect("stale unowned admission journal baseline metadata")
+    let journal_len_before_admission = std::fs::metadata(&journal_path)
+        .expect("stable historical admission journal baseline metadata")
         .len();
+    set_proxy_fixture_latest_block_height(&app, 1);
+    let response =
+        super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
+    let snapshot =
+        super::response_to_torii_proxy_snapshot(response, app.transaction_max_content_len.max(1))
+            .await;
+    assert_eq!(snapshot.status_code, StatusCode::ACCEPTED.as_u16());
+    assert_eq!(
+        app.queue.active_len(),
+        1,
+        "an exact historical context with unchanged authority must create durable queue ownership"
+    );
+    assert!(
+        std::fs::metadata(&journal_path)
+            .expect("stable historical admission journal metadata")
+            .len()
+            > journal_len_before_admission,
+        "accepted historical admission must append and sync its durable claim"
+    );
+    let expected = super::queue_plan_synced_acceptance_expectation(&request)
+        .expect("stable historical request expectation must be valid")
+        .expect("stable historical request must require strict acceptance");
+    super::validate_queue_plan_synced_acceptance(&snapshot, &expected)
+        .expect("stable historical authority must attest the exact durable request");
+}
+#[cfg(feature = "connect")]
+#[tokio::test]
+async fn incoming_queue_plan_synced_historical_forged_roster_fails_closed() {
+    let journal_dir = tempfile::tempdir().expect("create forged historical journal directory");
+    let journal_path = journal_dir.path().join("queue_plan_journal.norito");
+    let (app, mut request) =
+        incoming_proxy_submit_fixture(0xd8, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+    app.queue
+        .install_plan_journal(&journal_path, 1024 * 1024, true)
+        .expect("install forged historical queue plan journal");
+    let journal_len_before = std::fs::metadata(&journal_path)
+        .expect("forged historical journal baseline metadata")
+        .len();
+    let ToriiProxyRequestKindV1::SubmitTransaction {
+        transaction,
+        expected_plan,
+        admission_binding: Some(binding),
+        ..
+    } = &mut request.request
+    else {
+        panic!("forged historical fixture must contain an exact binding");
+    };
+    let forged_signer = checked_torii_test_keypair_from_seed_byte(
+        0xf7,
+        Algorithm::BlsNormal,
+        "derive forged historical authority",
+    );
+    let coordinator = binding
+        .admission_context
+        .route_incarnations
+        .first_mut()
+        .expect("forged historical fixture must contain a coordinator");
+    *coordinator
+        .validator_set
+        .last_mut()
+        .expect("forged historical fixture must contain validators") =
+        PeerId::new(forged_signer.public_key().clone());
+    coordinator.validator_set.sort();
+    coordinator.validator_set_hash = HashOf::new(&coordinator.validator_set);
+    let routing_plan = expected_plan
+        .clone()
+        .try_into_routing_plan()
+        .expect("forged historical routing plan");
+    binding.journal_record_digest = queue::queue_plan_journal_record_claim_digest(
+        transaction.clone(),
+        routing_plan,
+        binding.admission_context.clone(),
+        binding.enqueue_timestamp_ms,
+        Some(binding.global_admission_identity()),
+    )
+    .expect("rebuild forged historical journal digest");
     set_proxy_fixture_latest_block_height(&app, 1);
     let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    assert_eq!(
-        app.queue.active_len(),
-        0,
-        "historical context must not create queue ownership without the exact durable claim"
-    );
+    assert_eq!(app.queue.active_len(), 0);
     assert_eq!(
         std::fs::metadata(&journal_path)
-            .expect("stale unowned admission journal metadata")
+            .expect("forged historical journal metadata")
             .len(),
-        journal_len_before_rejection,
-        "rejected historical admission must not append a journal record"
+        journal_len_before,
+        "a forged historical roster must not append a durable claim"
     );
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
-        .expect("read historical unowned admission rejection");
+        .expect("read forged historical rejection");
     let envelope: ErrorEnvelope =
-        norito::decode_from_bytes(&body).expect("decode historical unowned admission rejection");
+        norito::decode_from_bytes(&body).expect("decode forged historical rejection");
     assert_eq!(envelope.code(), "queue_plan_admission_context_mismatch");
 }
 #[cfg(feature = "connect")]
@@ -2679,7 +2751,7 @@ async fn incoming_queue_plan_synced_future_context_defers_without_queue_ownershi
     let journal_dir = tempfile::tempdir().expect("create future admission journal directory");
     let journal_path = journal_dir.path().join("queue_plan_journal.norito");
     let (app, mut request) =
-        incoming_proxy_submit_fixture(0xd8, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        incoming_proxy_submit_fixture(0xd9, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
     app.queue
         .install_plan_journal(&journal_path, 1024 * 1024, true)
         .expect("install future admission queue plan journal");

@@ -12956,7 +12956,7 @@ mod tests {
     };
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
-        DeserializePayload, NoritoDeserialize,
+        DeserializePayload,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
         from_bytes,
         json::{self, Value},
@@ -14177,7 +14177,7 @@ seiyaku Privacy {
             body,
             signature: signature.payload().to_vec(),
         };
-        let bytes = norito::to_bytes(&token).expect("encode stream token");
+        let bytes = norito::encode_canonical(&token).expect("encode stream token");
         BASE64.encode(bytes)
     }
     fn da_fixture_path(name: &str) -> PathBuf {

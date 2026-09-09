@@ -36,14 +36,8 @@ where
     let frame = norito::encode_canonical(value).expect("complete canonical frame");
     let bare = value.encode();
     let header = ncore::Header::read(frame.as_slice()).unwrap();
-    let encode_hash = <T as NoritoSerialize>::schema_hash();
-    assert_eq!(norito::schema::identity::frame_hash::<T>(), encode_hash);
-    let decode_hash = <T as NoritoDeserialize<'_>>::schema_hash();
-    assert_eq!(
-        encode_hash, decode_hash,
-        "{case}: both actual codec directions"
-    );
-    assert_eq!(header.schema, encode_hash);
+    let frame_hash = norito::schema::identity::frame_hash::<T>();
+    assert_eq!(header.schema, frame_hash);
     let decoded: T = norito::decode_canonical(&frame).unwrap();
     assert_eq!(&decoded, value);
     assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
@@ -77,8 +71,8 @@ where
     rows.push(norito::json!({
         "case": case,
         "actual_type_name": (T::nominal_name()),
-        "serialize_schema_hash_hex": (hex(&encode_hash)),
-        "deserialize_schema_hash_hex": (hex(&decode_hash)),
+        "serialize_schema_hash_hex": (hex(&frame_hash)),
+        "deserialize_schema_hash_hex": (hex(&frame_hash)),
         "header_schema_hash_hex": (hex(&header.schema)),
         "header_flags": (header.flags),
         "payload_length": (header.length),

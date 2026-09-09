@@ -348,11 +348,6 @@ impl DomainId {
     }
 }
 
-impl ncore::NoritoDeserialize<'_> for DomainId {
-    fn schema_hash() -> [u8; 16] {
-        <Self as ncore::NoritoSerialize>::schema_hash()
-    }
-}
 impl<'de> ncore::DeserializePayload<'de> for DomainId {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived)

@@ -172,6 +172,10 @@ pub enum KagemushaReserveErrorV1 {
 }
 
 /// Canonical identity of the sole reserve for one network, asset, and exact incarnation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReservePoolKeyV1"
+)]
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, JsonDeserialize, JsonSerialize,
 )]
@@ -244,6 +248,10 @@ impl KagemushaReservePoolKeyV1 {
 }
 
 /// Durable totals for one pooled Kagemusha reserve.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReservePoolV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaReservePoolV1 {
     /// Reserve-state version.
@@ -361,6 +369,10 @@ impl KagemushaReserveCommitContextV1 {
 ///
 /// No mint time or finality is client supplied. The mint time comes from the
 /// committed receipt, and `request_digest` detects corrupted request bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaTopUpIssuanceIntentV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaTopUpIssuanceIntentV1 {
     /// Reserve intent layout version.
@@ -407,6 +419,10 @@ impl KagemushaTopUpIssuanceIntentV1 {
 /// `verified_anchor_identity` records which locally authenticated context admitted
 /// the result. It cannot authenticate itself during snapshot hydration.
 /// This attachment model exercises finality binding in reserve unit tests.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaMintFinalityAttachmentV1"
+)]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaMintFinalityAttachmentV1 {
@@ -421,6 +437,10 @@ pub struct KagemushaMintFinalityAttachmentV1 {
 }
 
 /// Durable record of one atomic online debit and reserve top-up.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaTopUpRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaTopUpRecordV1 {
     /// Reserve-record version.
@@ -450,6 +470,10 @@ pub struct KagemushaTopUpRecordV1 {
 }
 
 /// Durable record of one atomic reserve debit and beneficiary credit.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaRedemptionRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub struct KagemushaRedemptionRecordV1 {
     /// Reserve-record version.
@@ -595,6 +619,10 @@ impl KagemushaRedemptionRecordV1 {
 }
 
 /// Durable status record for either reserve operation kind.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveOperationRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "operation_kind", content = "record", deny_unknown_fields)]
 pub enum KagemushaReserveOperationRecordV1 {
@@ -936,6 +964,10 @@ where
 /// in separately keyed `mv::Storage` maps. The exact-entry read sets and sealed
 /// plans above keep each operation O(log n); placing this aggregate in one
 /// clone-on-write `mv::Cell` would make each mutation O(total history).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::kagemusha::kagemusha_v1_reserve::KagemushaReserveBookV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaReserveBookV1 {
     version: u16,

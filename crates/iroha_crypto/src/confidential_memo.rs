@@ -72,7 +72,7 @@ pub struct ConfidentialMemoCiphertextSlotV1 {
     pub suite: ConfidentialMemoKemSuiteV1,
     /// Suite-sized ML-KEM ciphertext.
     pub encapsulation: Vec<u8>,
-    /// XChaCha nonce used to wrap the body key.
+    /// `XChaCha` nonce used to wrap the body key.
     pub wrap_nonce: [u8; CONFIDENTIAL_MEMO_NONCE_BYTES_V1],
     /// Authenticated wrap of the 32-byte body key.
     pub wrapped_body_key: [u8; CONFIDENTIAL_MEMO_WRAPPED_KEY_BYTES_V1],
@@ -83,7 +83,7 @@ pub struct ConfidentialMemoCiphertextSlotV1 {
 pub struct ConfidentialMemoCiphertextV1 {
     /// Eight shuffled, indistinguishable real-or-padding slots.
     pub slots: [ConfidentialMemoCiphertextSlotV1; CONFIDENTIAL_MEMO_RECIPIENT_SLOTS_V1],
-    /// XChaCha nonce used by the encrypted body.
+    /// `XChaCha` nonce used by the encrypted body.
     pub payload_nonce: [u8; CONFIDENTIAL_MEMO_NONCE_BYTES_V1],
     /// Authenticated encrypted body.
     pub ciphertext: Vec<u8>,

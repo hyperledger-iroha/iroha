@@ -1,0 +1,67 @@
+// Actual compiler observations for existing owners in sorafs_manifest::reputation.
+// This is a private include fragment; owning suites retain all payload controls.
+
+/// Verify every captured concrete identity in this ownership scope.
+#[test]
+fn captured_concrete_owner_identities() {
+    crate::captured_owner_identity_support::check_both::<self::ReputationWeightsV1>(
+        "sorafs_manifest::reputation::ReputationWeightsV1",
+        "sorafs_manifest::reputation::ReputationWeightsV1",
+        "b50a2eae08e09fa8b619102efaca153a",
+        "b50a2eae08e09fa8b619102efaca153a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationReserveStageV1>(
+        "sorafs_manifest::reputation::ReputationReserveStageV1",
+        "sorafs_manifest::reputation::ReputationReserveStageV1",
+        "9fe1753b2a32eb2a8f3d683956e8ff1c",
+        "9fe1753b2a32eb2a8f3d683956e8ff1c",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationDegradationFlagV1>(
+        "sorafs_manifest::reputation::ReputationDegradationFlagV1",
+        "sorafs_manifest::reputation::ReputationDegradationFlagV1",
+        "95b3a18cc1669b5687792d234220cc00",
+        "95b3a18cc1669b5687792d234220cc00",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationProviderMetricsV1>(
+        "sorafs_manifest::reputation::ReputationProviderMetricsV1",
+        "sorafs_manifest::reputation::ReputationProviderMetricsV1",
+        "edaad2d75672a54612a60b5488229c48",
+        "edaad2d75672a54612a60b5488229c48",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationProviderInputV1>(
+        "sorafs_manifest::reputation::ReputationProviderInputV1",
+        "sorafs_manifest::reputation::ReputationProviderInputV1",
+        "684d7cee42f22512d2e84450a1b5696c",
+        "684d7cee42f22512d2e84450a1b5696c",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationTrustEdgeV1>(
+        "sorafs_manifest::reputation::ReputationTrustEdgeV1",
+        "sorafs_manifest::reputation::ReputationTrustEdgeV1",
+        "0ce9af8dd32c75c5c562fbaa84fd3765",
+        "0ce9af8dd32c75c5c562fbaa84fd3765",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ProviderReputationV1>(
+        "sorafs_manifest::reputation::ProviderReputationV1",
+        "sorafs_manifest::reputation::ProviderReputationV1",
+        "7cb0a4c343d808855f5b732864b109f0",
+        "7cb0a4c343d808855f5b732864b109f0",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationMerkleProofV1>(
+        "sorafs_manifest::reputation::ReputationMerkleProofV1",
+        "sorafs_manifest::reputation::ReputationMerkleProofV1",
+        "a8e155637dce003fcb8c4143e8cbd66a",
+        "a8e155637dce003fcb8c4143e8cbd66a",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationSnapshotV1>(
+        "sorafs_manifest::reputation::ReputationSnapshotV1",
+        "sorafs_manifest::reputation::ReputationSnapshotV1",
+        "90b4d303a7367b1768b50610c2346e25",
+        "90b4d303a7367b1768b50610c2346e25",
+    );
+    crate::captured_owner_identity_support::check_both::<self::ReputationSnapshotEventV1>(
+        "sorafs_manifest::reputation::ReputationSnapshotEventV1",
+        "sorafs_manifest::reputation::ReputationSnapshotEventV1",
+        "fc0ed6c6022892314c84bf45b308b89e",
+        "fc0ed6c6022892314c84bf45b308b89e",
+    );
+}

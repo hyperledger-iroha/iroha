@@ -8,7 +8,7 @@ use eyre::{Result, ensure, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
-    blocking::Client,
+    client::Client,
     crypto::HashOf,
     data_model::{
         Level, ValidationFail,
@@ -53,14 +53,13 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::json::Json;
-use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
+use iroha_test_network::{
+    NetworkBuilder, read_on_dedicated_thread, unexecuted_genesis_factory_with_post_topology,
+};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use reqwest::{Client as HttpClient, StatusCode};
 use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 use toml::{Table, Value as TomlValue};
 const NEXUS_ALIAS: &str = "universal";
 const DS1_ALIAS: &str = "ds1";
@@ -182,11 +181,20 @@ async fn wait_for_committed_success(
     let deadline = tokio::time::Instant::now() + STATUS_WAIT_TIMEOUT;
     let mut last_error: Option<String> = None;
     loop {
-        let mut polling_client = client.clone();
-        polling_client.torii_request_timeout = polling_client
+        let mut polling_builder = client.to_builder();
+        polling_builder.torii_request_timeout = polling_builder
             .torii_request_timeout
             .min(PROOF_FETCH_HTTP_TIMEOUT);
-        match query_committed_tx_outcome(&polling_client, &entry_hash) {
+        let polling_client = polling_builder.build()?;
+        let polling_entry_hash = entry_hash.clone();
+        match read_on_dedicated_thread(move || {
+            Ok(query_committed_tx_outcome(
+                &polling_client,
+                &polling_entry_hash,
+            )?)
+        })
+        .await
+        {
             Ok(Some(CommittedTxOutcome::Applied)) => return Ok(()),
             Ok(Some(CommittedTxOutcome::Rejected(reason))) => {
                 return Err(eyre!(
@@ -564,9 +572,11 @@ async fn wait_for_active_lane_validators(
     let mut last_total = 0usize;
     let mut last_active = BTreeSet::new();
     while started.elapsed() <= STATUS_WAIT_TIMEOUT {
-        let snapshot = client
-            .get_public_lane_validators(lane_id)
-            .map_err(|err| eyre!(err))?;
+        let polling_client = client.clone();
+        let snapshot =
+            read_on_dedicated_thread(move || polling_client.get_public_lane_validators(lane_id))
+                .await
+                .map_err(|err| eyre!(err))?;
         let (total, active) = lane_validator_snapshot(&snapshot, context)?;
         last_total = total;
         last_active = active.clone();
@@ -590,8 +600,8 @@ async fn wait_for_route_probe_approval(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<HashOf<TransactionEntrypoint>> {
+    let account = submitter.account_client()?;
     let transaction = {
-        let account = submitter.account_client();
         account
             .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [instruction],
@@ -605,15 +615,16 @@ async fn wait_for_route_probe_approval(
     let entry_hash = transaction.hash_as_entrypoint();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+        account
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
-    let submitter_for_submit = submitter.clone();
-    spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
+    account
+        .submit_transaction(&transaction)
         .await
-        .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
     let outcome = timeout(STATUS_WAIT_TIMEOUT, async {
         let mut saw_queued = false;
@@ -684,7 +695,7 @@ async fn wait_for_route_probe_approval(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for route probe status"))??;
-    events.close().await;
+    events.close().await?;
     match outcome {
         RouteProbeOutcome::Approved => Ok(entry_hash),
         RouteProbeOutcome::Rejected(reason) => Err(eyre!(
@@ -699,8 +710,8 @@ async fn wait_for_route_probe_rejection(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<String> {
+    let account = submitter.account_client()?;
     let transaction = {
-        let account = submitter.account_client();
         account
             .prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [instruction],
@@ -713,15 +724,16 @@ async fn wait_for_route_probe_rejection(
     let hash = transaction.hash();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter.listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+        account
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
     sleep(ROUTE_PROBE_SSE_HANDSHAKE_DELAY).await;
-    let submitter_for_submit = submitter.clone();
-    spawn_blocking(move || submitter_for_submit.submit_transaction(&transaction))
+    account
+        .submit_transaction(&transaction)
         .await
-        .map_err(|err| eyre!("{context}: route probe submit task join error: {err}"))?
         .map_err(|err| eyre!("{context}: failed to submit route probe transaction: {err}"))?;
     let outcome = timeout(STATUS_WAIT_TIMEOUT, async {
         let mut saw_queued = false;
@@ -792,7 +804,7 @@ async fn wait_for_route_probe_rejection(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for route probe status"))??;
-    events.close().await;
+    events.close().await?;
     match outcome {
         RouteProbeOutcome::Approved => Err(eyre!(
             "{context}: route probe transaction was approved unexpectedly"
@@ -1037,7 +1049,7 @@ async fn fetch_proof_record_payload(
     observer: &Client,
     proof_id: &ProofId,
 ) -> Result<Option<(ProofRecord, Vec<u8>)>> {
-    let mut url = observer.torii_url.clone();
+    let mut url = observer.endpoint().clone();
     {
         let mut segments = url
             .path_segments_mut()
@@ -1065,8 +1077,9 @@ fn query_proof_record_via_signed_query(
     observer: &Client,
     proof_id: &ProofId,
 ) -> Result<Option<ProofRecord>> {
-    let mut client = observer.clone();
-    client.torii_request_timeout = client.torii_request_timeout.min(PROOF_FETCH_HTTP_TIMEOUT);
+    let mut builder = observer.to_builder();
+    builder.torii_request_timeout = builder.torii_request_timeout.min(PROOF_FETCH_HTTP_TIMEOUT);
+    let client = builder.build()?;
     match client.query_single(FindProofRecordById {
         id: proof_id.clone(),
     }) {
@@ -1108,7 +1121,12 @@ async fn wait_for_proof_record_status(
             let error_suffix = last_error
                 .map(|err| format!("; last error: {err}"))
                 .unwrap_or_default();
-            let signed_query_suffix = match query_proof_record_via_signed_query(observer, proof_id)
+            let query_observer = observer.clone();
+            let query_proof_id = proof_id.clone();
+            let signed_query_suffix = match read_on_dedicated_thread(move || {
+                query_proof_record_via_signed_query(&query_observer, &query_proof_id)
+            })
+            .await
             {
                 Ok(Some(record)) => format!(
                     "; signed query observed status {:?} for {}",
@@ -1177,15 +1195,21 @@ async fn stark_cross_dataspace_verifyproof_validity_without_payload_leak() -> Re
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    let alice = network.client();
+    let alice = network.client().client().clone();
     let bob = network
         .peer()
-        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone())
+        .client()
+        .clone();
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-    let nexus_observer = network.peer().client_for(
-        &nexus_observer_id,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
-    );
+    let nexus_observer = network
+        .peer()
+        .client_for(
+            &nexus_observer_id,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+        )
+        .client()
+        .clone();
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,
@@ -1300,15 +1324,21 @@ async fn stark_cross_dataspace_verifyproof_validity_ds2_submission_without_paylo
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    let alice = network.client();
+    let alice = network.client().client().clone();
     let bob = network
         .peer()
-        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone())
+        .client()
+        .clone();
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-    let nexus_observer = network.peer().client_for(
-        &nexus_observer_id,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
-    );
+    let nexus_observer = network
+        .peer()
+        .client_for(
+            &nexus_observer_id,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+        )
+        .client()
+        .clone();
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,
@@ -1422,15 +1452,21 @@ async fn stark_cross_dataspace_verifyproof_rejection_without_payload_leak() -> R
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    let alice = network.client();
+    let alice = network.client().client().clone();
     let bob = network
         .peer()
-        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone())
+        .client()
+        .clone();
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-    let nexus_observer = network.peer().client_for(
-        &nexus_observer_id,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
-    );
+    let nexus_observer = network
+        .peer()
+        .client_for(
+            &nexus_observer_id,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+        )
+        .client()
+        .clone();
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,
@@ -1570,15 +1606,21 @@ async fn stark_cross_dataspace_verifyproof_tampered_payload_rejected_without_pay
         return Ok(());
     };
     network.ensure_blocks(1).await?;
-    let alice = network.client();
+    let alice = network.client().client().clone();
     let bob = network
         .peer()
-        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone());
+        .client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone())
+        .client()
+        .clone();
     let nexus_observer_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-    let nexus_observer = network.peer().client_for(
-        &nexus_observer_id,
-        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
-    );
+    let nexus_observer = network
+        .peer()
+        .client_for(
+            &nexus_observer_id,
+            SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+        )
+        .client()
+        .clone();
     let expected_validators = expected_lane_validators(&network);
     wait_for_active_lane_validators(
         &alice,

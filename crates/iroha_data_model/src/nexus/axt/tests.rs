@@ -1380,11 +1380,19 @@ fn sample_fastpq_binding(dsid: DataSpaceId) -> AxtFastpqBinding {
     reason = "the V1 binary audit enumerates every retired layout that previously defaulted a required field"
 )]
 fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::PreReleaseDescriptor",
+        frame = "iroha_data_model::nexus::axt::AxtDescriptor"
+    )]
     struct PreReleaseDescriptor {
         dsids: Vec<DataSpaceId>,
     }
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::PreReleaseProofEnvelope",
+        frame = "iroha_data_model::nexus::axt::AxtProofEnvelope"
+    )]
     struct PreReleaseProofEnvelope {
         dsid: DataSpaceId,
         manifest_root: [u8; 32],
@@ -1392,19 +1400,35 @@ fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
         proof: Vec<u8>,
         fastpq_binding: Option<AxtFastpqBinding>,
     }
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::PreReleaseProofBlob",
+        frame = "iroha_data_model::nexus::axt::ProofBlob"
+    )]
     struct PreReleaseProofBlob {
         payload: Vec<u8>,
     }
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::PreReleaseHandleBudget",
+        frame = "iroha_data_model::nexus::axt::HandleBudget"
+    )]
     struct PreReleaseHandleBudget {
         remaining: Quantity,
     }
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::PreReleaseHandleSubject",
+        frame = "iroha_data_model::nexus::axt::HandleSubject"
+    )]
     struct PreReleaseHandleSubject {
         account: String,
     }
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::PreReleaseAssetHandleDraft",
+        frame = "iroha_data_model::nexus::axt::AssetHandleDraft"
+    )]
     struct PreReleaseAssetHandleDraft {
         scope: Vec<String>,
         subject: HandleSubject,
@@ -1418,7 +1442,11 @@ fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
         expiry_slot: u64,
         max_clock_skew_ms: Option<u32>,
     }
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::PreReleaseSpendOp",
+        frame = "iroha_data_model::nexus::axt::SpendOp"
+    )]
     struct PreReleaseSpendOp {
         kind: String,
         from: String,
@@ -1429,6 +1457,18 @@ fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
     let dsid = DataSpaceId::new(19);
     let descriptor = to_bytes(&PreReleaseDescriptor { dsids: vec![dsid] })
         .expect("encode pre-release AXT descriptor");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<PreReleaseDescriptor>(),
+        norito::schema::identity::frame_hash::<AxtDescriptor>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(descriptor.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<AxtDescriptor>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(
         decode_from_bytes::<AxtDescriptor>(&descriptor).is_err(),
         "the V1 descriptor must require its exact touch collection"
@@ -1442,6 +1482,18 @@ fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
         fastpq_binding: Some(sample_fastpq_binding(dsid)),
     })
     .expect("encode pre-release AXT proof envelope");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<PreReleaseProofEnvelope>(),
+        norito::schema::identity::frame_hash::<AxtProofEnvelope>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(envelope.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<AxtProofEnvelope>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(
         decode_from_bytes::<AxtProofEnvelope>(&envelope).is_err(),
         "the V1 proof envelope must require amount and commitment slots"
@@ -1451,16 +1503,52 @@ fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
         payload: vec![0xC5],
     })
     .expect("encode pre-release proof blob");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<PreReleaseProofBlob>(),
+        norito::schema::identity::frame_hash::<ProofBlob>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(shortened.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<ProofBlob>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(decode_from_bytes::<ProofBlob>(&shortened).is_err());
     let shortened = to_bytes(&PreReleaseHandleBudget {
         remaining: Quantity::from(5_u64),
     })
     .expect("encode pre-release handle budget");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<PreReleaseHandleBudget>(),
+        norito::schema::identity::frame_hash::<HandleBudget>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(shortened.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<HandleBudget>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(decode_from_bytes::<HandleBudget>(&shortened).is_err());
     let shortened = to_bytes(&PreReleaseHandleSubject {
         account: "sorau fixture".to_owned(),
     })
     .expect("encode pre-release handle subject");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<PreReleaseHandleSubject>(),
+        norito::schema::identity::frame_hash::<HandleSubject>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(shortened.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<HandleSubject>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(decode_from_bytes::<HandleSubject>(&shortened).is_err());
     let draft = sample_asset_handle_draft();
     let shortened = to_bytes(&PreReleaseAssetHandleDraft {
@@ -1477,6 +1565,18 @@ fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
         max_clock_skew_ms: draft.max_clock_skew_ms,
     })
     .expect("encode pre-asset-binding handle draft");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<PreReleaseAssetHandleDraft>(),
+        norito::schema::identity::frame_hash::<AssetHandleDraft>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(shortened.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<AssetHandleDraft>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(
         decode_from_bytes::<AssetHandleDraft>(&shortened).is_err(),
         "the V1 handle draft must require its issuer-signed asset definition"
@@ -1488,6 +1588,18 @@ fn axt_v1_rejects_pre_release_binary_layouts_with_defaulted_fields() {
         amount: None,
     })
     .expect("encode pre-asset-binding spend operation");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<PreReleaseSpendOp>(),
+        norito::schema::identity::frame_hash::<SpendOp>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(shortened.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<SpendOp>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(
         decode_from_bytes::<SpendOp>(&shortened).is_err(),
         "the V1 spend operation must require its exact asset definition"
@@ -2175,7 +2287,11 @@ fn axt_reject_reason_roundtrips_label() {
     reason = "one canonical envelope fixture verifies the full nested wire shape and required commit height"
 )]
 fn envelope_roundtrips_through_norito() {
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::EnvelopeWithoutCommitHeight",
+        frame = "iroha_data_model::nexus::axt::AxtEnvelopeRecord"
+    )]
     struct EnvelopeWithoutCommitHeight {
         binding: AxtBinding,
         lane: LaneId,
@@ -2294,6 +2410,18 @@ fn envelope_roundtrips_through_norito() {
     };
     let missing_commit_height_bytes =
         to_bytes(&missing_commit_height).expect("encode omitted-height fixture");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<EnvelopeWithoutCommitHeight>(),
+        norito::schema::identity::frame_hash::<AxtEnvelopeRecord>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(missing_commit_height_bytes.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<AxtEnvelopeRecord>(),
+        "malformed fixture header must reach the production decoder"
+    );
     assert!(
         decode_from_bytes::<AxtEnvelopeRecord>(&missing_commit_height_bytes).is_err(),
         "commit_height is a required V1 wire field"
@@ -2305,11 +2433,19 @@ fn envelope_roundtrips_through_norito() {
     reason = "one policy-snapshot matrix covers canonical order, required fields, duplicates, and version binding"
 )]
 fn policy_snapshot_validation_rejects_order_duplicates_and_stale_versions() {
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::SnapshotWithoutVersion",
+        frame = "iroha_data_model::nexus::axt::AxtPolicySnapshot"
+    )]
     struct SnapshotWithoutVersion {
         entries: Vec<AxtPolicyBinding>,
     }
-    #[derive(Encode)]
+    #[derive(Encode, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "test::iroha_data_model::nexus::axt::SnapshotWithoutEntries",
+        frame = "iroha_data_model::nexus::axt::AxtPolicySnapshot"
+    )]
     struct SnapshotWithoutEntries {
         version: u64,
     }
@@ -2335,24 +2471,44 @@ fn policy_snapshot_validation_rejects_order_duplicates_and_stale_versions() {
     };
     assert_eq!(canonical.validate(), Ok(()));
     assert_eq!(AxtPolicySnapshot::default().validate(), Ok(()));
-    assert!(
-        decode_from_bytes::<AxtPolicySnapshot>(
-            &to_bytes(&SnapshotWithoutVersion {
-                entries: canonical.entries.clone(),
-            })
-            .expect("encode missing-version snapshot")
-        )
-        .is_err(),
-        "snapshot version is a required V1 wire field"
+    let missing_version_bytes = to_bytes(&SnapshotWithoutVersion {
+        entries: canonical.entries.clone(),
+    })
+    .expect("encode missing-version snapshot");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<SnapshotWithoutVersion>(),
+        norito::schema::identity::frame_hash::<AxtPolicySnapshot>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(missing_version_bytes.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<AxtPolicySnapshot>(),
+        "malformed fixture header must reach the production decoder"
     );
     assert!(
-        decode_from_bytes::<AxtPolicySnapshot>(
-            &to_bytes(&SnapshotWithoutEntries {
-                version: canonical.version,
-            })
-            .expect("encode missing-entries snapshot")
-        )
-        .is_err(),
+        decode_from_bytes::<AxtPolicySnapshot>(&missing_version_bytes).is_err(),
+        "snapshot version is a required V1 wire field"
+    );
+    let missing_entries_bytes = to_bytes(&SnapshotWithoutEntries {
+        version: canonical.version,
+    })
+    .expect("encode missing-entries snapshot");
+    assert_eq!(
+        norito::schema::identity::frame_hash::<SnapshotWithoutEntries>(),
+        norito::schema::identity::frame_hash::<AxtPolicySnapshot>(),
+        "malformed fixture must use the production frame identity"
+    );
+    assert_eq!(
+        norito::core::Header::read(missing_entries_bytes.as_slice())
+            .expect("read malformed fixture header")
+            .schema,
+        norito::schema::identity::frame_hash::<AxtPolicySnapshot>(),
+        "malformed fixture header must reach the production decoder"
+    );
+    assert!(
+        decode_from_bytes::<AxtPolicySnapshot>(&missing_entries_bytes).is_err(),
         "snapshot entries are a required V1 wire field"
     );
     let duplicate_entries = vec![first, first];

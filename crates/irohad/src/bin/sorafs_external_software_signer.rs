@@ -12,9 +12,8 @@ mod unix_main {
         ExternalSoftwareSignerEvidenceViewerAdapterV1,
         ExternalSoftwareSignerGovernanceDagAdapterV1, ExternalSoftwareSignerNativeAdapterV1,
         ExternalSoftwareSignerPotrGatewayAdapterV1, ExternalSoftwareSignerPotrProviderAdapterV1,
-        ExternalSoftwareSignerStreamTokenAdapterV1, RuntimeConsensusThresholdSignerBackendsV1,
-        SignerKeyAlgorithmV1, SignerPurposeBindingV1, SignerRoleV1,
-        SoftwareSignerAdministratorClientV1, SoftwareSignerClientV1,
+        RuntimeConsensusThresholdSignerBackendsV1, SignerKeyAlgorithmV1, SignerPurposeBindingV1,
+        SignerRoleV1, SoftwareSignerAdministratorClientV1, SoftwareSignerClientV1,
         SoftwareSignerEndpointPolicyV1, SoftwareSignerLiveProvenanceV1,
         SoftwareSignerProvisioningV1, SoftwareSignerPublicBindingV1,
         SoftwareSignerRotationRequestV1, SoftwareSignerServerV1, SoftwareSignerServiceV1,
@@ -475,7 +474,6 @@ mod unix_main {
             SignerRoleV1::EvidenceViewer if no_context => {
                 Ok(SignerPurposeBindingV1::EvidenceViewer)
             }
-            SignerRoleV1::StreamToken if no_context => Ok(SignerPurposeBindingV1::StreamToken),
             SignerRoleV1::PopCredentials if no_peer && no_signer && no_provider && no_billing => {
                 Ok(SignerPurposeBindingV1::PopCredentials {
                     issuer_id: args.pop_issuer_id.clone().ok_or(CliError::Input)?,
@@ -714,12 +712,6 @@ mod unix_main {
                         ExternalSoftwareSignerEvidenceViewerAdapterV1::try_new(client)
                             .map_err(|_| CliError::Client)?,
                     )),
-                IrohaRuntimeProviderSlotV1::StreamTokenSigner => {
-                    signers.insert_stream_token(Arc::new(
-                        ExternalSoftwareSignerStreamTokenAdapterV1::try_new(client)
-                            .map_err(|_| CliError::Client)?,
-                    ))
-                }
                 _ => return Err(CliError::Binding),
             }
             .map_err(|_| CliError::Binding)?;
@@ -757,7 +749,6 @@ mod unix_main {
             IrohaRuntimeProviderSlotV1::PotrProviderSigner => "potr-provider",
             IrohaRuntimeProviderSlotV1::BillingStatementSigner => "billing",
             IrohaRuntimeProviderSlotV1::EvidenceViewerReceiptSigner => "evidence-viewer",
-            IrohaRuntimeProviderSlotV1::StreamTokenSigner => "stream-token",
             _ => return Err(CliError::Binding),
         })
     }
@@ -1482,6 +1473,58 @@ mod unix_main {
             assert!(!help.contains("secret"));
         }
         #[test]
+        fn stream_token_cli_rejects_before_credentials_or_state() {
+            let parent = tempfile::tempdir().expect("isolated CLI rejection directory");
+            let state = parent.path().join("stream-state");
+            let binding = parent.path().join("stream-binding.norito");
+            let digest = "51".repeat(32);
+            let cli = Cli::try_parse_from([
+                "sorafs_external_software_signer",
+                "provision",
+                "--state-directory",
+                state.to_str().unwrap(),
+                "--binding-out",
+                binding.to_str().unwrap(),
+                "--handle",
+                "software://sorafs/stream-token/primary",
+                "--service-id",
+                "stream-primary",
+                "--administrator-id",
+                "stream-security-primary",
+                "--service-uid",
+                "1001",
+                "--client-uid",
+                "1002",
+                "--administrator-uid",
+                "1003",
+                "--role",
+                "stream_token",
+                "--algorithm",
+                "ed25519",
+                "--key-revision",
+                "1",
+                "--policy-revision",
+                "1",
+                "--policy-digest-sha256",
+                &digest,
+                "--max-request-bytes",
+                "2048",
+            ])
+            .expect("well-formed command with a forbidden software role");
+            let Command::Provision(args) = cli.command else {
+                panic!("provision command")
+            };
+            assert!(matches!(
+                purpose_binding_from_args(&args),
+                Err(CliError::Input)
+            ));
+            // No wrapping-key source exists. Reaching credential loading would return Credential.
+            assert!(matches!(provision(args), Err(CliError::Input)));
+            assert!(!state.exists());
+            assert!(!binding.exists());
+            assert_eq!(fs::read_dir(parent.path()).unwrap().count(), 0);
+        }
+        #[test]
         fn digest_parser_is_canonical_and_nonzero() {
             assert!(parse_digest(&"11".repeat(32)).is_ok());
             assert!(parse_digest(&"00".repeat(32)).is_err());
@@ -1508,7 +1551,6 @@ mod unix_main {
                 "potr-provider",
                 "billing",
                 "evidence-viewer",
-                "stream-token",
             ] {
                 let (binding, request, administrator) = fixed_signer_paths(role);
                 assert!(binding.ends_with(format!("{role}.binding.norito")));

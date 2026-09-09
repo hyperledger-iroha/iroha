@@ -1280,42 +1280,38 @@ fn generated_peer_config_rejects_a_duplicate_inline_genesis_identity() {
 }
 #[test]
 fn generated_sumeragi_capacity_contract_matches_config_defaults() {
-    assert_eq!(
-        GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-        iroha_config::parameters::defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY
-            .get()
-    );
-    assert_eq!(
-        GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
-        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get()
-    );
-    assert_eq!(
-        GENERATED_SUMERAGI_BODY_BYTES_FLOOR,
-        iroha_config::parameters::defaults::sumeragi::QUEUE_BODY_BYTES.get()
-    );
     for validator_count in [4_usize, 7, 31] {
-        assert_eq!(
-            generated_sumeragi_body_ingress_required_byte_capacity(
+        for body_source_bytes in [
+            QUEUE_BODY_SOURCE_BYTES.get(),
+            2 * QUEUE_BODY_SOURCE_BYTES.get(),
+        ] {
+            let mut root = toml::Table::new();
+            let mut queues = toml::Table::new();
+            queues.insert(
+                "body_source_bytes".into(),
+                toml::Value::Integer(i64::try_from(body_source_bytes).unwrap()),
+            );
+            let mut sumeragi = toml::Table::new();
+            sumeragi.insert("queues".into(), toml::Value::Table(queues));
+            root.insert("sumeragi".into(), toml::Value::Table(sumeragi));
+            ensure_generated_sumeragi_body_bytes(&mut root, validator_count)
+                .expect("canonical generated capacity");
+            let expected = sumeragi_v2_body_ingress_required_byte_capacity(
                 validator_count,
-                GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-                GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
-            ),
-            iroha_config::parameters::actual::sumeragi_v2_body_ingress_required_byte_capacity(
-                validator_count,
-                GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-                GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
+                QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+                body_source_bytes,
             )
-        );
+            .expect("representable roster")
+            .max(QUEUE_BODY_BYTES.get());
+            assert_eq!(
+                root["sumeragi"]["queues"]["body_bytes"].as_integer(),
+                Some(i64::try_from(expected).unwrap())
+            );
+        }
     }
-    assert_eq!(
-        generated_sumeragi_body_ingress_required_byte_capacity(
-            usize::MAX,
-            GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-            GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
-        ),
-        None,
-        "generator arithmetic must fail closed on roster overflow"
-    );
+    let error = ensure_generated_sumeragi_body_bytes(&mut toml::Table::new(), usize::MAX)
+        .expect_err("generator arithmetic must fail closed on roster overflow");
+    assert!(matches!(error, SupervisorError::Config(message) if message.contains("overflowed")));
 }
 #[test]
 fn generated_peer_configs_scale_sumeragi_body_bytes_for_legal_rosters() {
@@ -1350,13 +1346,13 @@ fn generated_peer_configs_scale_sumeragi_body_bytes_for_legal_rosters() {
             .and_then(|queues| queues.get("body_bytes"))
             .and_then(toml::Value::as_integer)
             .expect("generated aggregate body-byte capacity");
-        let required = generated_sumeragi_body_ingress_required_byte_capacity(
+        let required = sumeragi_v2_body_ingress_required_byte_capacity(
             validator_count,
-            GENERATED_SUMERAGI_AUTHENTICATED_NON_VALIDATOR_SOURCES,
-            GENERATED_SUMERAGI_BODY_SOURCE_BYTES,
+            QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+            QUEUE_BODY_SOURCE_BYTES.get(),
         )
         .expect("fixture byte geometry is representable")
-        .max(GENERATED_SUMERAGI_BODY_BYTES_FLOOR);
+        .max(QUEUE_BODY_BYTES.get());
         assert_eq!(
             body_bytes,
             i64::try_from(required).expect("fixture capacity fits TOML"),
@@ -1383,14 +1379,14 @@ fn generated_peer_config_preserves_larger_authored_sumeragi_body_bytes() {
         .collect::<Vec<_>>();
     let genesis = test_genesis_material(&paths);
     let authenticated_non_validator_sources = 5_usize;
-    let body_source_bytes = GENERATED_SUMERAGI_BODY_SOURCE_BYTES + 1024 * 1024;
-    let required = generated_sumeragi_body_ingress_required_byte_capacity(
+    let body_source_bytes = QUEUE_BODY_SOURCE_BYTES.get() + 1024 * 1024;
+    let required = sumeragi_v2_body_ingress_required_byte_capacity(
         validator_count,
         authenticated_non_validator_sources,
         body_source_bytes,
     )
     .expect("fixture byte geometry is representable");
-    let authored_body_bytes = required + body_source_bytes;
+    let authored_body_bytes = required.max(QUEUE_BODY_BYTES.get()) + body_source_bytes;
     let overlay_body_bytes = authored_body_bytes + body_source_bytes;
     let sumeragi_layer = |body_bytes: usize| {
         let mut queues = toml::Table::new();
@@ -2849,8 +2845,15 @@ exit 1
         Err(err) => panic!("build supervisor: {err}"),
     };
     supervisor.start_peer("peer0").expect("start peer");
-    // Stub exits immediately; refresh to observe the failure and schedule a restart.
-    std::thread::sleep(Duration::from_millis(10));
+    // Reap the actual failed child before asking the supervisor to observe its cached exit
+    // status. Process scheduling is independent of the supervisor's restart backoff.
+    let status = supervisor.peers[0]
+        .process
+        .as_mut()
+        .expect("spawned peer process")
+        .wait()
+        .expect("wait for failed peer stub");
+    assert_eq!(status.code(), Some(1));
     supervisor.refresh_peer_states();
     let peer = &supervisor.peers()[0];
     assert!(

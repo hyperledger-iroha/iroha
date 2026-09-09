@@ -1,5 +1,5 @@
 error: duplicate Norito enum index 1; first assigned to variant `First`
- --> tests/ui/fail/enum_duplicate_index.rs:7:5
+ --> tests/ui/fail/enum_duplicate_index.rs:6:5
   |
-7 |     Second,
+6 |     Second,
   |     ^^^^^^

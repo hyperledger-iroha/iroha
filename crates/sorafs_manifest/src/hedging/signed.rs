@@ -45,6 +45,8 @@ pub const MAX_SIGNED_HEDGING_FEED_LEDGER_ENTRIES: usize = MAX_HEDGING_PRICE_FEED
 /// Maximum canonical durable feed-ledger checkpoint bytes.
 pub const MAX_SIGNED_HEDGING_FEED_LEDGER_BYTES: usize = 32 * 1024 * 1024;
 /// Exact feed/source pair authorized for one external signer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::HedgingFeedBindingV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -70,6 +72,8 @@ impl HedgingFeedBindingV1 {
     }
 }
 /// One strong Ed25519 signer and the feed identities it may attest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::HedgingTrustedSignerV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -144,6 +148,8 @@ impl HedgingTrustedSignerV1 {
     }
 }
 /// External signer, identity, freshness, and revocation policy for price feeds.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::HedgingFeedTrustPolicyV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -294,6 +300,8 @@ impl HedgingFeedTrustPolicyV1 {
     }
 }
 /// Canonical normalized feed plus external signer authorization.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::SignedHedgingPriceFeedV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -416,6 +424,8 @@ impl SignedHedgingPriceFeedV1 {
     }
 }
 /// Deterministic reference-price decision retaining every authenticated input.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::GovernedHedgingReferencePriceDecisionV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -521,6 +531,8 @@ impl GovernedHedgingReferencePriceDecisionV1 {
     }
 }
 /// Billing statement paired with the authenticated price decision it embeds.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::GovernedBillingStatementV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -575,6 +587,8 @@ impl GovernedBillingStatementV1 {
     }
 }
 /// One authenticated feed sample and the exact time it passed admission.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::SignedHedgingFeedAdmissionV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -597,6 +611,8 @@ impl SignedHedgingFeedAdmissionV1 {
     }
 }
 /// Durable latest-feed high-water marks with replay and rollback protection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hedging::signed::SignedHedgingFeedLedgerV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -1953,3 +1969,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("signed/captured_owner_identity_tests.rs");

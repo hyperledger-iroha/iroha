@@ -218,9 +218,20 @@ impl PrivacyStatementContextV1 {
 /// The binding owns every consensus-selected byte that a native proof transcript must commit. It is
 /// constructed from a validated [`PrivacyStatementContextV1`] plus the trusted committed genesis
 /// hash; there is no optional field, default, alias, or legacy wire shape.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.native-consensus-binding.v1")]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -491,9 +502,7 @@ pub enum PrivacyZkAcePolicyLifecycleV1 {
     #[norito(rename = "revoked")]
     Revoked,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.privacy.zk-ace.policy-digest-material.v1")]
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_data_model::privacy::PrivacyZkAcePolicyDigestMaterialV1",
     frame = "iroha.privacy.zk-ace.policy-digest-material.v1"
@@ -856,9 +865,19 @@ pub fn validate_zk_ace_policy_revocation_v1(
     Ok(())
 }
 /// ZK-ACE authorization statement for a public asset transfer.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.zk-ace.authorization-statement.v1")]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(
@@ -2102,11 +2121,7 @@ impl From<PrivacyX509KeyUsageRequirementV1> for bool {
         requirement.is_required()
     }
 }
-impl norito::core::NoritoSerialize for PrivacyX509KeyUsageRequirementV1 {
-    fn schema_hash() -> [u8; 16] {
-        <bool as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for PrivacyX509KeyUsageRequirementV1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.0, writer)
@@ -2118,11 +2133,7 @@ impl norito::core::SerializePayload for PrivacyX509KeyUsageRequirementV1 {
         norito::core::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for PrivacyX509KeyUsageRequirementV1 {
-    fn schema_hash() -> [u8; 16] {
-        <bool as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for PrivacyX509KeyUsageRequirementV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self(<bool as norito::core::DeserializePayload>::deserialize(

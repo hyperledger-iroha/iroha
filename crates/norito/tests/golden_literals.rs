@@ -1,7 +1,10 @@
 //! Golden fixtures for Norito serialization of nested enums/options/tuples.
 use iroha_schema::IntoSchema;
 use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
-#[derive(Debug, PartialEq, Eq, IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug, PartialEq, Eq, IntoSchema, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito_group_03::golden_literals::NestedSample")]
 struct NestedSample {
     tag: SampleEnum,
     payload: Option<SamplePayload>,

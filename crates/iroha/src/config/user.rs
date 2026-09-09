@@ -809,7 +809,9 @@ impl Default for AliasCache {
     }
 }
 impl AliasCache {
-    fn into_policy(self) -> AliasCachePolicy {
+    /// Convert explicit SDK configuration into the reusable alias cache policy.
+    #[must_use]
+    pub fn into_policy(self) -> AliasCachePolicy {
         AliasCachePolicy::new(
             Duration::from_secs(self.positive_ttl),
             Duration::from_secs(self.refresh_window),
@@ -827,6 +829,33 @@ mod tests {
     use super::*;
     use iroha_crypto::Algorithm;
     use std::{fs, str::FromStr, time::Duration};
+    #[test]
+    fn alias_cache_policy_preserves_every_configured_duration() {
+        let policy = AliasCache {
+            positive_ttl: 1,
+            refresh_window: 2,
+            hard_expiry: 3,
+            negative_ttl: 4,
+            revocation_ttl: 5,
+            rotation_max_age: 6,
+            successor_grace: 7,
+            governance_grace: 8,
+        }
+        .into_policy();
+        assert_eq!(
+            [
+                policy.positive_ttl(),
+                policy.refresh_window(),
+                policy.hard_expiry(),
+                policy.negative_ttl(),
+                policy.revocation_ttl(),
+                policy.rotation_max_age(),
+                policy.successor_grace(),
+                policy.governance_grace()
+            ],
+            [1, 2, 3, 4, 5, 6, 7, 8].map(Duration::from_secs)
+        );
+    }
     fn root_with_timeouts(ttl: Duration, timeout: Duration) -> Root {
         let key_pair =
             KeyPair::try_from_seed(b"iroha:config:user:tests".to_vec(), Algorithm::Ed25519)

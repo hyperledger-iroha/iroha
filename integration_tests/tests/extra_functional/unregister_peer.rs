@@ -71,15 +71,12 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
-    let mut expected_height = run_blocking_with_timeout(
-        {
-            let client = client.clone();
-            move || client.client().get_status().map(|status| status.blocks)
-        },
-        tx_timeout,
-        "network_stable_after_add_and_after_remove_peer fetch status",
-    )
-    .await?;
+    let mut expected_height = timeout(tx_timeout, client.client().status().get())
+        .await
+        .map_err(|_| {
+            eyre!("network_stable_after_add_and_after_remove_peer fetch status timed out")
+        })??
+        .blocks;
     let genesis = network.genesis();
     if let Err(err) = new_peer
         .start(
@@ -107,7 +104,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
-    let setup_domain = domain_setup_instruction(&domain_id, &client.client().account)?;
+    let setup_domain = domain_setup_instruction(&domain_id, client.client().account())?;
     run_blocking_with_timeout(
         {
             let client = client.clone();
@@ -210,15 +207,10 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     {
         return Ok(());
     }
-    expected_height = run_blocking_with_timeout(
-        {
-            let client = client.clone();
-            move || client.client().get_status().map(|status| status.blocks)
-        },
-        tx_timeout,
-        "network_stable_after_add_and_after_remove_peer refresh status after unregister",
-    )
-    .await?;
+    expected_height = timeout(tx_timeout, client.client().status().get())
+        .await
+        .map_err(|_| eyre!("network_stable_after_add_and_after_remove_peer refresh status after unregister timed out"))??
+        .blocks;
     // We can mint without an error.
     mint(&client, &asset_def, &account, 200_u32.into(), tx_timeout).await?;
     expected_height = expected_height.saturating_add(1);

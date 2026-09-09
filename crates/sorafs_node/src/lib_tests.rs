@@ -8278,58 +8278,7 @@ fn publish_appeal_finance_settlement_receipt_writes_governance_publisher() {
     let published = publisher.take();
     assert_eq!(published, vec![expected]);
 }
-#[test]
-fn publish_por_governance_payloads_use_canonical_outbox_dispatch() {
-    let (handle, _dir) = node_with_temp_storage();
-    let publisher = Arc::new(RecordingPublisher::default());
-    handle
-        .try_set_governance_publisher(publisher.clone())
-        .expect("register recording publisher");
-    let publication = por_challenge_publication_fixture();
-    let report = por_weekly_report_fixture();
-    let expected_publication = to_bytes(&publication).expect("encode PoR challenge publication");
-    let expected_report = to_bytes(&report).expect("encode PoR weekly report");
-    handle
-        .publish_por_challenge_publication(publication)
-        .expect("publish PoR challenge publication");
-    handle
-        .publish_por_weekly_report(report)
-        .expect("publish PoR weekly report");
-    assert_eq!(
-        publisher.take(),
-        vec![expected_publication, expected_report]
-    );
-    assert_eq!(handle.pending_governance_publication_count(), 0);
-}
-#[test]
-fn por_governance_payloads_remain_ordered_and_retryable_after_publish_failure() {
-    let (handle, _dir) = node_with_temp_storage();
-    let failing = Arc::new(FailingPublisher::default());
-    handle
-        .try_set_governance_publisher(failing.clone())
-        .expect("register failing publisher before enqueue");
-    let publication = por_challenge_publication_fixture();
-    let report = por_weekly_report_fixture();
-    let expected_publication = to_bytes(&publication).expect("encode PoR challenge publication");
-    let expected_report = to_bytes(&report).expect("encode PoR weekly report");
-    handle
-        .publish_por_challenge_publication(publication)
-        .expect_err("challenge publish failure remains durable");
-    handle
-        .publish_por_weekly_report(report)
-        .expect_err("report publish failure remains durable");
-    assert_eq!(failing.attempts(), 2);
-    assert_eq!(handle.pending_governance_publication_count(), 2);
-    let recording = Arc::new(RecordingPublisher::default());
-    handle
-        .try_set_governance_publisher(recording.clone())
-        .expect("retry queued PoR publications");
-    assert_eq!(
-        recording.take(),
-        vec![expected_publication, expected_report]
-    );
-    assert_eq!(handle.pending_governance_publication_count(), 0);
-}
+include!("lib/por_publisher_canonical_tests.rs");
 #[test]
 fn por_ingestion_status_tracks_backlog_and_history() {
     let (handle, _dir) = node_with_temp_storage();

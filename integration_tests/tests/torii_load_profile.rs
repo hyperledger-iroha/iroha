@@ -155,8 +155,9 @@ async fn measure_submit_to_commit(
     let mut events = tokio::time::timeout(
         event_timeout,
         client
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .wrap_err("timed out opening transaction event stream")?
@@ -190,7 +191,7 @@ async fn measure_submit_to_commit(
     })
     .await
     .wrap_err("timed out waiting for transaction approval")??;
-    events.close().await;
+    events.close().await?;
     Ok(start.elapsed())
 }
 async fn run_transaction_commit_profile(

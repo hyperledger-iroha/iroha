@@ -2,7 +2,6 @@ use super::*;
 use crate::json_macros::JsonSerialize;
 use clap::Parser;
 use eyre::eyre;
-use futures::stream;
 use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     ChainId, Level,
@@ -19,7 +18,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tempfile::NamedTempFile;
-use tokio::runtime::Runtime;
 use url::Url;
 fn fixture_key_pair(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -357,13 +355,13 @@ fn inherited_operator_key_load_installs_the_explicit_run_context_signer() {
     .expect("parse inherited signer");
     let mut context = test_context(CliOutputFormat::Json);
     context.operator_key_pair = load_runtime_operator_key(&args).expect("load real descriptor");
-    let client = context.client_from_config();
+    let client = context.client_from_config().expect("valid command context");
     assert_eq!(
-        client.operator_key_pair.as_ref().map(KeyPair::public_key),
+        client.operator_key_pair().map(KeyPair::public_key),
         Some(key_pair.public_key())
     );
-    assert_ne!(client.key_pair.public_key(), key_pair.public_key());
-    assert_eq!(client.network_id, context.config.network_id);
+    assert_ne!(client.key_pair().public_key(), key_pair.public_key());
+    assert_eq!(client.network_id(), &context.config.network_id);
     assert_eq!(
         file.stream_position().expect("retained caller descriptor"),
         5
@@ -372,16 +370,39 @@ fn inherited_operator_key_load_installs_the_explicit_run_context_signer() {
 #[test]
 fn run_context_installs_only_the_explicit_operator_key() {
     let mut context = test_context(CliOutputFormat::Json);
-    assert!(context.client_from_config().operator_key_pair.is_none());
+    assert!(
+        context
+            .client_from_config()
+            .expect("valid command context")
+            .operator_key_pair()
+            .is_none()
+    );
     let operator_key_pair = fixture_key_pair(0x71);
     context.operator_key_pair = Some(operator_key_pair.clone());
-    let client = context.client_from_config();
+    let client = context.client_from_config().expect("valid command context");
     assert_eq!(
-        client.operator_key_pair.as_ref().map(KeyPair::public_key),
+        client.operator_key_pair().map(KeyPair::public_key),
         Some(operator_key_pair.public_key())
     );
-    assert_eq!(client.network_id, context.config.network_id);
-    assert_ne!(client.key_pair.public_key(), operator_key_pair.public_key());
+    assert_eq!(client.network_id(), &context.config.network_id);
+    assert_ne!(
+        client.key_pair().public_key(),
+        operator_key_pair.public_key()
+    );
+}
+#[test]
+fn run_context_returns_invalid_client_configuration() {
+    let mut context = test_context(CliOutputFormat::Json);
+    context.config.torii_api_url = Url::parse("ftp://invalid.example/").expect("URL fixture");
+    let error = context
+        .client_from_config()
+        .expect_err("invalid endpoint must be returned before command dispatch");
+    assert!(matches!(
+        error.downcast_ref::<iroha::Error>(),
+        Some(iroha::Error::Context(
+            iroha::client::AuthorityContextError::UnsupportedEndpointScheme { .. }
+        ))
+    ));
 }
 fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
     let _domain =
@@ -1679,27 +1700,112 @@ fn resolve_account_id_with_resolves_encoded_literal() {
 }
 #[test]
 fn stream_timeout_driver_propagates_errors() {
-    let mut stream = stream::iter(vec![Result::<DummyEvent, eyre::Report>::Err(eyre!(
-        "connection failed"
-    ))]);
     let mut processed = 0usize;
-    let rt = Runtime::new().expect("runtime");
-    let result = rt.block_on(async {
-        drive_try_stream_until_timeout(
-            &mut stream,
-            |_event| -> Result<()> {
-                processed += 1;
-                Ok(())
-            },
-            Duration::from_millis(1),
-            "timeout",
-        )
-        .await
-    });
+    let result = drive_stream_until_timeout(
+        |_timeout| {
+            Err::<Option<DummyEvent>, _>(iroha::Error::Transport {
+                operation: "events.subscribe",
+                kind: iroha::TransportErrorKind::Other,
+                details: "connection failed".to_owned(),
+            })
+        },
+        |_event| -> Result<()> {
+            processed += 1;
+            Ok(())
+        },
+        Duration::from_millis(1),
+        "timeout",
+    );
     let err = result.expect_err("stream error should propagate");
     assert!(err.to_string().contains("connection failed"));
     assert_eq!(processed, 0);
 }
+
+#[test]
+fn stream_timeout_driver_preserves_idle_wait_and_stops_at_timeout() {
+    let mut calls = 0;
+    let mut received = Vec::new();
+    drive_stream_until_timeout(
+        |timeout| {
+            assert_eq!(timeout, Duration::from_secs(7));
+            calls += 1;
+            match calls {
+                1 | 2 => Ok(Some(calls)),
+                3 => Err(iroha::Error::Timeout {
+                    operation: "stream.receive",
+                }),
+                _ => panic!("receive called after idle timeout"),
+            }
+        },
+        |item| {
+            received.push(item);
+            Ok(())
+        },
+        Duration::from_secs(7),
+        "timeout",
+    )
+    .expect("idle timeout completes the listener");
+    assert_eq!(calls, 3);
+    assert_eq!(received, vec![1, 2]);
+}
+
+#[test]
+fn stream_timeout_driver_preserves_transport_timeout_errors() {
+    let result = drive_stream_until_timeout(
+        |_| {
+            Err::<Option<DummyEvent>, _>(iroha::Error::Timeout {
+                operation: "events.subscribe",
+            })
+        },
+        |_| panic!("transport timeout must not deliver an item"),
+        Duration::from_secs(1),
+        "timeout",
+    );
+    assert!(result.unwrap_err().to_string().contains("events.subscribe"));
+}
+
+#[test]
+fn stream_timeout_driver_stops_at_clean_eof() {
+    let mut calls = 0;
+    drive_stream_until_timeout(
+        |_| {
+            calls += 1;
+            Ok::<Option<DummyEvent>, _>(None)
+        },
+        |_| panic!("EOF must not deliver an item"),
+        Duration::from_secs(1),
+        "timeout",
+    )
+    .expect("clean EOF");
+    assert_eq!(calls, 1);
+}
+
+#[test]
+fn stream_close_retains_receive_and_close_failures() {
+    let close_error = || iroha::Error::Timeout {
+        operation: "stream.close",
+    };
+    assert_eq!(finish_stream(Ok(7), Ok(())).unwrap(), 7);
+    assert_eq!(
+        finish_stream::<()>(Err(eyre!("original receive failure")), Ok(()))
+            .unwrap_err()
+            .to_string(),
+        "original receive failure",
+    );
+    assert!(matches!(
+        finish_stream(Ok(()), Err(close_error()))
+            .unwrap_err()
+            .downcast_ref::<iroha::Error>(),
+        Some(iroha::Error::Timeout {
+            operation: "stream.close"
+        }),
+    ));
+    let error = finish_stream::<()>(Err(eyre!("original receive failure")), Err(close_error()))
+        .unwrap_err();
+    assert!(format!("{error:#}").contains("original receive failure"));
+    assert!(error.to_string().contains("stream.close"));
+}
+
 fn authority_fee_payment_with_gas(limit: u64) -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
@@ -1896,8 +2002,12 @@ fn fee_quote_signing_rejects_invalid_semantics_and_response_media_type() {
             stream.write_all(&body).expect("write fee-quote response");
         });
         config.torii_api_url = Url::parse(&format!("http://{address}/")).expect("fee-quote URL");
-        let client = BlockingClient::from_client(Client::new(config))
-            .expect("blocking fee-quote fixture client");
+        let client = BlockingClient::from_client(
+            Client::builder(config)
+                .build()
+                .expect("valid fee-quote context"),
+        )
+        .expect("blocking fee-quote fixture client");
         let result = quote_and_sign_transaction(
             &client,
             Executable::Instructions(Vec::<InstructionBox>::new().into()),

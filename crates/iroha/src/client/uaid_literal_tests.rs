@@ -1,6 +1,8 @@
 #[test]
 fn uaid_bindings_query_leaves_query_string_empty() {
-    let client = Client::new(config_factory());
+    let client = Client::builder(config_factory())
+        .build()
+        .expect("valid client configuration");
     let url = join_torii_url(&client.torii_url, "v1/space-directory/uaids/demo");
     let query = UaidBindingsQuery;
     let request = query

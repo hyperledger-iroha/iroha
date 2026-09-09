@@ -347,6 +347,8 @@ impl PopCredentialServicePolicyV1 {
     }
 }
 /// Public metadata integrity-protected with an encrypted enrollment.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopEnrollmentAadV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -358,6 +360,8 @@ struct PopEnrollmentAadV1 {
     recipient_key_id: String,
 }
 /// Private enrollment plaintext. It is never written or logged.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopPrivateEnrollmentV1")]
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PopPrivateEnrollmentV1 {
     /// Canonical enrollment request, including the private applicant alias.
@@ -417,6 +421,8 @@ impl PopPrivateEnrollmentV1 {
     }
 }
 /// Canonical encrypted enrollment accepted by the issuer service.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopEncryptedEnrollmentV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
 pub struct PopEncryptedEnrollmentV1 {
     /// Schema version.
@@ -513,6 +519,8 @@ pub enum PopApprovalDecisionV1 {
     Reject,
 }
 /// Signed payload-free dual-control decision.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopApprovalV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -683,6 +691,8 @@ pub trait PopWalletKeyWrapper: Send + Sync + fmt::Debug {
     ) -> Result<[u8; 32], String>;
 }
 /// Private serializable witness representation used only inside encryption.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopPrivateWitnessEnvelopeV1")]
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopPrivateWitnessEnvelopeV1 {
     holder_secret: [u8; 32],
@@ -888,6 +898,8 @@ pub enum PopRegistryOperationKindV1 {
     },
 }
 /// One payload-free ledger submission.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopRegistryOperationV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -2392,6 +2404,8 @@ struct PopEnrollmentRecordV1 {
     canonical_encrypted_delivery: Option<Vec<u8>>,
 }
 /// Encrypted credential/witness delivery from issuer to wallet.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopEncryptedWalletDeliveryV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize)]
 pub struct PopEncryptedWalletDeliveryV1 {
     /// Schema version.
@@ -2405,6 +2419,8 @@ pub struct PopEncryptedWalletDeliveryV1 {
     /// Encrypted signed bundle and private witness.
     pub encrypted_payload: HybridPayloadEnvelopeV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopPrivateWalletDeliveryV1")]
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopPrivateWalletDeliveryV1 {
     bundle: PopIssuedCredentialBundleV1,
@@ -2421,6 +2437,8 @@ impl Drop for PopPrivateWalletDeliveryV1 {
         self.witness.zeroize();
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopIssuerCheckpointV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -3691,6 +3709,8 @@ fn wallet_delivery_aad(
     ]
     .concat())
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopWalletDeliveryAadV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletDeliveryAadV1 {
     version: u16,
@@ -3698,6 +3718,8 @@ struct PopWalletDeliveryAadV1 {
     operation_digest: [u8; 32],
     credential_commitment: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopWalletVaultPlaintextV1")]
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletVaultPlaintextV1 {
     bundle: PopIssuedCredentialBundleV1,
@@ -3728,6 +3750,8 @@ impl Drop for PopWalletVaultPlaintextV1 {
         scrub_pop_signature(&mut self.active_revocation_list.publisher_signature);
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopWalletVaultMetadataV1")]
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletVaultMetadataV1 {
     version: u16,
@@ -3737,6 +3761,8 @@ struct PopWalletVaultMetadataV1 {
     revocation_root: [u8; 32],
     revocation_list_version: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pop_credentials::PopWalletVaultEnvelopeV1")]
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PopWalletVaultEnvelopeV1 {
     metadata: PopWalletVaultMetadataV1,

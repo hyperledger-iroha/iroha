@@ -432,7 +432,7 @@ mod tests {
     )]
     fn typed_queries_are_authenticated_and_preserve_exact_fields() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let policy = policy(&client.account);
         let policy_record = ReputationJournalAuthorityPolicyRecordV1::try_new(
             policy,
@@ -490,6 +490,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             assert_eq!(
                 client
@@ -560,7 +561,7 @@ mod tests {
     #[test]
     fn unpinned_source_query_rejects_malformed_event_response() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let policy = policy(&client.account);
         let entry = por_entry(&client.account, &policy);
         let source_id = entry.source_id;
@@ -585,6 +586,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client.query_sorafs_reputation_journal_event_by_source_id(source_id, None)
         });
@@ -610,7 +612,7 @@ mod tests {
     #[test]
     fn event_page_query_rejects_responses_outside_request_bounds() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let policy = policy(&client.account);
         let first = por_entry(&client.account, &policy);
         let second = token_entry(&client.account, &policy);
@@ -655,6 +657,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             assert!(
                 client
@@ -671,7 +674,7 @@ mod tests {
     #[test]
     fn query_validation_rejects_bad_inputs_without_http() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let sends: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let sends = Arc::clone(&sends);
@@ -684,6 +687,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             let invalid_finalized = ReputationJournalFinalizedCursorV1 {
                 height: 0,

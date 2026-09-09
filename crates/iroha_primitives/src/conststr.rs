@@ -19,7 +19,7 @@ use core::{
 use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
+    DeserializePayload, SerializePayload, core as ncore,
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::{
@@ -281,13 +281,13 @@ impl JsonDeserialize for ConstString {
         parser.parse_string().map(Into::into)
     }
 }
-impl NoritoSerialize for ConstString {}
+
 impl SerializePayload for ConstString {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         <&str as SerializePayload>::serialize(&self.as_ref(), writer)
     }
 }
-impl NoritoDeserialize<'_> for ConstString {}
+
 impl<'a> DeserializePayload<'a> for ConstString {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         let ptr = core::ptr::from_ref(archived).cast::<u8>();

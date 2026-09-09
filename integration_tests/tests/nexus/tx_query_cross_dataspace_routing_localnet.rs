@@ -613,7 +613,7 @@ fn add_client_headers(
     include_content_type: bool,
     include_account_header: bool,
 ) -> reqwest::RequestBuilder {
-    for (name, value) in &client.client().headers {
+    for (name, value) in client.client().headers() {
         if !include_content_type && name.eq_ignore_ascii_case("content-type") {
             continue;
         }
@@ -638,7 +638,7 @@ async fn torii_json_get(
     path_segments: &[String],
     query_pairs: &[(String, String)],
 ) -> Result<RoutedJsonResponse> {
-    let mut url = client.client().torii_url.clone();
+    let mut url = client.client().endpoint().clone();
     let torii_url_literal = url.to_string();
     {
         let mut segments = url
@@ -687,7 +687,7 @@ async fn torii_json_get_as_account(
     path_segments: &[String],
     query_pairs: &[(String, String)],
 ) -> Result<RoutedJsonResponse> {
-    let mut url = client.client().torii_url.clone();
+    let mut url = client.client().endpoint().clone();
     let torii_url_literal = url.to_string();
     {
         let mut segments = url
@@ -716,7 +716,7 @@ async fn torii_json_get_as_account(
         .unwrap_or(u64::MAX);
     let nonce = format!("nexus-app-api-{timestamp_ms}-{}", Hash::new(url.as_str()));
     let message = canonical_network_request_signature_message(
-        &client.client().network_id,
+        client.client().network_id(),
         &Method::GET,
         &uri,
         &[],
@@ -724,7 +724,7 @@ async fn torii_json_get_as_account(
         &nonce,
     )
     .wrap_err("construct canonical app-api request")?;
-    let signature = Signature::try_new(client.client().key_pair.private_key(), &message)
+    let signature = Signature::try_new(client.client().key_pair().private_key(), &message)
         .wrap_err("sign canonical app-api request")?;
     let response = routed_http_client()
         .get(url)
@@ -824,7 +824,7 @@ async fn submit_transaction_raw(
         .post(
             client
                 .client()
-                .torii_url
+                .endpoint()
                 .join("v1/pipeline/transactions")
                 .wrap_err("compose /v1/pipeline/transactions URL")?,
         )

@@ -18,8 +18,12 @@ fn read_fixture_bytes(path: &str) -> Vec<u8> {
     fs::read(&path).unwrap_or_else(|err| panic!("failed to read {path}: {err}"))
 }
 fn regenerate_fixtures(root: &Path) {
+    let root = fs::canonicalize(root).expect("canonicalize isolated fixture output directory");
+    fs::create_dir(root.join("negative")).expect("create isolated negative fixture directory");
     let output = cargo_bin_cmd!("generate_pdp_fixtures")
-        .current_dir(root)
+        .current_dir(&root)
+        .arg("--output-dir")
+        .arg(&root)
         .output()
         .expect("run deterministic PDP fixture generator");
     assert!(
@@ -27,6 +31,10 @@ fn regenerate_fixtures(root: &Path) {
         "fixture generator failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        !root.join("fixtures").exists(),
+        "isolated regeneration must not write the default fixture tree"
     );
 }
 fn assert_outcome_fixture(name: &str, actual: &sorafs_manifest::ValidationOutcomeV1) {
@@ -356,10 +364,9 @@ fn pdp_fixture_regeneration_is_byte_identical() {
     regenerate_fixtures(first.path());
     regenerate_fixtures(second.path());
     for name in FILES {
-        let relative = Path::new("fixtures/sorafs_manifest/pdp").join(name);
-        let first_bytes = fs::read(first.path().join(&relative))
+        let first_bytes = fs::read(first.path().join(name))
             .unwrap_or_else(|error| panic!("read first regenerated `{name}`: {error}"));
-        let second_bytes = fs::read(second.path().join(&relative))
+        let second_bytes = fs::read(second.path().join(name))
             .unwrap_or_else(|error| panic!("read second regenerated `{name}`: {error}"));
         let checked_in = fs::read(Path::new(FIXTURES_ROOT).join(name))
             .unwrap_or_else(|error| panic!("read checked-in `{name}`: {error}"));

@@ -29,7 +29,9 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::ministry::TransparencyReleaseV1")]
 pub struct TransparencyReleaseV1 {
     /// Quarter identifier (e.g., `2026-Q3`) associated with the published bundle.
     pub quarter: String,
@@ -209,6 +211,8 @@ impl AgendaProposalV1 {
     }
 }
 /// Persisted Ministry agenda submission record keyed by `proposal_id`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ministry::AgendaProposalRecordV1")]
 #[derive(
     Debug,
     Clone,
@@ -1169,7 +1173,9 @@ pub const REVIEW_PANEL_SUMMARY_VERSION_V1: u16 = 1;
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::ministry::ReviewPanelSummaryV1")]
 pub struct ReviewPanelSummaryV1 {
     /// Schema version; must equal [`REVIEW_PANEL_SUMMARY_VERSION_V1`].
     pub version: u16,
@@ -1368,7 +1374,9 @@ pub const REFERENDUM_PACKET_VERSION_V1: u16 = 1;
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::ministry::ReferendumPacketV1")]
 pub struct ReferendumPacketV1 {
     /// Schema version; must equal [`REFERENDUM_PACKET_VERSION_V1`].
     pub version: u16,
@@ -2018,5 +2026,23 @@ mod tests {
         let decoded: ReferendumPacketV1 =
             decode_from_bytes(&bytes).expect("decode referendum packet");
         assert_eq!(packet, decoded);
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::ministry::ReferendumPacketV1,
+        >("iroha_data_model::ministry::ReferendumPacketV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::ministry::ReviewPanelSummaryV1,
+        >("iroha_data_model::ministry::ReviewPanelSummaryV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::ministry::TransparencyReleaseV1,
+        >("iroha_data_model::ministry::TransparencyReleaseV1");
     }
 }

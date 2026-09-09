@@ -198,7 +198,7 @@ fn submit_endorsement<C: RunContext>(args: SubmitArgs, context: &mut C) -> Resul
     context.finish([InstructionBox::from(instruction)])
 }
 fn list_endorsements<C: RunContext>(args: ListArgs, context: &mut C) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let records = client
         .query_single(FindDomainEndorsements {
             domain_id: args.domain,
@@ -207,7 +207,7 @@ fn list_endorsements<C: RunContext>(args: ListArgs, context: &mut C) -> Result<(
     context.print_data(&records)
 }
 fn show_policy<C: RunContext>(args: PolicyArgs, context: &mut C) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let policy = client
         .query_single(FindDomainEndorsementPolicy {
             domain_id: args.domain,
@@ -216,7 +216,7 @@ fn show_policy<C: RunContext>(args: PolicyArgs, context: &mut C) -> Result<()> {
     context.print_data(&policy)
 }
 fn show_committee<C: RunContext>(args: CommitteeArgs, context: &mut C) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let committee = client
         .query_single(FindDomainCommittee {
             committee_id: args.committee_id,

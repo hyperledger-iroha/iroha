@@ -495,7 +495,7 @@ public final class HttpClientTransportExactReadTests {
       HttpClientTransport.withExecutor(
               admissionExecutor, signedClientConfig("https://torii.example"))
           .requirePrivacyExact12CapabilityAdmission(
-              org.hyperledger.iroha.android.privacy.PrivacyProtocolIdV1
+              org.hyperledger.iroha.sdk.privacy.PrivacyProtocolIdV1
                   .ANONYMOUS_PGC_K_OUT_OF_N_V1,
               privacyAuth("privacy-admission"))
           .join();

@@ -241,7 +241,12 @@ final class AccountAddressTests: XCTestCase {
             noncanonical.replaceSubrange(range, with: "ｓｏｒａ")
         }
 
+        // Native admission uses Rust parse_encoded for both public entry points.
         XCTAssertThrowsError(try AccountAddress.fromI105(noncanonical, expectedPrefix: 753)) { error in
+            XCTAssertEqual(error as? AccountAddressError, .unsupportedAddressFormat)
+        }
+        // Keep the missing-sentinel diagnostic on the syntax inspection owner.
+        XCTAssertThrowsError(try AccountAddress.inspectI105NetworkPrefix(noncanonical, expectedPrefix: 753)) { error in
             XCTAssertEqual(error as? AccountAddressError, .missingI105Sentinel)
         }
         XCTAssertThrowsError(try AccountAddress.parseEncoded(noncanonical, expectedPrefix: 753)) { error in

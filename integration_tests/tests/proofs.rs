@@ -300,7 +300,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let snapshot = loop {
         let mut url = peer_clients[next_client_idx % peer_clients.len()]
             .client()
-            .torii_url
+            .endpoint()
             .clone();
         next_client_idx = next_client_idx.wrapping_add(1);
         {

@@ -405,7 +405,12 @@ Verifier behavior (native STARK)
   FRI base-value drift, STARK parameter-profile drift, and caller-supplied
   verifier-limit violations fail before native BFV acceptance. The governed
   full-material verifier performs the public structural checks, then
-  reconstructs and exactly matches the complete trace and composition roots. A
+  reconstructs and exactly matches the complete trace and composition roots.
+  Soracloud preflight authenticates the base-field AIR composition tree in its
+  own Merkle domain. Fp4 FRI layer roots use distinct domains; their connection
+  to the AIR is the authenticated equality of each initial FRI opening and its
+  AIR composition evaluation, with zero extension coefficients. Substituting
+  either tree's root for the other fails its domain-specific authentication. A
   valid envelope also cannot be replayed with stale BFV prover-input material,
   including layout metadata, trace/AIR digests, trace rows, composition values,
   or prover/verifier proof-key roles.

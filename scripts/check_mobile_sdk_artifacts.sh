@@ -4,7 +4,7 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] [--apple-only|--android-only] [--require-built-android] [--allow-dirty-source]
+  scripts/check_mobile_sdk_artifacts.sh [--root <repo-root>] --lockfile-path <absolute-path> [--apple-only|--android-only] [--require-built-android] [--allow-dirty-source]
 
 Validate the sole first-release mobile SDK surface:
   - exact KAGEMUSHA V1 C/header exports;
@@ -15,6 +15,7 @@ USAGE
 }
 
 ROOT_ARG=""
+CARGO_LOCKFILE=""
 CHECK_APPLE=1
 CHECK_ANDROID=1
 REQUIRE_ANDROID_OUTPUTS="${MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS:-0}"
@@ -27,6 +28,14 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --lockfile-path)
+      shift
+      if [[ -n "$CARGO_LOCKFILE" || -z "${1:-}" ]]; then
+        echo "error: --lockfile-path requires exactly one explicit value" >&2
+        exit 64
+      fi
+      CARGO_LOCKFILE="$1"
+      ;;
     --root)
       shift
       [[ $# -gt 0 ]] || { echo "[mobile-sdk-artifacts] --root requires a value" >&2; exit 64; }
@@ -50,6 +59,13 @@ while [[ $# -gt 0 ]]; do
   esac
   shift
 done
+
+if [[ "$CHECK_APPLE" == "1" ]]; then
+if [[ -z "$CARGO_LOCKFILE" ]]; then
+  echo "error: --lockfile-path is required; no implicit Cargo.lock selection" >&2
+  exit 64
+fi
+fi
 
 [[ "$REQUIRE_ANDROID_OUTPUTS" == "0" || "$REQUIRE_ANDROID_OUTPUTS" == "1" ]] || {
   echo "[mobile-sdk-artifacts] MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS must be 0 or 1" >&2
@@ -498,6 +514,7 @@ check_apple() {
     local validation=(
       "$ROOT_DIR/scripts/validate_norito_bridge_xcframework.py"
       --root "$ROOT_DIR"
+      --lockfile-path "$CARGO_LOCKFILE"
       --xcframework "$xcframework"
       --manifest "$manifest"
       --manifest-link "$manifest_link"

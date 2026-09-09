@@ -1864,7 +1864,7 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
             key_pair.public_key(),
             Some(izanami::genesis_support::UNRESOLVED_GENESIS_EXPECTED_HASH),
         );
-        let block = crate::supervisor::sign_kagami_stub_genesis_from_config(
+        let (bound_manifest, block) = crate::supervisor::sign_kagami_stub_genesis_from_config(
             &manifest_path,
             &config_path,
             &key_pair,
@@ -1935,6 +1935,12 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
         );
         assert!(!finalized_genesis.contains_key("expected_hash"));
         let wire = block.encode_wire().expect("encode fixture block");
+        fs::write(genesis_dir.join("genesis.signed.nrt"), &wire).expect("write fixture block");
+        fs::write(
+            &manifest_path,
+            json::to_vec_pretty(&bound_manifest).expect("encode bound fixture manifest"),
+        )
+        .expect("write bound fixture manifest");
         izanami::genesis_support::validate_prepared_genesis_for_startup(
             &wire,
             &RawGenesisTransaction::from_path(&manifest_path).expect("read fixture manifest"),
@@ -1943,7 +1949,6 @@ sponsor_vault_custody_account_id = "__CHAIN_ACCOUNT__"
             &chain_id,
         )
         .expect("generation fixture must satisfy exact startup genesis validation");
-        fs::write(genesis_dir.join("genesis.signed.nrt"), wire).expect("write fixture block");
         fs::write(
             genesis_dir.join("genesis.public_key"),
             format!("{}\n", key_pair.public_key()),

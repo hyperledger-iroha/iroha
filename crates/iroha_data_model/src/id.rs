@@ -297,7 +297,7 @@ mod model {
         RepoAgreementId(repo::RepoAgreementId),
     }
 }
-impl norito::core::NoritoSerialize for NetworkId {}
+
 impl norito::core::SerializePayload for NetworkId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(self.as_genesis_hash(), writer)
@@ -309,7 +309,7 @@ impl norito::core::SerializePayload for NetworkId {
         Some(iroha_crypto::Hash::LENGTH)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for NetworkId {}
+
 impl<'a> norito::core::DeserializePayload<'a> for NetworkId {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -335,7 +335,7 @@ impl<'a> DecodeFromSlice<'a> for NetworkId {
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::id::ChainIdText")]
 struct ChainIdText(ChainId);
-impl norito::core::NoritoSerialize for ChainIdText {}
+
 impl norito::core::SerializePayload for ChainIdText {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.0.as_str(), writer)
@@ -347,7 +347,7 @@ impl norito::core::SerializePayload for ChainIdText {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.0.as_str())
     }
 }
-impl norito::core::NoritoDeserialize<'_> for ChainIdText {}
+
 impl<'a> norito::core::DeserializePayload<'a> for ChainIdText {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -370,7 +370,7 @@ impl<'a> norito::core::DeserializePayload<'a> for ChainIdText {
 #[derive(Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::id::ChainIdWire")]
 struct ChainIdWire(ChainIdText);
-impl norito::core::NoritoDeserialize<'_> for ChainId {}
+
 impl<'a> norito::core::DeserializePayload<'a> for ChainId {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -450,7 +450,7 @@ mod id_box_codec {
             }
         }
     }
-    impl norito::core::NoritoSerialize for IdBox {}
+
     impl norito::core::SerializePayload for IdBox {
         fn serialize(
             &self,
@@ -460,7 +460,7 @@ mod id_box_codec {
             norito::core::SerializePayload::serialize(&candidate, writer)
         }
     }
-    impl norito::core::NoritoDeserialize<'_> for IdBox {}
+
     impl<'de> norito::core::DeserializePayload<'de> for IdBox {
         fn deserialize(archived: &'de norito::core::Archived<IdBox>) -> Self {
             Self::try_deserialize(archived)

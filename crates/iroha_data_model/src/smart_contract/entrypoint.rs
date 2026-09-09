@@ -10,7 +10,7 @@ use crate::{
 };
 use iroha_crypto::Hash;
 use iroha_schema::IntoSchema;
-use norito::{Decode, DeserializePayload, Encode, NoritoDeserialize};
+use norito::{Decode, DeserializePayload, Encode};
 // BEGIN GENERATED: kotodama-v1-source-identifier-policy
 /// Exact identifier spellings forbidden in every Kotodama V1 source position.
 const KOTODAMA_V1_FORBIDDEN_SOURCE_IDENTIFIERS: &[&str] = &["Amount"];
@@ -339,11 +339,7 @@ pub struct EntrypointValueTypeV1 {
 struct DecodedEntrypointValueTypeV1 {
     nodes: Vec<EntrypointValueTypeNodeV1>,
 }
-impl NoritoDeserialize<'_> for EntrypointValueTypeV1 {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::type_name_schema_hash::<Self>()
-    }
-}
+
 impl<'de> DeserializePayload<'de> for EntrypointValueTypeV1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)
@@ -1049,6 +1045,8 @@ pub struct EntrypointArgumentFieldV1 {
 )]
 #[norito(no_fast_from_json)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::smart_contract::entrypoint::EntrypointArgumentSchemaV1")]
 pub struct EntrypointArgumentSchemaV1 {
     /// Fields in source declaration and ABI register order.
     pub fields: Vec<EntrypointArgumentFieldV1>,
@@ -2450,3 +2448,6 @@ mod tests {
 
 #[cfg(test)]
 mod captured_entrypoint_schema_tests;
+
+#[cfg(test)]
+mod frame_identity_tests;

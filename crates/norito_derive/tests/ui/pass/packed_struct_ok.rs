@@ -1,4 +1,3 @@
-#![allow(unexpected_cfgs)]
 //! pass: derive NoritoSerialize/NoritoDeserialize on a mixed struct
 #[derive(norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct Mixed {

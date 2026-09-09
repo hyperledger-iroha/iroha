@@ -95,17 +95,7 @@ where
         T::json_deserialize(parser).map(Owned)
     }
 }
-impl<T> norito::core::NoritoSerialize for Owned<T>
-where
-    T: norito::core::NoritoSerialize,
-{
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        <T as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<T> norito::core::SerializePayload for Owned<T>
 where
     T: norito::core::NoritoSerialize,
@@ -120,14 +110,7 @@ where
         <T as norito::core::SerializePayload>::encoded_len_exact(&self.0)
     }
 }
-impl<'de, T> norito::core::NoritoDeserialize<'de> for Owned<T>
-where
-    T: norito::core::NoritoDeserialize<'de>,
-{
-    fn schema_hash() -> [u8; 16] {
-        <T as norito::core::NoritoDeserialize>::schema_hash()
-    }
-}
+
 impl<'de, T> norito::core::DeserializePayload<'de> for Owned<T>
 where
     T: norito::core::DeserializePayload<'de>,

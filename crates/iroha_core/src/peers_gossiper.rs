@@ -1118,6 +1118,8 @@ fn choose_address_with_quorum(
         .find_map(|(address, count)| (count == max_count).then(|| address.clone()))
 }
 /// Message for gossiping peers addresses.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::PeersGossip")]
 #[derive(Debug, Clone)]
 pub struct PeersGossip {
     /// Peers known to the sender, deduplicated but encoded in insertion order.
@@ -1126,12 +1128,16 @@ pub struct PeersGossip {
     pub peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
 }
 /// Wire representation for peers gossip.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::PeersGossipWire")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PeersGossipWire {
     peers: Vec<Peer>,
     peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
 }
 /// Signed trust gossip payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::PeerTrustGossip")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct PeerTrustGossip {
     /// Exact genesis-derived network identity bound by every enclosed signature.
@@ -1140,6 +1146,8 @@ pub struct PeerTrustGossip {
     pub trust: Vec<SignedPeerTrust>,
 }
 /// Trust information about a peer as reported by the sender.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::PeerTrustInfo")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct PeerTrustInfo {
     /// Id of the peer the trust info is about.
@@ -1150,6 +1158,8 @@ pub struct PeerTrustInfo {
     pub score: i32,
 }
 /// Trust report bundled with a signature from the sender.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::SignedPeerTrust")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct SignedPeerTrust {
     /// Reported trust values.
@@ -1157,7 +1167,6 @@ pub struct SignedPeerTrust {
     /// Signature proving authenticity of the trust record.
     pub signature: Vec<u8>,
 }
-impl NoritoSerialize for PeersGossip {}
 impl SerializePayload for PeersGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         // Serialize peers as Vec to preserve insertion order.
@@ -1168,7 +1177,6 @@ impl SerializePayload for PeersGossip {
         wire.serialize(writer)
     }
 }
-impl NoritoDeserialize<'_> for PeersGossip {}
 impl<'a> DeserializePayload<'a> for PeersGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("PeersGossip decode")

@@ -49,12 +49,30 @@ enum Instruction {
     TransferAsset(TransferAssetInstr),
     SetKeyValue(SetKeyValueInstr),
 }
-#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.iroha_like_roundtrip.Signature")]
 struct Signature {
     public_key: [u8; 32],
     signature: [u8; 64],
 }
-#[derive(Clone, Debug, PartialEq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.iroha_like_roundtrip.SignedTransaction")]
 struct SignedTransaction {
     creator: AccountId,
     timestamp_ms: u64,

@@ -45,7 +45,7 @@ pub(crate) fn assert_serialize<T: NoritoSchema + NoritoSerialize>(nominal: &str)
     );
     let hash = expected_hash(row, "serialize_hash");
     assert_eq!(norito::schema::identity::frame_hash::<T>(), hash);
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), hash);
+    assert_eq!(norito::schema::identity::frame_hash::<T>(), hash);
 }
 
 /// Also check the independently generated decoder without constructing a value.
@@ -55,7 +55,7 @@ where
 {
     assert_serialize::<T>(nominal);
     assert_eq!(
-        <T as NoritoDeserialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<T>(),
         expected_hash(captured(nominal), "deserialize_hash")
     );
 }

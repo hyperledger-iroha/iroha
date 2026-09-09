@@ -1,4 +1,4 @@
-//! Binary payload reconstruction and typed frame decoder generation.
+//! Binary payload reconstruction and canonical slice decoder generation.
 
 use super::*;
 
@@ -64,14 +64,12 @@ fn sequential_deserialize_value(
     Some(quote! { (#decode)? })
 }
 
-/// Generate payload reconstruction and, when requested, the typed frame contract.
+/// Generate payload reconstruction with optional validation and slice decoding.
 pub(super) fn derive_struct_deserialize(
     ident: &syn::Ident,
     generics: &Generics,
     fields: &Fields,
     container_attrs: &[Attribute],
-    schema_name: Option<&str>,
-    framed: bool,
 ) -> TokenStream2 {
     let validation = match ContainerAttr::parse(container_attrs) {
         Ok(attrs) => attrs.validate,
@@ -110,17 +108,6 @@ pub(super) fn derive_struct_deserialize(
     impl_gen.params.insert(0, syn::parse_quote!('de));
     let (impl_generics, _, where_clause) = impl_gen.split_for_impl();
     let (_, ty_generics, _) = r#gen.split_for_impl();
-    let frame_impl = if framed {
-        let schema_hash_body = schema_hash_body(schema_name);
-        quote! {
-            impl #impl_generics norito::core::NoritoDeserialize<'de> for #ident #ty_generics #where_clause {
-                #[inline]
-                fn schema_hash() -> [u8; 16] { #schema_hash_body }
-            }
-        }
-    } else {
-        TokenStream2::new()
-    };
 
     let field_bitset_enabled_decode = if struct_has_signature_like(&parsed_fields) {
         quote! { false }
@@ -309,23 +296,14 @@ pub(super) fn derive_struct_deserialize(
                     .collect(),
                 _ => Vec::new(),
             };
-            let validated_slice_value =
-                decode_validation::binding(validation.as_ref(), &format_ident!("value"));
             let __decode_from_slice_impl = slice_decode::derive(
                 ident,
                 &r#gen,
                 container_attrs,
-                quote! {
-                    let ptr = __archived as *const _ as *const u8;
-                    let mut offset = 0usize;
-                    let value = Self { #(#deserialize_fields),* };
-                    #validated_slice_value
-                    Ok((value, offset))
-                },
+                slice_decode::DecodeBody::Prefix,
             );
 
             quote! {
-                #frame_impl
                 impl #impl_generics norito::core::DeserializePayload<'de> for #ident #ty_generics #where_clause {
                     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                         match <Self as norito::core::DeserializePayload<'de>>::try_deserialize(archived) {
@@ -560,10 +538,13 @@ pub(super) fn derive_struct_deserialize(
                     .collect(),
                 _ => Vec::new(),
             };
-            let __decode_from_slice_impl =
-                slice_decode::derive(ident, &r#gen, container_attrs, decode_from_archived_body());
+            let __decode_from_slice_impl = slice_decode::derive(
+                ident,
+                &r#gen,
+                container_attrs,
+                slice_decode::DecodeBody::Archived(decode_from_archived_body()),
+            );
             quote! {
-                #frame_impl
                 impl #impl_generics norito::core::DeserializePayload<'de> for #ident #ty_generics #where_clause {
                     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
                         match <Self as norito::core::DeserializePayload<'de>>::try_deserialize(archived) {
@@ -653,10 +634,13 @@ pub(super) fn derive_struct_deserialize(
         }
         Fields::Unit => {
             let unit_methods = decode_validation::unit_methods(ident, validation.as_ref());
-            let __decode_from_slice_impl =
-                slice_decode::derive(ident, &r#gen, container_attrs, decode_from_archived_body());
+            let __decode_from_slice_impl = slice_decode::derive(
+                ident,
+                &r#gen,
+                container_attrs,
+                slice_decode::DecodeBody::Archived(decode_from_archived_body()),
+            );
             quote! {
-                #frame_impl
                 impl #impl_generics norito::core::DeserializePayload<'de> for #ident #ty_generics #where_clause {
                     #unit_methods
                 }
@@ -666,14 +650,12 @@ pub(super) fn derive_struct_deserialize(
     }
 }
 
-/// Generate enum reconstruction with positional fields and an optional frame contract.
+/// Generate enum reconstruction with positional fields and optional slice decoding.
 pub(super) fn derive_enum_deserialize(
     ident: &syn::Ident,
     generics: &Generics,
     data: &DataEnum,
     container_attrs: &[Attribute],
-    schema_name: Option<&str>,
-    framed: bool,
 ) -> TokenStream2 {
     let mut r#gen = generics.clone();
     let validation = match ContainerAttr::parse(container_attrs) {
@@ -923,22 +905,14 @@ pub(super) fn derive_enum_deserialize(
     impl_gen.params.insert(0, syn::parse_quote!('de));
     let (impl_generics, _, where_clause) = impl_gen.split_for_impl();
     let (_, ty_generics, _) = r#gen.split_for_impl();
-    let frame_impl = if framed {
-        let schema_hash_body = schema_hash_body(schema_name);
-        quote! {
-            impl #impl_generics norito::core::NoritoDeserialize<'de> for #ident #ty_generics #where_clause {
-                #[inline]
-                fn schema_hash() -> [u8; 16] { #schema_hash_body }
-            }
-        }
-    } else {
-        TokenStream2::new()
-    };
 
-    let __decode_from_slice_impl =
-        slice_decode::derive(ident, &r#gen, container_attrs, decode_from_archived_body());
+    let __decode_from_slice_impl = slice_decode::derive(
+        ident,
+        &r#gen,
+        container_attrs,
+        slice_decode::DecodeBody::Archived(decode_from_archived_body()),
+    );
     quote! {
-        #frame_impl
         impl #impl_generics norito::core::DeserializePayload<'de> for #ident #ty_generics #where_clause {
 
             fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {

@@ -27,7 +27,15 @@ fn checksum_mismatch_detected() {
 #[test]
 fn truncated_compressed_payload_yields_length_mismatch() {
     // Ensure compression is enabled in default features; the helper will decode either form.
-    #[derive(Debug, PartialEq, IntoSchema, norito::NoritoSerialize, norito::NoritoDeserialize)]
+    #[derive(
+        Debug,
+        PartialEq,
+        IntoSchema,
+        norito::NoritoSerialize,
+        norito::NoritoDeserialize,
+        norito::NoritoSchema,
+    )]
+    #[norito_schema(name = "norito.test.truncation.Blob")]
     struct Blob(Vec<u8>);
     let v = Blob((0..8192u32).map(|i| (i as u8).wrapping_mul(31)).collect());
     let mut bytes = norito::to_compressed_bytes(&v, Some(norito::CompressionConfig::default()))

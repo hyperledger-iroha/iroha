@@ -784,6 +784,8 @@ impl PorFinalizedReplayArchiveBindingV1 {
     }
 }
 /// Canonical source record persisted by the authenticated replay archive.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::por::PorFinalizedReplayArchiveRecordV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveRecordV1 {
     finalized: FinalizedChallengeStateV1,
@@ -837,6 +839,8 @@ impl PorFinalizedReplayArchiveRecordV1 {
     }
 }
 /// Provider-authenticated receipt for one replay-archive append.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::por::PorFinalizedReplayArchiveReceiptV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PorFinalizedReplayArchiveReceiptV1 {
     binding: PorFinalizedReplayArchiveBindingV1,
@@ -1350,6 +1354,8 @@ impl Default for PorTrackerState {
     }
 }
 /// Canonical durable snapshot of PoR challenge replay-protection state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::por::PorTrackerCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PorTrackerCheckpointV1 {
     pending: Vec<ChallengeState>,

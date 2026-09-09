@@ -181,6 +181,8 @@ const SIGNED_TRANSACTION_LIMITS: DecodeLimits = DecodeLimits::new(
     128,
 );
 /// One exact native moderation mutation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationNativeActionV1")]
 #[expect(
     clippy::large_enum_variant,
     reason = "boxing a variant would change the canonical public Norito action shape"
@@ -1169,6 +1171,8 @@ pub enum ModerationTerminalHandoffKindV1 {
     Publication,
 }
 /// Payload-free terminal handoff derived only from finalized ledger state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationTerminalHandoffV1 {
     /// Stable sink-specific handoff identity bound to the exact genesis-derived network.
@@ -1268,6 +1272,8 @@ impl ModerationPanelNotificationKindV1 {
 /// The record intentionally contains no case identifier, evidence locator, reason, attestation,
 /// holder material, or message body. The recipient resolves current assignment details from the
 /// finalized ledger after receiving the stable notification identity.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationV1 {
     /// Stable delivery identity used for sink-side idempotency.
@@ -1384,7 +1390,8 @@ impl ModerationDeadLetterResolutionActionV1 {
 /// digest. It therefore cannot be replayed after any state transition or redirected to another
 /// incident. The same archive-lifetime checkpoint trust anchor used for terminal-set attestations
 /// authorizes the transition; private key material remains outside the process and checkpoint.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationDeadLetterResolutionV1")]
 pub struct ModerationDeadLetterResolutionV1 {
     /// Resolution schema version.
     pub version: u16,
@@ -1456,6 +1463,10 @@ pub enum ModerationPanelNotificationArchiveExternalErrorV1 {
     Rejected,
 }
 /// Canonical terminal-set statement signed by the sealed checkpoint authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationSourceAttestationV1 {
     /// Archive schema version.
@@ -1643,6 +1654,10 @@ impl ModerationPanelNotificationArchiveSignerEpochV1 {
     }
 }
 /// Signed monotonic head of one immutable notification-receipt archive batch.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveHeadV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationArchiveHeadV1 {
     /// Archive schema version.
@@ -2458,6 +2473,8 @@ impl From<StoredOperationStatusV1> for ModerationOperationStatusV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::StoredOperationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredOperationV1 {
     operation_id: [u8; 32],
@@ -2565,6 +2582,8 @@ struct StoredDeadLetterV1 {
     resolution: Option<ModerationDeadLetterResolutionV1>,
     resolution_signature: Option<[u8; 64]>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::StoredDeadLetterRedriveV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredDeadLetterRedriveV1 {
     NativeSubmission {
@@ -2594,6 +2613,8 @@ enum StoredPanelNotificationStateV1 {
     Delivered,
     DeadLetter,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::StoredPanelNotificationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPanelNotificationV1 {
     notification: ModerationPanelNotificationV1,
@@ -2623,6 +2644,10 @@ enum ModerationPanelNotificationArchiveTerminalStatusV1 {
         dead_lettered_at_unix_ms: u64,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveRecordV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveRecordV1 {
     notification_id: [u8; 32],
@@ -2674,6 +2699,10 @@ enum ModerationTerminalArchiveRecordV1 {
         source_record_digest: [u8; 32],
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchivePayloadV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchivePayloadV1 {
     version: u16,
@@ -2684,6 +2713,10 @@ struct ModerationPanelNotificationArchivePayloadV1 {
 /// The checkpoint authority separately verifies terminal membership before it signs the source
 /// attestation. This manifest therefore carries no finalized snapshot, moderation scopes,
 /// authorities, native actions, outbox entries, or other checkpoint payloads.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveSourceManifestV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveSourceManifestV1 {
     version: u16,
@@ -2695,6 +2728,10 @@ struct ModerationPanelNotificationArchiveSourceManifestV1 {
     archive_signer_epochs: Vec<ModerationPanelNotificationArchiveSignerEpochV1>,
     predecessor_archive_head: Option<ModerationPanelNotificationArchiveHeadV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationArchiveArtifactV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationPanelNotificationArchiveArtifactV1 {
     version: u16,
@@ -2716,6 +2753,8 @@ struct ModerationPanelNotificationArchiveAuditCursorV1 {
     last_completed_generation: u64,
     last_completed_head_digest: Option<[u8; 32]>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationOrchestratorCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationOrchestratorCheckpointV1 {
     version: u16,

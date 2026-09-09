@@ -5,90 +5,68 @@ completion target is succinct verification from bounded authenticated openings.
 A successful local test, feature build, arithmetic calculation, or benchmark
 manifest is not a release qualification decision.
 
-The replay resource defaults now share an opening-shape derivation for the
-unchanged 256-transition, 512-column admission profile: 2,163,774 bytes of
-approximate payload and 2,372,085 bytes for the complete canonical Norito frame.
-The verifier uses the payload bound; Core encoding and the sidecar default use
-the frame bound. The derivation includes the existing 136 queries, 2,048-point
-maximum default LDE, nine binary folds, all authentication paths and framing.
-It changes no cryptographic parameters, qualification gates or compact admission.
+The replay resource defaults use one opening-shape derivation for the
+256-transition, 512-column admission profile: 2,163,774 bytes of approximate
+payload and 2,372,085 bytes for the complete canonical Norito frame. The verifier
+uses the payload bound; Core encoding and the sidecar default use the frame
+bound. These replay limits do not qualify or admit compact proofs.
 
-## Current optimizations integration
+## Current offline implementation
 
-Work is restricted to `/Users/takemiyamakoto/dev/iroha`, branch `optimizations`.
-The bounded-opening verifier is applied and compiled in this checkout. Normal
-callers can use `fastpq_prover::offline_compact` for complete ordinary and AXT
-quantity artifacts. Both routes require independently expected PublicIO, ordering
-and the complete canonical statement digest; AXT also requires independent binding,
-metadata, mirror and remote-spend expectations. Limits cover transport, public
-preparation, every segment, cumulative queries and cumulative Norito decode charges.
-The opaque success result covers every ordered child and retains all six coordinates
-of each AIR row root. This API grants no source finality or admission authority.
+The normal library exposes `fastpq_prover::offline_compact` for bounded ordinary
+and AXT quantity-artifact verification. Its sole compact owner now uses the
+canonical six-lane Goldilocks construction for H and fixed field-product G tapes,
+with the [exact V1 framing](fastpq_compact_v1_framing.md) and
+[fixed protocol geometry](fastpq_compact_protocol_contract.md). No SHAKE or
+prototype selector is accepted at this boundary. The canonical catalog/protocol
+pair remains Exact12 / `fastpq-state-transition-stark-v1`.
 
-The same facade now exposes ordinary and AXT quantity producers to normal callers.
-They check independent expectations and explicit byte, trace-cell, decode and
-private-tree budgets before expanding a physical trace. Supplied touched-tree
-roots must match the derived private witnesses. Every segment is preflighted,
-segments are proved sequentially, and one process-local admission guard bounds
-concurrent producer requests. The public verifier checks the complete artifact
-before it is returned. The conservative per-segment payload charge is a local
-allocation policy, not an RSS reservation or a consensus parameter; actual and
-inherited decoder budgets remain authoritative at final verification.
+Both routes require independently expected PublicIO, ordering and the complete
+canonical statement digest; AXT also requires its binding, metadata, mirrors and
+remote-spend expectations. Limits cover transport, public preparation, every
+segment, cumulative queries and cumulative Norito decode charges. The opaque
+success result retains every ordered child's complete six-word row commitment.
+It grants no source finality or admission authority.
 
-Exact incremental Norito sequence lengths, quantity-prefix validation and the
-transactional E/T/D/I/M/S reservation ledger are applied. The complete Norito
-suite passes 1,317 tests; the 16 sequence-length cases and 20 quantity-prefix
-cases pass. The Core accounting modules still have no production State consumer:
-their 40 registered tests await the shared Core build, and source quotas are not
-activated by these helpers.
+The same facade exposes ordinary and AXT quantity producers under this one
+six-lane profile. They check independent expectations and explicit byte,
+trace-cell, decode and private-tree budgets before expanding a physical trace.
+Supplied touched-tree roots must match the derived private witnesses. Every
+segment is preflighted, segments are proved sequentially, and a process-local
+admission guard bounds concurrent producer requests. At most 32 indexed jobs
+own row/evaluator workspaces in one phase. The public verifier checks the
+complete artifact before it is returned. Per-segment structural allocation
+charges are local policy, not an RSS reservation or a consensus parameter;
+actual and inherited decoder budgets remain authoritative at final verification.
+Merged-source complete producer execution and resource qualification remain
+required. The fixed-column synthetic AIR exercises framing and openings, not
+release semantics.
 
-The fixed candidate identity is
-`fastpq:compact-shake256:h16:g375:c401:342cols:923slots:65536rows:8blowup:17folds:prefix-body:v1`.
-Its sampler takes 401 candidates to produce 375 query positions. Fresh complete
-single and two-segment ordinary/AXT proofs pass verification after private paths
-and traces are dropped. Both complete transport-artifact tests and the separate
-136-query typed-transfer diagnostic also pass. The normal library and registered
-integration harness compile without compiler warnings; the latest full library
-run passes 953 tests, with 21 opt-in diagnostics ignored. The final producer
-selection passes 14 tests, including the subsequent early-decode wiring case.
-The complete registered integration suite passes all 20 tests, with four opt-in CPU measurements
-ignored by that default run. Its resource fixture now uses canonical balance keys,
-and both ordering goldens are regenerated for the current key and operation-tag
-encodings. The three current profile/framing scripts,
-retired-codec guard and formatting of the edited FASTPQ/accounting files pass.
-Scoped Clippy's last run reports
-154 findings and is not a passing gate.
+The fixed geometry has 65,536 rows, 342 columns, 923 slots, 375 unique queries,
+17 binary folds and four terminal values. The 22-message transcript expands 931
+six-word blocks, including the complete fixed 401-candidate query tape. Its
+profile identity, context, schema and challenge bytes differ from the retired
+SHAKE experiment. Earlier proof digests, counts and timing measurements below
+are explicitly prior-snapshot diagnostics and cannot qualify this implementation.
+Compilation is also distinct from complete proof execution and external review.
 
-| Fresh two-segment quantity artifact | Complete transport bytes | Raw verification, CPU test profile | Checked work |
-| --- | ---: | ---: | --- |
-| Ordinary | 7,967,817 | 8.40 s | 750 AIR evaluations, two terminal checks |
-| AXT | 8,024,804 | 9.28 s | 750 AIR evaluations, two terminal checks |
+The current DTO requires at least 1,050,000 raw bytes for its 375 complete rows
+and mixed/quotient pairs, before any framing, indices, roots or FRI openings.
+This exceeds the 512 KiB compact proof target and 1 MiB AXT ceiling. The producer
+requires its fixed valid-shape upper bound of 4,279,877 framed bytes per segment,
+with a separate 7,791,716-byte internal repeated-opening bound. The replay
+defaults are a different resource policy and cannot admit this offline profile.
+Explicit offline budgets provide no production qualification. The internally
+reviewed conditional ideal-field block/tuple reduction still requires the actual
+framing and AIR mapping and does not qualify the concrete six-lane construction.
 
-These are the retained verifier diagnostics preceding the normal producer API,
-not release latency or peak-memory guarantees. Fresh end-to-end verification of
-the new public producers is pending at this source checkpoint.
-The four separate CPU measurements of the existing public replay API also pass:
-two and four transition rows produce accepted canonical proofs of 150,028 and
-323,936 bytes; eight and sixteen rows rejected at that snapshot's 524,288-byte
-approximate proof limit. The rejected size hints are not encoded proof lengths.
-Those tests expose the current admitted capacity limit and do not measure the
-compact candidate or establish a workload SLO.
-The ordinary/AXT transport SHA-256 digests are
-`74ef89e30e22916cd7e02bb119a853037504469788de55f89f71cabdd630da4c` and
-`2c297c2eed8dca60b36bd4b6cd899fb9c19da617d980ec75724f54ff4849411b`.
-Retained commands, logs, proof digests and scoped source/executable hashes live in
-`target/fastpq-optimizations-integration/integrated-verifier-r1`; generated proofs
-live in `target/fastpq-production-validation`. Those local evidence directories
-are ignored and are not published release artifacts.
-
-Production node verification still replays the complete witness. Core has no
+Production node verification still replays the complete witness; Core has no
 consumer of this offline facade. Execution-owned source quotas and atomic D7
-publication, finalized source authentication, AXT authorization, independent
-cryptographic qualification, hardware/resource measurements and four-validator
-rollout/recovery remain unfinished. The source inventory/archive helpers preserve
-canonical transaction-wire commitments and separate execution-entry commitments,
-but their local ownership checks do not establish finality. No production profile
-or admission registry has been activated by this integration.
+publication, finalized source authentication, AXT authorization, witness privacy,
+independent cryptographic qualification, hardware/resource measurements and
+four-validator rollout/recovery remain unfinished. Production consumers, schemas,
+fixtures and SDKs must change together after those obligations are met. No
+production profile, limit or admission registry is activated by this slice.
 
 ## Completion goals
 
@@ -96,7 +74,7 @@ or admission registry has been activated by this integration.
 | --- | --- | --- |
 | G1: Close admission and evidence gaps | Regression rejection of unanchored remote spend, exact bound arithmetic, full-width contextual commitments, authenticated benchmark evidence | Corrections in progress; validation below |
 | G2: Constrain the complete transfer statement | Reviewed AIR ledger or equivalent bounded public-input checks, with negative tests for every relation below | Complete 923-slot one-delta hash/SMT ledgers, bounded public checks and typed PublicIO/claim adapter pass; external authority/root authentication remains separate |
-| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | Normal offline ordinary/AXT quantity APIs compile and complete fresh bounded-opening proof checks; authenticated Core admission remains unwired and production still replays |
+| G3: Implement succinct verification | Quotient/zerofier relation, correct terminal degree bound, bounded openings, no witness/trace reconstruction in the public verifier | One six-lane offline ordinary/AXT quantity verifier is implemented; exact-source full-proof evidence and a production-sized representation remain required; authenticated Core admission is unwired and production still replays |
 | G4: Qualify cryptography | Protocol-specific qROM argument, final multi-target digest analysis, independently reproduced constants and vectors, independent review bound to final artifacts | Unavailable |
 | G5: Qualify performance and resources | End-to-end proof/verification latency and peak memory, proof size, CPU/Metal/CUDA parity and failure quarantine on release hardware | Native Digest384 proof commitments/transcript and proof LDE execute on CPU; 423 M4 Max dispatch comparisons cover auxiliary shader ABI only; end-to-end, fleet and CUDA qualification remain incomplete |
 | G6: Qualify integration and release | Same-source four-validator tests, restart/recovery and adversarial admission, signed immutable source and artifacts, rollout/rollback evidence | Incomplete |
@@ -155,7 +133,7 @@ budget and 54 targets. The projected valid shared frame upper bound is
 4,326,227 bytes per segment. The staged candidate now has a measured complete
 shared proof frame of 4,046,360 bytes; its surrounding public artifact adds its
 own bytes. This remains an unqualified candidate; the admitted implementation
-has not changed. Its isolated [SHAKE prefix/body framing](fastpq_compact_shake_framing.md)
+has not changed. Its isolated SHAKE prefix/body framing (retired; the current owner is specified in [six-lane V1 framing](fastpq_compact_v1_framing.md))
 binds full public context and raw tapes while reusing unfinished absorb state.
 The prefix and common Merkle/joint coefficient seams pass the workspace Cargo
 gate, 43 focused tests and the full prover unit suite (948 passed, 11 diagnostic

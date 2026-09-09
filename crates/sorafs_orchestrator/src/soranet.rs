@@ -1858,12 +1858,16 @@ pub enum GuardSetPersistenceError {
         message: String,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::soranet::GuardSetEnvelopeV8")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardSetEnvelopeV8 {
     version: u8,
     payload: Vec<u8>,
     cache_tag_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::soranet::GuardSetPayloadV8")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardSetPayloadV8 {
     guards: Vec<GuardRecordPersist>,

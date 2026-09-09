@@ -49,23 +49,29 @@ use crate::{fft::Planner, gadgets::compact_smt_air::PHYSICAL_HASH_ROWS};
 
 const CONSTRAINT_COUNT: usize = LOCAL_SLOTS + TRANSITION_SLOTS + RESIDUE_COUNT;
 const IDENTITY: &str =
-    "fastpq:prototype:compact-transfer:v1:342cols:597local+83edge+243smt:65536rows";
+    "fastpq:compact:v1:compact-transfer:v1:342cols:597local+83edge+243smt:65536rows";
 const MASK_CYCLE_ROWS: usize = 4096;
 const LDE_ROWS: usize = 524_288;
 const FIXED_LDE_BYTES: usize = 205_520_896;
 const FIXED_COEFFICIENT_BYTES: usize = 25_690_112;
 const PHASE_CYCLE_BYTES: usize = 16_777_216;
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::TransferUpdateV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_transfer_air::BoundUpdate",
+    frame = "fastpq_prover::compact_v1::TransferUpdateV1"
+)]
 struct BoundUpdate {
     old_leaf: [u8; 32],
     new_leaf: [u8; 32],
     path: u32,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::TransferStatementV1")]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_transfer_air::BoundStatement",
+    frame = "fastpq_prover::compact_v1::TransferStatementV1"
+)]
 struct BoundStatement {
     version: u16,
     updates: [BoundUpdate; 2],
@@ -718,31 +724,39 @@ mod tests {
         );
         // Defaults are intentionally never raised by this diagnostic. A proof
         // outside its byte envelope remains a reported production blocker.
-        if proof_bytes <= limits.max_proof_bytes {
-            let work = verification.unwrap();
-            assert_eq!(work.air_evaluations, FASTPQ_FINAL_V1.fri.queries as usize);
-            assert_eq!(work.row_leaves, 2 * FASTPQ_FINAL_V1.fri.queries as usize);
-        } else {
-            assert!(matches!(
-                verification,
-                Err(Error::VerifierLimitExceeded {
-                    limit: "max_proof_bytes",
-                    ..
-                })
-            ));
-        }
+        assert!(proof_bytes > limits.max_proof_bytes);
+        assert!(matches!(
+            verification,
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_queries",
+                actual: 375,
+                max: 136
+            })
+        ));
+        let byte_policy = VerifyLimits {
+            max_queries: 375,
+            ..limits
+        };
+        assert!(matches!(
+            super::super::compact_protocol::verify(&air, &proof, byte_policy),
+            Err(Error::VerifierLimitExceeded {
+                limit: "max_proof_bytes",
+                ..
+            })
+        ));
         // Independently exercise the complete verifier after all private trace
         // objects have been dropped, even when the default byte gate rejects.
         // This explicit test envelope never alters production policy.
         let diagnostic_limits = VerifyLimits {
-            max_proof_bytes: 4 * 1024 * 1024,
+            max_proof_bytes: 16 * 1024 * 1024,
+            max_queries: 375,
             ..limits
         };
         let diagnostic_start = std::time::Instant::now();
         let work = super::super::compact_protocol::verify(&air, &proof, diagnostic_limits)
             .expect("valid full SMT proof within the explicit diagnostic envelope");
-        assert_eq!(work.air_evaluations, FASTPQ_FINAL_V1.fri.queries as usize);
-        assert_eq!(work.row_leaves, 2 * FASTPQ_FINAL_V1.fri.queries as usize);
+        assert_eq!(work.air_evaluations, 375);
+        assert!((375..=750).contains(&work.row_leaves));
         eprintln!(
             "compact_transfer_diagnostic_verify={:?}; work={work:?}; diagnostic_limit={}; production_profile_qualified=false",
             diagnostic_start.elapsed(),

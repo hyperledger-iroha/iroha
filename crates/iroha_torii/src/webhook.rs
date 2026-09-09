@@ -78,6 +78,8 @@ const WEBHOOK_QUEUE_SCAN_WORK_ITEMS: usize = 1024;
 const WEBHOOK_QUEUE_ADMISSION_SCAN_WORK_ITEMS: usize = WEBHOOK_QUEUE_HARD_CAPACITY * 2;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 const WEBHOOK_TEMP_FILE_RETRIES: usize = 32;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::webhook::WebhookCreate")]
 #[derive(
     Debug,
     Clone,
@@ -94,6 +96,8 @@ pub struct WebhookCreate {
     /// Uses the same JSON DSL as app-facing APIs (see `crate::filter::FilterExpr`).
     pub filter: Option<crate::filter::FilterExpr>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::webhook::WebhookEntry")]
 #[derive(
     Debug,
     Clone,
@@ -1998,6 +2002,8 @@ fn hmac_sha256_hex(secret: &[u8], body: &[u8]) -> String {
     let mac = outer.finalize();
     hex::encode(mac)
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::webhook::PendingDelivery")]
 #[derive(
     Debug,
     Clone,

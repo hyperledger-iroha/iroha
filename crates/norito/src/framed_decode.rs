@@ -31,7 +31,7 @@ where
     for<'de> T: NoritoDeserialize<'de>,
 {
     let header = core::Header::read(std::io::Cursor::new(bytes))?;
-    if header.schema != <T as NoritoSerialize>::schema_hash() {
+    if header.schema != norito::schema::identity::frame_hash::<T>() {
         return Err(Error::SchemaMismatch);
     }
     let payload_len = core::payload_len_to_usize(header.length)?;

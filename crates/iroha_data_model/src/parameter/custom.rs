@@ -113,6 +113,8 @@ mod model {
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     /// Id of a custom parameter
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::custom::model::CustomParameterId")]
     #[derive(
         Debug,
         Display,
@@ -131,6 +133,8 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct CustomParameterId(pub Name);
     /// A custom blockchain parameter
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::custom::model::CustomParameter")]
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema, Getters)]
     #[getset(get = "pub")]
     pub struct CustomParameter {

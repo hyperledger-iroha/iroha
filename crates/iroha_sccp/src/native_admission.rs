@@ -53,6 +53,8 @@ const NORITO_LENGTH_OFFSET: usize = NORITO_COMPRESSION_OFFSET + 1;
 )]
 #[norito(deny_unknown_fields)]
 #[norito(tag = "backend", content = "proof", rename_all = "snake_case")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::native_admission::SccpNativeSourceProofV1")]
 pub enum SccpNativeSourceProofV1 {
     /// Ethereum beacon-light-client and execution-MPT proof.
     #[codec(index = 0)]
@@ -99,6 +101,8 @@ impl SccpNativeSourceProofV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::native_admission::SccpNativeSourceProofEnvelopeV1")]
 pub struct SccpNativeSourceProofEnvelopeV1 {
     /// Envelope schema version. V1 accepts exactly `1`.
     pub version: u8,
@@ -141,6 +145,8 @@ pub struct SccpNativeSourceProofEnvelopeV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::native_admission::SccpNativeInboundMessageProofV1")]
 pub struct SccpNativeInboundMessageProofV1 {
     /// Wrapper schema version. V1 accepts exactly `1`.
     pub version: u8,
@@ -162,6 +168,8 @@ pub struct SccpNativeInboundMessageProofV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::native_admission::SccpNativeFinalityPointV1")]
 pub struct SccpNativeFinalityPointV1 {
     /// Native block number, slot, or shard sequence number.
     #[norito(with = "crate::json_utils::u64_string")]
@@ -183,6 +191,8 @@ pub struct SccpNativeFinalityPointV1 {
     norito::derive::JsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_sccp::native_admission::ValidatedSccpNativeInboundMessageV1")]
 pub struct ValidatedSccpNativeInboundMessageV1 {
     /// Exact external-source to SORA-target lane authenticated by the proof.
     pub lane: SccpLaneIdV1,

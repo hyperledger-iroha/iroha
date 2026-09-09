@@ -183,3 +183,99 @@ fn canonical_request_signature_and_witness_v1_limits_are_checked() {
         .is_err()
     );
 }
+
+#[test]
+fn canonical_request_witness_signing_preserves_captured_frame_and_layout() {
+    let mut witness = CanonicalRequestWitnessV1 {
+        schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        subject_account: ALICE_ID.clone(),
+        timestamp_ms: 42,
+        nonce: "borrowed-wire-parity".to_owned(),
+        canonical_request_hash: Hash::new(b"borrowed witness payload parity"),
+        signatures: Vec::new(),
+    };
+    let expected = include_bytes!(
+        "../../../iroha_torii_shared/tests/fixtures/canonical_request_witness_sdk_v1.bin"
+    );
+    assert_eq!(
+        canonical_request_witness_message(&witness).expect("captured signing frame"),
+        expected
+    );
+    witness.signatures.push(
+        iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+            signer: iroha_test_samples::ALICE_KEYPAIR.public_key().clone(),
+            signature: Signature::from_bytes(&[0x11; 64]),
+        },
+    );
+    let flags = norito::core::header_flags::PACKED_STRUCT
+        | norito::core::header_flags::FIELD_BITSET
+        | norito::core::header_flags::COMPACT_LEN;
+    let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+    assert_eq!(
+        canonical_request_witness_message(&witness).expect("signature vector excluded"),
+        expected
+    );
+    assert_eq!(norito::core::effective_decode_flags(), Some(flags));
+}
+
+#[test]
+fn canonical_request_witness_signing_retains_envelope_validation() {
+    let witness = CanonicalRequestWitnessV1 {
+        schema_version: CANONICAL_REQUEST_WITNESS_VERSION_V1,
+        subject_account: ALICE_ID.clone(),
+        timestamp_ms: 42,
+        nonce: "validated-witness".to_owned(),
+        canonical_request_hash: Hash::new(b"validated request"),
+        signatures: Vec::new(),
+    };
+    let mut invalid = witness.clone();
+    invalid.schema_version += 1;
+    assert!(
+        canonical_request_witness_message(&invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("schema version")
+    );
+    for nonce in ["", "embedded space", "non-ascii-λ"] {
+        invalid = witness.clone();
+        invalid.nonce = nonce.to_owned();
+        assert!(
+            canonical_request_witness_message(&invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("nonce")
+        );
+    }
+    for payload in [
+        Vec::new(),
+        vec![0; 64],
+        vec![0x11; CANONICAL_REQUEST_MAX_SIGNATURE_BYTES_V1 + 1],
+    ] {
+        invalid = witness.clone();
+        invalid.signatures.push(
+            iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+                signer: iroha_test_samples::ALICE_KEYPAIR.public_key().clone(),
+                signature: Signature::from_bytes(&payload),
+            },
+        );
+        assert!(
+            canonical_request_witness_message(&invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("signature")
+        );
+    }
+    invalid.signatures = vec![
+        iroha_data_model::soracloud::CanonicalRequestSignatureWitnessV1 {
+            signer: iroha_test_samples::ALICE_KEYPAIR.public_key().clone(),
+            signature: Signature::from_bytes(&[0x11; 64]),
+        };
+        CANONICAL_REQUEST_WITNESS_MAX_SIGNATURES_V1 + 1
+    ];
+    assert!(
+        canonical_request_witness_message(&invalid)
+            .unwrap_err()
+            .to_string()
+            .contains("V1 limit")
+    );
+}

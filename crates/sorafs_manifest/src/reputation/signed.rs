@@ -33,6 +33,8 @@ pub const MAX_SIGNED_REPUTATION_SNAPSHOT_ENCODED_BYTES: usize = 64 * 1024 * 1024
 /// Maximum cumulative allocation allowed while decoding a signed snapshot.
 pub const MAX_SIGNED_REPUTATION_SNAPSHOT_DECODE_ALLOCATED_BYTES: usize = 256 * 1024 * 1024;
 /// Canonical scoring inputs required to independently replay a snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::signed::ReputationScoringEvidenceV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -120,6 +122,8 @@ impl ReputationScoringEvidenceV1 {
     }
 }
 /// One externally governed Ed25519 signer authorized by a trust policy.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::signed::ReputationTrustedSignerV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -150,6 +154,8 @@ impl ReputationTrustedSignerV1 {
     }
 }
 /// External trust and freshness policy used to admit reputation snapshots.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::signed::ReputationSnapshotTrustPolicyV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -319,6 +325,8 @@ impl ReputationSnapshotTrustPolicyV1 {
     }
 }
 /// One signature over a reputation snapshot and external policy digest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::signed::ReputationSnapshotSignatureV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -329,6 +337,8 @@ pub struct ReputationSnapshotSignatureV1 {
     pub signature: [u8; ed25519_dalek::SIGNATURE_LENGTH],
 }
 /// Reputation snapshot plus externally authorized threshold signatures.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::reputation::signed::SignedReputationSnapshotV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -1238,9 +1248,16 @@ mod tests {
         );
     }
     #[test]
-    fn bounded_encoder_rejects_exact_oversize_before_serialization() {
+    pub(super) fn bounded_encoder_rejects_exact_oversize_before_serialization() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "sorafs_manifest::reputation::signed::tests::bounded_encoder_rejects_exact_oversize_before_serialization::MustNotSerialize"
+        )]
         struct MustNotSerialize;
-        impl norito::NoritoSerialize for MustNotSerialize {}
+        crate::signing_identity_test_support::check_rejected_identity::<MustNotSerialize>(
+            "reputation/oversized",
+        );
+
         impl norito::SerializePayload for MustNotSerialize {
             fn serialize(
                 &self,
@@ -1526,3 +1543,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("signed/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "signed/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

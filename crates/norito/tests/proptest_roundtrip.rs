@@ -19,8 +19,16 @@ struct StructPayload {
     values: Vec<u8>,
 }
 #[derive(
-    Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, iroha_schema::IntoSchema,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    iroha_schema::IntoSchema,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "norito.test.proptest_roundtrip.TestEnum")]
 enum TestEnum {
     Unit,
     Tuple(TuplePayload),

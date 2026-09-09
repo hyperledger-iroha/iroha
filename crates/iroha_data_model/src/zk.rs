@@ -551,9 +551,18 @@ pub struct StarkFriOpenProofV1 {
 /// action schema. `genesis_hash` is supplied by the trusted ledger context and
 /// duplicates the exact genesis-derived network identity so inconsistent
 /// trusted-context construction fails closed before proof verification.
-#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.zk-ace.public-inputs.v1")]
-#[derive(crate :: DeriveJsonSerialize, crate :: DeriveJsonDeserialize, norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    crate :: DeriveJsonSerialize,
+    crate :: DeriveJsonDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(
     name = "iroha_data_model::zk::ZkAcePrivacyPublicInputsV1",
     frame = "iroha.privacy.zk-ace.public-inputs.v1"

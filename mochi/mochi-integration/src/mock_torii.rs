@@ -5,7 +5,7 @@ use axum::{
         State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderValue, Response, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Response, StatusCode, Uri, header},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -46,6 +46,9 @@ use tokio::{
     sync::{broadcast, oneshot},
     task::JoinHandle,
 };
+#[path = "mock_stream_auth.rs"]
+mod stream_auth;
+use stream_auth::StreamAuthority;
 fn canonical_block_stream_message() -> Vec<u8> {
     let signer = mochi_core::development_signing_authorities()
         .first()
@@ -334,6 +337,7 @@ struct MockToriiBytes {
 }
 #[derive(Clone)]
 struct AppState {
+    stream_authority: Option<Arc<StreamAuthority>>,
     bytes: Arc<Mutex<MockToriiBytes>>,
     block_tx: broadcast::Sender<MockToriiFrame>,
     event_tx: broadcast::Sender<MockToriiFrame>,
@@ -345,6 +349,7 @@ struct AppState {
 pub struct MockToriiBuilder {
     addr: SocketAddr,
     data: MockToriiData,
+    stream_authority: Option<Arc<StreamAuthority>>,
 }
 impl MockToriiBuilder {
     /// Create a new builder bound to the provided socket address.
@@ -353,7 +358,14 @@ impl MockToriiBuilder {
         Self {
             addr,
             data: MockToriiData::default(),
+            stream_authority: None,
         }
+    }
+    /// Require canonical signatures from this exact account and genesis network.
+    #[must_use]
+    pub fn stream_reader(mut self, reader: &iroha::client::AccountClient) -> Self {
+        self.stream_authority = Some(Arc::new(StreamAuthority::new(reader)));
+        self
     }
     /// Override the initial block WebSocket frame.
     #[must_use]
@@ -374,7 +386,7 @@ impl MockToriiBuilder {
     }
     /// Spawn the mock server and return a handle for driving it.
     pub async fn spawn(self) -> Result<MockTorii> {
-        MockTorii::spawn(self.addr, self.data).await
+        MockTorii::spawn(self.addr, self.data, self.stream_authority).await
     }
 }
 /// Frames that can be pushed onto the mock Torii WebSocket feeds.
@@ -404,7 +416,18 @@ pub struct MockTorii {
     state: AppState,
 }
 impl MockTorii {
-    async fn spawn(addr: SocketAddr, data: MockToriiData) -> Result<Self> {
+    /// Number of authenticated, non-replayed stream upgrades accepted by the mock.
+    pub fn authenticated_stream_count(&self) -> usize {
+        self.state
+            .stream_authority
+            .as_ref()
+            .map_or(0, |authority| authority.accepted())
+    }
+    async fn spawn(
+        addr: SocketAddr,
+        data: MockToriiData,
+        stream_authority: Option<Arc<StreamAuthority>>,
+    ) -> Result<Self> {
         let bytes = MockToriiBytes {
             status_bytes: norito::to_bytes(&data.status)?,
             sumeragi_bytes: norito::to_bytes(&data.sumeragi)?,
@@ -419,6 +442,7 @@ impl MockTorii {
         let (block_tx, _) = broadcast::channel(32);
         let (event_tx, _) = broadcast::channel(32);
         let state = AppState {
+            stream_authority,
             bytes,
             block_tx,
             event_tx,
@@ -523,18 +547,36 @@ async fn handle_query(State(state): State<AppState>) -> impl IntoResponse {
 }
 async fn handle_block_stream(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let Some(authority) = &state.stream_authority else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    if let Err(status) = authority.verify(&headers, &uri) {
+        return status.into_response();
+    }
     ws.protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
         .on_upgrade(move |socket| block_stream(socket, state))
 }
+
 async fn handle_event_stream(
     State(state): State<AppState>,
+    headers: HeaderMap,
+    uri: Uri,
     ws: WebSocketUpgrade,
-) -> impl IntoResponse {
+) -> axum::response::Response {
+    let Some(authority) = &state.stream_authority else {
+        return StatusCode::FORBIDDEN.into_response();
+    };
+    if let Err(status) = authority.verify(&headers, &uri) {
+        return status.into_response();
+    }
     ws.protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
         .on_upgrade(move |socket| event_stream(socket, state))
 }
+
 async fn block_stream(mut socket: WebSocket, state: AppState) {
     let Some(Ok(Message::Binary(request))) = socket.recv().await else {
         return;
@@ -542,11 +584,11 @@ async fn block_stream(mut socket: WebSocket, state: AppState) {
     if norito::decode_from_bytes::<BlockSubscriptionRequest>(&request).is_err() {
         return;
     }
+    let mut rx = state.block_tx.subscribe();
     if let Err(err) = send_default_frame(&mut socket, &state.default_block_frame).await {
         eprintln!("failed to send default block frame: {err}");
         return;
     }
-    let mut rx = state.block_tx.subscribe();
     while let Ok(frame) = rx.recv().await {
         if send_frame(&mut socket, frame).await.is_err() {
             break;
@@ -563,11 +605,11 @@ async fn event_stream(mut socket: WebSocket, state: AppState) {
     if request.filters.is_empty() {
         return;
     }
+    let mut rx = state.event_tx.subscribe();
     if let Err(err) = send_default_frame(&mut socket, &state.default_event_frame).await {
         eprintln!("failed to send default event frame: {err}");
         return;
     }
-    let mut rx = state.event_tx.subscribe();
     while let Ok(frame) = rx.recv().await {
         if send_frame(&mut socket, frame).await.is_err() {
             break;

@@ -237,19 +237,49 @@ async fn real_kubo_publication_ipns_restart_and_tamper_lane() {
     let (_, recovered_mirror) = load_mirror_index_store(&service.config, &service.mirror_store)
         .expect("load recovered mirror store");
     assert!(!recovered_mirror.is_empty());
+    let checkpoint_before_repair = checkpoint_store
+        .load(GovernanceDagSealedStateSlot::Checkpoint)
+        .expect("retain authoritative checkpoint before derived pin loss");
     kubo_unpin(&service.ipfs, &checkpoint.head_ipfs_cid).await;
-    let missing_pin = service
-        .reconcile_once()
+    let missing_pin = ipfs_verify_pin(&service.ipfs, &checkpoint.head_ipfs_cid, 1024 * 1024)
         .await
-        .expect_err("steady state must reject a missing real Kubo head pin");
+        .expect_err("real Kubo must acknowledge head pin loss before recovery");
     assert!(matches!(missing_pin, GovernanceDagServiceError::Network(_)));
-    ipfs_pin(&service.ipfs, &checkpoint.head_ipfs_cid, 1024 * 1024)
-        .await
-        .expect("restore real Kubo head pin");
     service
         .reconcile_once()
         .await
-        .expect("steady state recovers after head repin");
+        .expect("steady state repairs the exact checkpoint-owned derived head pin");
+    ipfs_verify_pin(&service.ipfs, &checkpoint.head_ipfs_cid, 1024 * 1024)
+        .await
+        .expect("reconciliation restores the recursive head pin");
+    assert_eq!(
+        ipfs_cat(
+            &service.ipfs,
+            &checkpoint.head_ipfs_cid,
+            source.head_bytes.len() as u64,
+            1024 * 1024,
+        )
+        .await
+        .expect("read actual repaired Kubo head"),
+        source.head_bytes,
+    );
+    assert_eq!(service.checkpoint.as_ref(), Some(&checkpoint));
+    assert_eq!(
+        checkpoint_store
+            .load(GovernanceDagSealedStateSlot::Checkpoint)
+            .expect("read authoritative checkpoint after derived pin repair"),
+        checkpoint_before_repair,
+    );
+    let repaired_public = resolve_ipns_head(&service.ipfs, &ipns_name, 1024 * 1024)
+        .await
+        .expect("resolve the unchanged authoritative IPNS head after pin repair");
+    assert!(matches!(
+        &repaired_public,
+        PublicHead::Present { bytes, token }
+            if bytes == &source.head_bytes && token == &checkpoint.head_ipfs_cid
+    ));
+    assert!(service.intent.is_none());
+    assert!(service.api.0.read().await.ready);
     let checkpoint_record = checkpoint_store
         .load(GovernanceDagSealedStateSlot::Checkpoint)
         .expect("read sealed checkpoint")

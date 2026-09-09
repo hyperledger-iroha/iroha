@@ -12,9 +12,9 @@ fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
 ) -> json::Value {
     assert_eq!(T::nominal_name(), std::any::type_name::<T>());
     assert_eq!(T::frame_name(), T::nominal_name());
-    assert_eq!(frame_hash::<T>(), <T as NoritoSerialize>::schema_hash());
-    assert_eq!(frame_hash::<T>(), <T as NoritoDeserialize>::schema_hash());
     let frame = norito::to_bytes(value).unwrap();
+    let header = norito::core::Header::read(frame.as_slice()).unwrap();
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
     let decoded: T = norito::decode_from_bytes(&frame).unwrap();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), frame);
     assert_eq!(decoded.encode(), value.encode());
@@ -25,8 +25,8 @@ fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
     norito::json!({
         "case": case,
         "nominal": (std::any::type_name::<T>()),
-        "serialize_hash": (hex::encode(<T as NoritoSerialize>::schema_hash())),
-        "deserialize_hash": (hex::encode(<T as NoritoDeserialize>::schema_hash())),
+        "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
+        "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "bare_hex": (hex::encode(value.encode())),
         "frame_hex": (hex::encode(frame)),
     })

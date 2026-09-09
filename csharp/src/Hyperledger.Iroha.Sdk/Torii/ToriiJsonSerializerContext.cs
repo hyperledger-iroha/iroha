@@ -40,7 +40,7 @@ namespace Hyperledger.Iroha.Torii;
 [JsonSerializable(typeof(ToriiAccountOnboardingPlanRequest))]
 [JsonSerializable(typeof(ToriiAccountOnboardingPlanBody))]
 [JsonSerializable(typeof(ToriiAccountOnboardingPlanReceipt))]
-[JsonSerializable(typeof(ToriiTairaPublicResetMutationBindingV1))]
+[JsonSerializable(typeof(ToriiPreparedOperationBindingV1))]
 [JsonSerializable(typeof(ToriiAccountOnboardingPrepareRequestV1))]
 [JsonSerializable(typeof(ToriiAccountOnboardingDisposition))]
 [JsonSerializable(typeof(ToriiAccountOnboardingPreparedTransactionV1))]

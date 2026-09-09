@@ -2873,8 +2873,9 @@ fn native_applied_first_slot_cannot_be_reused_at_lane_signing_or_progress() {
     assert!(!adapter.output_guard.restart_required());
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lane_work::tests::IndependentlyEncodedSharedLaneFrontierForTest", frame = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
 #[derive(Clone, norito::Encode, norito::Decode)]
-#[norito(schema_name = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
 struct IndependentlyEncodedSharedLaneFrontierForTest {
     version: u8,
     lane_id: LaneId,

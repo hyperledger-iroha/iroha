@@ -222,11 +222,7 @@ impl RepoInstructionBox {
         }
     }
 }
-impl norito::core::NoritoSerialize for RepoInstructionBox {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::type_name_schema_hash::<Self>()
-    }
-}
+
 impl norito::core::SerializePayload for RepoInstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let (tag, payload) = self.tag_and_payload();
@@ -247,11 +243,7 @@ impl norito::core::SerializePayload for RepoInstructionBox {
             .checked_add(payload_len)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for RepoInstructionBox {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for RepoInstructionBox {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)

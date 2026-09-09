@@ -73,8 +73,9 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::por::{
     POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-    POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1, POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1,
-    PorStatusCursorV1, decode_por_weekly_report_v1,
+    POR_STATUS_CURSOR_MAX_ENCODED_BYTES_V1, POR_STATUS_EXPORT_PAGE_VERSION_V1,
+    POR_STATUS_PAGE_VERSION_V1, POR_WEEKLY_REPORT_MAX_CANONICAL_BYTES_V1, PorStatusCursorV1,
+    PorStatusExportPageV1, PorStatusPageV1, decode_por_weekly_report_v1,
 };
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GOVERNANCE_DAG_BLOCK_VERSION_V1, GOVERNANCE_DAG_HEAD_VERSION_V1,
@@ -1979,28 +1980,6 @@ fn por_status_response_bounds(canonical_record_bytes: usize) -> Option<PorStatus
         decode_limits,
     })
 }
-#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
-struct ToriiPorStatusPageV1 {
-    version: u8,
-    snapshot_generation: u64,
-    record_limit: u32,
-    canonical_byte_limit: u64,
-    canonical_bytes: u64,
-    inspected_candidates: u32,
-    has_more: bool,
-    #[norito(default)]
-    next_cursor: Option<String>,
-    statuses: Vec<PorChallengeStatusV1>,
-}
-#[derive(Debug, NoritoSerialize, NoritoDeserialize)]
-struct ToriiPorStatusExportPageV1 {
-    version: u8,
-    #[norito(default)]
-    start_epoch: Option<u64>,
-    #[norito(default)]
-    end_epoch: Option<u64>,
-    page: ToriiPorStatusPageV1,
-}
 #[derive(Debug, Clone, Copy, Default)]
 struct RequestedPorStatusFilter {
     manifest_digest: Option<[u8; 32]>,
@@ -2017,11 +1996,11 @@ fn validate_sorafs_por_cursor(cursor: &str, context: &str) -> Result<PorStatusCu
         })
 }
 fn validate_torii_por_status_page(
-    page: &ToriiPorStatusPageV1,
+    page: &PorStatusPageV1,
     expected_limit: usize,
     expected_max_bytes: usize,
 ) -> Result<(), String> {
-    if page.version != 1
+    if page.version != POR_STATUS_PAGE_VERSION_V1
         || page.snapshot_generation == 0
         || usize::try_from(page.record_limit).ok() != Some(expected_limit)
         || usize::try_from(page.canonical_byte_limit).ok() != Some(expected_max_bytes)
@@ -2301,7 +2280,7 @@ fn por_status(raw_args: Vec<String>) -> Result<(), String> {
             body_snippet(&body)
         ));
     }
-    let page: ToriiPorStatusPageV1 =
+    let page: PorStatusPageV1 =
         norito::decode_from_bytes_with_limits(&body, response_bounds.decode_limits)
             .map_err(|err| format!("failed to decode PoR status page: {err}"))?;
     if to_bytes(&page).map_err(|err| format!("failed to re-encode PoR status page: {err}"))? != body
@@ -2467,7 +2446,7 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
             body_snippet(&body)
         ));
     }
-    let export: ToriiPorStatusExportPageV1 =
+    let export: PorStatusExportPageV1 =
         norito::decode_from_bytes_with_limits(&body, response_bounds.decode_limits)
             .map_err(|err| format!("failed to decode PoR export page: {err}"))?;
     if to_bytes(&export).map_err(|err| format!("failed to re-encode PoR export page: {err}"))?
@@ -2475,7 +2454,10 @@ fn por_export(raw_args: Vec<String>) -> Result<(), String> {
     {
         return Err("PoR export page is not canonical Norito".into());
     }
-    if export.version != 1 || export.start_epoch != start_epoch || export.end_epoch != end_epoch {
+    if export.version != POR_STATUS_EXPORT_PAGE_VERSION_V1
+        || export.start_epoch != start_epoch
+        || export.end_epoch != end_epoch
+    {
         return Err("PoR export page does not match the requested epoch range".into());
     }
     validate_torii_por_status_page(&export.page, limit, max_bytes)?;
@@ -4054,6 +4036,8 @@ fn moderation_validate_corpus(raw_args: Vec<String>) -> Result<(), String> {
     );
     Ok(())
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::bin::sorafs_cli::ModerationRegistryPersistedSnapshot")]
 #[derive(Clone, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationRegistryPersistedSnapshot {
     schema_version: u16,
@@ -14500,7 +14484,7 @@ fn validate_prepared_storage_payload(
         return Err("payload PoR root does not match the canonical manifest".to_owned());
     }
     let stats = CarStreamingWriter::new(plan)
-        .write_from_reader(&mut payload.as_ref(), &mut io::sink())
+        .write_from_reader(&mut &payload[..], &mut io::sink())
         .map_err(format_car_error)?;
     if stats.root_cids.as_slice() != [manifest.root_cid.clone()]
         || stats.dag_codec != manifest.dag_codec.0

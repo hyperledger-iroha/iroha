@@ -76,7 +76,7 @@ fn parse_release_peer_url(input: &str) -> Result<Url, String> {
 
 fn release_peer_client(primary: &Client, peer_url: Url) -> Result<Client> {
     let peer_url = parse_release_peer_url(peer_url.as_str()).map_err(|reason| eyre!(reason))?;
-    let mut peer = primary.clone();
+    let mut peer = primary.to_builder();
     peer.torii_url = peer_url;
     // Peer reads and partial requests require fresh account-bound signatures. The
     // account key is therefore retained, but origin-agnostic HTTP credentials,
@@ -84,7 +84,7 @@ fn release_peer_client(primary: &Client, peer_url: Url) -> Result<Client> {
     // configured primary to an independently supplied signer-peer origin.
     peer.headers.clear();
     peer.operator_key_pair = None;
-    Ok(peer)
+    Ok(peer.build()?)
 }
 
 fn release_statement_matches(
@@ -223,7 +223,7 @@ impl Run for DraftAttemptArgs {
             proposal,
             attempt_sequence: self.attempt_sequence,
         };
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let response = client.post_parliament_attempt_draft(&request)?;
         let value = norito::json::to_value(&response)
             .wrap_err("failed to render Parliament attempt draft")?;
@@ -268,7 +268,7 @@ impl Run for DraftTransitionArgs {
         request
             .validate_static()
             .map_err(|reason| eyre::eyre!(reason))?;
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let response = client.post_parliament_transition_draft(&request)?;
         let value = norito::json::to_value(&response)
             .wrap_err("failed to render Parliament transition draft")?;
@@ -295,7 +295,7 @@ pub struct GetAttemptArgs {
 
 impl Run for GetAttemptArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let response = client.get_parliament_attempt(self.governance_attempt_id)?;
         let state_bytes = response.state_payload_hex.len() / 2;
         let value = norito::json::to_value(&response)
@@ -353,7 +353,7 @@ impl Run for FinalizeOpenedBallotArgs {
             bail!("Parliament TLE release coordinator requires at least one signer peer");
         }
 
-        let primary: Client = context.client_from_config();
+        let primary: Client = context.client_from_config()?;
         let release_context = primary
             .get_parliament_tle_release_context(self.ballot_attempt_id)
             .wrap_err("failed to fetch the canonical Parliament TLE release context")?;
@@ -711,17 +711,15 @@ mod tests {
         let expected = release_context_fixture();
         let (peer_url, requests, server) = spawn_release_context_peer(&expected, 2);
         for authorization in ["Basic cHJpbWFyeTpzZWNyZXQ=", "Bearer primary-secret"] {
-            let mut primary = Client::with_headers(
-                crate::fallback_config(),
-                HashMap::from([
-                    ("Authorization".to_owned(), authorization.to_owned()),
-                    ("X-Primary-Secret".to_owned(), "custom-secret".to_owned()),
-                ]),
-            );
-            primary.set_operator_key_pair(primary.key_pair.clone());
+            let mut builder = Client::builder(crate::fallback_config()).headers(HashMap::from([
+                ("Authorization".to_owned(), authorization.to_owned()),
+                ("X-Primary-Secret".to_owned(), "custom-secret".to_owned()),
+            ]));
+            builder.operator_key_pair = Some(builder.key_pair.clone());
+            let primary = builder.build().expect("valid primary context");
             let peer = release_peer_client(&primary, peer_url.clone()).expect("strict peer client");
-            assert!(peer.headers.is_empty());
-            assert!(peer.operator_key_pair.is_none());
+            assert!(peer.headers().is_empty());
+            assert!(peer.operator_key_pair().is_none());
             assert_eq!(
                 peer.get_parliament_tle_release_context(expected.ballot_attempt_id)
                     .expect("legitimate signed peer fetch"),

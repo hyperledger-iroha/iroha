@@ -176,6 +176,8 @@ impl V2BodyStoreCapacity {
     }
 }
 /// Metadata and exact canonical bytes persisted in one final body file.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_body_store::StoredBodyEnvelope")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct StoredBodyEnvelope {
     version: u16,
@@ -190,6 +192,8 @@ struct StoredBodyEnvelope {
 /// A merge-sidecar deferral is deliberately absent: it is a retry dependency,
 /// not a terminal semantic outcome and therefore cannot become restart
 /// authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_body_store::ValidationOutcomeMarkerKind")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum ValidationOutcomeMarkerKind {
@@ -199,6 +203,8 @@ enum ValidationOutcomeMarkerKind {
     Rejected(u8),
 }
 /// Versioned durable validation outcome bound to one exact body-store frame.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_body_store::ValidationOutcomeMarker")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct ValidationOutcomeMarker {
     version: u16,

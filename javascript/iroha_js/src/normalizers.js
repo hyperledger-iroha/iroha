@@ -16,6 +16,15 @@ import {
   ValidationErrorCode,
 } from "./validationError.js";
 
+const TEXT_MUST_BE_A_NON_EMPTY_STRING = " must be a non-empty string";
+const TEXT_MUST_BE_A_CANONICAL_BASE58_ASSET_DEFINITION_ID = " must be a canonical Base58 asset definition id";
+const TEXT_MUST_BE_A_CANONICAL_I105_ACCOUNT_ID = " must be a canonical I105 account id";
+const TEXT_DOMAIN_DATASPACE_FORM = "<domain>.<dataspace> form";
+const TEXT_DATASPACE_OR_NAME = "<dataspace> or <name>";
+const TEXT_MUST_BE_AN_EVEN_LENGTH_HEXADECIMAL_STRING = " must be an even-length hexadecimal string";
+const TEXT_MUST_USE_NAME = " must use <name>";
+
+
 export { ValidationError, ValidationErrorCode };
 
 function fail(code, message, path) {
@@ -32,7 +41,7 @@ const ALIAS_SCOPE_SEGMENT_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 function assertString(value, name) {
   if (typeof value !== JS_TYPE_STRING || value.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_STRING, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
   return value;
 }
@@ -42,14 +51,14 @@ export function canonicalizeMultihashHex(value, name) {
   if (trimmed.length === 0 || trimmed.length % 2 !== 0) {
     fail(
       ValidationErrorCode.INVALID_HEX,
-      `${name} must be an even-length hexadecimal string`,
+      `${name}${TEXT_MUST_BE_AN_EVEN_LENGTH_HEXADECIMAL_STRING}`,
       name,
     );
   }
   if (!/^[0-9A-Fa-f]+$/.test(trimmed)) {
     fail(
       ValidationErrorCode.INVALID_HEX,
-      `${name} must be an even-length hexadecimal string`,
+      `${name}${TEXT_MUST_BE_AN_EVEN_LENGTH_HEXADECIMAL_STRING}`,
       name,
     );
   }
@@ -59,7 +68,7 @@ export function canonicalizeMultihashHex(value, name) {
   } catch {
     fail(
       ValidationErrorCode.INVALID_HEX,
-      `${name} must be an even-length hexadecimal string`,
+      `${name}${TEXT_MUST_BE_AN_EVEN_LENGTH_HEXADECIMAL_STRING}`,
       name,
     );
   }
@@ -119,7 +128,7 @@ export function normalizeIdentifierInput(value, normalization, name = "identifie
   const raw = assertString(value, name);
   const trimmed = raw.trim();
   if (!trimmed) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_STRING, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
   const mode = assertString(normalization, `${name}Normalization`).trim().toLowerCase();
   switch (mode) {
@@ -241,7 +250,7 @@ function looksLikeCanonicalI105Literal(raw) {
 export function normalizeAccountId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {
-    fail(ValidationErrorCode.INVALID_ACCOUNT_ID, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_ACCOUNT_ID, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
 
   if (raw.includes("@")) {
@@ -258,7 +267,7 @@ export function normalizeAccountId(value, name) {
   ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical I105 account id`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL_I105_ACCOUNT_ID}`,
       name,
     );
   }
@@ -276,7 +285,7 @@ export function normalizeAccountId(value, name) {
       }
       fail(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be a canonical I105 account id`,
+        `${name}${TEXT_MUST_BE_A_CANONICAL_I105_ACCOUNT_ID}`,
         name,
       );
     }
@@ -287,12 +296,12 @@ export function normalizeAccountId(value, name) {
 export function ensureCanonicalAccountId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_STRING, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
   if (raw.includes("@")) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical I105 account id`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL_I105_ACCOUNT_ID}`,
       name,
     );
   }
@@ -303,7 +312,7 @@ export function ensureCanonicalAccountId(value, name) {
   ) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,
-      `${name} must be a canonical I105 account id`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL_I105_ACCOUNT_ID}`,
       name,
     );
   }
@@ -317,7 +326,7 @@ export function ensureCanonicalAccountId(value, name) {
       }
       throw createValidationError(
         ValidationErrorCode.INVALID_ACCOUNT_ID,
-        `${name} must be a canonical I105 account id`,
+        `${name}${TEXT_MUST_BE_A_CANONICAL_I105_ACCOUNT_ID}`,
         name,
         error,
       );
@@ -338,7 +347,7 @@ export function ensureCanonicalAccountId(value, name) {
 export function normalizeAccountAliasLiteral(value, name) {
   const alias = assertString(value, name).trim();
   if (alias.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_STRING, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
   const aliasParts = alias.split("@");
   const scopeParts = aliasParts[1]?.split(".") ?? [];
@@ -363,7 +372,7 @@ export function normalizeAccountAliasLiteral(value, name) {
 export function normalizeAssetId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {
-    fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_ASSET_ID, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
   if (raw.includes("#")) {
     fail(
@@ -393,7 +402,7 @@ function decodeBase58Literal(value, name) {
   if (!value.length) {
     fail(
       ValidationErrorCode.INVALID_ASSET_DEFINITION_ID,
-      `${name} must be a canonical Base58 asset definition id`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL_BASE58_ASSET_DEFINITION_ID}`,
       name,
     );
   }
@@ -403,7 +412,7 @@ function decodeBase58Literal(value, name) {
     if (digit === undefined) {
       fail(
         ValidationErrorCode.INVALID_ASSET_DEFINITION_ID,
-        `${name} must be a canonical Base58 asset definition id`,
+        `${name}${TEXT_MUST_BE_A_CANONICAL_BASE58_ASSET_DEFINITION_ID}`,
         name,
       );
     }
@@ -452,14 +461,14 @@ export function normalizeAssetDefinitionId(value, name = "asset_definition_id") 
   if (raw.length === 0) {
     fail(
       ValidationErrorCode.INVALID_ASSET_DEFINITION_ID,
-      `${name} must be a canonical Base58 asset definition id`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL_BASE58_ASSET_DEFINITION_ID}`,
       name,
     );
   }
   if (raw.includes(":") || raw.includes("#") || !BASE58_PATTERN.test(raw)) {
     fail(
       ValidationErrorCode.INVALID_ASSET_DEFINITION_ID,
-      `${name} must be a canonical Base58 asset definition id`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL_BASE58_ASSET_DEFINITION_ID}`,
       name,
     );
   }
@@ -507,7 +516,7 @@ export function tryNormalizeAssetDefinitionId(value, name = "asset_definition_id
 export function normalizeAssetHoldingId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {
-    fail(ValidationErrorCode.INVALID_ASSET_ID, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_ASSET_ID, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
   const parts = raw.split("#");
   if (parts.length < 2 || parts.length > 3) {
@@ -574,7 +583,7 @@ export function assetReferencesMatch(left, right) {
 export function normalizeRwaId(value, name) {
   const raw = assertString(value, name).trim();
   if (raw.length === 0) {
-    fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty string`, name);
+    fail(ValidationErrorCode.INVALID_STRING, `${name}${TEXT_MUST_BE_A_NON_EMPTY_STRING}`, name);
   }
   if (/\s/.test(raw)) {
     fail(
@@ -634,7 +643,7 @@ function normalizeAliasScope(scope, name, separator) {
   if (parts.length === 0 || parts.length > 2) {
     fail(
       ValidationErrorCode.INVALID_STRING,
-      `${name} must use <name>${separator}<dataspace> or <name>${separator}<domain>.<dataspace> form`,
+      `${name}${TEXT_MUST_USE_NAME}${separator}${TEXT_DATASPACE_OR_NAME}${separator}${TEXT_DOMAIN_DATASPACE_FORM}`,
       name,
     );
   }
@@ -642,7 +651,7 @@ function normalizeAliasScope(scope, name, separator) {
     if (!ALIAS_SCOPE_SEGMENT_PATTERN.test(part)) {
       fail(
         ValidationErrorCode.INVALID_STRING,
-        `${name} must use <name>${separator}<dataspace> or <name>${separator}<domain>.<dataspace> form`,
+        `${name}${TEXT_MUST_USE_NAME}${separator}${TEXT_DATASPACE_OR_NAME}${separator}${TEXT_DOMAIN_DATASPACE_FORM}`,
         name,
       );
     }
@@ -655,7 +664,7 @@ function normalizeScopedAlias(value, name, separator, options = {}) {
   if (raw.length === 0 || /\s/.test(raw)) {
     fail(
       ValidationErrorCode.INVALID_STRING,
-      `${name} must use <name>${separator}<dataspace> or <name>${separator}<domain>.<dataspace> form`,
+      `${name}${TEXT_MUST_USE_NAME}${separator}${TEXT_DATASPACE_OR_NAME}${separator}${TEXT_DOMAIN_DATASPACE_FORM}`,
       name,
     );
   }
@@ -664,7 +673,7 @@ function normalizeScopedAlias(value, name, separator, options = {}) {
   if (firstIndex <= 0 || firstIndex !== lastIndex || lastIndex >= raw.length - 1) {
     fail(
       ValidationErrorCode.INVALID_STRING,
-      `${name} must use <name>${separator}<dataspace> or <name>${separator}<domain>.<dataspace> form`,
+      `${name}${TEXT_MUST_USE_NAME}${separator}${TEXT_DATASPACE_OR_NAME}${separator}${TEXT_DOMAIN_DATASPACE_FORM}`,
       name,
     );
   }
@@ -673,14 +682,14 @@ function normalizeScopedAlias(value, name, separator, options = {}) {
   if (!ALIAS_LOCAL_PATTERN.test(local)) {
     fail(
       ValidationErrorCode.INVALID_STRING,
-      `${name} must use <name>${separator}<dataspace> or <name>${separator}<domain>.<dataspace> form`,
+      `${name}${TEXT_MUST_USE_NAME}${separator}${TEXT_DATASPACE_OR_NAME}${separator}${TEXT_DOMAIN_DATASPACE_FORM}`,
       name,
     );
   }
   if (options.rejectI105Local && tryNormalizeI105AccountId(local, `${name}.local`)) {
     fail(
       ValidationErrorCode.INVALID_STRING,
-      `${name} must use <name>${separator}<dataspace> or <name>${separator}<domain>.<dataspace> form`,
+      `${name}${TEXT_MUST_USE_NAME}${separator}${TEXT_DATASPACE_OR_NAME}${separator}${TEXT_DOMAIN_DATASPACE_FORM}`,
       name,
     );
   }

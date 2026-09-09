@@ -52,7 +52,7 @@ use ivm_abi::{
     },
 };
 use norito::{
-    core::{Header, NoritoDeserialize, SerializePayload},
+    core::{Header, SerializePayload},
     decode_from_bytes,
 };
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -872,7 +872,7 @@ pub fn decode_canonical_zk_batch(
     // itself to satisfy `Batch` payload-storage alignment. Inspect the bounded
     // top-level count before materializing any elements.
     let view = norito::core::from_bytes_view(payload).map_err(|_| ERR_DECODE)?;
-    if view.schema() != <Batch as NoritoDeserialize>::schema_hash() {
+    if view.schema() != norito::schema::identity::frame_hash::<Batch>() {
         return Err(ERR_DECODE);
     }
     let alignment = norito::core::archived_payload_align::<Batch>();

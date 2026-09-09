@@ -16,11 +16,11 @@ use norito::NoritoSerialize;
 use super::{
     compact_axt_batch::AxtTransferBatch,
     compact_axt_context::preflight_context,
-    compact_bundle::{self, ShakeAxtBundleWire, ShakeBundleWire},
+    compact_bundle::{self, AxtBundleWire, BundleWire},
     compact_model_statement::with_prepared_quantity_statement,
     compact_protocol::{
         FixedAir,
-        shared_openings::{preflight_shake_prover, prove_shake_shared},
+        shared_openings::{preflight_prover, prove_shared},
     },
     compact_prover_resources::check_segment_charge,
     compact_public_batch::{BatchContextLimits, PublicTransferBatch, preflight_prepared},
@@ -285,7 +285,7 @@ fn segments<R: FixedAir>(
     // Validate every complete statement before expanding even the first witness.
     for ordinal in 0..statements.len() {
         let relation = relation(ordinal)?;
-        preflight_shake_prover(&relation, verification.bundle.segment)?;
+        preflight_prover(&relation, verification.bundle.segment)?;
         check_segment_charge(
             relation.statement_bytes().len(),
             SHARED_FRAME_BOUND,
@@ -297,7 +297,7 @@ fn segments<R: FixedAir>(
     for (ordinal, (statement, private)) in statements.iter().zip(private).enumerate() {
         let relation = relation(ordinal)?;
         let columns = columns(statement, private)?;
-        let proof = prove_shake_shared(&relation, &columns, verification.bundle.segment)?;
+        let proof = prove_shared(&relation, &columns, verification.bundle.segment)?;
         drop(columns);
         let length = norito::core::encoded_frame_len(&proof)?;
         check(
@@ -389,8 +389,8 @@ fn prepare_and_prove(
             proving,
             verification,
         )?;
-        compact_bundle::encode_shake_axt_wire(
-            &ShakeAxtBundleWire {
+        compact_bundle::encode_axt_wire(
+            &AxtBundleWire {
                 version: 1,
                 intermediate_roots: roots,
                 segments: frames,
@@ -407,8 +407,8 @@ fn prepare_and_prove(
             proving,
             verification,
         )?;
-        compact_bundle::encode_shake_wire(
-            &ShakeBundleWire {
+        compact_bundle::encode_wire(
+            &BundleWire {
                 version: 1,
                 intermediate_roots: roots,
                 segments: frames,

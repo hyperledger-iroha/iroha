@@ -15,8 +15,11 @@ pub const BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1: &str =
 /// Maximum external authentication-proof bytes accepted by the V1 route.
 pub const BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1: usize = 64 * 1024;
 /// Canonical owner proof submitted when acknowledging one published statement.
-#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "iroha.torii.v1.sorafs.billing.acknowledgement_proof")]
+#[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1",
+    frame = "iroha.torii.v1.sorafs.billing.acknowledgement_proof"
+)]
 pub struct BillingAcknowledgementProofV1 {
     /// Non-zero client-generated idempotency nonce authenticated by the
     /// canonical Torii request signature and by the external owner proof.
@@ -126,11 +129,13 @@ mod tests {
     #[test]
     fn stable_schema_name_and_roundtrip_are_exact() {
         assert_eq!(
-            <BillingAcknowledgementProofV1 as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<BillingAcknowledgementProofV1>(),
             norito::core::schema_hash_for_name(BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_NAME_V1)
         );
         assert_eq!(
-            hex::encode(<BillingAcknowledgementProofV1 as norito::NoritoSerialize>::schema_hash()),
+            hex::encode(norito::schema::identity::frame_hash::<
+                BillingAcknowledgementProofV1,
+            >()),
             BILLING_ACKNOWLEDGEMENT_PROOF_SCHEMA_HASH_HEX_V1
         );
         let proof = BillingAcknowledgementProofV1::try_new([0x91; 32], vec![0xa5; 64])
@@ -180,5 +185,15 @@ mod tests {
         let debug = format!("{proof:?}");
         assert!(debug.contains("[REDACTED]"));
         assert!(!debug.contains("165"));
+    }
+}
+
+#[cfg(test)]
+mod captured_frame_identity_tests {
+    #[test]
+    fn observed_declared_identities() {
+        crate::captured_identity_tests::assert_bidirectional::<super::BillingAcknowledgementProofV1>(
+            "iroha_torii_shared::sorafs_hedging_billing_api::BillingAcknowledgementProofV1",
+        );
     }
 }

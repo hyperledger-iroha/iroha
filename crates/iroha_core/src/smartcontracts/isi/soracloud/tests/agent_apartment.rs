@@ -147,12 +147,7 @@ fn agent_text_helpers_preserve_free_form_bytes_and_reject_aliases() {
     ] {
         let error = parse_optional_agent_workflow_input_json(Some(noncanonical_json))
             .expect_err("workflow JSON aliases must fail closed");
-        assert!(
-            error
-                .to_string()
-                .contains("canonical Norito JSON serialization"),
-            "unexpected workflow JSON rejection: {error}"
-        );
+        assert_invalid_parameter_contains(error, "canonical Norito JSON serialization");
     }
 }
 
@@ -186,7 +181,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
     })
     .execute(&ALICE_ID, &mut stx)
     .expect_err("padded capability must fail instead of verifying as its trimmed alias");
-    assert!(error.to_string().contains("invalid capability"));
+    assert_invalid_parameter_contains(error, "invalid capability");
 
     let policy_reason_payload = encode_agent_policy_revoke_provenance_payload(
         apartment_name.as_ref(),
@@ -201,7 +196,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
     })
     .execute(&ALICE_ID, &mut stx)
     .expect_err("blank optional reason must fail instead of becoming None");
-    assert!(error.to_string().contains("reason must not be empty"));
+    assert_invalid_parameter_contains(error, "reason must not be empty");
 
     let mailbox_payload = encode_agent_message_send_provenance_payload(
         apartment_name.as_ref(),
@@ -218,7 +213,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
     })
     .execute(&ALICE_ID, &mut stx)
     .expect_err("padded channel must fail instead of verifying as its trimmed alias");
-    assert!(error.to_string().contains("surrounding whitespace"));
+    assert_invalid_parameter_contains(error, "surrounding whitespace");
 
     let mailbox_payload = encode_agent_message_send_provenance_payload(
         apartment_name.as_ref(),
@@ -235,7 +230,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
     })
     .execute(&ALICE_ID, &mut stx)
     .expect_err("free-form payload bytes must not be trimmed before verification");
-    assert!(error.to_string().contains("signature verification failed"));
+    assert_invalid_parameter_contains(error, "signature verification failed");
 
     let ack_payload = encode_agent_message_ack_provenance_payload(
         apartment_name.as_ref(),
@@ -249,7 +244,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
         })
         .execute(&ALICE_ID, &mut stx)
         .expect_err("padded message id must fail instead of looking up its trimmed alias");
-    assert!(error.to_string().contains("whitespace"));
+    assert_invalid_parameter_contains(error, "whitespace");
 
     let artifact_payload = encode_agent_artifact_allow_provenance_payload(
         apartment_name.as_ref(),
@@ -265,7 +260,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
         })
         .execute(&ALICE_ID, &mut stx)
         .expect_err("padded artifact hash must fail instead of verifying as its trimmed alias");
-    assert!(error.to_string().contains("whitespace"));
+    assert_invalid_parameter_contains(error, "whitespace");
 
     let autonomy_payload = encode_agent_autonomy_run_provenance_payload(
         apartment_name.as_ref(),
@@ -286,7 +281,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
     })
     .execute(&ALICE_ID, &mut stx)
     .expect_err("padded run label must fail instead of verifying as its trimmed alias");
-    assert!(error.to_string().contains("surrounding whitespace"));
+    assert_invalid_parameter_contains(error, "surrounding whitespace");
 
     let noncanonical_workflow_json = "{ \"b\": 2, \"a\": 1 }";
     let canonical_workflow_json = "{\"a\":1,\"b\":2}";
@@ -309,11 +304,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
     })
     .execute(&ALICE_ID, &mut stx)
     .expect_err("noncanonical workflow JSON must fail even when its canonical form was signed");
-    assert!(
-        error
-            .to_string()
-            .contains("canonical Norito JSON serialization")
-    );
+    assert_invalid_parameter_contains(error, "canonical Norito JSON serialization");
 
     let error =
         iroha_data_model::isi::InstructionBox::from(isi::RecordSoracloudAgentAutonomyExecution {
@@ -332,7 +323,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
         })
         .execute(&ALICE_ID, &mut stx)
         .expect_err("padded run id must fail instead of looking up its trimmed alias");
-    assert!(error.to_string().contains("whitespace"));
+    assert_invalid_parameter_contains(error, "whitespace");
     assert!(stx.world.soracloud_agent_apartments.iter().next().is_none());
     assert!(
         stx.world
@@ -522,12 +513,7 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         .clone()
         .execute(&ALICE_ID, &mut stx)
         .expect_err("pending wallet request ID replay must fail closed");
-    assert!(
-        pending_replay_error
-            .to_string()
-            .contains("has already been used"),
-        "unexpected pending replay rejection: {pending_replay_error}"
-    );
+    assert_invalid_parameter_contains(pending_replay_error, "has already been used");
     assert_eq!(
         stx.world
             .soracloud_agent_apartment_audit_events
@@ -556,12 +542,7 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
     let historical_replay_error = wallet_spend_instruction
         .execute(&ALICE_ID, &mut stx)
         .expect_err("approved wallet request ID replay must fail closed");
-    assert!(
-        historical_replay_error
-            .to_string()
-            .contains("has already been used"),
-        "unexpected historical replay rejection: {historical_replay_error}"
-    );
+    assert_invalid_parameter_contains(historical_replay_error, "has already been used");
     assert_eq!(
         stx.world
             .soracloud_agent_apartment_audit_events
@@ -757,10 +738,7 @@ fn auto_approved_agent_wallet_request_id_cannot_be_replayed() -> Result<(), eyre
     let error = noncanonical_instruction
         .execute(&ALICE_ID, &mut stx)
         .expect_err("surrounding asset-definition whitespace must fail closed");
-    assert!(
-        error.to_string().contains("surrounding whitespace"),
-        "unexpected asset-definition rejection: {error}"
-    );
+    assert_invalid_parameter_contains(error, "surrounding whitespace");
     let request_id = "auto-wallet-request-1";
     let amount: Quantity = "0.001".parse().expect("wallet amount");
     let payload = encode_agent_wallet_spend_provenance_payload(
@@ -790,10 +768,7 @@ fn auto_approved_agent_wallet_request_id_cannot_be_replayed() -> Result<(), eyre
     let error = instruction
         .execute(&ALICE_ID, &mut stx)
         .expect_err("auto-approved wallet request ID replay must fail closed");
-    assert!(
-        error.to_string().contains("has already been used"),
-        "unexpected auto-approval replay rejection: {error}"
-    );
+    assert_invalid_parameter_contains(error, "has already been used");
     assert_eq!(
         stx.world
             .soracloud_agent_apartment_audit_events

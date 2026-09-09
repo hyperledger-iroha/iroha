@@ -104,6 +104,8 @@ pub enum TleKeySessionLifecycleValidationErrorV1 {
 /// transcript or the key-session identifier. Heights are inclusive. A
 /// rotation committed at height `H` shortens its predecessor through `H` and
 /// makes the successor selectable beginning at `H + 1`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleKeySessionLifecycleV1")]
 #[derive(
     Debug,
     Clone,
@@ -272,6 +274,8 @@ impl TleKeySessionLifecycleV1 {
 }
 
 /// Public coefficient commitments and constant-term proof for one qualified dealer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleAdaptiveDealerCommitmentV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -302,6 +306,8 @@ impl TleAdaptiveDealerCommitmentV1 {
 }
 
 /// One public composite verification share in a finalized adaptive TLE transcript.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleAdaptivePublicShareV1")]
 #[derive(
     Debug,
     Clone,
@@ -327,6 +333,8 @@ pub struct TleAdaptivePublicShareV1 {
 /// The qualified dealer commitments are retained so a restart can reconstruct
 /// and revalidate the complete cryptographic transcript instead of trusting
 /// cached public-key bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleKeySessionPublicStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -732,6 +740,8 @@ impl ValidatedTleKeySessionV1 {
 /// from committed state; broker transport must admit it only from the scoped
 /// daemon session, and the daemon must construct it through
 /// [`AuthorizedTleReleaseContextV1::broker_projection_v1`].
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::AuthorizedTleReleaseProjectionV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct AuthorizedTleReleaseProjectionV1 {
     /// Fixed projection layout version.
@@ -1388,6 +1398,8 @@ impl TleProjectedPartialReleaseSignerV1 for InMemoryTlePartialReleaseSignerV1 {
 }
 
 /// Public adaptive partial release and representation proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TlePartialReleaseShareV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1435,6 +1447,8 @@ impl VerifiedTlePartialReleaseShareV1 {
 /// Unique public final threshold release signature for one future identity.
 ///
 /// No reconstruction subset or signer bitmap is serialized.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::TleFinalReleaseSignatureV1")]
 #[derive(
     Debug,
     Clone,

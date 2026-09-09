@@ -191,6 +191,8 @@ impl TransactionRoutingView for TransactionPayload {
     }
 }
 /// Routing decision returned by a [`LaneRouter`].
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RoutingDecision")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RoutingDecision {
     /// Lane assigned to the transaction.
@@ -214,6 +216,8 @@ impl Default for RoutingDecision {
     }
 }
 /// Role of one route in a transaction routing plan.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RouteLegRole")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RouteLegRole {
     /// The route coordinates final admission and commit ordering for the plan.
@@ -222,6 +226,8 @@ pub enum RouteLegRole {
     Participant,
 }
 /// One lane/dataspace leg in a transaction routing plan.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RouteLeg")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct RouteLeg {
     /// Lane and dataspace selected for this leg.
@@ -237,6 +243,8 @@ impl RouteLeg {
     }
 }
 /// Native AMX routing plan for a transaction that touches multiple dataspaces.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::NativeAmxRoutingPlan")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct NativeAmxRoutingPlan {
     /// Stable digest of the coordinator and participant route set.
@@ -247,6 +255,8 @@ pub struct NativeAmxRoutingPlan {
     pub participants: Vec<RouteLeg>,
 }
 /// Complete routing plan for a transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::router::RoutingPlan")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum RoutingPlan {
     /// The transaction executes on one lane/dataspace route.
@@ -7714,6 +7724,7 @@ fn default_route_elastic_candidates(
     candidates.dedup();
     candidates
 }
+#[cfg(test)]
 fn insert_height_active_routable_lane(
     lanes: &mut BTreeSet<LaneId>,
     route: RoutingDecision,
@@ -7726,7 +7737,8 @@ fn insert_height_active_routable_lane(
         lanes.insert(route.lane_id);
     }
 }
-/// Resolve the set of lanes that the configured Nexus routing policy can select at a block height.
+/// Resolve height-specific routable lanes for routing and scheduler regression fixtures.
+#[cfg(test)]
 pub(crate) fn routable_lane_ids_for_nexus_at_height(
     nexus: &Nexus,
     block_height: u64,

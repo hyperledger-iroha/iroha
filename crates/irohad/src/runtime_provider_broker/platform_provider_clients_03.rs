@@ -2747,7 +2747,8 @@ impl ParliamentTleBrokerPartialReleaseSigner {
         &self,
         session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
         expected_participant_index: u16,
-    ) -> Result<iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1, BrokerError> {
+    ) -> Result<iroha_core::tle_release::TlePartialReleaseCapabilityAttestationV1, BrokerError>
+    {
         retry_consensus_signer_once_after_unavailable(self.session.as_ref(), || {
             live_exact_qualification(self.session.as_ref(), &self.binding, self.metadata_digest)?;
             let request_payload = encode_canonical(
@@ -3050,32 +3051,27 @@ pub(super) fn resolve(
                 dependencies = dependencies.with_sorafs_fenced_transparency_head_reader(reader);
             }
             slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
-                let public_key = binding
-                    .stream_token_signer_public_key
+                let hardware = binding
+                    .stream_token_hardware_binding
+                    .as_ref()
                     .ok_or(IrohaRuntimeProviderRegistryErrorV1::BindingMismatch)?;
-                let signer = Arc::new(StreamTokenBrokerSigner {
+                hardware.validate_network(&session.chain_id, session.network_id.as_bytes())?;
+                let client = Arc::new(StreamTokenHardwareBrokerClient {
                     session: Arc::clone(&session),
                     binding: binding.clone(),
                     metadata_digest: observation.metadata_digest,
-                    public_key,
+                    latch: Arc::new(Mutex::new(StreamTokenSignLatchV1::Idle)),
                 });
-                let first = live_exact_qualification(
-                    signer.session.as_ref(),
-                    &signer.binding,
-                    signer.metadata_digest,
-                )
-                .map_err(registry_error)?;
-                let second = live_exact_qualification(
-                    signer.session.as_ref(),
-                    &signer.binding,
-                    signer.metadata_digest,
-                )
-                .map_err(registry_error)?;
-                if second != first {
-                    signer.session.poison();
-                    return Err(IrohaRuntimeProviderRegistryErrorV1::StaleOrRevoked);
-                }
-                dependencies = dependencies.with_sorafs_stream_token_signer(signer);
+                client.metadata().map_err(registry_error)?;
+                let observer = Arc::new(StreamTokenObserverBrokerClient {
+                    session: Arc::clone(&session),
+                    binding: binding.clone(),
+                    metadata_digest: observation.metadata_digest,
+                    observer_handle: hardware.observer_handle().to_owned(),
+                });
+                dependencies = dependencies
+                    .with_sorafs_stream_token_hardware_client(client)
+                    .with_sorafs_stream_token_state_observer(observer);
             }
             slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() => {
                 let qualification = binding

@@ -1,4 +1,6 @@
 /// Norito-encoded pipeline recovery metadata sidecar stored alongside block data.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::PipelineRecoverySidecar")]
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct PipelineRecoverySidecar {
     /// Schema / evolution tag for the pipeline metadata format.
@@ -156,6 +158,8 @@ impl PipelineRecoverySidecar {
     }
 }
 /// Known metadata format variants for pipeline recovery sidecars.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::PipelineRecoveryFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum PipelineRecoveryFormat {
     #[codec(index = 0)]
@@ -163,6 +167,8 @@ pub enum PipelineRecoveryFormat {
     Current,
 }
 /// Deterministic DAG summary embedded in pipeline recovery metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::PipelineDagSnapshot")]
 #[derive(Debug, Copy, Clone, Encode, Decode)]
 pub struct PipelineDagSnapshot {
     /// Blake2 hash summarising the DAG structure for the block.
@@ -171,6 +177,8 @@ pub struct PipelineDagSnapshot {
     pub key_count: u32,
 }
 /// Transaction access summary persisted for pipeline recovery/replay.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::PipelineTxSnapshot")]
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct PipelineTxSnapshot {
     /// Transaction hash to correlate with block entries.
@@ -212,6 +220,8 @@ impl PipelineTxSnapshot {
     }
 }
 /// ZK proof artifacts captured alongside pipeline metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::PipelineProofSnapshot")]
 #[derive(Debug, Clone, Encode, Decode)]
 pub struct PipelineProofSnapshot {
     /// Backend identifier for the proof format.
@@ -229,6 +239,8 @@ pub struct PipelineProofSnapshot {
 /// recovery metadata bounded under sustained throughput. Full proof payloads
 /// should be exported through dedicated proof artifact paths rather than folded
 /// into the pipeline sidecar.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::FastpqProofSnapshot")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct FastpqProofSnapshot {
     /// Block height the proof belongs to.
@@ -391,6 +403,8 @@ impl FastpqProofSnapshot {
     }
 }
 /// Known metadata format variants for certified standalone lane blocks.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::CertifiedLaneBlockArtifactFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum CertifiedLaneBlockArtifactFormat {
     #[codec(index = 0)]
@@ -398,6 +412,8 @@ pub enum CertifiedLaneBlockArtifactFormat {
     Current,
 }
 /// Persisted standalone lane block certification artifact.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::CertifiedLaneBlockArtifact")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedLaneBlockArtifact {
     /// Schema / evolution tag for the certified lane block format.
@@ -455,6 +471,8 @@ impl CertifiedLaneBlockArtifact {
 /// The complete artifact is retained so a frontier publication that survives a
 /// crash can repair the exact ordinary progress-pair entry without scanning
 /// lane-local history.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LatestCertifiedLaneBlockFrontierV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct LatestCertifiedLaneBlockFrontierV1 {
@@ -489,6 +507,8 @@ impl LatestCertifiedLaneBlockFrontierV1 {
     }
 }
 /// Known metadata formats for lane-owned executable payloads and view proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneBlockArtifactFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum AutonomousLaneBlockArtifactFormat {
     #[codec(index = 0)]
@@ -502,6 +522,8 @@ pub(crate) enum AutonomousLaneBlockArtifactFormat {
 /// bound to the immutable origin proposal, and every later synthetic view
 /// cursor is authorized by a lane-committee aggregate certificate carrying
 /// restart-verifiable PoPs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneBlockArtifact")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct AutonomousLaneBlockArtifact {
     /// Schema/evolution tag.
@@ -544,6 +566,8 @@ impl AutonomousLaneBlockArtifact {
 /// lane-local height only after the prior attempt is durably retired and its
 /// Queue release is complete. This pointer is published last and reconstructed
 /// from the bounded attempt inventory at startup.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneBlockLatestAttemptV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLaneBlockLatestAttemptV1 {
@@ -584,6 +608,8 @@ impl AutonomousLaneBlockLatestAttemptV1 {
     }
 }
 /// Canonical identity and monotonic value stored for one Kura-root process generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleProcessGenerationBodyV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleProcessGenerationBodyV1 {
@@ -633,6 +659,8 @@ impl AutonomousLifecycleProcessGenerationBodyV1 {
     }
 }
 /// Self-hashed first-release process-generation record for one exclusive Kura root.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleProcessGenerationRecordV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleProcessGenerationRecordV1 {
@@ -700,6 +728,8 @@ impl AutonomousLifecycleProcessGenerationClaim {
     }
 }
 /// Stable, versioned encoding of a fixed-width canonical identity projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleCanonicalIdentityV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleCanonicalIdentityV1 {
@@ -733,6 +763,8 @@ impl AutonomousLifecycleCanonicalIdentityV1 {
     }
 }
 /// Stable Queue/QueuePlan portion of one autonomous lifecycle projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleQueueProjectionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleQueueProjectionV1 {
@@ -741,6 +773,8 @@ struct AutonomousLifecycleQueueProjectionV1 {
     reservation_state: u8,
 }
 /// Stable Kura and carrier-evidence portion of one lifecycle projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleCarrierProjectionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleCarrierProjectionV1 {
@@ -749,6 +783,8 @@ struct AutonomousLifecycleCarrierProjectionV1 {
     ready_qc_durable: bool,
 }
 /// Stable volatile-custody portion of one autonomous lifecycle projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleSessionProjectionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleSessionProjectionV1 {
@@ -758,6 +794,8 @@ struct AutonomousLifecycleSessionProjectionV1 {
     producer_alive: bool,
 }
 /// Stable monotonic-history portion of one autonomous lifecycle projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleHistoryProjectionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleHistoryProjectionV1 {
@@ -774,6 +812,8 @@ struct AutonomousLifecycleHistoryProjectionV1 {
     released_high_water: u64,
 }
 /// Stable decision/application portion of one autonomous lifecycle projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleDecisionProjectionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleDecisionProjectionV1 {
@@ -786,6 +826,8 @@ struct AutonomousLifecycleDecisionProjectionV1 {
     applied_by: u128,
 }
 /// Stable release-progress portion of one autonomous lifecycle projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleReleaseProjectionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleReleaseProjectionV1 {
@@ -799,6 +841,8 @@ struct AutonomousLifecycleReleaseProjectionV1 {
 /// The persistence layout deliberately does not encode the internal
 /// refinement struct. Conversion is field-for-field and every decoded value
 /// must pass the current production state or transition kernel before use.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleStableStateV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLifecycleStableStateV1 {
@@ -1010,6 +1054,8 @@ impl AutonomousLifecycleStableStateV1 {
     }
 }
 /// Complete stable discriminator for one prepared production transition.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleActionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLifecycleActionV1 {
@@ -1030,6 +1076,8 @@ pub(crate) enum AutonomousLifecycleCursorPhaseKindV1 {
     Terminal,
 }
 /// Durable lifecycle phase for one exact autonomous proposal attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleCursorPhaseV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum AutonomousLifecycleCursorPhaseV1 {
     /// A checked transition is durable before its production mutation.
@@ -1275,6 +1323,8 @@ impl AutonomousLifecycleCursorPhaseV1 {
     }
 }
 /// Versioned, payload-free identity of one ordered Queue reservation group.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleReservationGroupV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleReservationGroupV1 {
@@ -1300,6 +1350,8 @@ impl AutonomousLifecycleReservationGroupV1 {
     }
 }
 /// Complete immutable identity bound into every autonomous lifecycle cursor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleAttemptBindingV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLifecycleAttemptBindingV1 {
@@ -1730,6 +1782,8 @@ impl AutonomousLifecycleAttemptBindingV1 {
     }
 }
 /// Canonical unsigned portion of one autonomous lifecycle cursor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleCursorUnsignedV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLifecycleCursorUnsignedV1 {
@@ -1818,6 +1872,8 @@ impl AutonomousLifecycleCursorUnsignedV1 {
     }
 }
 /// Signed, hash-chained durable lifecycle cursor for one proposal attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleCursorV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLifecycleCursorV1 {
@@ -1933,6 +1989,8 @@ impl AutonomousLifecycleCursorV1 {
 /// This records what Queue's move-only per-hash fence proved at the Kura
 /// terminal sink. `ExactOrdinaryFifo` means the observer preserved an already
 /// admitted FIFO copy; it does not mean the release protocol restored FIFO.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleReplicaQueueDispositionV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) enum AutonomousLifecycleReplicaQueueDispositionV1 {
@@ -1948,6 +2006,8 @@ pub(crate) enum AutonomousLifecycleReplicaQueueDispositionV1 {
 /// The compact source coordinates are never sufficient on their own. Kura
 /// reopens the referenced merge entry/carrier or the exact durable retirement
 /// and released claims before either publishing or consuming this record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeSourceV1")]
 #[allow(variant_size_differences)] // Fixed V1 Norito fields preserve canonical source hashes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -2035,6 +2095,8 @@ impl AutonomousLifecycleTerminalOutcomeSourceV1 {
 /// rules. A canonical noncommittee replica is a separate, merge-only basis: it
 /// binds the exact revalidated replica bytes and must never be interpreted as
 /// local lifecycle ownership or retirement authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBasisV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) enum AutonomousLifecycleTerminalOutcomeBasisV1 {
@@ -2065,6 +2127,8 @@ impl AutonomousLifecycleTerminalOutcomeBasisV1 {
     }
 }
 /// Crash-safe publication stage for one exact terminal outcome.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeStageV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) enum AutonomousLifecycleTerminalOutcomeStageV1 {
@@ -2081,6 +2145,8 @@ pub(crate) enum AutonomousLifecycleTerminalOutcomeStageV1 {
     },
 }
 /// Hash-protected body of one autonomous lifecycle terminal outcome.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleTerminalOutcomeBodyV1 {
@@ -2098,6 +2164,8 @@ struct AutonomousLifecycleTerminalOutcomeBodyV1 {
 /// revalidated complete carrier outcome when a removed validator cannot sign a
 /// new local lifecycle cursor. A local release outcome never substitutes for
 /// globally authenticated retirement/drain evidence.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLifecycleTerminalOutcomeV1 {
@@ -2570,6 +2638,8 @@ impl AutonomousLifecycleCursorRead {
     }
 }
 /// Authenticated origin of local executable-payload custody before Kura activation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecyclePayloadCustodySourceV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) enum AutonomousLifecyclePayloadCustodySourceV1 {
     /// Producer-side custody remains fenced by the exact live Queue reservation group.
@@ -2595,6 +2665,8 @@ pub(crate) enum AutonomousLifecyclePayloadCustodySourceV1 {
 /// payload custody. This is deliberately an internal, encode-only DTO: callers
 /// must pass the complete typed retirement to Kura's source-specific validator
 /// and cannot choose the resulting evidence digest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleLosingRetirementCustodyEvidenceV1")]
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleLosingRetirementCustodyEvidenceV1 {
     version: u16,
@@ -2604,6 +2676,8 @@ struct AutonomousLifecycleLosingRetirementCustodyEvidenceV1 {
     executable_payload_hash: Hash,
 }
 /// Canonical identity of one QC-authenticated canonical carrier repair.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleCanonicalCarrierRepairCustodyEvidenceV1")]
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleCanonicalCarrierRepairCustodyEvidenceV1 {
     version: u16,
@@ -2617,6 +2691,8 @@ struct AutonomousLifecycleCanonicalCarrierRepairCustodyEvidenceV1 {
     executable_payload_hash: Hash,
 }
 /// Canonical identity of one locally protected global carrier delivery.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleProtectedCarrierReceiveCustodyEvidenceV1")]
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleProtectedCarrierReceiveCustodyEvidenceV1 {
     version: u16,
@@ -2629,6 +2705,8 @@ struct AutonomousLifecycleProtectedCarrierReceiveCustodyEvidenceV1 {
     executable_payload_hash: Hash,
 }
 /// Canonical identity of an outstanding-request-bound historical QC response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleHistoricalQcResponseCustodyEvidenceV1")]
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleHistoricalQcResponseCustodyEvidenceV1 {
     version: u16,
@@ -2644,6 +2722,8 @@ struct AutonomousLifecycleHistoricalQcResponseCustodyEvidenceV1 {
 }
 /// Canonical identity of the complete State-preflighted historical recovery
 /// record which supplied payload custody before its dependent sidecars exist.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleCanonicalHistoricalRecoveryCustodyEvidenceV1")]
 #[derive(Debug, Encode)]
 struct AutonomousLifecycleCanonicalHistoricalRecoveryCustodyEvidenceV1 {
     version: u16,
@@ -2655,6 +2735,8 @@ struct AutonomousLifecycleCanonicalHistoricalRecoveryCustodyEvidenceV1 {
     executable_payload_hash: Hash,
 }
 /// Exact typed custody evidence bound into the signed lifecycle bootstrap.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecyclePayloadCustodyBindingV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecyclePayloadCustodyBindingV1 {
@@ -2730,6 +2812,8 @@ enum AutonomousLifecycleBootstrapPersistenceAuthentication<'authorization> {
     PayloadCustody(&'authorization AutonomousLifecyclePayloadCustodyAuthorization),
 }
 /// Canonical signed intent persisted before the first autonomous payload mutation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleBootstrapBodyV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleBootstrapBodyV1 {
@@ -2847,6 +2931,8 @@ impl AutonomousLifecycleBootstrapBodyV1 {
     }
 }
 /// Self-hashed first-release bootstrap artifact retained through every crash boundary.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLifecycleBootstrapV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLifecycleBootstrapV1 {
@@ -3199,6 +3285,8 @@ impl AutonomousLifecyclePendingTerminalOutcomeRecovery {
     }
 }
 /// Durable state of one autonomous executable-entrypoint owner.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneEntrypointClaimStateV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum AutonomousLaneEntrypointClaimStateV1 {
     /// The lane payload exclusively owns the entrypoint.
@@ -3234,6 +3322,8 @@ enum AutonomousLaneEntrypointClaimStateV1 {
 /// reaches `ReplicaReleased`; after the matching terminal outcome is synced,
 /// Kura seals it as `ReplicaReleasedComplete`. Only that archive-independent
 /// sealed state may be replaced by a later payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneEntrypointClaimV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct AutonomousLaneEntrypointClaimV1 {
@@ -3368,6 +3458,8 @@ impl AutonomousLaneEntrypointClaimV1 {
 /// ownership. Its ordered reservation vector is therefore both the exact
 /// release recipe and the restart proof that a delayed proposal, READY vote,
 /// QC, or merge bundle belongs to a closed slot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneSlotRetirementV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLaneSlotRetirementV1 {
@@ -3441,6 +3533,8 @@ impl AutonomousLaneSlotRetirementV1 {
     }
 }
 /// Known formats for the bounded mutable view state of an autonomous payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneBlockViewStateFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 enum AutonomousLaneBlockViewStateFormat {
     #[codec(index = 0)]
@@ -3454,6 +3548,8 @@ enum AutonomousLaneBlockViewStateFormat {
 /// limit. All identity fields are repeated and validated so a stale view file
 /// cannot be attached to a recreated lane or another payload at the same
 /// lane-local height.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneBlockViewState")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutonomousLaneBlockViewState {
     format: AutonomousLaneBlockViewStateFormat,
@@ -3516,6 +3612,8 @@ include!("autonomous_reservation_inventory.rs");
 include!("autonomous_reservation_classifier.rs");
 include!("historical_autonomous_recovery.rs");
 /// Known metadata format variants for lane-local block artifacts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockArtifactFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockArtifactFormat {
     #[codec(index = 0)]
@@ -3523,6 +3621,8 @@ pub enum LaneBlockArtifactFormat {
     Current,
 }
 /// Persisted lane-local payload ownership artifact anchored to a global block.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockArtifact")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockArtifact {
     /// Schema / evolution tag for the lane artifact format.
@@ -3763,6 +3863,8 @@ pub struct RecoveredLaneBlockPayload {
 /// anchored by its exact ownership sidecar, while a lane-owned autonomous
 /// payload is bound directly to its chain, epoch, and executable-payload hash.
 /// Autonomous inputs never manufacture a global block hash or proposal view.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockExecutionSourceV1")]
 #[allow(variant_size_differences)] // The exact global artifact must remain inline and canonical.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -3828,6 +3930,8 @@ impl LaneBlockExecutionSourceV1 {
     }
 }
 /// Known metadata format variants for durable lane-block execution input.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockExecutionInputArtifactFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockExecutionInputArtifactFormat {
     #[codec(index = 0)]
@@ -3835,6 +3939,8 @@ pub enum LaneBlockExecutionInputArtifactFormat {
     Current,
 }
 /// Durable recovered input for a certified standalone lane block.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockExecutionInputArtifact")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockExecutionInputArtifact {
@@ -3893,6 +3999,8 @@ impl LaneBlockExecutionInputArtifact {
     }
 }
 /// Known metadata format variants for durable lane-block execution preflights.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockExecutionPreflightArtifactFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockExecutionPreflightArtifactFormat {
     #[codec(index = 0)]
@@ -3900,6 +4008,8 @@ pub enum LaneBlockExecutionPreflightArtifactFormat {
     Current,
 }
 /// Durable result of a non-committing execution preflight for a lane block.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockExecutionPreflightArtifact")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockExecutionPreflightArtifact {
@@ -3970,6 +4080,8 @@ impl LaneBlockExecutionPreflightArtifact {
     }
 }
 /// Known metadata format variants for durable lane-block application receipts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockApplicationReceiptArtifactFormat")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub enum LaneBlockApplicationReceiptArtifactFormat {
     #[codec(index = 0)]
@@ -3980,6 +4092,8 @@ pub enum LaneBlockApplicationReceiptArtifactFormat {
     MergeExecution,
 }
 /// Durable receipt proving that a certified lane block has committed results.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneBlockApplicationReceiptArtifact")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneBlockApplicationReceiptArtifact {
@@ -4033,6 +4147,8 @@ pub struct LaneBlockApplicationReceiptArtifact {
 /// retaining a lifetime-sized startup or retirement scan. Every field is
 /// reconstructed from the QC-authenticated merge entry and carrier before the
 /// cursor can authorize compaction or archive validation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::LaneMergeApplicationFrontierV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct LaneMergeApplicationFrontierV1 {

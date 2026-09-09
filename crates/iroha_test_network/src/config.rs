@@ -2289,7 +2289,7 @@ mod tests {
             match tx.instructions() {
                 Executable::Instructions(isi) => {
                     for instr in isi {
-                        if let Some(RegisterBox::Peer(isi)) =
+                        if let Some(RegisterBox::Peer(_)) =
                             instr.as_any().downcast_ref::<RegisterBox>()
                         {
                             register_pop += 1;

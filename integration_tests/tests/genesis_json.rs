@@ -280,7 +280,7 @@ fn genesis_norito_bytes_roundtrip_network() -> Result<()> {
         timeout(sync_timeout, peer.once_block(1))
             .await
             .map_err(|_| eyre!("timed out waiting for genesis block 1"))?;
-        let _blocks: u64 = peer.client().client().get_status().unwrap().blocks;
+        let _blocks: u64 = peer.status().await.unwrap().blocks;
         Ok(())
     });
     if let Err(err) = roundtrip_result {

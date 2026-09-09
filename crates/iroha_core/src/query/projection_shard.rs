@@ -55,6 +55,8 @@ pub enum QueryProjectionShardArchiveError {
     #[error("failed to compress query projection shard archive with zstd: {0}")]
     Compress(#[source] std::io::Error),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_shard::QueryProjectionShardLocator")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode)]
 struct QueryProjectionShardLocator {
     version: u16,
@@ -66,6 +68,8 @@ struct QueryProjectionShardLocator {
     indexed_block_hash: Option<HashOf<BlockHeader>>,
 }
 /// Immutable archive describing one query projection shard snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_shard::QueryProjectionShardArchive")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionShardArchive {
     /// Version of the archive payload itself.

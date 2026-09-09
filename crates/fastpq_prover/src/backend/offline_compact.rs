@@ -1,7 +1,7 @@
 //! Fixed quantity-artifact production and verification for offline callers.
 //!
-//! The two routes verify complete ordered bundles under the existing fixed SHAKE
-//! candidate. The caller supplies independent expected public inputs and AXT
+//! The two routes verify complete ordered bundles under the fixed six-lane compact V1
+//! implementation. The caller supplies independent expected public inputs and AXT
 //! context; artifact bytes cannot select another value domain or protocol.
 //! Success establishes mathematical consistency with those expectations, not
 //! their authority, ledger finality, replay admission or production qualification.
@@ -379,7 +379,7 @@ pub fn quantity_profile_id() -> FastpqCompactProfileIdV1 {
 
 /// Verify a complete ordinary quantity artifact against independent caller inputs.
 ///
-/// The entry point fixes the quantity value domain, ordinary semantics and SHAKE
+/// The entry point fixes the quantity value domain, ordinary semantics and the six-lane
 /// candidate. It does not accept a generic AIR, profile selector or private witness.
 ///
 /// # Errors

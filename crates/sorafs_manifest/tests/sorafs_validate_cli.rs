@@ -395,7 +395,7 @@ fn sorafs_validate_admission_accepts_committed_renewal_fixture() {
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "admission",
-            "--envelope",
+            "--input",
             envelope.to_str().expect("fixture path is utf-8"),
             "--renewal",
             renewal.to_str().expect("fixture path is utf-8"),
@@ -431,7 +431,7 @@ fn sorafs_validate_admission_accepts_committed_revocation_fixture() {
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "admission",
-            "--envelope",
+            "--input",
             envelope.to_str().expect("fixture path is utf-8"),
             "--revocation",
             revocation.to_str().expect("fixture path is utf-8"),
@@ -554,7 +554,9 @@ fn sorafs_validate_orderbook_accepts_committed_receipt_fixture() {
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "orderbook",
-            "--receipt",
+            "--kind",
+            "settlement-receipt",
+            "--input",
             fixture.to_str().expect("fixture path is utf-8"),
             "--generated-at",
             "123",
@@ -909,7 +911,9 @@ fn sorafs_validate_repair_accepts_generated_task_record() {
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "repair",
-            "--task",
+            "--kind",
+            "task",
+            "--input",
             input.to_str().expect("temp path is utf-8"),
             "--generated-at",
             "123",
@@ -940,7 +944,9 @@ fn sorafs_validate_repair_accepts_committed_task_fixture() {
     let output = cargo_bin_cmd!("sorafs-validate")
         .args([
             "repair",
-            "--task",
+            "--kind",
+            "task",
+            "--input",
             fixture.to_str().expect("fixture path is utf-8"),
             "--generated-at",
             "123",

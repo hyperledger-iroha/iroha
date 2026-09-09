@@ -8,7 +8,7 @@ use crate::conststr::ConstString;
 use core::fmt;
 use iroha_schema::{IntoSchema, TypeId};
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, core as ncore,
+    DeserializePayload, SerializePayload, core as ncore,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize},
 };
 pub use small_string::SmallStr;
@@ -77,13 +77,13 @@ mod small_string {
             Ok(Self::from_string(value))
         }
     }
-    impl NoritoSerialize for SmallStr {}
+
     impl SerializePayload for SmallStr {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             <&str as SerializePayload>::serialize(&self.as_str(), writer)
         }
     }
-    impl NoritoDeserialize<'_> for SmallStr {}
+
     impl<'a> DeserializePayload<'a> for SmallStr {
         fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
             let archived_str: &ncore::Archived<String> = archived.cast();
@@ -115,7 +115,7 @@ mod small_string {
 mod tests {
     use super::*;
     use norito::{
-        DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
+        DeserializePayload, SerializePayload,
         codec::{Decode, Encode},
         core as ncore, decode_from_bytes, json, to_bytes,
     };
@@ -205,7 +205,7 @@ mod tests {
             "iroha_primitives::small::small_string::SmallStr"
         );
         assert_eq!(
-            <SmallStr as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<SmallStr>(),
             [
                 0x53, 0x33, 0xe7, 0x06, 0x4f, 0x0e, 0x99, 0x2f, 0x66, 0x60, 0xa7, 0xe1, 0x23, 0x24,
                 0x0c, 0xbc
@@ -477,10 +477,6 @@ mod tests {
         let nominal = "iroha_primitives::small::small_string::SmallStr";
         assert_eq!(<SmallStr as norito::NoritoSchema>::nominal_name(), nominal);
         assert_eq!(<SmallStr as norito::NoritoSchema>::frame_name(), nominal);
-        assert_eq!(
-            <SmallStr as NoritoDeserialize>::schema_hash(),
-            <SmallStr as NoritoSerialize>::schema_hash()
-        );
         let _flags = ncore::DecodeFlagsGuard::enter(ncore::header_flags::COMPACT_LEN);
         let frame = to_bytes(&SmallStr::from_str("schema")).expect("current nominal frame");
         assert_eq!(
@@ -553,7 +549,7 @@ mod tests {
     #[test]
     fn nested_smallvec_counts_once_and_retains_fixed_element_prefixes() {
         struct Leaf<'a>(&'a std::cell::Cell<usize>);
-        impl NoritoSerialize for Leaf<'_> {}
+
         impl SerializePayload for Leaf<'_> {
             fn serialize(&self, writer: &mut ncore::Encoder<'_>) -> Result<(), ncore::Error> {
                 self.0.set(self.0.get() + 1);
@@ -683,7 +679,7 @@ mod tests {
     fn smallvec_zero_sized_round_trip() {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         struct Zst;
-        impl NoritoSerialize for Zst {}
+
         impl SerializePayload for Zst {
             fn serialize(
                 &self,
@@ -692,7 +688,7 @@ mod tests {
                 Ok(())
             }
         }
-        impl NoritoDeserialize<'_> for Zst {}
+
         impl<'a> DeserializePayload<'a> for Zst {
             fn deserialize(_: &'a ncore::Archived<Self>) -> Self {
                 Self
@@ -919,7 +915,7 @@ mod small_vector {
             )
         }
     }
-    impl<A: Array> NoritoSerialize for SmallVec<A> where A::Item: NoritoSerialize {}
+
     impl<A: Array> SerializePayload for SmallVec<A>
     where
         A::Item: SerializePayload,
@@ -935,10 +931,7 @@ mod small_vector {
             Ok(())
         }
     }
-    impl<'a, A: Array> NoritoDeserialize<'a> for SmallVec<A> where
-        A::Item: NoritoDeserialize<'a> + for<'slice> ncore::DecodeFromSlice<'slice>
-    {
-    }
+
     impl<'a, A: Array> DeserializePayload<'a> for SmallVec<A>
     where
         A::Item: DeserializePayload<'a> + for<'slice> ncore::DecodeFromSlice<'slice>,

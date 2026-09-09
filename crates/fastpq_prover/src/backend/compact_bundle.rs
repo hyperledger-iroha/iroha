@@ -3,14 +3,12 @@
 //! Every segment binds the original complete public context, ordered root chain
 //! and its ordinal before challenges. This module never prepares isolated delta
 //! slices or reconstructs private witnesses. All segments must verify before a
-//! result is returned. The outer canonical frame is a distinct prototype schema.
+//! result is returned. The outer canonical frame is a sole final schema.
 //!
 //! TODO: Qualify aggregate protocol security, resources and authenticated caller
 //! integration before production use. This offline bundle does not change any
 //! production default or grant source-state authority or finality.
 
-#[cfg(test)]
-use fastpq_isi::FASTPQ_FINAL_V1;
 use iroha_data_model::privacy::GoldilocksDigest384V1;
 use norito::{DecodeLimits, NoritoDeserialize, NoritoSerialize};
 
@@ -66,8 +64,11 @@ impl Default for BundleLimits {
 }
 
 /// Canonical carrier only; decoding it does not validate any contained proof.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::OrdinaryTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::BundleWire",
+    frame = "fastpq_prover::compact_v1::OrdinaryTransferBundleV1"
+)]
 pub(super) struct BundleWire {
     /// Exact bundle format version.
     pub(super) version: u16,
@@ -81,39 +82,17 @@ pub(super) struct BundleWire {
 ///
 /// Although its structural fields match the ordinary carrier, the nominal
 /// schema differs. Re-encoding a carrier cannot retag child segment identities.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_prototype::AxtTransferBundleV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_bundle::AxtBundleWire",
+    frame = "fastpq_prover::compact_v1::AxtTransferBundleV1"
+)]
 pub(super) struct AxtBundleWire {
     /// Exact bundle format version.
     pub(super) version: u16,
     /// Ordered claimed roots between chronological segment proofs.
     pub(super) intermediate_roots: Vec<[u8; 32]>,
     /// Canonical AXT segment proof frames in original occurrence order.
-    pub(super) segments: Vec<Vec<u8>>,
-}
-
-/// Distinct candidate ordinary carrier. The contained frames must also match
-/// the caller-selected candidate transcript; encoding supplies no qualification.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeOrdinaryTransferBundleV1")]
-pub(super) struct ShakeBundleWire {
-    /// Exact carrier version.
-    pub(super) version: u16,
-    /// Original chronological shared endpoints, without private SMT paths.
-    pub(super) intermediate_roots: Vec<[u8; 32]>,
-    /// Ordered complete raw candidate shared frames.
-    pub(super) segments: Vec<Vec<u8>>,
-}
-
-/// Distinct candidate AXT carrier; complete trusted AXT context stays outside it.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "fastpq_prover::compact_candidate::ShakeAxtTransferBundleV1")]
-pub(super) struct ShakeAxtBundleWire {
-    /// Exact carrier version.
-    pub(super) version: u16,
-    /// Original chronological shared endpoints, without private SMT paths.
-    pub(super) intermediate_roots: Vec<[u8; 32]>,
-    /// Ordered complete raw candidate AXT shared frames.
     pub(super) segments: Vec<Vec<u8>>,
 }
 
@@ -169,7 +148,15 @@ pub(super) fn verify_transfer_bundle<V: CompactTransferValue>(
     bytes: &[u8],
     limits: BundleLimits,
 ) -> Result<VerifiedBundle> {
-    verify_transfer_bundle_with(prepared, expected, bytes, limits, SharedVerifier::Prototype)
+    verify_transfer_bundle_with(
+        prepared,
+        expected,
+        bytes,
+        limits,
+        SharedVerifier {
+            max_decode_allocation_charges: 32 * 1024 * 1024,
+        },
+    )
 }
 
 fn verify_transfer_bundle_with<V: CompactTransferValue>(
@@ -208,13 +195,7 @@ fn verify_transfer_bundle_with<V: CompactTransferValue>(
             MAX_DECODE_DEPTH,
         ),
         || {
-            let wire = match verifier {
-                #[cfg(test)]
-                SharedVerifier::Prototype => decode_wire(bytes, count, limits)?,
-                SharedVerifier::ShakeCandidate { .. } => {
-                    decode_shake_wire(bytes, count, limits, verifier)?
-                }
-            };
+            let wire = decode_wire_with_policy(bytes, count, limits, verifier)?;
             let batch = PublicTransferBatch::new(
                 prepared,
                 expected,
@@ -271,7 +252,9 @@ pub(super) fn verify_axt_transfer_bundle<V: CompactTransferValue>(
         context,
         bytes,
         limits,
-        SharedVerifier::Prototype,
+        SharedVerifier {
+            max_decode_allocation_charges: 32 * 1024 * 1024,
+        },
     )
 }
 
@@ -312,13 +295,7 @@ fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
             MAX_DECODE_DEPTH,
         ),
         || {
-            let wire = match verifier {
-                #[cfg(test)]
-                SharedVerifier::Prototype => decode_axt_wire(bytes, count, limits)?,
-                SharedVerifier::ShakeCandidate { .. } => {
-                    decode_shake_axt_wire(bytes, count, limits, verifier)?
-                }
-            };
+            let wire = decode_axt_wire_with_policy(bytes, count, limits, verifier)?;
             let batch = AxtTransferBatch::new(
                 prepared,
                 expected,
@@ -359,7 +336,7 @@ fn verify_axt_transfer_bundle_with<V: CompactTransferValue>(
 
 /// Verify an ordered candidate ordinary bundle with separate child and cumulative
 /// decode charges. Every child must pass before returning a verified result.
-pub(super) fn verify_shake_transfer_bundle<V: CompactTransferValue>(
+pub(super) fn verify_transfer_bundle_with_allocation<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     bytes: &[u8],
@@ -371,7 +348,7 @@ pub(super) fn verify_shake_transfer_bundle<V: CompactTransferValue>(
         expected,
         bytes,
         limits,
-        SharedVerifier::ShakeCandidate {
+        SharedVerifier {
             max_decode_allocation_charges: max_segment_decode_allocation_charges,
         },
     )
@@ -379,7 +356,7 @@ pub(super) fn verify_shake_transfer_bundle<V: CompactTransferValue>(
 
 /// Verify an ordered candidate AXT bundle with complete caller AXT context.
 /// Neither carrier nor successful proof prefixes grant authority or finality.
-pub(super) fn verify_shake_axt_transfer_bundle<V: CompactTransferValue>(
+pub(super) fn verify_axt_transfer_bundle_with_allocation<V: CompactTransferValue>(
     prepared: &PreparedPublicTransfers<'_, V>,
     expected: &PublicIO,
     context: AxtVerificationContext<'_>,
@@ -393,71 +370,20 @@ pub(super) fn verify_shake_axt_transfer_bundle<V: CompactTransferValue>(
         context,
         bytes,
         limits,
-        SharedVerifier::ShakeCandidate {
+        SharedVerifier {
             max_decode_allocation_charges: max_segment_decode_allocation_charges,
         },
     )
 }
-
-/// Encode a bounded candidate ordinary carrier; child proof validity is separate.
-pub(super) fn encode_shake_wire(
-    wire: &ShakeBundleWire,
-    count: usize,
-    limits: BundleLimits,
-) -> Result<Vec<u8>> {
-    preflight_wire_parts_for(
-        wire.version,
-        &wire.intermediate_roots,
-        &wire.segments,
-        count,
-        limits,
-        SharedVerifier::ShakeCandidate {
-            max_decode_allocation_charges: limits.max_total_decode_allocation_charges,
-        },
-    )?;
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    check_limit(
-        "max_bundle_wire_bytes",
-        norito::core::encoded_frame_len(wire)?,
-        limits.max_wire_bytes,
-    )?;
-    Ok(norito::encode_canonical(wire)?)
-}
-
-/// Encode a bounded nominal candidate AXT carrier without replacing caller context.
-pub(super) fn encode_shake_axt_wire(
-    wire: &ShakeAxtBundleWire,
-    count: usize,
-    limits: BundleLimits,
-) -> Result<Vec<u8>> {
-    preflight_wire_parts_for(
-        wire.version,
-        &wire.intermediate_roots,
-        &wire.segments,
-        count,
-        limits,
-        SharedVerifier::ShakeCandidate {
-            max_decode_allocation_charges: limits.max_total_decode_allocation_charges,
-        },
-    )?;
-    let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-    check_limit(
-        "max_bundle_wire_bytes",
-        norito::core::encoded_frame_len(wire)?,
-        limits.max_wire_bytes,
-    )?;
-    Ok(norito::encode_canonical(wire)?)
-}
-
 // Normalize only already bounded nominal carrier fields by moving their owned
 // tables. No child is decoded, retagged or accepted by these internal conversions.
-fn decode_shake_wire(
+fn decode_wire_with_policy(
     bytes: &[u8],
     count: usize,
     limits: BundleLimits,
     verifier: SharedVerifier,
 ) -> Result<BundleWire> {
-    let wire: ShakeBundleWire = norito::decode_canonical_with_limits(
+    let wire: BundleWire = norito::decode_canonical_with_limits(
         bytes,
         wire_decode_limits_for(bytes, count, limits, verifier)?,
     )?;
@@ -476,13 +402,13 @@ fn decode_shake_wire(
     })
 }
 
-fn decode_shake_axt_wire(
+fn decode_axt_wire_with_policy(
     bytes: &[u8],
     count: usize,
     limits: BundleLimits,
     verifier: SharedVerifier,
 ) -> Result<AxtBundleWire> {
-    let wire: ShakeAxtBundleWire = norito::decode_canonical_with_limits(
+    let wire: AxtBundleWire = norito::decode_canonical_with_limits(
         bytes,
         wire_decode_limits_for(bytes, count, limits, verifier)?,
     )?;
@@ -502,7 +428,6 @@ fn decode_shake_axt_wire(
 }
 
 /// Serialize a bounded carrier; this helper does not verify its child frames.
-#[cfg(test)]
 pub(super) fn encode_wire(
     wire: &BundleWire,
     expected_count: usize,
@@ -516,7 +441,6 @@ pub(super) fn encode_wire(
 }
 
 /// Encode a bounded nominal AXT carrier without verifying its child frames.
-#[cfg(test)]
 pub(super) fn encode_axt_wire(
     wire: &AxtBundleWire,
     expected_count: usize,
@@ -574,7 +498,14 @@ fn wire_decode_limits(
     expected_count: usize,
     limits: BundleLimits,
 ) -> Result<DecodeLimits> {
-    wire_decode_limits_for(bytes, expected_count, limits, SharedVerifier::Prototype)
+    wire_decode_limits_for(
+        bytes,
+        expected_count,
+        limits,
+        SharedVerifier {
+            max_decode_allocation_charges: 32 * 1024 * 1024,
+        },
+    )
 }
 
 fn wire_decode_limits_for(
@@ -614,7 +545,13 @@ fn wire_decode_limits_for(
 
 #[cfg(test)]
 fn preflight_count(count: usize, limits: BundleLimits) -> Result<()> {
-    preflight_count_for(count, limits, SharedVerifier::Prototype)
+    preflight_count_for(
+        count,
+        limits,
+        SharedVerifier {
+            max_decode_allocation_charges: 32 * 1024 * 1024,
+        },
+    )
 }
 
 fn preflight_count_for(count: usize, limits: BundleLimits, verifier: SharedVerifier) -> Result<()> {
@@ -638,7 +575,6 @@ fn preflight_count_for(count: usize, limits: BundleLimits, verifier: SharedVerif
     check_limit("max_bundle_queries", queries, limits.max_total_queries)
 }
 
-#[cfg(test)]
 fn preflight_wire(wire: &BundleWire, expected_count: usize, limits: BundleLimits) -> Result<()> {
     preflight_wire_parts(
         wire.version,
@@ -649,7 +585,6 @@ fn preflight_wire(wire: &BundleWire, expected_count: usize, limits: BundleLimits
     )
 }
 
-#[cfg(test)]
 fn preflight_wire_parts(
     version: u16,
     intermediate_roots: &[[u8; 32]],
@@ -663,7 +598,9 @@ fn preflight_wire_parts(
         segments,
         expected_count,
         limits,
-        SharedVerifier::Prototype,
+        SharedVerifier {
+            max_decode_allocation_charges: 32 * 1024 * 1024,
+        },
     )
 }
 
@@ -749,6 +686,12 @@ fn shape(details: &str) -> Error {
 
 #[cfg(test)]
 mod tests {
+    fn test_segment_limits() -> crate::VerifyLimits {
+        crate::VerifyLimits {
+            max_queries: 375,
+            ..crate::VerifyLimits::default()
+        }
+    }
     use super::*;
     use crate::backend::compact_axt_context::tests::Fixture;
 
@@ -771,7 +714,11 @@ mod tests {
     fn limits(count: usize) -> BundleLimits {
         BundleLimits {
             max_segments: count,
-            max_total_queries: count * FASTPQ_FINAL_V1.fri.queries as usize,
+            max_total_queries: count * 375,
+            segment: VerifyLimits {
+                max_queries: 375,
+                ..test_segment_limits()
+            },
             ..BundleLimits::default()
         }
     }
@@ -868,7 +815,7 @@ mod tests {
             max_total_segment_bytes: 75,
             segment: VerifyLimits {
                 max_proof_bytes: 38,
-                ..VerifyLimits::default()
+                ..test_segment_limits()
             },
             ..limits(2)
         };
@@ -1084,16 +1031,16 @@ mod tests {
                 &frame,
                 BundleLimits {
                     segment: VerifyLimits {
-                        max_queries: 135,
-                        ..VerifyLimits::default()
+                        max_queries: 374,
+                        ..test_segment_limits()
                     },
                     ..limits(1)
                 }
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_queries",
-                actual: 136,
-                max: 135
+                actual: 375,
+                max: 374
             })
         ));
         let prepared_bytes = ordinary.work().public_bytes;
@@ -1105,7 +1052,7 @@ mod tests {
                 BundleLimits {
                     segment: VerifyLimits {
                         max_batch_bytes: prepared_bytes,
-                        ..VerifyLimits::default()
+                        ..test_segment_limits()
                     },
                     ..limits(1)
                 }
@@ -1376,7 +1323,7 @@ mod tests {
             (
                 BundleLimits {
                     segment: VerifyLimits {
-                        max_queries: 135,
+                        max_queries: 374,
                         ..limits(2).segment
                     },
                     ..limits(2)
@@ -1457,7 +1404,7 @@ mod tests {
         decode_axt_wire(&raw, 1, limits(1)).unwrap();
     }
 
-    fn shake_limits(count: usize) -> BundleLimits {
+    fn final_limits(count: usize) -> BundleLimits {
         BundleLimits {
             max_segments: count,
             max_wire_bytes: 16 * 1024 * 1024,
@@ -1467,74 +1414,133 @@ mod tests {
             segment: VerifyLimits {
                 max_proof_bytes: 4_326_227,
                 max_queries: 375,
-                ..VerifyLimits::default()
+                ..test_segment_limits()
             },
             ..BundleLimits::default()
         }
     }
 
-    fn shake_verifier() -> SharedVerifier {
-        SharedVerifier::ShakeCandidate {
+    fn final_verifier() -> SharedVerifier {
+        SharedVerifier {
             max_decode_allocation_charges: 64 * 1024 * 1024,
         }
     }
 
     #[test]
-    fn candidate_bundle_headers_are_nominal_and_preserve_exact_payload_and_flags() {
+    fn final_bundle_headers_are_nominal_and_reject_every_retired_carrier() {
+        macro_rules! retired_carrier {
+            ($name:ident,$schema:literal) => {
+                #[derive(NoritoSerialize, norito::NoritoSchema)]
+                #[norito_schema(name = $schema)]
+                struct $name {
+                    version: u16,
+                    intermediate_roots: Vec<[u8; 32]>,
+                    segments: Vec<Vec<u8>>,
+                }
+            };
+        }
+        retired_carrier!(
+            OldOrdinary,
+            "fastpq_prover::compact_prototype::OrdinaryTransferBundleV1"
+        );
+        retired_carrier!(
+            OldAxt,
+            "fastpq_prover::compact_prototype::AxtTransferBundleV1"
+        );
+        retired_carrier!(
+            OldShakeOrdinary,
+            "fastpq_prover::compact_candidate::ShakeOrdinaryTransferBundleV1"
+        );
+        retired_carrier!(
+            OldShakeAxt,
+            "fastpq_prover::compact_candidate::ShakeAxtTransferBundleV1"
+        );
         for count in 1..=3 {
-            let original = wire(count);
-            let ordinary = ShakeBundleWire {
-                version: original.version,
-                intermediate_roots: original.intermediate_roots.clone(),
-                segments: original.segments.clone(),
+            let ordinary = wire(count);
+            let axt = AxtBundleWire {
+                version: ordinary.version,
+                intermediate_roots: ordinary.intermediate_roots.clone(),
+                segments: ordinary.segments.clone(),
             };
-            let axt = ShakeAxtBundleWire {
-                version: original.version,
-                intermediate_roots: original.intermediate_roots.clone(),
-                segments: original.segments.clone(),
-            };
-            let bytes = encode_shake_wire(&ordinary, count, shake_limits(count)).unwrap();
-            let axt_bytes = encode_shake_axt_wire(&axt, count, shake_limits(count)).unwrap();
-            let native = encode_wire(&original, count, limits(count)).unwrap();
-            assert_eq!(bytes.len(), native.len());
-            assert_eq!(axt_bytes.len(), native.len());
+            let bytes = encode_wire(&ordinary, count, final_limits(count)).unwrap();
+            let axt_bytes = encode_axt_wire(&axt, count, final_limits(count)).unwrap();
+            assert_eq!(bytes.len(), axt_bytes.len());
             assert_eq!(
-                decode_shake_wire(&bytes, count, shake_limits(count), shake_verifier()).unwrap(),
-                original
+                decode_wire_with_policy(&bytes, count, final_limits(count), final_verifier())
+                    .unwrap(),
+                ordinary
             );
-            let restored =
-                decode_shake_axt_wire(&axt_bytes, count, shake_limits(count), shake_verifier())
-                    .unwrap();
-            assert_eq!(restored.version, axt.version);
-            assert_eq!(restored.intermediate_roots, axt.intermediate_roots);
-            assert_eq!(restored.segments, axt.segments);
-            for wrong in [&axt_bytes, &native] {
-                assert!(
-                    decode_shake_wire(wrong, count, shake_limits(count), shake_verifier()).is_err()
-                );
+            assert_eq!(
+                decode_axt_wire_with_policy(
+                    &axt_bytes,
+                    count,
+                    final_limits(count),
+                    final_verifier()
+                )
+                .unwrap(),
+                axt
+            );
+            assert!(
+                decode_wire_with_policy(&axt_bytes, count, final_limits(count), final_verifier())
+                    .is_err()
+            );
+            assert!(
+                decode_axt_wire_with_policy(&bytes, count, final_limits(count), final_verifier())
+                    .is_err()
+            );
+            macro_rules! old_bytes {
+                ($name:ident) => {
+                    norito::encode_canonical(&$name {
+                        version: ordinary.version,
+                        intermediate_roots: ordinary.intermediate_roots.clone(),
+                        segments: ordinary.segments.clone(),
+                    })
+                    .unwrap()
+                };
             }
-            for wrong in [&bytes, &native] {
+            for retired in [
+                old_bytes!(OldOrdinary),
+                old_bytes!(OldAxt),
+                old_bytes!(OldShakeOrdinary),
+                old_bytes!(OldShakeAxt),
+            ] {
+                assert_eq!(retired.len(), bytes.len());
                 assert!(
-                    decode_shake_axt_wire(wrong, count, shake_limits(count), shake_verifier())
+                    decode_wire_with_policy(&retired, count, final_limits(count), final_verifier())
                         .is_err()
                 );
+                assert!(
+                    decode_axt_wire_with_policy(
+                        &retired,
+                        count,
+                        final_limits(count),
+                        final_verifier()
+                    )
+                    .is_err()
+                );
             }
-            assert!(decode_wire(&bytes, count, shake_limits(count)).is_err());
-            assert!(decode_axt_wire(&axt_bytes, count, shake_limits(count)).is_err());
+            assert_eq!(
+                decode_wire(&bytes, count, final_limits(count)).unwrap(),
+                ordinary
+            );
+            assert_eq!(
+                decode_axt_wire(&axt_bytes, count, final_limits(count)).unwrap(),
+                axt
+            );
             for flags in [0, norito::core::default_encode_flags()] {
                 let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
                 assert_eq!(
-                    encode_shake_wire(&ordinary, count, shake_limits(count)).unwrap(),
+                    encode_wire(&ordinary, count, final_limits(count)).unwrap(),
                     bytes
                 );
                 assert_eq!(
-                    encode_shake_axt_wire(&axt, count, shake_limits(count)).unwrap(),
+                    encode_axt_wire(&axt, count, final_limits(count)).unwrap(),
                     axt_bytes
                 );
                 assert_eq!(
-                    decode_shake_wire(&bytes, count, shake_limits(count), shake_verifier())
+                    decode_wire_with_policy(&bytes, count, final_limits(count), final_verifier())
                         .unwrap(),
-                    original
+                    ordinary
                 );
                 assert_eq!(norito::core::get_decode_flags(), flags);
             }
@@ -1554,14 +1560,14 @@ mod tests {
                 (
                     BundleLimits {
                         max_wire_bytes: 0,
-                        ..shake_limits(2)
+                        ..final_limits(2)
                     },
                     "max_bundle_wire_bytes",
                 ),
                 (
                     BundleLimits {
                         max_total_queries: 749,
-                        ..shake_limits(2)
+                        ..final_limits(2)
                     },
                     "max_bundle_queries",
                 ),
@@ -1569,17 +1575,23 @@ mod tests {
                     BundleLimits {
                         segment: VerifyLimits {
                             max_queries: 374,
-                            ..shake_limits(2).segment
+                            ..final_limits(2).segment
                         },
-                        ..shake_limits(2)
+                        ..final_limits(2)
                     },
                     "max_queries",
                 ),
             ] {
                 let result = if semantics == ProofSemantics::StateTransition {
-                    verify_shake_transfer_bundle(&prepared, &expected, &[255], limits, usize::MAX)
+                    verify_transfer_bundle_with_allocation(
+                        &prepared,
+                        &expected,
+                        &[255],
+                        limits,
+                        usize::MAX,
+                    )
                 } else {
-                    verify_shake_axt_transfer_bundle(
+                    verify_axt_transfer_bundle_with_allocation(
                         &prepared,
                         &expected,
                         AxtVerificationContext {
@@ -1599,9 +1611,9 @@ mod tests {
                 );
             }
         }
-        preflight_count_for(2, shake_limits(2), shake_verifier()).unwrap();
-        assert!(preflight_count_for(0, shake_limits(2), shake_verifier()).is_err());
-        assert!(preflight_count_for(129, shake_limits(129), shake_verifier()).is_err());
+        preflight_count_for(2, final_limits(2), final_verifier()).unwrap();
+        assert!(preflight_count_for(0, final_limits(2), final_verifier()).is_err());
+        assert!(preflight_count_for(129, final_limits(129), final_verifier()).is_err());
         assert_eq!(
             BundleLimits::default().segment.max_proof_bytes,
             VerifyLimits::default().max_proof_bytes
@@ -1611,7 +1623,7 @@ mod tests {
     #[test]
     fn candidate_bundle_geometry_and_nested_decode_budgets_remain_bounded() {
         let original = wire(2);
-        let candidate = ShakeBundleWire {
+        let candidate = BundleWire {
             version: original.version,
             intermediate_roots: original.intermediate_roots,
             segments: original.segments,
@@ -1630,29 +1642,30 @@ mod tests {
                 6 => bad.segments[1].clear(),
                 _ => unreachable!(),
             }
-            assert!(encode_shake_wire(&bad, 2, shake_limits(2)).is_err());
+            assert!(encode_wire(&bad, 2, final_limits(2)).is_err());
             let bytes = norito::encode_canonical(&bad).unwrap();
-            assert!(decode_shake_wire(&bytes, 2, shake_limits(2), shake_verifier()).is_err());
+            assert!(decode_wire_with_policy(&bytes, 2, final_limits(2), final_verifier()).is_err());
         }
-        let bytes = encode_shake_wire(&candidate, 2, shake_limits(2)).unwrap();
+        let bytes = encode_wire(&candidate, 2, final_limits(2)).unwrap();
         let zero = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 16);
         let (result, usage) = norito::core::with_decode_limits_measured(zero, || {
-            decode_shake_wire(&bytes, 2, shake_limits(2), shake_verifier())
+            decode_wire_with_policy(&bytes, 2, final_limits(2), final_verifier())
         });
         assert!(matches!(
             result,
             Err(Error::Encode(norito::Error::TotalAllocationExceeded { .. }))
         ));
         assert_eq!(usage.total_allocated_bytes(), 0);
-        let decoded = decode_shake_wire(&bytes, 2, shake_limits(2), shake_verifier()).unwrap();
+        let decoded =
+            decode_wire_with_policy(&bytes, 2, final_limits(2), final_verifier()).unwrap();
         assert_eq!(decoded.segments, candidate.segments);
         assert!(
-            encode_shake_wire(
+            encode_wire(
                 &candidate,
                 2,
                 BundleLimits {
                     max_total_segment_bytes: 74,
-                    ..shake_limits(2)
+                    ..final_limits(2)
                 }
             )
             .is_err()

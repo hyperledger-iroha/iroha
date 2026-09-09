@@ -634,6 +634,10 @@ fn sidecar_wake_transition_is_exact(
         && next.fault.is_none()
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::validate_sidecar::DurableValidateSidecarRegistrationV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct DurableValidateSidecarRegistrationV1 {
@@ -653,6 +657,10 @@ struct DurableValidateSidecarRegistrationV1 {
     reference: CertifiedMergeLedgerReference,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::validate_sidecar::DurableValidateSidecarRegistrationFrameV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct DurableValidateSidecarRegistrationFrameV1 {

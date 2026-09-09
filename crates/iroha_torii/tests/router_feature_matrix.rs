@@ -448,6 +448,7 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
             ts,
             false,
         )
+        .expect("test telemetry resource registration")
         .0
     };
     let telemetry_profile = iroha_config::parameters::actual::TelemetryProfile::Operator;

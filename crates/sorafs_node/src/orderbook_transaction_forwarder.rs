@@ -135,6 +135,8 @@ pub enum OrderbookTransactionKindV1 {
     SettlementReceipt,
 }
 /// Validated native orderbook operation retained for isolated external signing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::orderbook_transaction_forwarder::OrderbookOperationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum OrderbookOperationV1 {
     /// Execute one deterministic bounded matching transition.
@@ -582,6 +584,10 @@ struct StoredDeadOrderbookTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::orderbook_transaction_forwarder::OrderbookTransactionForwarderCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct OrderbookTransactionForwarderCheckpointV1 {
     version: u8,

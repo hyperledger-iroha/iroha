@@ -1,3 +1,5 @@
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::block::valid::tests::MutableGenesisBlockWire")]
 #[derive(norito::codec::Decode, norito::codec::Encode)]
 struct MutableGenesisBlockWire {
     signatures: std::collections::BTreeSet<BlockSignature>,

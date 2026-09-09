@@ -2,7 +2,15 @@
 #![cfg(feature = "json")]
 use iroha_schema::IntoSchema;
 use norito::core::to_bytes;
-#[derive(IntoSchema, norito::derive::Encode, norito::derive::Decode, PartialEq, Debug)]
+#[derive(
+    IntoSchema,
+    norito::derive::Encode,
+    norito::derive::Decode,
+    PartialEq,
+    Debug,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.debug_mixed.Mixed")]
 struct Mixed {
     name: String,
     nums: Vec<u32>,

@@ -179,6 +179,8 @@ fn historical_autonomous_recovery_read_matches_accounting(
 /// relabel, retirement, archive GC, and recreation therefore move or retire
 /// the record with the rest of that incarnation instead of leaving a global
 /// orphan which a later incarnation could accidentally hydrate.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::HistoricalAutonomousLaneRecoveryRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct HistoricalAutonomousLaneRecoveryRecordV1 {
@@ -1515,7 +1517,6 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 &provisional_path,
             )?;
             let bytes = historical_autonomous_recovery_record_bytes(record);
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
             let _geometry_guard = self.lane_geometry_lock.lock();
             let entry = self.lane_storage_entry(descriptor.lane_id)?;
             self.require_active_lane_artifact(&entry, descriptor)?;
@@ -1529,6 +1530,7 @@ macro_rules! kura_historical_autonomous_recovery_methods {
                 record.recovery_id,
             );
             let _sidecar_guard = self.sidecar_lock.lock();
+            let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(vec![path.clone()]);
             if self.canonical_sidecar_directory(&directory)?.is_none() {
                 let parent = directory.parent().ok_or_else(|| {
                     Self::invalid_historical_autonomous_recovery(

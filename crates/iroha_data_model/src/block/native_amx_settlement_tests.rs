@@ -1480,14 +1480,6 @@ fn native_amx_participant_settlement_declares_canonical_schema_identity() {
         norito::schema::identity::frame_hash::<NativeAmxParticipantSettlement>(),
         hash
     );
-    assert_eq!(
-        <NativeAmxParticipantSettlement as norito::NoritoSerialize>::schema_hash(),
-        hash
-    );
-    assert_eq!(
-        <NativeAmxParticipantSettlement as norito::NoritoDeserialize>::schema_hash(),
-        hash
-    );
 }
 #[test]
 fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {

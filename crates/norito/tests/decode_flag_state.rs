@@ -1,8 +1,5 @@
 //! Regression tests for decode flag state handling and panic safety.
-use norito::{
-    NoritoSerialize,
-    core::{self, Compression, Header, VERSION_MAJOR},
-};
+use norito::core::{self, Compression, Header, VERSION_MAJOR};
 use std::io::{Cursor, Read};
 fn encode_fixed_vec_u32(values: &[u32]) -> Vec<u8> {
     let mut body = Vec::new();
@@ -14,7 +11,7 @@ fn encode_fixed_vec_u32(values: &[u32]) -> Vec<u8> {
     }
     let checksum = core::hardware_crc64(&body);
     let header = Header::new(
-        <Vec<u32> as NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<Vec<u32>>(),
         body.len() as u64,
         checksum,
     );
@@ -44,7 +41,7 @@ fn encode_fixed_tuple_u8_string(value: u8, text: &str) -> Vec<u8> {
     bytes.extend_from_slice(b"NRT0");
     bytes.push(VERSION_MAJOR);
     bytes.push(0); // default minor (no adaptive features)
-    bytes.extend_from_slice(&<(u8, String)>::schema_hash());
+    bytes.extend_from_slice(&norito::schema::identity::frame_hash::<(u8, String)>());
     bytes.push(Compression::None as u8);
     bytes.extend_from_slice(&(body.len() as u64).to_le_bytes());
     bytes.extend_from_slice(&checksum.to_le_bytes());

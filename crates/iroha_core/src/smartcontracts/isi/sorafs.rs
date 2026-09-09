@@ -4956,6 +4956,8 @@ const REPAIR_PAYLOAD_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     REPAIR_PAYLOAD_MAX_DECODE_ALLOCATION_BYTES_V1,
     64,
 );
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs::RepairSourceBindingV1")]
 #[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct RepairSourceBindingV1 {
     source_identity: [u8; 32],
@@ -4963,6 +4965,8 @@ struct RepairSourceBindingV1 {
     ticket_id: String,
     report_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs::RepairPersistedEventV1")]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct RepairPersistedEventV1 {
     sequence: u64,
@@ -4970,6 +4974,8 @@ struct RepairPersistedEventV1 {
     event_index: u32,
     event: SorafsRepairLedgerEvent,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs::RepairEventJournalHeadV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct RepairEventJournalHeadV1 {
     last_sequence: u64,

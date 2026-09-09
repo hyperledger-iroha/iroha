@@ -980,7 +980,7 @@ fn add_client_headers(
     client: &Client,
     mut request: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
-    for (name, value) in &client.client().headers {
+    for (name, value) in client.client().headers() {
         request = request.header(name, value);
     }
     request
@@ -990,7 +990,7 @@ async fn torii_json_get(
     path_segments: &[String],
     query_pairs: &[(String, String)],
 ) -> Result<RoutedJsonGetResponse> {
-    let mut url = client.client().torii_url.clone();
+    let mut url = client.client().endpoint().clone();
     let torii_url_literal = url.to_string();
     {
         let mut segments = url
@@ -2110,8 +2110,9 @@ async fn wait_for_route_probe_approval(
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -2171,7 +2172,7 @@ async fn wait_for_route_probe_approval(
             }
         }
     }
-    events.close().await;
+    events.close().await?;
     let (height, approval_observed) = if let Some(height) = approved_height {
         (height, true)
     } else {
@@ -2199,8 +2200,9 @@ async fn submit_transaction_with_route_observation(
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -2242,18 +2244,26 @@ async fn submit_transaction_with_route_observation(
                 break;
             }
             TransactionStatus::Rejected(reason) => {
-                events.close().await;
-                return Err(eyre!(
-                    "{context}: route-observed transaction rejected: {reason}"
-                ));
+                let rejection = eyre!("{context}: route-observed transaction rejected: {reason}");
+                if let Err(close_error) = events.close().await {
+                    return Err(
+                        rejection.wrap_err(format!("event stream close failed: {close_error}"))
+                    );
+                }
+                return Err(rejection);
             }
             TransactionStatus::Expired => {
-                events.close().await;
-                return Err(eyre!("{context}: route-observed transaction expired"));
+                let expired = eyre!("{context}: route-observed transaction expired");
+                if let Err(close_error) = events.close().await {
+                    return Err(
+                        expired.wrap_err(format!("event stream close failed: {close_error}"))
+                    );
+                }
+                return Err(expired);
             }
         }
     }
-    events.close().await;
+    events.close().await?;
     observed.ok_or_else(|| eyre!("{context}: timed out observing queued transaction route"))
 }
 fn wait_for_expected_balances(
@@ -4566,11 +4576,11 @@ async fn fetch_autoscale_bridge_finality_proof(
     let client = peer.client();
     let url = client
         .client()
-        .torii_url
+        .endpoint()
         .join(&format!("v1/bridge/finality/{height}"))
         .wrap_err("construct autoscale carrier-finality URL")?;
     let request = reqwest::Client::builder()
-        .timeout(client.client().torii_request_timeout)
+        .timeout(client.client().torii_request_timeout())
         .build()
         .wrap_err("build autoscale carrier-finality HTTP client")?
         .get(url)
@@ -4619,7 +4629,7 @@ fn exact_autoscale_carrier_height_context(
     let first = proofs
         .first()
         .ok_or_else(|| eyre!("autoscale carrier-height proof set is empty"))?;
-    let network_id = network.client().client().network_id;
+    let network_id = *network.client().client().network_id();
     verify_bridge_finality_proof(first, &network_id)
         .wrap_err("first autoscale carrier finality proof is invalid")?;
     ensure!(
@@ -4788,7 +4798,7 @@ fn validate_autoscale_retirement_evidence(
     };
     let intent = &certificate.body.intent;
     let final_frontier = &certificate.body.final_frontier;
-    let network_id = network.client().client().network_id;
+    let network_id = *network.client().client().network_id();
     validate_autoscale_drain_certificate(&network_id, certificate)?;
     let carrier_context =
         exact_autoscale_carrier_height_context(runtime, network, entry.merge_qc.carrier_height)?;
@@ -5179,6 +5189,7 @@ fn offline_kura_config(store_dir: PathBuf) -> KuraConfig {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }

@@ -63,13 +63,13 @@ fn align_exact_pinned_validator_pops(
     }
     Some(pinned.into_iter().map(|(_, pop)| pop).collect())
 }
-/// Return true when proposal assembly should look beyond the remaining block
-/// slots to discover work from other currently routable lanes.
+/// Compute the height-aware lookahead decision exercised by scheduler fixtures.
 ///
-/// The gate intentionally uses the same height-aware routing surface as the
+/// The fixture uses the same height-aware routing surface as the
 /// queue router. Sidecar lanes that no policy path can select, future-created
 /// autoscale lanes and malformed autoscale anchors do not enable broader scans.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn proposal_lookahead_enabled(nexus: &Nexus, block_height: u64) -> bool {
     crate::queue::routable_lane_ids_for_nexus_at_height(nexus, block_height).len() > 1
 }
@@ -2213,6 +2213,10 @@ impl AutonomousLaneReservationSlotPlanError {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::lane_planner::AutonomousLaneReservationSlotIdentityV1"
+)]
 #[derive(Encode)]
 struct AutonomousLaneReservationSlotIdentityV1 {
     identity_version: u16,
@@ -2232,6 +2236,10 @@ struct AutonomousLaneReservationSlotIdentityV1 {
     min_quorum: u32,
     qc_mode_tag: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::lane_planner::AutonomousLaneReservationOwnerIdentityV1"
+)]
 #[derive(Encode)]
 struct AutonomousLaneReservationOwnerIdentityV1 {
     identity_version: u16,

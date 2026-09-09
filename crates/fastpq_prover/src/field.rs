@@ -1,7 +1,7 @@
 //! Canonical Goldilocks scalar arithmetic and degree-four extension for FASTPQ FRI.
 
 use fastpq_isi::GoldilocksDigest384V1;
-use norito::{DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload};
+use norito::{DeserializePayload, SerializePayload};
 
 /// Goldilocks prime `2^64 - 2^32 + 1`.
 pub const GOLDILOCKS_MODULUS_V1: u64 = 0xffff_ffff_0000_0001;
@@ -15,6 +15,8 @@ const FP4_NON_RESIDUE_V1: u64 = 7;
 /// coefficients outside the base field before constructing this type.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "fastpq_prover::field::GoldilocksFp4V1")]
 pub struct GoldilocksFp4V1 {
     coefficients: [u64; 4],
 }
@@ -147,7 +149,6 @@ impl GoldilocksFp4V1 {
     }
 }
 
-impl NoritoSerialize for GoldilocksFp4V1 {}
 impl SerializePayload for GoldilocksFp4V1 {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         writer.write_all(&self.to_le_bytes())?;
@@ -163,7 +164,6 @@ impl SerializePayload for GoldilocksFp4V1 {
     }
 }
 
-impl NoritoDeserialize<'_> for GoldilocksFp4V1 {}
 impl<'de> DeserializePayload<'de> for GoldilocksFp4V1 {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("canonical GoldilocksFp4V1 decode")
@@ -302,15 +302,18 @@ mod tests {
 
     #[test]
     fn norito_rejects_the_retired_struct_framing() {
-        #[derive(NoritoSerialize)]
-        #[norito(schema_name = "fastpq_prover::field::GoldilocksFp4V1")]
+        #[derive(norito::NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "fastpq_prover::field::tests::norito_rejects_the_retired_struct_framing::RetiredStructFrame",
+            frame = "fastpq_prover::field::GoldilocksFp4V1"
+        )]
         struct RetiredStructFrame {
             coefficients: [u64; 4],
         }
 
         assert_eq!(
-            <RetiredStructFrame as NoritoSerialize>::schema_hash(),
-            <GoldilocksFp4V1 as NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<RetiredStructFrame>(),
+            norito::schema::identity::frame_hash::<GoldilocksFp4V1>(),
             "exercise payload rejection under the same field schema"
         );
         let retired = RetiredStructFrame {

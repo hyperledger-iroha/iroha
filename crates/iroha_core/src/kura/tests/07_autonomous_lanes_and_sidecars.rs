@@ -714,11 +714,15 @@ fn autonomous_claim_inventory_rejects_unexpected_artifacts_before_any_cleanup_or
 }
 #[test]
 fn autonomous_entrypoint_claim_rejects_unknown_state_tag() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::autonomous_entrypoint_claim_rejects_unknown_state_tag::UnknownClaimState")]
     #[derive(Encode)]
     enum UnknownClaimState {
         #[codec(index = 99)]
         Unknown,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::autonomous_entrypoint_claim_rejects_unknown_state_tag::UnknownClaimFixture")]
     #[derive(Encode)]
     struct UnknownClaimFixture {
         version: u16,

@@ -240,8 +240,11 @@ fn stage(
     owner.stage_qualification(&fields)
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.active-hardware-credential-reply")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::QualificationReply",
+    frame = "iroha.kagemusha.device.v1.active-hardware-credential-reply"
+)]
 struct QualificationReply {
     version: u16,
     operation: u8,
@@ -669,8 +672,11 @@ fn abandoned_read_attempts_have_fixed_live_capacity_and_never_reserve_money() {
     );
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::SnapshotReply",
+    frame = "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply"
+)]
 struct SnapshotReply {
     version: u16,
     operation: u8,
@@ -779,16 +785,22 @@ fn independently_selected_native_network_and_lane_remain_required() {
     );
 }
 
-#[derive(Clone, Copy, Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-watermark")]
+#[derive(Clone, Copy, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::Watermark",
+    frame = "iroha.kagemusha.device.v1.pending-credit-watermark"
+)]
 struct Watermark {
     hardware_epoch_generation: u128,
     hardware_epoch_id: [u8; 32],
     inbox_revision: u128,
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-watermark-reply")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkReply",
+    frame = "iroha.kagemusha.device.v1.pending-credit-watermark-reply"
+)]
 struct WatermarkReply {
     version: u16,
     operation: u8,
@@ -939,15 +951,21 @@ fn signed_snapshot_cannot_choose_another_wallet_or_qualification_context() {
     }
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-target")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::PendingTarget",
+    frame = "iroha.kagemusha.device.v1.pending-credit-target"
+)]
 enum PendingTarget {
     DrainAll,
     RequiredBalance(u128),
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.read-pending-credit-watermark-command")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkCommand",
+    frame = "iroha.kagemusha.device.v1.read-pending-credit-watermark-command"
+)]
 struct WatermarkCommand {
     version: u16,
     operation: u8,

@@ -27,6 +27,8 @@ const BASIS_POINTS_SCALE: u128 = 10_000;
 /// Maximum collateral ratio (basis points) supported by pricing tiers (10×).
 const MAX_COLLATERAL_RATIO_BPS: u32 = 100_000;
 /// Pricing manifest describing storage/egress tiers and settlement policy.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::PricingManifestV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -121,6 +123,8 @@ impl PricingManifestV1 {
     }
 }
 /// Pricing tier describing storage and egress fees.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::PricingTierV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -208,6 +212,8 @@ fn prorated_fee(
     XorQuantity::try_from_quantity(exact)
 }
 /// Settlement and credit policy for buyers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::CreditPolicyV1")]
 #[derive(
     Debug,
     Clone,
@@ -243,6 +249,8 @@ impl CreditPolicyV1 {
     }
 }
 /// Bond and collateral requirements applied to providers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::BondPolicyV1")]
 #[derive(
     Debug,
     Clone,
@@ -278,6 +286,8 @@ impl BondPolicyV1 {
     }
 }
 /// Probabilistic micropayment configuration for retrieval vouchers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::PricingMicropaymentPolicyV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -1004,3 +1014,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+include!("pricing/captured_owner_identity_tests.rs");

@@ -47,7 +47,8 @@ async fn norito_rpc_gate_records_metrics() {
             mtls_trusted_proxy_cidrs:
                 iroha_config::parameters::defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
         };
-    let (app, metrics) = mk_norito_rpc_test_harness(cfg.clone()).await;
+    let app = mk_norito_rpc_test_harness(cfg.clone()).await;
+    let metrics = app.telemetry.metrics().await;
     let trusted_remote = Some("127.0.0.1".parse().expect("trusted proxy"));
     let untrusted_remote = Some("198.51.100.10".parse().expect("untrusted proxy"));
     let mut headers = HeaderMap::new();
@@ -94,7 +95,8 @@ async fn norito_rpc_gate_records_metrics() {
             mtls_trusted_proxy_cidrs:
                 iroha_config::parameters::defaults::torii::transport::norito_rpc::mtls_trusted_proxy_cidrs(),
         };
-    let (mtls_app, mtls_metrics) = mk_norito_rpc_test_harness(mtls_cfg.clone()).await;
+    let mtls_app = mk_norito_rpc_test_harness(mtls_cfg.clone()).await;
+    let mtls_metrics = mtls_app.telemetry.metrics().await;
     assert!(
         mtls_app
             .check_norito_rpc_allowed(&HeaderMap::new(), trusted_remote)
@@ -134,7 +136,8 @@ async fn norito_rpc_gate_records_metrics() {
     let mut disabled_cfg = actual::NoritoRpcTransport::default();
     disabled_cfg.enabled = false;
     disabled_cfg.stage = actual::NoritoRpcStage::Disabled;
-    let (disabled_app, disabled_metrics) = mk_norito_rpc_test_harness(disabled_cfg.clone()).await;
+    let disabled_app = mk_norito_rpc_test_harness(disabled_cfg.clone()).await;
+    let disabled_metrics = disabled_app.telemetry.metrics().await;
     assert!(
         disabled_app
             .check_norito_rpc_allowed(&HeaderMap::new(), trusted_remote)

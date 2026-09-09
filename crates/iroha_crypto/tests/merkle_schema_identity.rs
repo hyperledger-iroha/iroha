@@ -29,22 +29,16 @@ fn record<T: NoritoSchema + NoritoSerialize + for<'a> NoritoDeserialize<'a>>(
 ) -> json::Value {
     assert_eq!(T::nominal_name(), std::any::type_name::<T>());
     assert_eq!(T::frame_name(), T::nominal_name());
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoSerialize>::schema_hash()
-    );
-    assert_eq!(
-        norito::schema::identity::frame_hash::<T>(),
-        <T as NoritoDeserialize>::schema_hash()
-    );
     let frame = norito::to_bytes(&value).unwrap();
+    let header = norito::core::Header::read(frame.as_slice()).unwrap();
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
     let decoded: T = norito::decode_from_bytes(&frame).unwrap();
     assert_eq!(norito::to_bytes(&decoded).unwrap(), frame);
     norito::json!({
         "nominal": (std::any::type_name::<T>()),
         "frame_name": (std::any::type_name::<T>()),
-        "serialize_hash": (hex(&<T as NoritoSerialize>::schema_hash())),
-        "deserialize_hash": (hex(&<T as NoritoDeserialize>::schema_hash())),
+        "serialize_hash": (hex(&norito::schema::identity::frame_hash::<T>())),
+        "deserialize_hash": (hex(&norito::schema::identity::frame_hash::<T>())),
         "frame_hex": (hex(&frame)),
     })
 }
@@ -119,22 +113,16 @@ fn merkle_schema_identity_composes_markers_without_codec_bounds() {
         norito::to_bytes(&relocated.get_proof(2).unwrap()).unwrap(),
         norito::to_bytes(&relocated.commitment().unwrap()).unwrap(),
     ];
-    for (original, relocated) in original_frames.iter().zip(&relocated_frames) {
-        assert_eq!(
-            original[norito::core::Header::SIZE..],
-            relocated[norito::core::Header::SIZE..]
-        );
-        // TODO: Switch the active codec atomically after identity coverage closes.
-        assert_ne!(original[6..22], relocated[6..22]);
-    }
-    assert!(norito::decode_from_bytes::<MerkleTree<RelocatedMarker>>(&original_frames[0]).is_err());
-    assert!(
-        norito::decode_from_bytes::<MerkleProof<RelocatedMarker>>(&original_frames[1]).is_err()
-    );
-    assert!(
-        norito::decode_from_bytes::<MerkleTreeCommitment<RelocatedMarker>>(&original_frames[2])
-            .is_err()
-    );
+    assert_eq!(original_frames, relocated_frames);
+    let decoded: MerkleTree<RelocatedMarker> =
+        norito::decode_from_bytes(&original_frames[0]).unwrap();
+    assert_eq!(norito::to_bytes(&decoded).unwrap(), original_frames[0]);
+    let decoded: MerkleProof<RelocatedMarker> =
+        norito::decode_from_bytes(&original_frames[1]).unwrap();
+    assert_eq!(norito::to_bytes(&decoded).unwrap(), original_frames[1]);
+    let decoded: MerkleTreeCommitment<RelocatedMarker> =
+        norito::decode_from_bytes(&original_frames[2]).unwrap();
+    assert_eq!(norito::to_bytes(&decoded).unwrap(), original_frames[2]);
     assert!(norito::decode_from_bytes::<MerkleProof<OriginalMarker>>(&original_frames[0]).is_err());
     let proof = CompactMerkleProof::try_from_full(original.get_proof(2).unwrap()).unwrap();
     assert_eq!(proof.depth(), 3);

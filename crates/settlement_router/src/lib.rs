@@ -26,7 +26,7 @@
     clippy::missing_panics_doc
 )]
 use norito::{
-    Archived, DeserializePayload, Error, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    Archived, DeserializePayload, Error, SerializePayload,
     core::DecodeFromSlice,
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Parser},
 };
@@ -51,7 +51,8 @@ pub use receipt::{SettlementReceipt, SettlementReceiptError};
 pub use swapline::{CollateralKind, SwapLineConfig, SwapLineError, SwapLineExposure, SwapLineId};
 pub use volatility::VolatilityBucket;
 /// UTC timestamp rounded to milliseconds since Unix epoch.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::TimestampMs")]
 pub struct TimestampMs(OffsetDateTime);
 impl TimestampMs {
     /// Construct from milliseconds since Unix epoch.
@@ -84,13 +85,11 @@ impl From<TimestampMs> for OffsetDateTime {
         value.0
     }
 }
-impl NoritoSerialize for TimestampMs {}
 impl SerializePayload for TimestampMs {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.as_unix_millis().serialize(writer)
     }
 }
-impl NoritoDeserialize<'_> for TimestampMs {}
 impl<'a> DeserializePayload<'a> for TimestampMs {
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let ptr = std::ptr::from_ref(archived).cast::<u8>();
@@ -134,7 +133,8 @@ impl JsonDeserialize for TimestampMs {
     }
 }
 /// Duration stored as whole seconds.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::DurationSeconds")]
 pub struct DurationSeconds(Duration);
 impl DurationSeconds {
     /// Construct from a `time::Duration`.
@@ -163,13 +163,11 @@ impl From<DurationSeconds> for Duration {
         value.0
     }
 }
-impl NoritoSerialize for DurationSeconds {}
 impl SerializePayload for DurationSeconds {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         self.0.whole_seconds().serialize(writer)
     }
 }
-impl NoritoDeserialize<'_> for DurationSeconds {}
 impl<'a> DeserializePayload<'a> for DurationSeconds {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         let seconds_arch: &Archived<i64> = archived.cast();

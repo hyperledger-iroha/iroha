@@ -21,6 +21,8 @@ use std::sync::LazyLock;
 /// The ABI V1 address map reserves the half-open range `0x0010_0000..0x0020_0000` for the heap.
 pub const IVM_HEAP_MAX_BYTES: u64 = 0x0010_0000;
 /// Raw 32-byte consensus fingerprint with one canonical JSON representation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parameter::system::ConsensusFingerprint")]
 #[derive(
     Debug,
     Clone,
@@ -56,6 +58,10 @@ impl core::fmt::Display for ConsensusFingerprint {
 /// Validators read this value from the finalized world state before building
 /// an epoch-boundary height context. The old roster then authenticates the
 /// complete next roster through the boundary context and its CommitQC.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::parameter::system::KagemushaMintFinalityNextEpochParameterV1"
+)]
 #[derive(
     Debug,
     Clone,
@@ -151,6 +157,8 @@ impl JsonDeserialize for ConsensusFingerprint {
     }
 }
 /// Canonical signed Sumeragi v2 handshake metadata stored in genesis.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::parameter::system::ConsensusHandshakeMetadata")]
 #[derive(
     Debug,
     Clone,
@@ -316,6 +324,8 @@ mod model {
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     /// Consensus runtime mode
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::SumeragiConsensusMode")]
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema,
     )]
@@ -336,6 +346,8 @@ mod model {
         }
     }
     /// Limits that govern consensus operation
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::SumeragiParameters")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[display("{block_cadence_ms},{max_clock_drift_ms}_SL")]
     pub struct SumeragiParameters {
@@ -368,6 +380,8 @@ mod model {
         pub key_allowed_algorithms: Vec<iroha_crypto::Algorithm>,
     }
     /// NPoS-specific consensus parameters persisted as a custom parameter payload.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::SumeragiNposParameters")]
     #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     #[norito(deny_unknown_fields)]
@@ -563,6 +577,8 @@ mod model {
     /// Single Sumeragi parameter
     ///
     /// Check [`SumeragiParameters`] for more details
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::SumeragiParameter")]
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -572,6 +588,8 @@ mod model {
         MaxClockDriftMs(u64),
     }
     /// Limits that a block must obey to be accepted.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::BlockParameters")]
     #[derive(
         Debug,
         Display,
@@ -599,6 +617,8 @@ mod model {
     /// Single block parameter
     ///
     /// Check [`BlockParameters`] for more details
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::BlockParameter")]
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -606,6 +626,8 @@ mod model {
         MaxTransactions(NonZeroU64),
     }
     /// Limits that a transaction must obey to be accepted.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::TransactionParameters")]
     #[derive(
         Debug,
         Display,
@@ -649,6 +671,8 @@ mod model {
     /// Single transaction parameter
     ///
     /// Check [`TransactionParameters`] for more details
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::TransactionParameter")]
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -664,6 +688,8 @@ mod model {
         RequireSequence(bool),
     }
     /// Limits that a smart contract must obey at runtime to considered valid.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::SmartContractParameters")]
     #[derive(
         Debug,
         Display,
@@ -695,6 +721,8 @@ mod model {
     /// Single smart contract parameter
     ///
     /// Check [`SmartContractParameters`] for more details
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::SmartContractParameter")]
     #[derive(
         Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -706,6 +734,8 @@ mod model {
         MaxOutputBytes(NonZeroU64),
     }
     /// Set of all current blockchain parameter values
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::Parameters")]
     #[derive(
         Debug,
         Clone,
@@ -750,6 +780,8 @@ mod model {
     /// Single blockchain parameter.
     ///
     /// Check [`Parameters`] for more details
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::parameter::system::model::Parameter")]
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub enum Parameter {

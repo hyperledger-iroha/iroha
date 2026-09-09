@@ -82,6 +82,22 @@ def test_reviewed_rust_include_manifest_is_pinned_and_current() -> None:
     assert errors == []
 
 
+def test_reviewed_rust_source_expands_daemon_runtime_dependency_contract() -> None:
+    module = load_checker()
+    errors: list[str] = []
+    _path, source = module._read_reviewed_rust_source(
+        ROOT_DIR,
+        "crates/irohad/src/main.rs",
+        "actual daemon runtime dependency contract",
+        errors,
+    )
+    assert errors == []
+    assert source is not None
+    assert source.count(
+        "fn standard_launcher_forwards_external_sorafs_runtime_dependencies"
+    ) == 1
+
+
 def test_reviewed_rust_source_expands_exact_lane_work_closure(
     tmp_path: Path,
 ) -> None:

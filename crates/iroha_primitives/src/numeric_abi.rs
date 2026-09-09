@@ -11,8 +11,7 @@ use crate::{
     },
 };
 use norito::{
-    Archived, DeserializePayload, Error as NoritoError, NoritoDeserialize, NoritoSerialize,
-    SerializePayload,
+    Archived, DeserializePayload, Error as NoritoError, NoritoSerialize, SerializePayload,
     json::{self, FastJsonWrite, JsonDeserialize},
 };
 /// Nominal schema name of a V1 integer frame.
@@ -608,13 +607,8 @@ numeric_schema_identity! {
     DecimalValueV1 => ("iroha_primitives::numeric_abi::DecimalValueV1", DECIMAL_SCHEMA_NAME_V1),
     QuantityValueV1 => ("iroha_primitives::numeric_abi::QuantityValueV1", QUANTITY_SCHEMA_NAME_V1),
 }
-macro_rules! impl_frame_codec {
-    ($ty:ty, $schema:expr, $encode:expr, $decode:expr) => {
-        impl NoritoSerialize for $ty {
-            fn schema_hash() -> [u8; 16] {
-                $schema
-            }
-        }
+macro_rules! impl_payload_codec {
+    ($ty:ty, $encode:expr, $decode:expr) => {
         impl SerializePayload for $ty {
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
                 writer
@@ -623,11 +617,6 @@ macro_rules! impl_frame_codec {
             }
             fn encoded_len_exact(&self) -> Option<usize> {
                 Some($encode(self).len())
-            }
-        }
-        impl NoritoDeserialize<'_> for $ty {
-            fn schema_hash() -> [u8; 16] {
-                $schema
             }
         }
         impl<'a> DeserializePayload<'a> for $ty {
@@ -656,21 +645,18 @@ macro_rules! impl_frame_codec {
         }
     };
 }
-impl_frame_codec!(
+impl_payload_codec!(
     IntValueV1,
-    INT_SCHEMA_HASH_V1,
     |value: &IntValueV1| encode_int_body(&value.0),
     |bytes: &[u8]| decode_int_body(bytes).map(|(value, used)| (IntValueV1(value), used))
 );
-impl_frame_codec!(
+impl_payload_codec!(
     DecimalValueV1,
-    DECIMAL_SCHEMA_HASH_V1,
     |value: &DecimalValueV1| encode_scaled_body(&value.0),
     |bytes: &[u8]| decode_scaled_body(bytes).map(|(value, used)| (DecimalValueV1(value), used))
 );
-impl_frame_codec!(
+impl_payload_codec!(
     QuantityValueV1,
-    QUANTITY_SCHEMA_HASH_V1,
     |value: &QuantityValueV1| encode_scaled_body(value.0.as_numeric()),
     |bytes: &[u8]| {
         let (value, used) = decode_scaled_body(bytes)?;

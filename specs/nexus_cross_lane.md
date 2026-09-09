@@ -83,16 +83,16 @@ the certificate stale and releases its Kura slot rather than blocking the
 intervening proposal needed for catch-up.
 
 Ingress classifies the supplied context against one coherent state view. An
-exact current context is admitted normally. A historical context is reusable
-only when the authority already owns and revalidates the same durable local
-claim; an honest authority signs only while the context is current or while
-replaying that exact claim, never for a first-time unowned old-height request.
-A previously assembled quorum certificate may,
-however, become carrier-eligible after a height-only race when its original
-predecessor remains in canonical history and every embedded route, roster, and
-incarnation exactly matches the receiver's current authority source. This
-exception is enforced independently at certificate persistence and carrier
-validation, and does not create a historical request-signing path. An
+exact current context is admitted normally. A historical context is admitted
+only when its original predecessor remains in canonical history and every
+embedded route incarnation and validator roster resolves identically at both
+the source and current proposal heights. This closes the height-only race in
+which one authority advances after another has durably accepted the same exact
+request, while authority or incarnation churn remains fail-closed. An exact
+already-owned durable claim remains idempotently reusable. A previously
+assembled quorum certificate is carrier-eligible under the same complete
+history and current-source checks. These rules are enforced independently at
+request admission, certificate persistence, and carrier validation. An
 ahead-of-frontier request whose authority source matches locally returns
 retryable `queue_plan_admission_context_future` without mutating queue
 ownership. A noncanonical predecessor, self-declared or currently different

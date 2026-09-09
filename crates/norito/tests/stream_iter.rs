@@ -10,7 +10,16 @@ use std::{
     io::Cursor,
 };
 #[cfg_attr(feature = "schema-structural", derive(iroha_schema::IntoSchema))]
-#[derive(Debug, Clone, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.stream_iter.PackedRow")]
 struct PackedRow {
     id: u32,
     tag: u16,

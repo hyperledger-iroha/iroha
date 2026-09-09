@@ -3201,11 +3201,34 @@ mod tests {
             }],
         };
         let schema_bytes = to_bytes(&schema).expect("encode list schema");
+        let schema_hash = entrypoint_argument_schema_hash_v1(&schema_bytes);
+        let canonical_record = EntrypointArgumentRecordV1 {
+            schema_hash,
+            atoms: vec![EntrypointValueAtomV1::List(1), int_atom(7)],
+        };
+        let canonical = to_bytes(&canonical_record).expect("encode flat list record");
+        assert_eq!(
+            validate_argument_record(&schema, &canonical),
+            Ok(canonical_record),
+            "the corresponding flat list is accepted",
+        );
         let legacy = LegacyRecord {
-            schema_hash: entrypoint_argument_schema_hash_v1(&schema_bytes),
+            schema_hash,
             atoms: vec![LegacyAtom::List(vec![vec![LegacyAtom::Int(7)]])],
         };
-        let encoded = to_bytes(&legacy).expect("encode retired recursive list shape");
+        // Advertise the real record identity so this exercises rejection of the
+        // retired payload shape after frame validation, rather than a name mismatch.
+        let (payload, flags) = norito::codec::encode_with_header_flags(&legacy);
+        let encoded = norito::core::frame_bare_with_header_flags::<EntrypointArgumentRecordV1>(
+            &payload, flags,
+        )
+        .expect("frame retired recursive list shape");
+        let view = norito::core::from_bytes_view(&encoded).expect("valid frame and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<EntrypointArgumentRecordV1>(),
+        );
+        assert_eq!(view.as_bytes(), payload);
         assert_eq!(
             validate_argument_record(&schema, &encoded),
             Err(VMError::DecodeError),

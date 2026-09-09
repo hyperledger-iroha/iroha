@@ -151,6 +151,10 @@ struct AttestedExpectedRosterDocument {
 /// This deliberately mirrors `QuorumCertificateRef::same_commit_decision`: the
 /// decision round, signer subset, and aggregate signature are absent, while
 /// the complete subject and deterministic execution commitment remain bound.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::bin::pk2_bridge_finality_verify::SemanticCommitDecisionIdentity"
+)]
 #[derive(norito::Encode)]
 struct SemanticCommitDecisionIdentity {
     identity_version: u8,

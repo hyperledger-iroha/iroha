@@ -20,7 +20,7 @@ impl Run for Command {
             Command::Abi(cmd) => cmd.run(context),
             Command::Upgrade(cmd) => cmd.run(context),
             Command::Status => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let value = client.get_runtime_metrics_json()?;
                 // Compose a short one-line summary
                 let abi_version = value
@@ -52,7 +52,7 @@ impl Run for Command {
                 Ok(())
             }
             Command::Capabilities => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let value = client.get_node_capabilities_json()?;
                 let sm_enabled = value
                     .get("crypto")
@@ -98,18 +98,18 @@ impl Run for AbiCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             AbiCommand::Active => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let value = client.get_runtime_abi_active_json()?;
                 context.print_data(&value)
             }
             AbiCommand::ActiveQuery => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let out: iroha::data_model::query::runtime::AbiVersion = client
                     .query_single(iroha::data_model::query::runtime::prelude::FindAbiVersion)?;
                 context.print_data(&out)
             }
             AbiCommand::Hash => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let value = client.get_runtime_abi_hash_json()?;
                 context.print_data(&value)
             }
@@ -131,7 +131,7 @@ impl Run for UpgradeCommand {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
             UpgradeCommand::List => {
-                let client = context.client_from_config();
+                let client = context.client_from_config()?;
                 let value = client.get_runtime_upgrades_json()?;
                 context.print_data(&value)
             }
@@ -149,7 +149,7 @@ pub struct ProposeArgs {
 }
 impl Run for ProposeArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let s = std::fs::read_to_string(&self.file)?;
         let value: norito::json::Value = norito::json::from_str(&s)?;
         let out = client.post_runtime_propose_upgrade_json(&value)?;
@@ -164,7 +164,7 @@ pub struct ActivateArgs {
 }
 impl Run for ActivateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let out = client.post_runtime_activate_upgrade_json(&self.id)?;
         context.print_data(&out)
     }
@@ -177,7 +177,7 @@ pub struct CancelArgs {
 }
 impl Run for CancelArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client = context.client_from_config();
+        let client = context.client_from_config()?;
         let out = client.post_runtime_cancel_upgrade_json(&self.id)?;
         context.print_data(&out)
     }

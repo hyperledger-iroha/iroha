@@ -360,7 +360,7 @@ impl FromStr for OpaqueAccountId {
         Ok(opaque)
     }
 }
-impl norito::NoritoSerialize for AccountId {}
+
 impl norito::SerializePayload for AccountId {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         norito::core::SerializePayload::serialize(&self.controller, writer)
@@ -372,7 +372,7 @@ impl norito::SerializePayload for AccountId {
         norito::core::SerializePayload::encoded_len_exact(&self.controller)
     }
 }
-impl norito::NoritoDeserialize<'_> for AccountId {}
+
 impl<'de> norito::DeserializePayload<'de> for AccountId {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)

@@ -586,3 +586,157 @@ old logs, skipped tests and mutable-tree inventories cannot close a release gate
   Current SDK/CLI changes also require fresh provenance and execution. The
   private transaction collector includes fixed-slot completion ordering and
   exact deadline tests; no private test is reported as an executed Rust test.
+- After merge release, the collector and one final-context voting-journal
+  regression are published. The frozen V4 manifest contains 51 files, including
+  45 Rust sources. The successor selection explicitly accounts for all 91 prior
+  Core cases and adds five required cases, for 96; SDK status retains 24 and CLI
+  collection adds 16. Formatting, diff checks and retired-codec guards pass.
+  Compilation and execution are still pending. Complete owner-published Kura
+  resource accounting is being implemented privately; incomplete inventory must
+  remain unavailable to the scaling collector.
+
+### 2026-09-08 sixth-build focused regression result
+
+- The fourth common build emitted Core/SDK artifacts but failed CLI compilation.
+  The CLI repair uses explicit expression grouping in the native Norito JSON
+  macro and the canonical metadata JSON conversion. The fifth build passed;
+  its exact Core selection finished 95/96, SDK status 24/24 and CLI 13/16.
+  All original failures and source receipts remain retained.
+- The sixth common build passes after two scoped test corrections. The READY
+  recovery fixture restores the exact canonical authority only after asserting
+  durable PoP recovery under the intentionally empty authority map. It retains
+  all 26 original assertions and adds three checks. The virtual clock yields
+  before advancing future time and rechecks newly registered waiters; all 93
+  prior assertions remain and eight timer checks are added.
+- The source-matched Core binary passes **96/96**, zero failures/ignored, from
+  `01:52:17.947197Z` to `02:05:28.643058Z`. CLI passes **17/17**. SDK retains
+  **24/24** on its exact unchanged fifth-build binary, validated again by the
+  successful sixth build and unchanged SDK source closure. All 51 selected
+  sources and each private binary remain unchanged throughout their runs.
+- V6 manifest SHA-256 is
+  `f38a945e1895532d5ce95990131d2637a8b5367da00556a2cacfb4302dfa46ad`;
+  Core selection V5 is
+  `f8a5b0b59484409033d2823840e225f0a77c4e7ef112b6ffe825c959504e5ae9`;
+  CLI selection V2 is
+  `9d75d4e4af274e06d0b8246de47af57c7d6f4ccd776c5cdc8f6eaee868a210d7`.
+  Core binary SHA-256 is
+  `f179fa1c6ffdc682fc0ca536fb08522dd8f9377c46bb953a518149991224d234`;
+  CLI is `24d69ce37ffeb81a18591d4d696dccc29a2f46607594674ec78a26bf9eee5fa7`;
+  SDK is `3d5c90e4927abb905d8b3c3c73cea79ba0bbbcc4d3a84d1066e3f681fc5a6521`.
+  The retained `core-sdk-cli-retry6-provenance-review/` receipts bind the
+  compiler outputs and current source to these direct test runs.
+- Fresh-target Verus reports 1,690 library and 221 project queries with zero
+  errors and exactly 19 compiler inputs. Its strict driver remains unqualified
+  because the broader checkout digest changed during execution; zero declared
+  input changes do not override that condition. The earlier source diagnostic's
+  41 errors and unrelated input drift remain retained. The corrected sealed-source
+  diagnostic below passes; no new proof run qualifies those changes.
+- Complete Kura resource accounting, exact workload routing, SDK parity,
+  four-peer/13-global-validator network runs, ten deterministic seeds, the
+  two-hour soak, five pinned scaling pairs and final workspace qualification
+  remain open. The focused passes close no release gate.
+
+### 2026-09-08 disk-accounting writer regression result
+
+- Code review found ten identical total-cache deltas immediately after the
+  enforced-cache helper, which already updates both caches. The scoped runtime
+  correction removes only those duplicate calls. Legitimate total-only DA
+  deltas and all mutation guards remain unchanged. Two new actual-writer tests
+  and eight raw-cache checkpoints inspect actual file lengths before any refresh
+  could conceal duplicate accounting. Original assertions remain intact.
+- The seventh common build passed. Its five exact writer tests finished three
+  pass/two fail, with unchanged selected sources and binary. The process fixture
+  had no configured lane marker; the signed-bootstrap terminal fixtures changed
+  an incarnation after anchoring the journal. Reviewed fixture-only corrections
+  establish the final authenticated geometry before opening lifecycle authority,
+  preserving all 17 file-level test names and 228 assertion sites.
+- The eighth common build passes, and the same five cases pass without failures
+  or ignored tests from `02:36:45.825396Z` to `02:37:33.901919Z`. All 60 selected
+  files, including 54 Rust sources, and the copied binary remain unchanged.
+  Core binary SHA-256 is
+  `772c303807523c14507db5ce9e74ddb36a71e664df156ae5b0568b0b15ad543c`.
+  V8 manifest SHA-256 is
+  `5fe3b6f4f3a7c710df50e913cf6989f4e1f8943d1bddb546ccb1ce468eaad6b9`;
+  the five-test selection V2 is
+  `3f980336d36c7aca4191d7230ad0766d4b58a42b4d778179fda50ca47b0b8870`.
+  Retained receipts and results are under
+  `core-total-delta-retry8-provenance-review/` and
+  `core-kura-total-delta-direct-5-retry8/`. The failed seventh-run evidence remains.
+- Physical resource accounting is still private and incomplete. It must bind
+  exact path ownership, directory identity across publication, nested recovery
+  and verified deletion before a complete metric may be registered. Resident
+  source review passes with 23 tests prepared; those tests are not yet compiled
+  or executed. No resource or release gate closes from the five writer passes.
+
+### 2026-09-08 source-fidelity diagnostic and resource qualification
+
+- The complete `_exact_output_production_source_fidelity_errors` diagnostic
+  finishes at `03:42:25.181097Z`, exit zero after 1,045.697 seconds, with zero
+  errors. All 19,328 source type/mode/presence records remain unchanged at
+  `716b0547b711dbe841a59da0460304b9c1f2e676ccd2acf2e90403d068a53d89`.
+  An external Git view preserves the original HEAD and stage membership;
+  actual include-closure positive and missing-provider negative checks pass
+  before the run. This is a sealed-source diagnostic, excluding the later
+  predecessor-anchor patch, not full proof-ledger or live-workspace qualification.
+  Receipts are under `formal/source-fidelity-detached-20260908-v2/`.
+- The first detached attempt lacked the Git context required by the real include
+  resolver. Its 718 cascading diagnostics are retained as an invalid-environment
+  failure, not classified as production-source defects. No checker predicate was
+  bypassed to obtain the corrected result.
+- The published predecessor-anchor correction separately passes all 36 selected
+  controls with 69 focused source/config inputs unchanged. All 82 original AST
+  assertions remain intact. Results are under
+  `formal/source-fidelity-current-20260908/prior-predecessor-anchor-published/`.
+- The 95-file composed Kura inventory and 13-file telemetry successor are
+  published with reviewed compilation and fixture corrections. Physical scope
+  remains nine Kura-owned trees, eleven exact root files and bounded validated
+  process quarantine; delegated consensus files and the process lock are excluded.
+  Fifteen physical and eight resident families must all be available before a
+  complete metric can qualify. Publication receipts remain under
+  `scaling-kura-composed-review/source-ready-v1/` and
+  `scaling-kura-telemetry-export-review/`.
+- Retry 19's exact 208-leaf selection finishes **206 passed, two failed**, zero
+  ignored, with all 8,812 source paths and both original/retained Core/Config
+  images unchanged during execution. Both direct reservation guards pass. The two
+  remaining failures reach signed-snapshot bootstrap context validation after
+  the earlier ordering fix. See `core-kura-direct-208-retry19-root/result.json`.
+  Retry 18's separate 197-pass/11-fail result and all intermediate repairs remain
+  retained; neither combined build is promoted to a pass.
+- After the exact signed-bootstrap fixture correction, retry 20's retained Core
+  image passes both affected snapshot finalizer cases and the related signature
+  rejection test at `2026-09-08T09:53:44.772817Z`. Its 8,820 source records and
+  binary identities are unchanged during execution. The same four-test receipt
+  includes one separate BFV fixture failure; it is not a four-test pass. Evidence
+  is in the `core-policy-tests/result.json` receipt under
+  `target/privacy-release-evidence/2026-09-07-recovery/core-retry-20/`. The combined retry-20 build remains exit 101.
+  The earlier 206 passing leaves and these three are separate source scopes.
+- The private formal successor passes **65 cases and 17 subtests** against the
+  exact historical 348-owner retry-19 source, with 1,840 captured files and 31
+  absences. All 110 validator calls retain copied/rehashed inputs and a stable
+  private index. The reviewed nine-file patch is unchanged from the previous
+  candidate; 39 live Git providers remain explicitly unqualified. See
+  `scaling-kura-composed-review/formal-contract-successor-v3-retry19-exact/`.
+  This is not a complete model or live-index pass; older failed captures remain.
+- The corrected private resource package passes **1,324 cases**, zero failures,
+  errors or skips, with all 20 source inputs exact. It includes 364 parser,
+  54 process, 181 HTTP, 108 worker, 190 replay, 259 budget/projection,
+  85 typed-scanner, 76 ten-run experiment and seven package controls. The HTTP
+  scope fix and experiment owner have independent source reviews. Actual worker
+  publication and raw replay execute across all ten synthetic runs; this does
+  not prove canonical lane routing or effects. The process suite's own Python
+  RSS/image smoke and test-owned loopback/pipe work remain distinct from validator
+  measurement. See `scaling-resource-policy-package-review-v2/validation-v1/`.
+  The earlier 1,218-case package and component results retain their exact sources
+  and receipts. Independent composition review passes; publication is pending and G-SCALE stays open.
+- The coordinated retry-22 build passes with all **8,821 source paths unchanged**.
+  Its exact 61-leaf CLI selection finishes **61 passed, zero failed or ignored**,
+  with the full source inventory and original/retained CLI binary unchanged.
+  It contains every original 57 leaf plus four new workload regressions; all 31
+  resource Clock/IPC/parent controls pass. The published unique Clap group ID,
+  actual metadata-value size and bounded frame-derived decoder allocation repairs
+  resolve the prior failures. See `cli-load-direct-61-retry22/result.json`.
+  Retry 21's separate 41-pass/16-fail receipt and independent review remain
+  unchanged at `cli-load-direct-57-retry21/`; no failed cohort is relabelled.
+  Exact routing/effect authority, launch identity, all writer allocations,
+  main evidence-validator integration and the CLI pre-admission handshake remain
+  open, as do all five paired measurements. M1–M6 and every release gate stay open.

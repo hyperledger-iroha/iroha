@@ -261,8 +261,11 @@ const fn device_operation_name(operation: KagemushaDeviceLifecycleOperationV1) -
 }
 
 /// Canonical inventory body authenticated by the contract-vector digest.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_contract_vector_v1::KagemushaNativeContractVectorBodyV1"
+)]
 pub struct KagemushaNativeContractVectorBodyV1 {
     /// Sole supported contract-vector version.
     pub version: u16,
@@ -373,8 +376,11 @@ impl KagemushaNativeContractVectorBodyV1 {
 }
 
 /// Canonical native/mobile KAGEMUSHA V1 contract vector.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_contract_vector_v1::KagemushaNativeContractVectorV1"
+)]
 pub struct KagemushaNativeContractVectorV1 {
     /// Exact typed inventory body.
     pub body: KagemushaNativeContractVectorBodyV1,

@@ -41,12 +41,24 @@ on:
       - "scripts/build_norito_xcframework.sh"
       - "scripts/check_mobile_sdk_artifact_pin_commit.py"
       - "scripts/check_privacy_python_witness_boundary.py"
+      - "scripts/check_privacy_retired_witness_boundary.py"
+      - "scripts/tests/check_privacy_retired_witness_boundary_test.py"
+      - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/privacy/fixtures/RetiredPrivacyConfidentialWitnessFixture.kt"
+      - "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyRetiredWitnessBoundaryJavaConsumerTest.java"
+      - "IrohaSwift/Tests/IrohaSwiftTests/RetiredPrivacyConfidentialWitnessFixture.swift"
       - "scripts/compute_workspace_source_manifest.py"
       - "scripts/check_mobile_sdk_artifacts.sh"
       - "scripts/check_mobile_sdk_artifacts_test.sh"
       - "scripts/check_privacy_exact12_sdk_manifest_parity.py"
       - "scripts/tests/check_privacy_exact12_sdk_manifest_parity_test.py"
+      - "scripts/tests/check_privacy_cargo_materialization_test.py"
       - "scripts/tests/check_privacy_jvm_native_gate_test.py"
+      - "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNoteJavaConsumerTest.java"
+      - "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePathJavaConsumerTest.java"
+      - "scripts/check_privacy_jvm_class_contract.py"
+      - "scripts/check_kotlin_jni.py"
+      - "scripts/jvm_classfile.py"
+      - "scripts/tests/check_kotlin_jni_test.py"
       - "scripts/tests/check_privacy_python_witness_boundary_test.py"
       - "scripts/check_swift_pod_bridge.sh"
       - "scripts/exec_with_file_lock.py"
@@ -203,6 +215,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/TxBuilderTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/VerifyingKeyBackendTagTests.swift"
       - "java/iroha_android/README.md"
+      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/**"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/RegisterPinManifestInstruction.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/LanePrivacyMerkleWitness.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/LanePrivacyProof.java"
@@ -214,18 +227,19 @@ on:
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyBackendTag.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyRecordDescription.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/zk/VerifyingKeyStatus.java"
-      - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridge.java"
       - "java/iroha_android/src/main/java/org/hyperledger/iroha/android/norito/TransactionPayloadAdapter.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/ProofAttachmentModelTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/norito/ProofAttachmentNoritoTests.java"
-      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java"
+      - "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridgeJavaConsumerTest.java"
       - "kotlin/core-jvm/src/test/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureJavaConsumerTest.java"
       - "kotlin/README.md"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/RegisterPinManifestInstruction.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructions.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/zk/VerifyingKeyBackendTag.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyNativeBridge.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ConfidentialNote.kt"
+      - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/ZkAssetMerklePath.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12FixtureCodecV1.kt"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/tx/norito/TransactionPayloadAdapter.kt"
       - "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ZkAssetInstructionsTest.kt"
@@ -323,12 +337,13 @@ jobs:
         with:
           name: privacy-jvm-native-abi23-${{ github.sha }}
           path: ${{ runner.temp }}/privacy-jvm-native-abi23
-      - name: Authenticate distinct privacy release lock
+      - name: Authenticate canonical privacy graph snapshot
         run: |
+          source ci/privacy_sdk_cargo_lockfile.sh
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi23/Cargo.lock"
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
-          ! cmp -s "$release_lock" Cargo.lock
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+          cmp -s "$release_lock" Cargo.lock
           source_date_epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
           [[ "$source_date_epoch" =~ ^[1-9][0-9]*$ ]]
           echo "SOURCE_DATE_EPOCH=$source_date_epoch" >> "$GITHUB_ENV"
@@ -365,15 +380,16 @@ jobs:
       - name: Swift privacy native fail-closed contract
         run: python3 -I -B scripts/tests/check_privacy_swift_native_contract_test.py
       - name: Rebuild exact ABI23 XCFramework under full Xcode
-        run: scripts/build_norito_xcframework.sh
+        run: scripts/build_norito_xcframework.sh --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
       - name: Privacy Swift SDK parse and native ABI23 tests
         run: ci/check_privacy_swift_sdk.sh
       - name: Revalidate frozen Swift inputs and ABI23 artifacts
         if: always()
         run: |
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
-          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          scripts/check_mobile_sdk_artifacts.sh --apple-only
+          source ci/privacy_sdk_cargo_lockfile.sh
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+          [[ "$("$MOBILE_SDK_PYTHON_BINARY" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+          scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
 
   privacy_jvm_sdk_tests:
     runs-on: ubuntu-latest
@@ -459,8 +475,9 @@ jobs:
           PRIVACY_CSHARP_PYTHON: ${{ steps.privacy-csharp-python.outputs.python-path }}
         run: |
           input="$RUNNER_TEMP/privacy-jvm-native-abi23"
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
+          source ci/privacy_sdk_cargo_lockfile.sh
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$input/Cargo.lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+          [[ "$("$PRIVACY_CSHARP_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
           "$PRIVACY_CSHARP_PYTHON" -I -S scripts/check_native_sdk_abi23_artifact.py verify \
             --artifact "$input/libconnect_norito_bridge.so" \
             --manifest "$input/native-sdk-abi23-csharp.json" \
@@ -514,14 +531,15 @@ jobs:
         with:
           name: privacy-jvm-native-abi23-${{ github.sha }}
           path: ${{ runner.temp }}/privacy-jvm-native-abi23
-      - name: Authenticate distinct privacy release lock
+      - name: Authenticate canonical privacy graph snapshot
         env:
           PRIVACY_JS_PYTHON: ${{ steps.privacy-js-python.outputs.python-path }}
         run: |
           release_lock="$RUNNER_TEMP/privacy-jvm-native-abi23/Cargo.lock"
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79" ]]
-          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa" ]]
-          ! cmp -s "$release_lock" Cargo.lock
+          source ci/privacy_sdk_cargo_lockfile.sh
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$release_lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+          [[ "$("$PRIVACY_JS_PYTHON" -I -S -c 'import hashlib,pathlib; print(hashlib.sha256(pathlib.Path("Cargo.lock").read_bytes()).hexdigest())')" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]]
+          cmp -s "$release_lock" Cargo.lock
           echo "IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH=$release_lock" >> "$GITHUB_ENV"
       - name: Prime privacy N-API dependencies from the frozen lock
         run: RUSTC_BOOTSTRAP=1 cargo -Z unstable-options fetch --locked --lockfile-path "$IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH"
@@ -651,7 +669,7 @@ jobs:
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-native-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-python-workflow
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-guard-workflow
-          ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-helper-generation
+          ci/check_privacy_sdk_guard.sh --negative-control-cargo-lock-helper-compatibility
           ci/check_privacy_sdk_guard.sh --negative-control-cargo-config-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-native-crates-workflow-path
           ci/check_privacy_sdk_guard.sh --negative-control-rust-toolchain-workflow-path

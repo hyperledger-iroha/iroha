@@ -1824,7 +1824,7 @@ mod wire {
             Self(values)
         }
     }
-    impl<T: NoritoSerialize> NoritoSerialize for MembershipValues<T> {}
+
     impl<T: NoritoSerialize> SerializePayload for MembershipValues<T> {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
             self.0.serialize(writer)
@@ -1836,10 +1836,7 @@ mod wire {
             self.0.encoded_len_exact()
         }
     }
-    impl<T> NoritoDeserialize<'_> for MembershipValues<T> where
-        T: NoritoSerialize + for<'a> NoritoDeserialize<'a>
-    {
-    }
+
     impl<'de, T> DeserializePayload<'de> for MembershipValues<T>
     where
         T: NoritoSerialize + for<'a> DeserializePayload<'a>,
@@ -2261,7 +2258,7 @@ mod wire {
 pub(super) fn generic_membership_identity_records() -> Vec<norito::json::Value> {
     wire::captured_tx_predicate_schema_tests::generic_membership_identity_records()
 }
-impl norito::core::NoritoSerialize for CommittedTxPredicate {}
+
 impl norito::core::SerializePayload for CommittedTxPredicate {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         if !norito::core::use_packed_seq() && !norito::core::use_packed_struct() {
@@ -2277,7 +2274,7 @@ impl norito::core::SerializePayload for CommittedTxPredicate {
         wire::streamed_encoded_len(self)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for CommittedTxPredicate {}
+
 impl<'de> norito::core::DeserializePayload<'de> for CommittedTxPredicate {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CommittedTxPredicate deserialization must succeed")

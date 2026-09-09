@@ -388,7 +388,6 @@ else
       "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-potr-provider.plist"
       "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-billing.plist"
       "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-evidence-viewer.plist"
-      "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-stream-token.plist"
       "external_software_signer/launchd/org.hyperledger.iroha.sorafs-signer-pop-credentials.plist"
       "runtime_provider_broker/launchd/org.hyperledger.iroha.runtime-provider-broker-v1.plist"
     )

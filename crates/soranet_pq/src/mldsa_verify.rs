@@ -1,4 +1,4 @@
-//! Byte-oriented ML-DSA verification with an AArch64 SHA3 capability guard.
+//! Byte-oriented ML-DSA verification with an `AArch64` SHA3 capability guard.
 
 use pqcrypto_mldsa::{ffi, mldsa44, mldsa65, mldsa87};
 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _, VerificationError};
@@ -103,7 +103,7 @@ verifier!(
 /// Verify a typed ML-DSA-65 signature with an empty FIPS 204 context.
 ///
 /// Preserves the `pqcrypto` typed verifier's return values and uses its CLEAN
-/// implementation when AArch64 NEON or SHA3 support is unavailable. Callers
+/// implementation when `AArch64` NEON or SHA3 support is unavailable. Callers
 /// retain their existing application-level encoding and all-zero checks.
 ///
 /// # Errors

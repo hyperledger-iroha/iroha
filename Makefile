@@ -158,6 +158,7 @@ bridge-xcframework:
 	@test -n "$$NORITO_BRIDGE_BUILD_DIR" || { echo "NORITO_BRIDGE_BUILD_DIR is required" >&2; exit 1; }
 	@test -n "$$NORITO_BRIDGE_ARCHIVE_OUTPUT" || { echo "NORITO_BRIDGE_ARCHIVE_OUTPUT is required" >&2; exit 1; }
 	@bash scripts/build_norito_xcframework.sh \
+		--lockfile-path "$(CURDIR)/Cargo.lock" \
 		--archive-output "$$NORITO_BRIDGE_ARCHIVE_OUTPUT"
 	@$(MAKE) bridge-checksum
 

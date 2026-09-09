@@ -1003,6 +1003,7 @@ fn kura_config_for_snapshot_test(store_dir: &Path, blocks_in_memory: NonZeroUsiz
         merge_ledger_cache_capacity: MERGE_LEDGER_CACHE_CAPACITY,
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: REPLICA_ADVERT_POLICY,
     }
 }
@@ -1473,7 +1474,11 @@ fn publish_test_snapshot_generation(
     .expect("publish immutable test generation");
     (store_identity, generation)
 }
-fn write_snapshot_bundle_from_bytes(store_dir: &std::path::Path, bytes: &[u8], key_pair: &KeyPair) {
+pub(super) fn write_snapshot_bundle_from_bytes(
+    store_dir: &std::path::Path,
+    bytes: &[u8],
+    key_pair: &KeyPair,
+) {
     let (store_identity, generation) = publish_test_snapshot_generation(store_dir, bytes, key_pair);
     publish_snapshot_current_pointer(
         store_dir,

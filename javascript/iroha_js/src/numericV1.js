@@ -4,6 +4,14 @@ import { crc64Xz } from "./crc64Xz.js";
 
 import { parseStrictLosslessIntegerJson } from "./strictLosslessJson.js";
 
+const TEXT_NUMERIC_ENVELOPE = "numeric envelope ";
+const TEXT_NUMERIC_MANTISSA_IS_OUTSIDE_THE_SIGNED_512_BIT_DOMAIN = "numeric mantissa is outside the signed 512-bit domain";
+const TEXT_MUST_USE_CANONICAL = " must use canonical ";
+const TEXT_MANTISSA_IS_TOO_WIDE = "mantissa is too wide";
+const TEXT_NUMERIC_SCALE_EXCEEDS_28 = "numeric scale exceeds 28";
+const TEXT_NUMERIC_FRAME = "numeric frame ";
+
+
 export { parseStrictLosslessIntegerJson };
 const MAX_MANTISSA_BYTES = 64;
 const INVALID_TEXT = "invalid_text";
@@ -144,7 +152,7 @@ function checkedBigInt(value, context) {
   if (typeof value === JS_TYPE_BIGINT) return value;
   if (typeof value === JS_TYPE_STRING) {
     if (!/^-?(?:0|[1-9][0-9]*)$/u.test(value) || value === "-0") {
-      fail(INVALID_TEXT, `${context} must use canonical base-10 syntax`);
+      fail(INVALID_TEXT, `${context}${TEXT_MUST_USE_CANONICAL}base-10 syntax`);
     }
     if (value.length > MAX_INT_TEXT_BYTES) {
       fail(MANTISSA_OVERFLOW, "integer text exceeds the signed 512-bit input bound");
@@ -156,7 +164,7 @@ function checkedBigInt(value, context) {
 
 function checkIntRange(value) {
   if (value < INT_MIN || value > INT_MAX) {
-    fail(MANTISSA_OVERFLOW, "numeric mantissa is outside the signed 512-bit domain");
+    fail(MANTISSA_OVERFLOW, TEXT_NUMERIC_MANTISSA_IS_OUTSIDE_THE_SIGNED_512_BIT_DOMAIN);
   }
   return value;
 }
@@ -172,12 +180,12 @@ function encodeTwosComplement(value) {
       remaining >>= 8n;
     }
     if ((bytes[bytes.length - 1] & 0x80) !== 0) bytes.push(0);
-    if (bytes.length > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, "mantissa is too wide");
+    if (bytes.length > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, TEXT_MANTISSA_IS_TOO_WIDE);
     return Uint8Array.from(bytes);
   }
   let width = 1;
   while (value < -(1n << BigInt(width * 8 - 1))) width += 1;
-  if (width > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, "mantissa is too wide");
+  if (width > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, TEXT_MANTISSA_IS_TOO_WIDE);
   let encoded = (1n << BigInt(width * 8)) + value;
   const bytes = new Uint8Array(width);
   for (let index = 0; index < width; index += 1) {
@@ -189,7 +197,7 @@ function encodeTwosComplement(value) {
 
 function decodeTwosComplement(input) {
   const bytes = asBytes(input, "mantissa");
-  if (bytes.length > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, "mantissa is too wide");
+  if (bytes.length > MAX_MANTISSA_BYTES) fail(MANTISSA_OVERFLOW, TEXT_MANTISSA_IS_TOO_WIDE);
   if (bytes.length === 0) return 0n;
   const last = bytes[bytes.length - 1];
   if (bytes.length === 1 && last === 0) {
@@ -220,7 +228,7 @@ function normalizeScaled(mantissa, scale, quantity) {
   let normalizedMantissa;
   if (typeof mantissa === JS_TYPE_STRING) {
     if (!/^-?(?:0|[1-9][0-9]*)$/u.test(mantissa) || mantissa === "-0") {
-      fail(INVALID_TEXT, "mantissa must use canonical base-10 syntax");
+      fail(INVALID_TEXT, ("mantissa" + TEXT_MUST_USE_CANONICAL + "base-10 syntax"));
     }
     const negative = mantissa.startsWith("-");
     let magnitude = negative ? mantissa.slice(1) : mantissa;
@@ -234,7 +242,7 @@ function normalizeScaled(mantissa, scale, quantity) {
       }
       const normalizedText = `${negative ? "-" : ""}${magnitude}`;
       if (normalizedText.length > MAX_INT_TEXT_BYTES) {
-        fail(MANTISSA_OVERFLOW, "numeric mantissa is outside the signed 512-bit domain");
+        fail(MANTISSA_OVERFLOW, TEXT_NUMERIC_MANTISSA_IS_OUTSIDE_THE_SIGNED_512_BIT_DOMAIN);
       }
       normalizedMantissa = BigInt(normalizedText);
     }
@@ -249,7 +257,7 @@ function normalizeScaled(mantissa, scale, quantity) {
       normalizedScale -= 1;
     }
   }
-  if (normalizedScale > 28) fail(INVALID_SCALE, "canonical numeric scale exceeds 28");
+  if (normalizedScale > 28) fail(INVALID_SCALE, ("canonical " + TEXT_NUMERIC_SCALE_EXCEEDS_28));
   checkIntRange(normalizedMantissa);
   if (quantity && normalizedMantissa < 0n) {
     fail("negative_quantity", "quantity cannot be negative");
@@ -274,7 +282,7 @@ function parseScaled(value, quantity) {
     end -= 1;
     scale -= 1;
   }
-  if (scale > 28) fail(INVALID_SCALE, "canonical numeric scale exceeds 28");
+  if (scale > 28) fail(INVALID_SCALE, ("canonical " + TEXT_NUMERIC_SCALE_EXCEEDS_28));
   if (end - first > MAX_SIGNIFICANT_DIGITS) {
     fail(MANTISSA_OVERFLOW, "decimal mantissa exceeds the signed 512-bit input bound");
   }
@@ -380,23 +388,23 @@ function decodeFrame(kind, input) {
   const schema = SCHEMAS[kind];
   const frame = asBytes(input, "numeric frame");
   const maximum = FRAME_HEADER_BYTES + 4 + MAX_MANTISSA_BYTES + (schema.scaled ? 1 : 0);
-  if (frame.length < FRAME_HEADER_BYTES) fail("frame_too_short", "numeric frame is truncated");
-  if (frame.length > maximum) fail("frame_too_large", "numeric frame is oversized");
+  if (frame.length < FRAME_HEADER_BYTES) fail("frame_too_short", (TEXT_NUMERIC_FRAME + "is truncated"));
+  if (frame.length > maximum) fail("frame_too_large", (TEXT_NUMERIC_FRAME + "is oversized"));
   if (!equalBytes(frame.subarray(0, 6), Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 0, 0]))) {
-    fail("invalid_header", "numeric frame has the wrong Norito magic or version");
+    fail("invalid_header", (TEXT_NUMERIC_FRAME + "has the wrong Norito magic or version"));
   }
   if (!equalBytes(frame.subarray(6, 22), hexToBytes(schema.hash))) {
-    fail("schema_mismatch", "numeric frame schema does not match its type");
+    fail("schema_mismatch", (TEXT_NUMERIC_FRAME + "schema does not match its type"));
   }
   if (frame[22] !== 0) fail("compression_not_allowed", "numeric frames cannot be compressed");
-  if (frame[39] !== 0) fail("layout_flags_not_allowed", "numeric frame flags must be zero");
+  if (frame[39] !== 0) fail("layout_flags_not_allowed", (TEXT_NUMERIC_FRAME + "flags must be zero"));
   const bodyLength = readU64Le(frame, 23);
   if (bodyLength > BigInt(Number.MAX_SAFE_INTEGER)
     || Number(bodyLength) !== frame.length - FRAME_HEADER_BYTES) {
-    fail(LENGTH_MISMATCH, "numeric frame length is inconsistent");
+    fail(LENGTH_MISMATCH, (TEXT_NUMERIC_FRAME + "length is inconsistent"));
   }
   const body = frame.subarray(FRAME_HEADER_BYTES);
-  if (readU64Le(frame, 31) !== crc64Xz(body)) fail("checksum_mismatch", "numeric frame checksum failed");
+  if (readU64Le(frame, 31) !== crc64Xz(body)) fail("checksum_mismatch", (TEXT_NUMERIC_FRAME + "checksum failed"));
   if (body.length < 4) fail(LENGTH_MISMATCH, "numeric body has no mantissa length");
   const mantissaLength = readU32Le(body, 0);
   const expectedBodyLength = 4 + mantissaLength + (schema.scaled ? 1 : 0);
@@ -407,7 +415,7 @@ function decodeFrame(kind, input) {
   const mantissa = decodeTwosComplement(body.subarray(4, 4 + mantissaLength));
   if (!schema.scaled) return new KotodamaInt(mantissa);
   const scale = body[body.length - 1];
-  if (scale > 28) fail(INVALID_SCALE, "numeric scale exceeds 28");
+  if (scale > 28) fail(INVALID_SCALE, TEXT_NUMERIC_SCALE_EXCEEDS_28);
   if ((mantissa === 0n && scale !== 0) || (scale > 0 && mantissa % 10n === 0n)) {
     fail("noncanonical_decimal", "numeric value has a noncanonical scale");
   }
@@ -430,25 +438,25 @@ function envelopeFor(kind, value) {
 function decodeEnvelope(kind, input) {
   const schema = SCHEMAS[kind];
   const envelope = asBytes(input, "numeric pointer envelope");
-  if (envelope.length < ENVELOPE_HEADER_BYTES) fail(TRUNCATED_ENVELOPE, "numeric envelope is truncated");
+  if (envelope.length < ENVELOPE_HEADER_BYTES) fail(TRUNCATED_ENVELOPE, (TEXT_NUMERIC_ENVELOPE + "is truncated"));
   const pointerType = (envelope[0] << 8) | envelope[1];
   const knownAllowedType = pointerType >= NUMERIC_V1_MIN_KNOWN_POINTER_TYPE
     && pointerType <= NUMERIC_V1_MAX_ASSIGNED_POINTER_TYPE;
   if (!knownAllowedType) {
-    fail("unknown_type", "numeric envelope has an unknown pointer type");
+    fail("unknown_type", (TEXT_NUMERIC_ENVELOPE + "has an unknown pointer type"));
   }
-  if (pointerType !== schema.pointerType) fail("wrong_type", "numeric envelope type does not match");
-  if (envelope[2] !== 1) fail("invalid_envelope_version", "numeric envelope version must be 1");
+  if (pointerType !== schema.pointerType) fail("wrong_type", (TEXT_NUMERIC_ENVELOPE + "type does not match"));
+  if (envelope[2] !== 1) fail("invalid_envelope_version", (TEXT_NUMERIC_ENVELOPE + "version must be 1"));
   const frameLength = readU32Be(envelope, 3);
   const maximum = FRAME_HEADER_BYTES + 4 + MAX_MANTISSA_BYTES + (schema.scaled ? 1 : 0);
-  if (frameLength > maximum) fail("oversized_length", "numeric envelope declares an oversized frame");
+  if (frameLength > maximum) fail("oversized_length", (TEXT_NUMERIC_ENVELOPE + "declares an oversized frame"));
   if (ENVELOPE_HEADER_BYTES + frameLength + HASH_BYTES !== envelope.length) {
-    fail(TRUNCATED_ENVELOPE, "numeric envelope length is inconsistent");
+    fail(TRUNCATED_ENVELOPE, (TEXT_NUMERIC_ENVELOPE + "length is inconsistent"));
   }
   const frame = envelope.subarray(ENVELOPE_HEADER_BYTES, ENVELOPE_HEADER_BYTES + frameLength);
   const suppliedHash = envelope.subarray(ENVELOPE_HEADER_BYTES + frameLength);
   if (!equalBytes(payloadHash(frame), suppliedHash)) {
-    fail("payload_hash_mismatch", "numeric envelope payload hash failed");
+    fail("payload_hash_mismatch", (TEXT_NUMERIC_ENVELOPE + "payload hash failed"));
   }
   return decodeFrame(kind, frame);
 }
@@ -481,13 +489,13 @@ export const NumericV1 = Object.freeze({
   decodeDecimalJson: (value) => {
     if (typeof value !== JS_TYPE_STRING) fail(INVALID_TEXT, "decimal JSON must be a string");
     const decoded = new KotodamaDecimal(value);
-    if (decoded.toString() !== value) fail(INVALID_TEXT, "decimal JSON must use canonical spelling");
+    if (decoded.toString() !== value) fail(INVALID_TEXT, ("decimal JSON" + TEXT_MUST_USE_CANONICAL + "spelling"));
     return decoded;
   },
   decodeQuantityJson: (value) => {
     if (typeof value !== JS_TYPE_STRING) fail(INVALID_TEXT, "quantity JSON must be a string");
     const decoded = new KotodamaQuantity(value);
-    if (decoded.toString() !== value) fail(INVALID_TEXT, "quantity JSON must use canonical spelling");
+    if (decoded.toString() !== value) fail(INVALID_TEXT, ("quantity JSON" + TEXT_MUST_USE_CANONICAL + "spelling"));
     return decoded;
   },
 });

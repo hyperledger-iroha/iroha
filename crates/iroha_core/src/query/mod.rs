@@ -2,6 +2,7 @@
 #![allow(clippy::disallowed_types)]
 pub mod cursor;
 pub mod index_status;
+mod journal_io;
 pub mod pagination;
 pub mod projection_checkpoint;
 pub mod projection_checkpoint_journal;

@@ -19,6 +19,8 @@ use norito::{
     JsonDeserialize,
 )]
 #[norito(tag = "bucket", content = "value")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::volatility::VolatilityBucket")]
 pub enum VolatilityBucket {
     /// Normal trading conditions (no extra margin).
     #[default]

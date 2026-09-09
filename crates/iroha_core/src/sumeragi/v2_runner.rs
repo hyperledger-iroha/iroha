@@ -2203,8 +2203,15 @@ pub(in crate::sumeragi) fn advance_executor(
                     if matches!(
                         attestation.mode(),
                         super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-                    ) =>
+                    ) || (matches!(
+                        attestation.mode(),
+                        super::v2_lifecycle_coordinator::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. }
+                    ) && executor.lifecycle_decision_apply_dispatch_available(Some(&attestation))?) =>
                 {
+                    // The delayed observer output has no retained Apply. A
+                    // delayed validator suffix retries Completion only after
+                    // the full executor dispatch gate is open; otherwise its
+                    // exact bounded runtime predecessor must drain below.
                     (None, true)
                 }
                 Some(attestation)

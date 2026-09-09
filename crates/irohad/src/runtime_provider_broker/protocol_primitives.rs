@@ -112,46 +112,43 @@ pub(super) const OPERATION_BOOTLE_LANTERN_ISSUANCE_ISSUE_VALIDATED_V1: u16 = 122
 pub(super) const OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1: u16 = 123;
 pub(super) const OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1: u16 = 124;
 pub(super) const OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1: u16 = 125;
+pub(super) const OPERATION_STREAM_TOKEN_RECOVER_V1: u16 = 126;
+pub(super) const OPERATION_STREAM_TOKEN_OBSERVE_V1: u16 = 127;
 // A real payload byte avoids relying on zero-sized archive reconstruction;
 // the authenticated slot and operation provide the request-domain binding.
 pub(super) const CHECKPOINT_LOAD_REQUEST_VERSION_V1: u8 = 1;
-define_broker_wire_struct!(sensitive pub(super) SignRequestWireV1 { pub(super) payload: Vec<u8>, });
-impl_broker_debug_fields!(SignRequestWireV1 as value {
-    "payload_len" => value.payload.len(),
-} => finish_non_exhaustive);
-impl_scrub_fields_on_drop!(SignRequestWireV1 { payload });
-define_broker_wire_struct!(sensitive pub(super) PurposeSignRequestWireV1 { pub(super) purpose: u8, pub(super) payload: Vec<u8>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::primitives::PurposeSignRequestWireV1" pub(super) PurposeSignRequestWireV1 { pub(super) purpose: u8, pub(super) payload: Vec<u8>, });
 impl_broker_debug_fields!(PurposeSignRequestWireV1 as value {
     "purpose" => value.purpose,
     "payload_len" => value.payload.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(PurposeSignRequestWireV1 { payload });
-define_broker_wire_struct!(copy pub(super) SignResultWireV1 { pub(super) signature: [u8; 64], });
-define_broker_wire_struct!(sensitive pub(super) VariableSignatureResultWireV1 { pub(super) signature: Vec<u8>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::SignResultWireV1" pub(super) SignResultWireV1 { pub(super) signature: [u8; 64], });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::primitives::VariableSignatureResultWireV1" pub(super) VariableSignatureResultWireV1 { pub(super) signature: Vec<u8>, });
 impl_broker_debug_fields!(VariableSignatureResultWireV1 as value {
     "signature_len" => value.signature.len(),
 } => finish_non_exhaustive);
-define_broker_wire_struct!(copy pub(super) PopIssuerSignRequestWireV1 { pub(super) purpose: u8, pub(super) digest: [u8; 32], });
-define_broker_wire_struct!(copy pub(super) PopIssuerSignResultWireV1 { pub(super) signature: [u8; 64], });
-define_broker_wire_struct!(owned pub(super) GlobalBeaconPartialSignRequestWireV1 {
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::PopIssuerSignRequestWireV1" pub(super) PopIssuerSignRequestWireV1 { pub(super) purpose: u8, pub(super) digest: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::PopIssuerSignResultWireV1" pub(super) PopIssuerSignResultWireV1 { pub(super) signature: [u8; 64], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconPartialSignRequestWireV1" pub(super) GlobalBeaconPartialSignRequestWireV1 {
     pub(super) session: iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1,
     pub(super) height: u64,
     pub(super) finalized_chain_anchor: iroha_data_model::consensus::GlobalThresholdBeaconChainAnchorV1,
 });
-define_broker_wire_struct!(copy pub(super) GlobalBeaconPartialSignResultWireV1 {
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::GlobalBeaconPartialSignResultWireV1" pub(super) GlobalBeaconPartialSignResultWireV1 {
     pub(super) partial: iroha_data_model::consensus::GlobalThresholdBeaconPartialSignatureV1,
 });
-define_broker_wire_struct!(owned pub(super) ParliamentTlePartialReleaseSignRequestWireV1 {
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::ParliamentTlePartialReleaseSignRequestWireV1" pub(super) ParliamentTlePartialReleaseSignRequestWireV1 {
     pub(super) projection: iroha_core::tle_release::AuthorizedTleReleaseProjectionV1,
 });
-define_broker_wire_struct!(owned pub(super) ParliamentTlePartialReleaseSignResultWireV1 {
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::ParliamentTlePartialReleaseSignResultWireV1" pub(super) ParliamentTlePartialReleaseSignResultWireV1 {
     pub(super) partial: iroha_core::tle_release::TlePartialReleaseShareV1,
 });
-define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestRequestWireV1 {
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::ParliamentTleCapabilityAttestRequestWireV1" pub(super) ParliamentTleCapabilityAttestRequestWireV1 {
     pub(super) key_session: iroha_core::tle_release::TleKeySessionPublicStateV1,
     pub(super) participant_index: u16,
 });
-define_broker_wire_struct!(owned pub(super) ParliamentTleCapabilityAttestResultWireV1 {
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::ParliamentTleCapabilityAttestResultWireV1" pub(super) ParliamentTleCapabilityAttestResultWireV1 {
     pub(super) key_session_id: iroha_data_model::governance::types::TleKeySessionId,
     pub(super) transcript_hash: [u8; 32],
     pub(super) participant_index: u16,
@@ -289,14 +286,14 @@ pub(super) const PROVIDER_INGEST_SOURCE_STREAM_DOMAIN_V1: &[u8] =
     b"iroha.runtime-provider-broker.provider-ingest-source-stream.v1";
 pub(super) const PROVIDER_INGEST_SOURCE_CHUNK_DOMAIN_V1: &[u8] =
     b"iroha.runtime-provider-broker.provider-ingest-source-chunk.v1";
-define_broker_wire_struct!(owned pub(super) PopRuntimeOpenResultWireV1 { pub(super) issuer_signer_handle: String, pub(super) issuer_public_key: [u8; 32], pub(super) enrollment_recipient_key_id: String, pub(super) enrollment_recipient_public_key_digest: [u8; 32], pub(super) wallet_recipient_key_id: String, pub(super) wallet_recipient_public_key_digest: [u8; 32], pub(super) wallet_wrapping_key_id: String, });
-define_broker_wire_struct!(move_sensitive pub(super) PopRecipientOpenRequestWireV1 { pub(super) encrypted_payload: sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1, pub(super) aad: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::PopRuntimeOpenResultWireV1" pub(super) PopRuntimeOpenResultWireV1 { pub(super) issuer_signer_handle: String, pub(super) issuer_public_key: [u8; 32], pub(super) enrollment_recipient_key_id: String, pub(super) enrollment_recipient_public_key_digest: [u8; 32], pub(super) wallet_recipient_key_id: String, pub(super) wallet_recipient_public_key_digest: [u8; 32], pub(super) wallet_wrapping_key_id: String, });
+define_broker_wire_struct!(move_sensitive "irohad::runtime_provider_broker::protocol::primitives::PopRecipientOpenRequestWireV1" pub(super) PopRecipientOpenRequestWireV1 { pub(super) encrypted_payload: sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1, pub(super) aad: Vec<u8>, });
 impl_broker_debug_fields!(PopRecipientOpenRequestWireV1 as value {
     "encrypted_payload" => "[REDACTED]",
     "aad_len" => value.aad.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(PopRecipientOpenRequestWireV1 { aad });
-define_broker_wire_struct!(move_sensitive pub(super) PopRecipientOpenResultWireV1 { pub(super) plaintext: Vec<u8>, });
+define_broker_wire_struct!(move_sensitive "irohad::runtime_provider_broker::protocol::primitives::PopRecipientOpenResultWireV1" pub(super) PopRecipientOpenResultWireV1 { pub(super) plaintext: Vec<u8>, });
 impl PopRecipientOpenResultWireV1 {
     pub(super) fn take_plaintext(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.plaintext)
@@ -444,6 +441,8 @@ mod operation_ordinal_tests {
             (OPERATION_GLOBAL_BEACON_PARTIAL_SIGN_V1, 123),
             (OPERATION_PARLIAMENT_TLE_PARTIAL_RELEASE_SIGN_V1, 124),
             (OPERATION_PARLIAMENT_TLE_CAPABILITY_ATTEST_V1, 125),
+            (OPERATION_STREAM_TOKEN_RECOVER_V1, 126),
+            (OPERATION_STREAM_TOKEN_OBSERVE_V1, 127),
         ];
         for (index, (operation, expected)) in exact.into_iter().enumerate() {
             assert_eq!(operation, expected);
@@ -453,7 +452,7 @@ mod operation_ordinal_tests {
         assert!(super::super::operation_is_known(
             OPERATION_POP_RUNTIME_OPEN_V1
         ));
-        assert!(!super::super::operation_is_known(126));
+        assert!(!super::super::operation_is_known(128));
     }
 }
 
@@ -724,22 +723,22 @@ impl Drop for ScrubbedReadChunk {
         let _ = std::hint::black_box(&self.0);
     }
 }
-define_broker_wire_struct!(sensitive pub(super) BrokerFrameV1 { pub(super) magic: [u8; 8], pub(super) version: u16, pub(super) kind: u8, pub(super) body: Vec<u8>, });
+define_broker_wire_struct!(sensitive "irohad::runtime_provider_broker::protocol::primitives::BrokerFrameV1" pub(super) BrokerFrameV1 { pub(super) magic: [u8; 8], pub(super) version: u16, pub(super) kind: u8, pub(super) body: Vec<u8>, });
 impl_broker_debug_fields!(BrokerFrameV1 as value {
     "version" => value.version,
     "kind" => value.kind,
     "body_len" => value.body.len(),
 } => finish_non_exhaustive);
 impl_scrub_fields_on_drop!(BrokerFrameV1 { body });
-define_broker_wire_struct!(owned pub(super) ProviderBindingWireV1 { pub(super) slot: u16, pub(super) handle: String, pub(super) revision: Option<u64>, pub(super) policy_digest: Option<[u8; 32]>, pub(super) bootle_lantern_issuance_bindings: Option<BootleLanternIssuanceBindingsWireV1>, pub(super) stream_token_signer_public_key: Option<[u8; 32]>, pub(super) stream_token_gateway_admission_qualification: Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>, pub(super) stream_token_gateway_admission_max_pending: Option<u32>, pub(super) stream_token_gateway_admission_max_tracked_tokens: Option<u32>, pub(super) stream_token_gateway_admission_reconcile_max_items: Option<u32>, pub(super) appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>, pub(super) appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>, pub(super) appeal_finance_checkpoint_max_bytes: Option<u64>, pub(super) pop_credential_runtime_binding: Option<PopCredentialRuntimeBindingWireV1>, pub(super) por_replay_archive_binding: Option<sorafs_node::PorFinalizedReplayArchiveBindingV1>, pub(super) por_replay_archive_proof_limits: Option<PorReplayArchiveProofLimitsWireV1>, pub(super) potr_runtime_binding: Option<PotrRuntimeBindingWireV1>, pub(super) native_signer_binding: Option<NativeTransactionSignerBindingWireV1>, pub(super) governance_dag_publisher_peer_id: Option<Vec<u8>>, pub(super) governance_dag_publisher_public_key: Option<[u8; 32]>, pub(super) governance_request_ingress_binding: Option<GovernanceRequestIngressBindingWireV1>, pub(super) provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>, pub(super) provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>, pub(super) provider_ingest_checkpoint_max_bytes: Option<u64>, pub(super) provider_ingest_max_signed_transaction_bytes: Option<u64>, pub(super) evidence_viewer_webauthn_binding: Option<EvidenceViewerWebAuthnBindingWireV1>, pub(super) evidence_viewer_grant_ttl_ms: Option<u64>, pub(super) evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_transparency_publisher_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_attestation_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_id: Option<[u8; 32]>, pub(super) evidence_viewer_archive_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_max_bytes: Option<u64>, pub(super) moderation_panel_notification_archive_binding: Option<ModerationPanelNotificationArchiveBindingWireV1>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::ProviderBindingWireV1" pub(super) ProviderBindingWireV1 { pub(super) slot: u16, pub(super) handle: String, pub(super) revision: Option<u64>, pub(super) policy_digest: Option<[u8; 32]>, pub(super) bootle_lantern_issuance_bindings: Option<BootleLanternIssuanceBindingsWireV1>, pub(super) stream_token_hardware_binding: Option<crate::runtime_provider_registry::StreamTokenHardwareRuntimeBindingV1>, pub(super) stream_token_gateway_admission_qualification: Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>, pub(super) stream_token_gateway_admission_max_pending: Option<u32>, pub(super) stream_token_gateway_admission_max_tracked_tokens: Option<u32>, pub(super) stream_token_gateway_admission_reconcile_max_items: Option<u32>, pub(super) appeal_finance_signer_binding: Option<AppealFinanceSignerBindingWireV1>, pub(super) appeal_finance_checkpoint_binding: Option<AppealFinanceCheckpointBindingWireV1>, pub(super) appeal_finance_checkpoint_max_bytes: Option<u64>, pub(super) pop_credential_runtime_binding: Option<PopCredentialRuntimeBindingWireV1>, pub(super) por_replay_archive_binding: Option<sorafs_node::PorFinalizedReplayArchiveBindingV1>, pub(super) por_replay_archive_proof_limits: Option<PorReplayArchiveProofLimitsWireV1>, pub(super) potr_runtime_binding: Option<PotrRuntimeBindingWireV1>, pub(super) native_signer_binding: Option<NativeTransactionSignerBindingWireV1>, pub(super) governance_dag_publisher_peer_id: Option<Vec<u8>>, pub(super) governance_dag_publisher_public_key: Option<[u8; 32]>, pub(super) governance_request_ingress_binding: Option<GovernanceRequestIngressBindingWireV1>, pub(super) provider_ingest_signer_binding: Option<ProviderIngestSignerBindingWireV1>, pub(super) provider_ingest_source_limits: Option<ProviderIngestSourceLimitsWireV1>, pub(super) provider_ingest_checkpoint_max_bytes: Option<u64>, pub(super) provider_ingest_max_signed_transaction_bytes: Option<u64>, pub(super) evidence_viewer_webauthn_binding: Option<EvidenceViewerWebAuthnBindingWireV1>, pub(super) evidence_viewer_grant_ttl_ms: Option<u64>, pub(super) evidence_viewer_receipt_signer_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_transparency_publisher_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_max_bytes: Option<u64>, pub(super) moderation_checkpoint_attestation_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_id: Option<[u8; 32]>, pub(super) evidence_viewer_archive_public_key: Option<[u8; 32]>, pub(super) evidence_viewer_archive_max_bytes: Option<u64>, pub(super) moderation_panel_notification_archive_binding: Option<ModerationPanelNotificationArchiveBindingWireV1>, });
 // Exact public identity and resource bound for moderation receipt archives.
-define_broker_wire_struct!(copy pub(super) ModerationPanelNotificationArchiveBindingWireV1 { pub(super) archive_id: [u8; 32], pub(super) bootstrap_public_key: [u8; 32], pub(super) public_key: [u8; 32], pub(super) max_bytes: u64, pub(super) max_records: u64, });
-define_broker_wire_struct!(copy pub(super) GovernanceRequestIngressBindingWireV1 { pub(super) scope: u8, pub(super) endpoint_binding: [u8; 32], pub(super) public_key: [u8; 32], pub(super) max_body_bytes: u64, pub(super) max_envelope_lifetime_secs: u64, pub(super) max_future_skew_secs: u64, });
-define_broker_wire_struct!(copy pub(super) BootleLanternIssuanceBindingsWireV1 { pub(super) issuer_id: [u8; 32], pub(super) policy_id: [u8; 32], pub(super) authorization_lifetime_blocks: u64, });
-define_broker_wire_struct!(owned pub(super) AppealFinanceSignerBindingWireV1 { pub(super) authority: iroha_data_model::account::AccountId, pub(super) public_key: iroha_crypto::PublicKey, pub(super) valid_from_block_height: u64, pub(super) revoked_at_block_height: Option<u64>, });
-define_broker_wire_struct!(owned pub(super) AppealFinanceCheckpointBindingWireV1 { pub(super) public_key: iroha_crypto::PublicKey, });
-define_broker_wire_struct!(owned pub(super) PopCredentialRuntimeBindingWireV1 { pub(super) issuer_policy_digest: [u8; 32], pub(super) issuer_id: String, pub(super) issuer_signer_handle: String, pub(super) issuer_public_key: [u8; 32], pub(super) enrollment_recipient_key_id: String, pub(super) enrollment_recipient_public_key_digest: [u8; 32], pub(super) wallet_recipient_key_id: String, pub(super) wallet_recipient_public_key_digest: [u8; 32], pub(super) wallet_wrapping_key_id: String, });
-define_broker_wire_struct!(copy pub(super) PorReplayArchiveProofLimitsWireV1 { pub(super) max_successor_receipts: u32, pub(super) max_successor_proof_bytes: u64, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::ModerationPanelNotificationArchiveBindingWireV1" pub(super) ModerationPanelNotificationArchiveBindingWireV1 { pub(super) archive_id: [u8; 32], pub(super) bootstrap_public_key: [u8; 32], pub(super) public_key: [u8; 32], pub(super) max_bytes: u64, pub(super) max_records: u64, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::GovernanceRequestIngressBindingWireV1" pub(super) GovernanceRequestIngressBindingWireV1 { pub(super) scope: u8, pub(super) endpoint_binding: [u8; 32], pub(super) public_key: [u8; 32], pub(super) max_body_bytes: u64, pub(super) max_envelope_lifetime_secs: u64, pub(super) max_future_skew_secs: u64, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::BootleLanternIssuanceBindingsWireV1" pub(super) BootleLanternIssuanceBindingsWireV1 { pub(super) issuer_id: [u8; 32], pub(super) policy_id: [u8; 32], pub(super) authorization_lifetime_blocks: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::AppealFinanceSignerBindingWireV1" pub(super) AppealFinanceSignerBindingWireV1 { pub(super) authority: iroha_data_model::account::AccountId, pub(super) public_key: iroha_crypto::PublicKey, pub(super) valid_from_block_height: u64, pub(super) revoked_at_block_height: Option<u64>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::AppealFinanceCheckpointBindingWireV1" pub(super) AppealFinanceCheckpointBindingWireV1 { pub(super) public_key: iroha_crypto::PublicKey, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::PopCredentialRuntimeBindingWireV1" pub(super) PopCredentialRuntimeBindingWireV1 { pub(super) issuer_policy_digest: [u8; 32], pub(super) issuer_id: String, pub(super) issuer_signer_handle: String, pub(super) issuer_public_key: [u8; 32], pub(super) enrollment_recipient_key_id: String, pub(super) enrollment_recipient_public_key_digest: [u8; 32], pub(super) wallet_recipient_key_id: String, pub(super) wallet_recipient_public_key_digest: [u8; 32], pub(super) wallet_wrapping_key_id: String, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::PorReplayArchiveProofLimitsWireV1" pub(super) PorReplayArchiveProofLimitsWireV1 { pub(super) max_successor_receipts: u32, pub(super) max_successor_proof_bytes: u64, });
 impl From<crate::runtime_provider_registry::PorReplayArchiveProofLimitsV1>
     for PorReplayArchiveProofLimitsWireV1
 {
@@ -767,7 +766,7 @@ impl From<&crate::runtime_provider_registry::PopCredentialRuntimeBindingV1>
         }
     }
 }
-define_broker_wire_struct!(copy pub(super) PotrAdmissionPolicyBindingWireV1 { pub(super) provider_id: [u8; 32], pub(super) policy_identity: [u8; 32], pub(super) policy_digest: [u8; 32], pub(super) policy_sequence: u64, pub(super) finalized_height: u64, pub(super) finalized_block_hash: [u8; 32], pub(super) admission_envelope_digest: [u8; 32], });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::PotrAdmissionPolicyBindingWireV1" pub(super) PotrAdmissionPolicyBindingWireV1 { pub(super) provider_id: [u8; 32], pub(super) policy_identity: [u8; 32], pub(super) policy_digest: [u8; 32], pub(super) policy_sequence: u64, pub(super) finalized_height: u64, pub(super) finalized_block_hash: [u8; 32], pub(super) admission_envelope_digest: [u8; 32], });
 impl PotrAdmissionPolicyBindingWireV1 {
     pub(super) fn to_binding(self) -> sorafs_node::PotrAdmissionPolicyBindingV1 {
         sorafs_node::PotrAdmissionPolicyBindingV1 {
@@ -781,7 +780,7 @@ impl PotrAdmissionPolicyBindingWireV1 {
         }
     }
 }
-define_broker_wire_struct!(owned pub(super) PotrRuntimeBindingWireV1 { pub(super) gateway_handle: String, pub(super) gateway_signer_id: [u8; 32], pub(super) gateway_revision: u64, pub(super) gateway_policy_digest: [u8; 32], pub(super) provider_handle: String, pub(super) provider_signer_id: [u8; 32], pub(super) provider_revision: u64, pub(super) provider_policy_digest: [u8; 32], pub(super) gateway_public_key: [u8; 32], pub(super) reader_id: [u8; 32], pub(super) source_id: [u8; 32], pub(super) resolver_id: [u8; 32], pub(super) baseline_admission_policy: PotrAdmissionPolicyBindingWireV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::PotrRuntimeBindingWireV1" pub(super) PotrRuntimeBindingWireV1 { pub(super) gateway_handle: String, pub(super) gateway_signer_id: [u8; 32], pub(super) gateway_revision: u64, pub(super) gateway_policy_digest: [u8; 32], pub(super) provider_handle: String, pub(super) provider_signer_id: [u8; 32], pub(super) provider_revision: u64, pub(super) provider_policy_digest: [u8; 32], pub(super) gateway_public_key: [u8; 32], pub(super) reader_id: [u8; 32], pub(super) source_id: [u8; 32], pub(super) resolver_id: [u8; 32], pub(super) baseline_admission_policy: PotrAdmissionPolicyBindingWireV1, });
 impl From<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>
     for PotrRuntimeBindingWireV1
 {
@@ -812,9 +811,9 @@ impl From<&iroha_config::parameters::actual::SorafsPotrRuntimeBinding>
         }
     }
 }
-define_broker_wire_struct!(owned pub(super) NativeTransactionSignerBindingWireV1 { pub(super) role: u8, pub(super) authority: iroha_data_model::account::AccountId, pub(super) public_key: iroha_crypto::PublicKey, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::NativeTransactionSignerBindingWireV1" pub(super) NativeTransactionSignerBindingWireV1 { pub(super) role: u8, pub(super) authority: iroha_data_model::account::AccountId, pub(super) public_key: iroha_crypto::PublicKey, });
 pub(super) const SORACLOUD_RUNTIME_SIGNER_ROLE_WIRE_V1: u8 = 5;
-define_broker_wire_struct!(owned pub(super) EvidenceViewerWebAuthnBindingWireV1 { pub(super) rp_id: String, pub(super) allowed_origins: Vec<String>, pub(super) challenge_ttl_ms: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::EvidenceViewerWebAuthnBindingWireV1" pub(super) EvidenceViewerWebAuthnBindingWireV1 { pub(super) rp_id: String, pub(super) allowed_origins: Vec<String>, pub(super) challenge_ttl_ms: u64, });
 impl From<&EvidenceViewerWebAuthnBindingV1> for EvidenceViewerWebAuthnBindingWireV1 {
     fn from(binding: &EvidenceViewerWebAuthnBindingV1) -> Self {
         Self {
@@ -824,7 +823,7 @@ impl From<&EvidenceViewerWebAuthnBindingV1> for EvidenceViewerWebAuthnBindingWir
         }
     }
 }
-define_broker_wire_struct!(copy pub(super) ProviderIngestSourceLimitsWireV1 { pub(super) operation_timeout_ms: u64, pub(super) max_content_bytes: u64, pub(super) max_source_providers: u32, pub(super) max_concurrent_streams: u32, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::primitives::ProviderIngestSourceLimitsWireV1" pub(super) ProviderIngestSourceLimitsWireV1 { pub(super) operation_timeout_ms: u64, pub(super) max_content_bytes: u64, pub(super) max_source_providers: u32, pub(super) max_concurrent_streams: u32, });
 impl From<ProviderIngestSourceLimitsV1> for ProviderIngestSourceLimitsWireV1 {
     fn from(limits: ProviderIngestSourceLimitsV1) -> Self {
         Self {
@@ -835,7 +834,7 @@ impl From<ProviderIngestSourceLimitsV1> for ProviderIngestSourceLimitsWireV1 {
         }
     }
 }
-define_broker_wire_struct!(owned pub(super) ProviderIngestSignerBindingWireV1 { pub(super) runtime_handle: String, pub(super) adapter_revision: u64, pub(super) signer_policy_id: [u8; 32], pub(super) signer_policy_revision: u64, pub(super) signer_policy_predecessor_digest: Option<[u8; 32]>, pub(super) signer_policy_digest: [u8; 32], pub(super) algorithm: u8, pub(super) public_key: Vec<u8>, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::primitives::ProviderIngestSignerBindingWireV1" pub(super) ProviderIngestSignerBindingWireV1 { pub(super) runtime_handle: String, pub(super) adapter_revision: u64, pub(super) signer_policy_id: [u8; 32], pub(super) signer_policy_revision: u64, pub(super) signer_policy_predecessor_digest: Option<[u8; 32]>, pub(super) signer_policy_digest: [u8; 32], pub(super) algorithm: u8, pub(super) public_key: Vec<u8>, });
 impl ProviderIngestSignerBindingWireV1 {
     pub(super) fn try_from_binding(
         binding: &sorafs_node::ProviderIngestCompletionSignerBindingV1,

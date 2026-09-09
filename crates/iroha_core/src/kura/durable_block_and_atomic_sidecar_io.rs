@@ -96,7 +96,9 @@ impl Kura {
             );
             return;
         }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.clone()]);
         match self.append_bound_debug_block_dump(&path, &bytes) {
             Ok((before, after)) => {
                 self.update_disk_usage_delta(before, after);
@@ -231,7 +233,13 @@ impl Kura {
         } else {
             None
         };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self.begin_canonical_physical_mutation(
+            &mut block_store,
+            CanonicalPhysicalOperation::Append {
+                start_height,
+                block_count: 1,
+            },
+        );
         let mut accounting_complete =
             block_store_before.is_some() && (!total_initialized || da_before.is_some());
         if let Err(error) = block_store.append_block_batch_at(

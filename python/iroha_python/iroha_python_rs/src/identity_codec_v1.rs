@@ -154,11 +154,14 @@ mod tests {
 
     #[test]
     fn oversized_identity_frame_is_rejected_before_output_allocation() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_python_rs::identity_codec_v1::tests::oversized_identity_frame_is_rejected_before_output_allocation::OversizedPayload"
+        )]
         struct OversizedPayload {
             serialization_passes: Cell<usize>,
         }
 
-        impl norito::NoritoSerialize for OversizedPayload {}
         impl norito::SerializePayload for OversizedPayload {
             fn serialize(
                 &self,

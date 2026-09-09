@@ -309,6 +309,17 @@ malformed, oversized, non-regular, or symlinked records. Ordinary global blocks
 advance the height high-water mark too, so an idle merge ledger cannot exhaust
 the bounded guard journal.
 
+Semantic revalidation distinguishes an invalid candidate from a global round
+that ceased to be current while validation ran. A candidate that is invalid
+against an unchanged exact State generation and Kura parent fails closed with
+its detailed reason. If either frontier advances, the validator retains its
+durable signing record, clears any queued broadcast for the stale round, and
+retries from the new round without treating publication as corruption. Before
+using the validator private key, consensus acquires the State publication lease
+and then the canonical Kura publication lease, rechecks the exact generation,
+height, and parent, and consumes the durable authorization while both leases
+remain held. It releases both leases before any Kura mutation.
+
 Lane-drain signing adds an exclusive per-directory `owner.lock`, so two node
 processes cannot concurrently use the same durable voting identity. Drain-vote
 transport applies the canonical 16-KiB frame and 128-validator sequence limits

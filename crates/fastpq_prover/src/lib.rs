@@ -33,6 +33,8 @@ mod error;
 mod fastpq_cuda;
 mod fft;
 mod field;
+#[cfg(test)]
+mod frame_tests;
 pub mod gadgets;
 #[cfg(feature = "fastpq-gpu")]
 #[path = "gpu.rs"]

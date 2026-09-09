@@ -204,7 +204,7 @@ impl Run for VoteArgs {
             direction,
             nullifier,
         } = self;
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let resolved = resolve_vote_mode(&client, &referendum_id, mode)?;
         match resolved {
             ResolvedVoteMode::Zk => {
@@ -300,7 +300,7 @@ pub struct VoteZkArgs {
 }
 impl Run for VoteZkArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let mut public = if let Some(p) = self.public {
             let s = std::fs::read_to_string(&p)?;
             norito::json::from_str(&s)?
@@ -332,12 +332,9 @@ impl Run for VoteZkArgs {
         normalize_public_input_owner(public_obj)?;
         public_obj.insert(
             "authority".to_owned(),
-            json_value(&client.account.to_string())?,
+            json_value(&client.account().to_string())?,
         );
-        public_obj.insert(
-            "network_id".to_owned(),
-            json_value(&client.network_id)?,
-        );
+        public_obj.insert("network_id".to_owned(), json_value(client.network_id())?);
         public_obj.insert("election_id".to_owned(), json_value(&self.election_id)?);
         public_obj.insert("backend".to_owned(), json_value(&self.backend)?);
         public_obj.insert("envelope_b64".to_owned(), json_value(&self.envelope_b64)?);
@@ -384,11 +381,11 @@ pub struct VotePlainArgs {
 }
 impl Run for VotePlainArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let owner = canonicalize_account_literal(&self.owner, "--owner")?;
         let body = json_object(vec![
-            ("authority", json_value(&client.account.to_string())?),
-            ("network_id", json_value(&client.network_id)?),
+            ("authority", json_value(&client.account().to_string())?),
+            ("network_id", json_value(client.network_id())?),
             ("referendum_id", json_value(&self.referendum_id)?),
             ("owner", json_value(&owner)?),
             ("amount", json_value(&self.amount)?),
@@ -434,7 +431,7 @@ pub struct ProposalGetArgs {
 }
 impl Run for ProposalGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_gov_proposal_json(&self.id)?;
         let found = value
             .get("found")
@@ -707,7 +704,7 @@ pub struct LocksGetArgs {
 }
 impl Run for LocksGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_gov_locks_json(&self.referendum_id)?;
         let found = value
             .get("found")
@@ -729,7 +726,7 @@ impl Run for LocksGetArgs {
 pub struct UnlockStatsArgs {}
 impl Run for UnlockStatsArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_gov_unlock_stats_json()?;
         let height = value
             .get("height_current")
@@ -763,7 +760,7 @@ pub struct ReferendumGetArgs {
 }
 impl Run for ReferendumGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_gov_referendum_json(&self.referendum_id)?;
         let found = value
             .get("found")
@@ -786,7 +783,7 @@ pub struct TallyGetArgs {
 }
 impl Run for TallyGetArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let value = client.get_gov_tally_json(&self.referendum_id)?;
         let approve = value
             .get("approve")

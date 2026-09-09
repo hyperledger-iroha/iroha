@@ -82,6 +82,10 @@ const POTR_RECEIPT_LIMITS: DecodeLimits = DecodeLimits::new(
     2 * PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1,
     32,
 );
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_proof_outcome::ProofOutcomePersistedEventV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ProofOutcomePersistedEventV1 {
     sequence: u64,
@@ -89,6 +93,10 @@ struct ProofOutcomePersistedEventV1 {
     event_index: u32,
     outcome: ProofOutcomeRecordV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_proof_outcome::ProofOutcomeEventJournalHeadV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ProofOutcomeEventJournalHeadV1 {
     last_sequence: u64,

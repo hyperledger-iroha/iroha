@@ -57959,7 +57959,7 @@ if finality_artifact.height_context != self.context {
         "lane rollover finality authority differs from the frozen height context".to_owned(),
     ));
 }
-if self.has_pending_historical_recovery() {
+if self.has_pending_historical_recovery()? {
     return Ok(None);
 }
 let Some(height) = usize::try_from(finality_artifact.height)
@@ -65979,7 +65979,7 @@ fn service_historical_recovery_tick(
     services: &ProductionV2Services,
 ) -> Result<HistoricalRecoveryServiceOutcome, V2RunnerError> {
     let current_archive_targets = lane_work
-        .has_pending_historical_recovery()
+        .has_pending_historical_recovery()?
         .then(|| services.current_archive_targets())
         .unwrap_or_default();
     lane_work
@@ -66555,7 +66555,7 @@ for post in sidecar_posts {
         lane_ack_items.get("V2LaneWorkAdapter::persist_anchored_sessions"),
         """
 self.hydrate_canonical_lane_artifacts()?;
-self.collect_committed_lane_sessions();
+self.collect_committed_lane_sessions()?;
 """,
         "late canonical lane hydration must precede committed-session collection",
         errors,
@@ -66865,7 +66865,55 @@ retained != 0
         "runner pruning must retain every live source attempt and its tombstones",
         errors,
     )
-    _require_rust_token_sequence(runner_path, runner_ack_items.get("dispatch_lane_work_effects_with_progress"), """apply_certified_merge_sidecar_chunk_admissions ( lane_work , services , limit ) ? ; let mut queue_plan_sources = None ; let scan_limit = lane_work . effect_count ( ) ; let mut dispatched = 0 usize ; for _ in 0 .. scan_limit { if dispatched >= limit . max ( 1 ) { break ; } let Some ( mut next_effect ) = lane_work . next_effect ( ) else { break ; } ; if ! retain_active_owned_reply_routes ( & mut next_effect ) { let _ = require_peeked_lane_work_effect ( lane_work . drain_effects ( 1 ) . pop ( ) ) ? ; continue ; } if queue_plan_sources . is_none ( ) && matches ! ( & next_effect , V2LaneWorkEffect :: PostQueuePlanAdmissionCertificate { .. } ) { queue_plan_sources = Some ( services . queue_plan_admission_batch_sources ( ) . map_err ( V2RunnerError :: Service ) ? , ) ; } if ! services . can_retain_lane_work_effect_from_snapshot ( & next_effect , queue_plan_sources . as_mut ( ) ) . map_err ( V2RunnerError :: Service ) ? { let effect = require_peeked_lane_work_effect ( lane_work . drain_effects ( 1 ) . pop ( ) ) ? ; drop ( effect ) ; if next_effect . retries_from_native_catalog_after_source_retention ( ) { continue ; } if ! lane_work . requeue_effect ( next_effect ) { return Err ( V2RunnerError :: Service ( . to_owned ( ) , ) ) ; } continue ; } let effect = require_peeked_lane_work_effect ( lane_work . drain_effects ( 1 ) . pop ( ) ) ? ; drop ( effect ) ;""", "runner lane dispatch must apply receipts, preserve the bounded scan and fail-stop peek/drain, then reuse one immutable QueuePlan Kura inventory for every preflight", errors)
+    _require_rust_token_sequence(runner_path, runner_ack_items.get("dispatch_lane_work_effects_with_progress"), """apply_certified_merge_sidecar_chunk_admissions(lane_work, services, limit)?;
+    let mut queue_plan_sources = None;
+    let scan_limit = lane_work.effect_count();
+    let mut dispatched = 0usize;
+    for _ in 0..scan_limit {
+        if dispatched >= limit.max(1) {
+            break;
+        }
+        let Some(mut next_effect) = lane_work.next_effect() else {
+            break;
+        };
+        if !retain_active_owned_reply_routes(&mut next_effect) {
+            let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
+            continue;
+        }
+        if queue_plan_sources.is_none()
+            && matches!(
+                &next_effect,
+                V2LaneWorkEffect::PostQueuePlanAdmissionCertificate { .. }
+            )
+        {
+            queue_plan_sources = Some(
+                services
+                    .queue_plan_admission_batch_sources()
+                    .map_err(V2RunnerError::Service)?,
+            );
+        }
+        if !services
+            .can_retain_lane_work_effect_from_snapshot(&next_effect, queue_plan_sources.as_mut())
+            .map_err(V2RunnerError::Service)?
+        {
+            if next_effect.retries_from_native_catalog_after_source_retention() {
+                let _ = require_peeked_lane_work_effect(lane_work.drain_effects(1).pop())?;
+                // Catalog ownership survives a known-full worker just as it
+                // survives an enqueue race below. Do not let this peer pin the
+                // adapter's bounded delivery queue.
+                continue;
+            }
+            if !lane_work.rotate_next_effect() {
+                return Err(V2RunnerError::Service(
+                    "lane-work scheduler could not restore a reserved effect".to_owned(),
+                ));
+            }
+            continue;
+        }
+        // Keep the original effect, exact reply routes and fair-ingress owner
+        // until the worker confirms transfer. Late local validation can fail
+        // after the capacity preflight, before any worker ownership exists.
+        """, "runner lane dispatch must apply receipts, preserve the bounded scan and fail-stop peek/drain, then reuse one immutable QueuePlan Kura inventory for every preflight", errors)
     _require_rust_token_sequence(
         runner_path,
         runner_ack_items.get("dispatch_lane_work_effects_with_progress"),
@@ -66964,7 +67012,7 @@ if !*canonical_lane_body_recovered {
 }
 let _ = lane_work.persist_anchored_sessions()?;
 let _ = service_historical_recovery_tick(lane_work, services)?;
-if lane_work.has_pending_historical_recovery() {
+if lane_work.has_pending_historical_recovery()? {
     return Ok(false);
 }
 lane_work
@@ -66986,7 +67034,7 @@ let _ = retry_exact_output_and_apply_sidecar_admissions(
 let _ = lane_work.recover_decided_canonical_lane_body(receipt, artifact)?;
 lane_work.persist_anchored_sessions()?;
 let _ = service_historical_recovery_tick(&mut lane_work, services)?;
-if lane_work.has_pending_historical_recovery() {
+if lane_work.has_pending_historical_recovery()? {
     return Err(V2RunnerError::Service(
         "finalized lane output still owns predecessor-height recovery".to_owned(),
     ));
@@ -68515,8 +68563,7 @@ V2LaneWorkEffect::PostDurableLaneCertificate {
     for path, item, expected, description in (
         (worker_path, exact_output_claim_items.get("accepts_superseded_reply_delivery"), "const fn accepts_superseded_reply_delivery ( & self ) -> bool { matches ! ( self , Self :: DurableCommitCertificateResponse { .. } | Self :: DurableCertifiedBodyResponse { .. } ) }", "superseded reply history must be limited to durable global response claims"),
         (effects_path, ingress_seam_items["effects::matches_apply"][1], "fn matches_apply ( & self , tag : EventTag , context : & wire :: HeightContext , subject : wire :: BlockSubject , certificate : & wire :: QuorumCertificate , ownership : & RuntimeEffectOwnership , ) -> bool { self . tag == tag && matches ! ( & self . ownership , FinalityCompletionOwner :: Runtime ( retained ) if retained == ownership ) && self . artifact . validate ( ) . is_ok ( ) && self . artifact . height_context == * context && self . artifact . subject == subject && self . artifact . commit_qc . as_ref ( ) . same_commit_decision ( certificate . as_ref ( ) ) && self . receipt . height ( ) == context . height && self . receipt . context_id ( ) == context . id ( ) && self . receipt . block_hash ( ) == subject . block_hash && self . receipt . subject ( ) == subject && self . receipt . certificate ( ) == self . artifact . commit_qc . as_ref ( ) && self . receipt . artifact_hash ( ) == HashOf :: new ( & self . artifact ) }", "durable Apply tombstone equality must bind the runtime incarnation, tag, finality decision, and Kura receipt"),
-        (lane_path, lane_items.get("durable_historical_lane_output_source_hash"), """
-pub(crate) fn durable_historical_lane_output_source_hash(
+        (lane_path, lane_items.get("durable_historical_lane_output_source_hash"), """pub(crate) fn durable_historical_lane_output_source_hash(
     kura: &Kura,
     message: &BlockMessage,
 ) -> Result<Option<Hash>, String> {
@@ -68536,13 +68583,19 @@ pub(crate) fn durable_historical_lane_output_source_hash(
         ),
         _ => return Ok(None),
     };
-    let Some(durable) = kura.read_certified_lane_block_artifact(lane_id, lane_block_height) else {
+    let Some(durable) = kura
+        .read_lane_completion_certificate(lane_id, lane_block_height)
+        .map_err(|error| error.to_string())?
+    else {
         return Ok(None);
     };
     if durable.proposal.proposal_hash != proposal_hash {
         return Ok(None);
     }
-    let Some(receipt) = kura.read_lane_block_application_receipt(lane_id, lane_block_height) else {
+    let Some(receipt) = kura
+        .read_lane_application_receipt(lane_id, lane_block_height)
+        .map_err(|error| error.to_string())?
+    else {
         return Ok(None);
     };
     if receipt.proposal != durable.proposal {
@@ -68553,6 +68606,9 @@ pub(crate) fn durable_historical_lane_output_source_hash(
     if let Err(retained_error) =
         validate_winning_lane_output(message, &durable.proposal, &durable.signer_pops)
     {
+        // Preserve self-contained replay of the exact retained certificate.
+        // Only an alternate quorum can require another signer from the full
+        // immutable height authority.
         let signer_pops = durable_historical_lane_verification_pops(kura, &durable)?;
         if signer_pops == durable.signer_pops {
             return Err(retained_error);
@@ -68567,8 +68623,7 @@ pub(crate) fn durable_historical_lane_output_source_hash(
         receipt_hash.as_ref(),
         HashOf::new(message).as_ref(),
     ])))
-}
-""", "historical lane retirement must authenticate the exact durable proposal and application receipt before binding its output hash"),
+}""", "historical lane retirement must authenticate the exact durable proposal and application receipt before binding its output hash"),
         (lane_path, lane_items.get("durable_historical_lane_verification_pops"), "fn durable_historical_lane_verification_pops ( kura : & Kura , durable : & CertifiedLaneBlockArtifact , ) -> Result < BTreeMap < PublicKey , Vec < u8 > > , String > { let mut pops = durable . signer_pops . clone ( ) ; if let Some ( validator_pops ) = validated_autonomous_validator_pops ( & durable . prepare_qc , & durable . proposal . descriptor . validator_set , ) ? { if durable . commit_qc . validator_set != durable . proposal . descriptor . validator_set { return Err ( . to_owned ( ) ) ; } pops . extend ( validator_pops ) ; return Ok ( pops ) ; } let proposal_height = durable . proposal . descriptor . proposal_height ; let Some ( finality ) = kura . v2_finality_artifact ( proposal_height ) . map_err ( | error | format ! ( ) ) ? else { return Ok ( pops ) ; } ; let hint = durable . proposal . payload_block_hint . ok_or_else ( || . to_owned ( ) ) ? ; if finality . height != proposal_height || finality . height_context . height != proposal_height || hint . proposal_height != proposal_height || hint . proposal_block_hash != finality . block_hash { return Err ( . to_owned ( ) , ) ; } wire :: finality :: verify_validator_roster_pops ( & finality . height_context , & finality . validator_set_pops , ) . map_err ( | error | format ! ( ) ) ? ; for ( entry , pop ) in finality . height_context . roster . iter ( ) . zip ( & finality . validator_set_pops ) { if durable . proposal . descriptor . validator_set . contains ( & entry . validator ) { pops . insert ( entry . validator . public_key ( ) . clone ( ) , pop . clone ( ) ) ; } } Ok ( pops ) }", "historical lane verification must source alternate signer PoPs from the frozen finality roster"),
     ):
         _require_exact_rust_tokens(path, item, expected, description, errors)
@@ -68960,23 +69015,9 @@ if &source.height_context.network_id != source_network_id
         durable_history_items.get("durable_history_source_covers"),
         errors,
     )
-    _require_rust_token_sequence(
+    _require_durable_lane_rollover_source_contracts(
         worker_path,
         durable_history_items.get("durable_history_source_covers"),
-        """
-let source = kura
-    .read_certified_lane_block_artifact(*lane_id, *lane_block_height)
-    .ok_or_else(|| {
-        "durable lane certificate lost its certified Kura source".to_owned()
-    })?;
-if source.proposal.descriptor.proposal_height != *proposal_height
-    || source.proposal.proposal_hash != *proposal_hash
-    || certificate.proposal != source.proposal
-    || certificate.prepare_qc != source.prepare_qc
-    || certificate.commit_qc != source.commit_qc
-{
-""",
-        "durable lane certificate must match its exact certified Kura source",
         errors,
     )
     _require_rust_token_sequence(
@@ -69324,6 +69365,8 @@ let certificate = match self.reconstruct_durable_lane_certificate(proposal, send
     errors.extend(_ingress_effects_source_fidelity_errors(repo_root))
     errors.extend(_worker_ack_reconciled_source_fidelity_errors(repo_root))
     errors.extend(_worker_ownership_reconciled_source_fidelity_errors(repo_root))
+    errors.extend(_lane_storage_reconciled_source_fidelity_errors(repo_root))
+    errors.extend(_worker_handoff_reconciled_source_fidelity_errors(repo_root))
     _require_rust_token_sequence(
         lane_path,
         lane_items.get("serve_durable_lane_certificate"),

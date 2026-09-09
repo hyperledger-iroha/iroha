@@ -815,18 +815,6 @@ mod jni_exports {
         Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeDeriveConfidentialMerklePathV3,
         Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_nativeVerifyConfidentialMerklePathV3
     );
-    revision_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeConfidentialDerivationContractRevisionV3);
-    default_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDefaultConfidentialDiversifierV3);
-    one_input_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialDiversifierV3, diversifier);
-    two_input_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialOwnerTagV3, owner_tag);
-    one_input_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialAssetTagV3, asset_tag);
-    one_input_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialNetworkTagV3, network_tag);
-    four_input_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialNoteCommitmentV3, note_commitment);
-    four_input_export!(Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialNullifierV3, nullifier);
-    merkle_path_export!(
-        Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeDeriveConfidentialMerklePathV3,
-        Java_org_hyperledger_iroha_android_privacy_PrivacyNativeBridge_nativeVerifyConfidentialMerklePathV3
-    );
 }
 #[cfg(test)]
 mod tests {

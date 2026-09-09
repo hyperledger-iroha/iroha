@@ -20,7 +20,7 @@ pub struct AuditDeployArgs {
 }
 impl Run for AuditDeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
+        let client: Client = context.client_from_config()?;
         let contract_address = resolve_contract_address_target(
             &client,
             self.contract_address.as_deref(),

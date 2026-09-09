@@ -55,8 +55,11 @@ fn canonical_decoder_rejects_wrong_schema_domain_and_framing() {
         let invalid = norito::encode_canonical(&QuantityValueV1 { scale, limbs }).unwrap();
         assert!(decode_quantity_units_v1(&invalid).is_err());
     }
-    #[derive(NoritoSerialize)]
-    #[norito(schema_name = "fastpq_prover::public_transfer::OtherQuantityValueV1")]
+    #[derive(NoritoSerialize, norito::NoritoSchema)]
+    #[norito_schema(
+        name = "fastpq_prover::gadgets::public_transfer_statement::quantity::tests::canonical_decoder_rejects_wrong_schema_domain_and_framing::OtherValue",
+        frame = "fastpq_prover::public_transfer::OtherQuantityValueV1"
+    )]
     struct OtherValue {
         scale: u32,
         limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS],

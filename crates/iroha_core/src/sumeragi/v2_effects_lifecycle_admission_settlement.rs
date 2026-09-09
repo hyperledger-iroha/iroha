@@ -2186,6 +2186,25 @@ impl V2EffectExecutor<SerializedV2Runtime> {
         }
     }
 
+    /// Replace only private fixture dispatch debt for exact-suffix rejection controls.
+    #[cfg(test)]
+    pub(in crate::sumeragi) fn set_retained_effect_suffix_for_test(
+        &mut self,
+        effects: Vec<(AdapterEffect, RuntimeEffectOwnership)>,
+    ) {
+        self.retained_effect_batch = (!effects.is_empty()).then(|| RetainedEffectBatch {
+            effects: effects
+                .into_iter()
+                .map(|(effect, ownership)| OwnedAdapterEffect {
+                    effect,
+                    ownership,
+                    highest_prepare_retention: None,
+                })
+                .collect(),
+            oldest_at: Instant::now(),
+        });
+    }
+
     /// Settle exactly one registry-attested direct Broadcast after Apply terminal settlement.
     ///
     /// Unlike the ordinary Runtime drain, this consumes only the pending-map key

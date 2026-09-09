@@ -1,21 +1,12 @@
 //! Canonical frame projections and borrowed construction for Governance DAG payloads.
 
 use super::{
-    GovernanceDagBlockCidPayloadV1, GovernanceDagBlockCidPayloadViewV1,
-    GovernanceDagBlockSignaturePayloadV1, GovernanceDagBlockSignaturePayloadViewV1,
+    GovernanceDagBlockCidPayloadViewV1, GovernanceDagBlockSignaturePayloadViewV1,
     GovernanceDagBlockSignaturePayloadViewWireV1, GovernanceDagBlockV1,
-    GovernanceDagHeadSignaturePayloadV1, GovernanceDagHeadSignaturePayloadViewV1,
-    GovernanceDagHeadSignaturePayloadViewWireV1, GovernanceDagHeadV1,
-    GovernanceLogNodeCidPayloadV1, GovernanceLogNodeCidPayloadViewV1, GovernanceLogNodeV1,
-    GovernanceLogSignaturePayloadV1, GovernanceLogSignaturePayloadViewV1,
-    GovernanceLogSignaturePayloadViewWireV1, borrowed_norito,
+    GovernanceDagHeadSignaturePayloadViewV1, GovernanceDagHeadSignaturePayloadViewWireV1,
+    GovernanceDagHeadV1, GovernanceLogNodeCidPayloadViewV1, GovernanceLogNodeV1,
+    GovernanceLogSignaturePayloadViewV1, GovernanceLogSignaturePayloadViewWireV1, borrowed_norito,
 };
-
-impl norito::core::NoritoSerialize for GovernanceLogNodeCidPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceLogNodeCidPayloadV1::schema_hash()
-    }
-}
 
 impl norito::core::SerializePayload for GovernanceLogNodeCidPayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
@@ -26,12 +17,6 @@ impl norito::core::SerializePayload for GovernanceLogNodeCidPayloadViewV1<'_> {
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         self.0.encoded_len_exact()
-    }
-}
-
-impl norito::core::NoritoSerialize for GovernanceDagBlockCidPayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceDagBlockCidPayloadV1::schema_hash()
     }
 }
 
@@ -61,12 +46,6 @@ impl<'a> From<&'a GovernanceDagBlockV1> for GovernanceDagBlockSignaturePayloadVi
     }
 }
 
-impl norito::core::NoritoSerialize for GovernanceDagBlockSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceDagBlockSignaturePayloadV1::schema_hash()
-    }
-}
-
 impl norito::core::SerializePayload for GovernanceDagBlockSignaturePayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -89,12 +68,6 @@ impl<'a> From<&'a GovernanceDagHeadV1> for GovernanceDagHeadSignaturePayloadView
             publisher_peer_id: borrowed_norito::Vec(&head.publisher_peer_id),
             checkpoint_cid: borrowed_norito::Option(head.checkpoint_cid.as_deref()),
         })
-    }
-}
-
-impl norito::core::NoritoSerialize for GovernanceDagHeadSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceDagHeadSignaturePayloadV1::schema_hash()
     }
 }
 
@@ -124,12 +97,6 @@ impl<'a> From<&'a GovernanceLogNodeV1> for GovernanceLogSignaturePayloadViewV1<'
                 .map(borrowed_norito::Value),
             payload: borrowed_norito::Value(&node.payload),
         })
-    }
-}
-
-impl norito::core::NoritoSerialize for GovernanceLogSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        GovernanceLogSignaturePayloadV1::schema_hash()
     }
 }
 

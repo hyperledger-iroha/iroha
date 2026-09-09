@@ -1,3 +1,5 @@
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::QueryOptions")]
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -297,6 +299,7 @@ fn authenticate_signed_query_request_at(
 }
 #[cfg(test)]
 mod signed_query_verification_tests {
+    use super::*;
     use iroha_crypto::SignatureOf;
     use iroha_data_model::{
         account::{AccountId, MultisigMember, MultisigPolicy},
@@ -306,7 +309,6 @@ mod signed_query_verification_tests {
             executor::prelude::FindExecutorDataModel, runtime::prelude::FindAbiVersion,
         },
     };
-    use super::*;
     const NOW_MS: u64 = 1_000_000;
     fn network_id(seed: u8) -> NetworkId {
         NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
@@ -854,21 +856,21 @@ pub(crate) async fn execute_admitted_verified_query_with_server_owned_memory(
     let store_cloned = live_query_store.clone();
     let response = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
-        // Cancellation detaches blocking work. Both permits therefore belong
-        // to the worker until validation and execution have actually ended.
-        let _admission = admission;
-        run_on_snapshot_with_server_owned_memory_arc(
-            &state_cloned,
-            &store_cloned,
-            &authority,
-            request,
-            plan.mode,
-            plan.limits,
-            plan.stored_start_budget,
-            plan.ordinary_limits,
-            memory_lease,
-        )
-    }),
+            // Cancellation detaches blocking work. Both permits therefore belong
+            // to the worker until validation and execution have actually ended.
+            let _admission = admission;
+            run_on_snapshot_with_server_owned_memory_arc(
+                &state_cloned,
+                &store_cloned,
+                &authority,
+                request,
+                plan.mode,
+                plan.limits,
+                plan.stored_start_budget,
+                plan.ordinary_limits,
+                memory_lease,
+            )
+        }),
     )
     .await
     .map_err(|error| ValidationFail::InternalError(format!("query worker join error: {error}")))
@@ -1094,32 +1096,32 @@ async fn execute_verified_query_with_opts_inner(
     }
     let resp = crate::panic_recovery::join_recoverable(
         crate::panic_recovery::spawn_blocking_recoverable(move || {
-        // A cancelled HTTP future detaches `spawn_blocking`. Keep both the
-        // physical-work admission and the shared fanout-memory reservation in
-        // this worker until validation and execution have actually stopped.
-        let _admission = admission;
-        match fanout_execution {
-            Some((_, execution_budget, _fanout_reservation)) => {
-                run_on_snapshot_ephemeral_with_budget_arc(
+            // A cancelled HTTP future detaches `spawn_blocking`. Keep both the
+            // physical-work admission and the shared fanout-memory reservation in
+            // this worker until validation and execution have actually stopped.
+            let _admission = admission;
+            match fanout_execution {
+                Some((_, execution_budget, _fanout_reservation)) => {
+                    run_on_snapshot_ephemeral_with_budget_arc(
+                        &state_cloned,
+                        &store_cloned,
+                        &authority_cloned,
+                        request,
+                        limits,
+                        execution_budget,
+                    )
+                }
+                None => run_on_snapshot_with_mode_arc_and_start_budget(
                     &state_cloned,
                     &store_cloned,
                     &authority_cloned,
                     request,
+                    mode,
                     limits,
-                    execution_budget,
-                )
+                    stored_start_budget,
+                ),
             }
-            None => run_on_snapshot_with_mode_arc_and_start_budget(
-                &state_cloned,
-                &store_cloned,
-                &authority_cloned,
-                request,
-                mode,
-                limits,
-                stored_start_budget,
-            ),
-        }
-    }),
+        }),
     )
     .await
     .map_err(|e| ValidationFail::InternalError(format!("query worker join error: {e}")))

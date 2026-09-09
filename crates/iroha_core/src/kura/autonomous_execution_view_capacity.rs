@@ -345,7 +345,9 @@ impl Kura {
                 None
             }
         };
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(
+            Self::sidecar_physical_resource_paths(&data_path, &index_path),
+        );
         let wrote = Self::append_indexed_progress_sidecar(
             &data_path,
             &index_path,

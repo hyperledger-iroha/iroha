@@ -70,11 +70,7 @@ impl IntoSchema for Json {
         }
     }
 }
-impl norito::core::NoritoSerialize for Json {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::type_name_schema_hash::<Self>()
-    }
-}
+
 impl norito::core::SerializePayload for Json {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let wire = JsonWireRef(Cow::Borrowed(self.0.as_str()));
@@ -89,11 +85,7 @@ impl norito::core::SerializePayload for Json {
         norito::core::SerializePayload::encoded_len_exact(&wire)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Json {
-    fn schema_hash() -> [u8; 16] {
-        norito::core::type_name_schema_hash::<Self>()
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for Json {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).unwrap_or_else(|error| {

@@ -37,6 +37,10 @@ BUILD_EFFICIENCY_PROVENANCE_COMMAND = (
 BUILD_EFFICIENCY_PROVENANCE_TEST = (
     "scripts/tests/check_build_efficiency_provenance_test.py"
 )
+RESULT_CONSUMERS = (
+    "BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS",
+    "PARLIAMENT", "NEXUS_DATASPACE", "NEXUS_PROOFS",
+)
 REQUIRED_NUMERIC_TEST_COMMANDS = (
     "cargo test --locked -p ivm --test ivm_group_06 numeric_",
     "cargo test --locked -p ivm --test ivm_group_01 abi_hash_versions::",
@@ -144,19 +148,19 @@ def test_required_aggregate_accepts_only_explicit_success_or_skip(selected: bool
     """A fully selected run and an explicitly empty run both aggregate correctly."""
 
     environment = {"CLASSIFIER_RESULT": "success"}
-    for name in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"):
+    for name in RESULT_CONSUMERS:
         environment[f"{name}_SELECTED"] = str(selected).lower()
         environment[f"{name}_RESULT"] = "success" if selected else "skipped"
     assert _aggregate_results(environment).returncode == 0
 
 
-@pytest.mark.parametrize("name", ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"))
+@pytest.mark.parametrize("name", RESULT_CONSUMERS)
 @pytest.mark.parametrize("result", ("failure", "cancelled", "skipped"))
 def test_required_aggregate_rejects_every_selected_consumer_failure(name: str, result: str) -> None:
     """A missing, cancelled, or failed selected consumer cannot produce green CI."""
 
     environment = {"CLASSIFIER_RESULT": "success"}
-    for consumer in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"):
+    for consumer in RESULT_CONSUMERS:
         environment[f"{consumer}_SELECTED"] = "false"
         environment[f"{consumer}_RESULT"] = "skipped"
     environment[f"{name}_SELECTED"] = "true"
@@ -169,9 +173,22 @@ def test_required_aggregate_rejects_classifier_failure_and_absent_decisions() ->
 
     assert _aggregate_results({"CLASSIFIER_RESULT": "failure"}).returncode != 0
     environment = {"CLASSIFIER_RESULT": "success"}
-    for name in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS"):
+    for name in RESULT_CONSUMERS:
         environment[f"{name}_SELECTED"] = ""
         environment[f"{name}_RESULT"] = "skipped"
+    assert _aggregate_results(environment).returncode != 0
+
+
+@pytest.mark.parametrize("name", RESULT_CONSUMERS)
+@pytest.mark.parametrize("result", ("success", "failure", "cancelled"))
+def test_required_aggregate_rejects_unselected_jobs_that_ran(name: str, result: str) -> None:
+    """A routed-off job must be skipped; execution is a classification mismatch."""
+
+    environment = {"CLASSIFIER_RESULT": "success"}
+    for consumer in RESULT_CONSUMERS:
+        environment[f"{consumer}_SELECTED"] = "false"
+        environment[f"{consumer}_RESULT"] = "skipped"
+    environment[f"{name}_RESULT"] = result
     assert _aggregate_results(environment).returncode != 0
 
 
@@ -415,6 +432,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
             "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
             "TEST_NETWORK_BIN_IROHA: bins/iroha",
+            "TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL: bins/iroha3d_message_control",
             'IROHA_TEST_REQUIRE_NETWORK: "1"',
             'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" --checks clippy,build,test,doc',
         ),
@@ -430,6 +448,21 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             if requirement not in normalized_job:
                 errors.append(f"PR {job_name} is missing selected-binary behavior: {requirement}")
 
+    for name in ("sora_parliament_lifecycle", "nexus_cross_dataspace_localnet", "nexus_cross_lane_proofs"):
+        job = _job_block(workflow, name)
+        normalized_job = _normalized(job)
+        for requirement in (
+            "needs: rust_changes",
+            f"if: needs.rust_changes.outputs.run_{name} == 'true'",
+            f"run: bash ci/check_{name}.sh",
+            f"run_{name}: ${{{{ steps.classify.outputs.run_{name} }}}}",
+        ):
+            owner = _normalized(_job_block(workflow, "rust_changes")) if requirement.startswith("run_") else normalized_job
+            if requirement not in owner:
+                errors.append(f"PR {name} is missing qualified-owner routing: {requirement}")
+        if "pre_build" in job or "actions/download-artifact@" in job:
+            errors.append(f"PR {name} must retain its owned qualified binary protocol")
+
     required_job = _job_block(workflow, "rust_required")
     if not required_job:
         errors.append("PR workflow is missing the single Rust result aggregator")
@@ -437,12 +470,12 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         normalized_required = _normalized(required_job)
         for requirement in (
             "if: always()",
-            "needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests]",
+            "needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle, nexus_cross_dataspace_localnet, nexus_cross_lane_proofs]",
             'test "$CLASSIFIER_RESULT" = success',
             "true:success|false:skipped) return 0",
             *(
                 f'check_result "${name}_SELECTED" "${name}_RESULT"'
-                for name in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS")
+                for name in RESULT_CONSUMERS
             ),
         ):
             if requirement not in normalized_required:

@@ -31,6 +31,8 @@ pub const MAX_GOVERNED_PRICING_SERIES_ENTRIES: usize = 1_024;
 /// Maximum canonical durable pricing-series checkpoint bytes.
 pub const MAX_GOVERNED_PRICING_SERIES_BYTES: usize = 32 * 1024 * 1024;
 /// One strong Ed25519 signer authorized by pricing governance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::signed::PricingTrustedSignerV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -61,6 +63,8 @@ impl PricingTrustedSignerV1 {
     }
 }
 /// External trust, currency, threshold, and activation policy for pricing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::signed::PricingTrustPolicyV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -217,6 +221,8 @@ impl PricingTrustPolicyV1 {
     }
 }
 /// One threshold signature retained on a governed pricing manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::signed::PricingManifestSignatureV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -246,6 +252,8 @@ impl PricingManifestSignatureV1 {
     }
 }
 /// Canonical pricing manifest plus threshold governance authorization.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::signed::GovernedPricingManifestV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -461,6 +469,8 @@ pub fn validate_governed_pricing_transition(
     Ok(())
 }
 /// One governed pricing manifest and the exact time it passed admission.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::signed::GovernedPricingAdmissionV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -483,6 +493,8 @@ impl GovernedPricingAdmissionV1 {
     }
 }
 /// Durable, replay-verifiable series of governed pricing activations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::pricing::signed::GovernedPricingSeriesV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -1407,3 +1419,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("signed/captured_owner_identity_tests.rs");

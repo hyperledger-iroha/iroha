@@ -1349,11 +1349,6 @@ impl TryFrom<MergeLedgerEntryWire> for MergeLedgerEntry {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for MergeLedgerEntry {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
 impl<'de> norito::core::DeserializePayload<'de> for MergeLedgerEntry {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("merge-ledger entry wire version must be current")

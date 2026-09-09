@@ -68,9 +68,6 @@ pub trait HttpTransport: std::fmt::Debug + Send + Sync {
     fn send(&self, request: TransportRequest) -> TransportFuture<'_>;
 }
 
-// TODO: Extend the context-owned transport boundary to WebSocket event and block
-// streams once their request types carry an injected connector. HTTP requests,
-// including asynchronous transaction submission, already use this boundary.
 #[doc = include_str!("http_docs/request_builder.md")]
 pub trait RequestBuilder {
     /// Create a new builder with specified method and URL. Entrypoint for most client operations.
@@ -116,45 +113,35 @@ pub trait RequestBuilder {
     fn body(self, data: Vec<u8>) -> Self;
 }
 /// Generalization of `WebSocket` client's functionality
-pub mod ws {
+pub(crate) mod ws {
     use super::{RequestBuilder, Result, eyre};
     use url::Url;
     #[doc = include_str!("http_docs/websocket_flow.md")]
     pub mod conn_flow {
         use super::*;
         /// Initial data to initialize connection and acquire handshake. Produced by implementor of [`Init`].
-        pub struct InitData<R, E>
+        pub struct InitData<R>
         where
             R: RequestBuilder,
-            E: Events,
         {
             /// Built HTTP request to init WS connection
             pub req: R,
             /// Should be sent immediately after WS connection establishment
             pub first_message: Vec<u8>,
-            /// Handler for the next flow stage - handshake
-            pub next: E,
         }
-        impl<R, E> InitData<R, E>
+        impl<R> InitData<R>
         where
             R: RequestBuilder,
-            E: Events,
         {
             /// Construct new item.
-            pub fn new(req: R, first_message: Vec<u8>, next: E) -> Self {
-                Self {
-                    req,
-                    first_message,
-                    next,
-                }
+            pub fn new(req: R, first_message: Vec<u8>) -> Self {
+                Self { req, first_message }
             }
         }
         /// Initial flow stage.
         pub trait Init<R: RequestBuilder> {
-            /// The next handler
-            type Next: Events;
             #[doc = include_str!("http_docs/init_flow.md")]
-            fn init(self) -> InitData<R, Self::Next>;
+            fn init(self) -> crate::Result<InitData<R>>;
         }
         /// Events flow stage.
         pub trait Events {

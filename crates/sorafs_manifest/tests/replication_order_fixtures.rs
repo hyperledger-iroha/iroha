@@ -1,3 +1,4 @@
+//! Canonical replication-order fixture roundtrips and field identities.
 #![allow(unexpected_cfgs)]
 use sorafs_manifest::{REPLICATION_ORDER_VERSION_V1, ReplicationOrderV1};
 use std::fs;
@@ -23,7 +24,7 @@ fn replication_order_fixture_roundtrip() {
     );
     assert_eq!(
         hex::encode(order.order_id),
-        "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
+        "2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b",
         "fixture order id changed"
     );
     assert_eq!(

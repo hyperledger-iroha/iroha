@@ -4,6 +4,8 @@ struct FairV2IngressWireKey {
     hash: CryptoHash,
 }
 /// Closed productive v2 ingress class carried only in node-local metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::FairV2IngressLeaderWireSourceClass")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum FairV2IngressLeaderWireSourceClass {
     /// Proposal, vote, certificate, or timeout control.
@@ -13,6 +15,8 @@ pub(crate) enum FairV2IngressLeaderWireSourceClass {
     /// One authenticated certified-body response.
     CertifiedResponse,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::FairV2IngressLeaderWirePhase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum FairV2IngressLeaderWirePhase {
     Proposal,
@@ -54,6 +58,8 @@ impl FairV2IngressLeaderWirePhase {
     }
 }
 /// Finite semantic owner address for one productive leader wire.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::FairV2IngressLeaderWireSlot")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct FairV2IngressLeaderWireSlot {
@@ -62,6 +68,8 @@ pub(crate) struct FairV2IngressLeaderWireSlot {
     chunk_index: Option<u32>,
 }
 /// Full immutable identity retained across queue, runtime, and durable cuts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::FairV2IngressLeaderWireIdentity")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct FairV2IngressLeaderWireIdentity {
@@ -113,6 +121,8 @@ impl FairV2IngressLeaderWireIdentity {
     }
 }
 /// Exact internal reservation token attached to fair-ingress ownership.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::FairV2IngressLeaderWireToken")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct FairV2IngressLeaderWireToken {

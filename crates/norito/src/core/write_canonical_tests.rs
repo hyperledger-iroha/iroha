@@ -27,13 +27,14 @@ fn streamed_frame_preserves_active_layout_bytes() {
         assert_eq!(actual, expected, "flags=0x{flags:02x}");
     }
 }
+#[derive(crate::NoritoSchema)]
+#[norito_schema(name = "norito.test.core.write_canonical_tests.ChangingPayload")]
 struct ChangingPayload {
     calls: Cell<usize>,
     first: &'static [u8],
     second: &'static [u8],
 }
-impl NoritoSerialize for ChangingPayload {
-}
+
 impl SerializePayload for ChangingPayload {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let call = self.calls.get();
@@ -68,9 +69,10 @@ fn streamed_canonical_frame_rejects_second_pass_checksum_drift() {
 }
 #[test]
 fn streamed_canonical_frame_rejects_second_pass_flag_drift() {
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.write_canonical_tests.ChangingFlags")]
     struct ChangingFlags(Cell<usize>);
-    impl NoritoSerialize for ChangingFlags {
-}
+
 impl SerializePayload for ChangingFlags {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let call = self.0.get();

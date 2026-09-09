@@ -1,3 +1,5 @@
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::DummySidecar")]
 #[derive(Debug, Encode, Decode, PartialEq, Eq)]
 struct DummySidecar {
     height: u64,
@@ -1405,6 +1407,8 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
     // not first-release authority: rejection precedes both rollback and
     // roll-forward mutation and retains the marker for diagnosis.
     {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_core::kura::tests::bound_progress_recovery_handles_crash_phases_without_path_escape::PreNamespaceBoundProgressAppendIntentV1")]
         #[derive(Encode)]
         struct PreNamespaceBoundProgressAppendIntentV1 {
             version: u16,
@@ -1469,7 +1473,7 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
         let encode_with_current_schema = |intent: &PreNamespaceBoundProgressAppendIntentV1| {
             let mut bytes = norito::to_bytes(intent).expect("encode pre-namespace intent layout");
             let schema =
-                <BoundProgressAppendIntentV1 as norito::core::NoritoSerialize>::schema_hash();
+                norito::schema::identity::frame_hash::<BoundProgressAppendIntentV1>();
             let schema_start = MAGIC.len() + 2;
             let schema_end = schema_start + schema.len();
             assert!(bytes.len() >= Header::SIZE);

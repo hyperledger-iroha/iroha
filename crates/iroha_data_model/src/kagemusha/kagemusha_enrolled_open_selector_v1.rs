@@ -28,8 +28,12 @@ pub const KAGEMUSHA_ENROLLED_OPEN_SELECTOR_MAX_BYTES_V1: usize = 16 * 1024;
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.enrolled-open-selector")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_enrolled_open_selector_v1::KagemushaEnrolledOpenSelectorV1",
+    frame = "iroha.kagemusha.v1.enrolled-open-selector"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaEnrolledOpenSelectorV1 {
     /// Sole first-release format, 1.
@@ -347,5 +351,29 @@ mod tests {
         let mut trailing = bytes;
         trailing.push(0);
         assert!(KagemushaEnrolledOpenSelectorV1::decode_canonical_exact(&trailing).is_err());
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaEnrolledOpenSelectorV1>(
+            "iroha_data_model::kagemusha::kagemusha_enrolled_open_selector_v1::KagemushaEnrolledOpenSelectorV1",
+            "iroha.kagemusha.v1.enrolled-open-selector",
+            "97a4a47428d0082e3269f373a191e7ee",
+        );
     }
 }

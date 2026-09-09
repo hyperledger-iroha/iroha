@@ -95,6 +95,8 @@ fn proposal_from_canonical_lane_ownership(
 /// input are validated and durable. The Queue startup gate may then treat an
 /// exact durable-record read-back as a persistent owner which the lane adapter
 /// can hydrate after publication resumes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_apply::HistoricalAutonomousReservationInstallV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 pub(crate) struct HistoricalAutonomousReservationInstallV1 {
     /// Schema version of the installation identity.

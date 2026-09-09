@@ -46,8 +46,12 @@ const APPROVAL_DOMAIN: &str = "iroha:kagemusha:v1:retail-enrollment-approval";
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-runtime")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentRuntimeV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-runtime"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentRuntimeV1 {
     /// Exact financial institution identifier.
@@ -80,8 +84,12 @@ pub struct KagemushaRetailEnrollmentRuntimeV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-owner")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentOwnerV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-owner"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentOwnerV1 {
     /// Canonical retail wallet account.
@@ -103,8 +111,12 @@ pub struct KagemushaRetailEnrollmentOwnerV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-issuance")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuanceV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-issuance"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentIssuanceV1 {
     /// Exact authenticated hardware/proof release selected for this issuance.
@@ -128,8 +140,12 @@ pub struct KagemushaRetailEnrollmentIssuanceV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-subject")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentSubjectV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-subject"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentSubjectV1 {
     /// Sole first-release format version.
@@ -164,8 +180,12 @@ pub struct KagemushaRetailEnrollmentSubjectV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-approval")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentApprovalV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-approval"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentApprovalV1 {
     /// Exact cross-protocol replay separator supplied by `approval_payload`.
@@ -185,8 +205,12 @@ pub struct KagemushaRetailEnrollmentApprovalV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-certificate")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentCertificateV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-certificate"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentCertificateV1 {
     /// Exact signed subject.
@@ -210,8 +234,12 @@ pub struct KagemushaRetailEnrollmentCertificateV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.kagemusha.v1.retail-enrollment-issuer-policy")]
+#[norito_schema(
+    name = "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuerPolicyV1",
+    frame = "iroha.kagemusha.v1.retail-enrollment-issuer-policy"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRetailEnrollmentIssuerPolicyV1 {
     /// Sole first-release policy format.
@@ -1107,6 +1135,60 @@ mod tests {
         reject_unknown!(
             fixture.certificate.subject.approval_payload().unwrap(),
             KagemushaRetailEnrollmentApprovalV1
+        );
+    }
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaRetailEnrollmentRuntimeV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentRuntimeV1",
+            "iroha.kagemusha.v1.retail-enrollment-runtime",
+            "67f3af521a2b2c0e2ad110e6f0a528a0",
+        );
+        check::<super::KagemushaRetailEnrollmentOwnerV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentOwnerV1",
+            "iroha.kagemusha.v1.retail-enrollment-owner",
+            "537843eb69ef723fb31655ef7af9b7a8",
+        );
+        check::<super::KagemushaRetailEnrollmentIssuanceV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuanceV1",
+            "iroha.kagemusha.v1.retail-enrollment-issuance",
+            "bcc1a56544552e1ec3b9b4add6565ee0",
+        );
+        check::<super::KagemushaRetailEnrollmentSubjectV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentSubjectV1",
+            "iroha.kagemusha.v1.retail-enrollment-subject",
+            "74aed55fe9158b5bbb9a26dace1696ef",
+        );
+        check::<super::KagemushaRetailEnrollmentApprovalV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentApprovalV1",
+            "iroha.kagemusha.v1.retail-enrollment-approval",
+            "064206d6778777d489ed030ff7239fe2",
+        );
+        check::<super::KagemushaRetailEnrollmentCertificateV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentCertificateV1",
+            "iroha.kagemusha.v1.retail-enrollment-certificate",
+            "7205a003f9151ddd6b3701853f0188d7",
+        );
+        check::<super::KagemushaRetailEnrollmentIssuerPolicyV1>(
+            "iroha_data_model::kagemusha::kagemusha_retail_enrollment_v1::KagemushaRetailEnrollmentIssuerPolicyV1",
+            "iroha.kagemusha.v1.retail-enrollment-issuer-policy",
+            "7934f8746eb0821b84dcee4bfba3e96c",
         );
     }
 }

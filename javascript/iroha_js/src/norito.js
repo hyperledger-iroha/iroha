@@ -1,4 +1,5 @@
-import { createNoritoRecordDecoder } from "./noritoRecordDecoder.js";
+import { createNoritoReplicationOrderValidator } from "./noritoReplicationOrderValidator.js";
+import { createNoritoRecordDecoder, createNoritoRecordEncoder } from "./noritoRecordDecoder.js";
 import { rejectError, rejectRange, rejectType } from "./validationThrow.js";
 import { kaigiScalarBytesV1 } from "./kaigiScalarV1.js";
 import { Buffer } from "buffer";
@@ -53,7 +54,10 @@ import {
 } from "./noritoGovernanceBoundary.js";
 import { computeHashLiteralCrc } from "./hashLiteralCrc.js";
 import { createNoritoNftMarketCodecs, NFT_MARKET_INSTRUCTION_NAMES_V1, NFT_MARKET_INSTRUCTION_WIRE_IDS_V1 } from "./noritoNftMarketCodecs.js";
-import { createNoritoGameCodecs, GAME_INSTRUCTION_NAMES_V1, GAME_INSTRUCTION_WIRE_IDS_V1, gameValueMaximumBytesV1 } from "./noritoGameCodecs.js";
+import {createNoritoGameCodecs} from './noritoGameCodecs.js';
+import { GAME_INSTRUCTION_NAMES_V1, GAME_INSTRUCTION_WIRE_IDS_V1, gameValueMaximumBytesV1 } from './noritoGameRegistry.js';
+import {createNoritoGameInstructionCodecs} from './noritoGameInstructionCodecs.js';
+import {createNoritoGameResourceEngine} from './noritoGameResourceEngine.js';
 import { KotodamaQuantity, NumericV1 } from "./numericV1.js";
 import {
   PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FIELD_NAMES_V1,
@@ -67,6 +71,167 @@ import {
   proofBoxFitsEncodedBudget,
   proofBoxMaxProofBytes,
 } from "./proofAttachment.js";
+
+const TEXT_SMART_CONTRACT_CODE = "smart_contract_code::";
+const TEXT_MUST_BE_GREATER_THAN_ZERO = " must be greater than zero";
+const TEXT_MUST_BE_AN_OBJECT_2 = " must be an object";
+const TEXT_CONTRACT_ADDRESS_2 = "contract_address";
+const TEXT_CANCEL_CONFIDENTIAL_POLICY_TRANSITION = "CancelConfidentialPolicyTransition";
+const TEXT_EXPECTED_REVISION_2 = "expected_revision";
+const TEXT_ASSET_DEFINITION_ID = "asset_definition_id";
+const TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION = "ScheduleConfidentialPolicyTransition";
+const TEXT_MUST_CONTAIN = " must contain ";
+const TEXT_CANONICAL = " canonical ";
+const TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA = " requires validation fee policy metadata";
+const TEXT_EXPECTED_REMAINING_AMOUNT = "expected_remaining_amount";
+const TEXT_CARRIES_A_SUBSTITUTED = " carries a substituted ";
+const TEXT_SET_CONTRACT_PARLIAMENT_DELEGATION_2 = "SetContractParliamentDelegation";
+const TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD_2 = "FinalizeSmartContractCodeUpload";
+const TEXT_MUST_BE = " must be ";
+const TEXT_ELECTION_ID = "election_id";
+const TEXT_TRANSACTION_INTENT_PROJECTION_NORITO_2 = "transactionIntentProjectionNorito";
+const TEXT_COMMITMENT = "commitment";
+const TEXT_EXPECTED_ASSIGNMENT_REVISION = "expected_assignment_revision";
+const TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_3 = "unsignedTransactionPayloadNorito";
+const TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK_2 = "UploadSmartContractCodeChunk";
+const TEXT_EXPIRE_REPLICATION_ORDER_2 = "ExpireReplicationOrder";
+const TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO = "submit_proof_instruction_norito";
+const TEXT_REGISTER_SMART_CONTRACT_BYTES = "RegisterSmartContractBytes";
+const TEXT_DEACTIVATE_CONTRACT_INSTANCE_2 = "DeactivateContractInstance";
+const TEXT_EXCEEDS_THE = " exceeds the ";
+const TEXT_EXPECTED_AUTHORITY = "expected_authority";
+const TEXT_CODE_HASH_2 = "code_hash";
+const TEXT_MUST_NOT_BE = " must not be ";
+const TEXT_TRANSACTION_INTENT = "transaction_intent_";
+const TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_2 = "submitProofInstructionNorito";
+const TEXT_ACTIVATE_CONTRACT_INSTANCE = "ActivateContractInstance";
+const TEXT_REMOVE_SMART_CONTRACT_BYTES = "RemoveSmartContractBytes";
+const TEXT_REGISTER_VERIFYING_KEY = "RegisterVerifyingKey";
+const TEXT_INSTRUCTION = "instruction ";
+const TEXT_PRIMARY_REFERENCE = "primary_reference";
+const TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET_2 = " must use a native hash with its marker bit set";
+const TEXT_VALIDATION_FEE = "validation_fee_";
+const TEXT_ACCOUNT_ID = "account_id";
+const TEXT_SET_ASSET_TRANSFER_BLACKLIST_2 = "SetAssetTransferBlacklist";
+const TEXT_REPORT_KAIGI_RELAY_HEALTH = "ReportKaigiRelayHealth";
+const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";
+const TEXT_OFFER_CONTRACT_OWNERSHIP = "OfferContractOwnership";
+const TEXT_FINALIZE_ELECTION = "FinalizeElection";
+const TEXT_CREATION_TIME_MS = "creation_time_ms";
+const TEXT_COMPLETION_EPOCH = "completion_epoch";
+const TEXT_FINALIZED_ANCHOR = "finalized_anchor";
+const TEXT_EXPIRATION_EPOCH = "expiration_epoch";
+const TEXT_SET_KAIGI_RELAY_MANIFEST = "SetKaigiRelayManifest";
+const TEXT_REGISTER_ZK_ASSET = "RegisterZkAsset";
+const TEXT_UPDATE_VERIFYING_KEY = "UpdateVerifyingKey";
+const TEXT_PREDECESSOR_DIGEST = "predecessor_digest";
+const TEXT_PUBLIC_INPUTS_SCHEMA_HASH = "public_inputs_schema_hash";
+const TEXT_UNSUPPORTED = "unsupported ";
+const TEXT_COMPLETE_REPLICATION_ORDER_2 = "CompleteReplicationOrder";
+const TEXT_CLAIM_TWITTER_FOLLOW_REWARD = "ClaimTwitterFollowReward";
+
+
+const TEXT_IROHA_DATA_MODEL_ISI = (TEXT_IROHA_DATA_MODEL + "isi::");
+const TEXT_IROHA_INSTRUCTION_V1 = "iroha.instruction.v1::";
+const TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE = ("MultisigProposeDto." + TEXT_VALIDATION_FEE);
+const TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT = "Internal Norito canonicalization does not support ";
+const TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 = "PrivacyExact12FixtureBundleV1.";
+const TEXT_SET_ASSET_TRANSFER_AVAILABILITY = "SetAssetTransferAvailability.";
+const TEXT_REPLICATION_ORDER_V1 = "ReplicationOrderV1.";
+const TEXT_MUST_BE_AN_OBJECT = TEXT_MUST_BE_AN_OBJECT_2;
+const TEXT_USES_UNSUPPORTED = (" uses " + TEXT_UNSUPPORTED);
+const TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO = "MultisigContractCallProposeDto.";
+const TEXT_COMPLETE_REPLICATION_ORDER = "CompleteReplicationOrder.";
+const TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2 = "PrivacyExact12FixtureBundleV1 ";
+const TEXT_INTERNAL_NORITO_DECODER_DOES_NOT_SUPPORT = "Internal Norito decoder does not support ";
+const TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO = "MultisigContractCallApproveDto.";
+const TEXT_ZK_CREATE_ELECTION = "zk.CreateElection.";
+const TEXT_SET_ASSET_TRANSFER_CONTROL = "SetAssetTransferControl.";
+const TEXT_NATIVE_GAME_VALUE_EXCEEDS_ITS_COMPILED_PAYLOAD_LIMIT = "native game value exceeds its compiled payload limit";
+const TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT = "SoraFS billing acknowledgement ";
+const TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET = TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET_2;
+const TEXT_ZK_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION = "zk.ScheduleConfidentialPolicyTransition.";
+const TEXT_MUST_CONTAIN_EXACTLY = (TEXT_MUST_CONTAIN + "exactly ");
+const TEXT_PROPOSE_DEPLOY_CONTRACT = "ProposeDeployContract.";
+const TEXT_MUST_BE_EXACT_STANDARD_BASE64 = (TEXT_MUST_BE + "exact standard-base64");
+const TEXT_ISSUE_REPLICATION_ORDER = "IssueReplicationOrder.";
+const TEXT_PAYLOAD_PROOF_AUDIT_PATH_MUST = ".payload.proof.audit_path must ";
+const TEXT_MULTISIG_PROPOSE_DTO = "MultisigProposeDto.";
+const TEXT_COMMIT_CONTRACT_DEPLOYMENT = "CommitContractDeployment.";
+const TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO = ".unsignedTransactionPayloadNorito.";
+const TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO = ".signedTransactionVersionedNorito ";
+const TEXT_ZK_FINALIZE_ELECTION = "zk.FinalizeElection.";
+const TEXT_CANCEL_ASSET_LOCK_V1 = "CancelAssetLockV1.";
+const TEXT_CONTRACT_ADDRESS = TEXT_CONTRACT_ADDRESS_2;
+const TEXT_ENVELOPE_NORITO_CARRIES_A_SUBSTITUTED = (".envelopeNorito" + TEXT_CARRIES_A_SUBSTITUTED);
+const TEXT_MUST_BE_A = (TEXT_MUST_BE + "a ");
+const TEXT_SET_ASSET_TRANSFER_BLACKLIST = "SetAssetTransferBlacklist.";
+const TEXT_EXPECTED_REVISION = TEXT_EXPECTED_REVISION_2;
+const TEXT_ZK_SUBMIT_BALLOT = "zk.SubmitBallot.";
+const TEXT_RECORD_SCCP_MESSAGE_PAYLOAD = "RecordSccpMessage.payload_";
+const TEXT_IS_REQUIRED = " is required";
+const TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO_2 = ".signedTransactionVersionedNorito.";
+const TEXT_BACKEND = ".backend";
+const TEXT_MUST_NOT_CONTAIN = " must not contain ";
+const TEXT_CANCEL_ASSET_LOCK_V1_2 = "CancelAssetLockV1 ";
+const TEXT_VALUE_PROGRAM = ".value.program_";
+const TEXT_PREDECESSOR_DIGEST_IS_REQUIRED_AFTER_REVISION_1 = ".predecessor_digest is required after revision 1";
+const TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_DOES_NOT_CONTAIN_THE = ".unsignedTransactionPayloadNorito does not contain the ";
+const TEXT_PREDECESSOR_DIGEST_MUST_BE_NULL_AT_REVISION_1 = (".predecessor_digest" + TEXT_MUST_BE + "null at revision 1");
+const TEXT_EXPIRE_REPLICATION_ORDER = "ExpireReplicationOrder.";
+const TEXT_DESTINATION = ".destination";
+const TEXT_MUST_BE_AN_EXACT_CANONICAL_I105_ACCOUNT_ID = (" must be an exact" + TEXT_CANONICAL + "I105 account id");
+const TEXT_VARINT_EXCEEDS_AN_UNSIGNED_64_BIT_INTEGER = " varint exceeds an unsigned 64-bit integer";
+const TEXT_EXCEEDS_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE = " exceeds JavaScript's safe integer range";
+const TEXT_CODE_HASH = TEXT_CODE_HASH_2;
+const TEXT_NATIVE_GAME_VALUE_IS_NOT_BYTE_CANONICAL = "native game value is not byte-canonical";
+const TEXT_MUST_FIT_IN_AN_UNSIGNED_64_BIT_INTEGER = " must fit in an unsigned 64-bit integer";
+const TEXT_SUBMIT_PROOF_WIRE_ID_MUST_BE = (".submitProofWireId" + TEXT_MUST_BE);
+const TEXT_TRANSACTION_INTENT_PROJECTION_NORITO = ("." + TEXT_TRANSACTION_INTENT + "projection_norito");
+const TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_PAYLOAD = ".submitProofInstructionNorito.payload";
+const TEXT_VERIFYING_KEYS = "verifying_keys.";
+const TEXT_CANCEL_ASSET_LOCK = "CancelAssetLock.";
+const TEXT_VALUE_CHARGE_LIMITS_MUST = ".value.charge_limits must ";
+const TEXT_BLOCK_PROOFS = "BlockProofs.";
+const TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_2 = ".unsigned_transaction_payload_norito";
+const TEXT_SIGNED_TRANSACTION = ".signed_transaction_";
+
+
+// Reuse exact wire names and diagnostic fields throughout this module.
+const CONTEXT_MINT_TRIGGER_REPETITIONS = "Mint.TriggerRepetitions";
+const CONTEXT_BURN_TRIGGER_REPETITIONS = "Burn.TriggerRepetitions";
+const CONTEXT_TRANSFER_DOMAIN = "Transfer.Domain";
+const CONTEXT_TRANSFER_ASSET_DEFINITION = "Transfer.AssetDefinition";
+const CONTEXT_REGISTER_DOMAIN = "Register.Domain";
+const CONTEXT_REGISTER_ACCOUNT = "Register.Account";
+const CONTEXT_REGISTER_ASSET_DEFINITION = "Register.AssetDefinition";
+const WIRE_TYPE_TOP_UP_KAGEMUSHA_V1 = "TopUpKagemushaV1";
+const WIRE_TYPE_CANCEL_ASSET_LOCK = "CancelAssetLock";
+const WIRE_TYPE_RECORD_SCCP_MESSAGE = "RecordSccpMessage";
+const WIRE_FIELD_ASSET_DEFINITION_ID = TEXT_ASSET_DEFINITION_ID;
+const FIELD_INSTRUCTION = "instruction";
+const WIRE_TYPE_OPEN_VERIFY_ENVELOPE = "OpenVerifyEnvelope";
+const WIRE_TYPE_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 = "PrivacyExact12FixtureBundleV1";
+const WIRE_ID_IROHA_TRANSFER = "iroha.transfer";
+const WIRE_ID_IROHA_REGISTER = "iroha.register";
+const WIRE_ID_IROHA_CUSTOM = "iroha.custom";
+const WIRE_FIELD_EXPECTED_REMAINING_AMOUNT = TEXT_EXPECTED_REMAINING_AMOUNT;
+const WIRE_FIELD_ACCOUNT_ID = TEXT_ACCOUNT_ID;
+const WIRE_FIELD_EXPECTED_REVISION = TEXT_EXPECTED_REVISION;
+const FIELD_VARIANT_INDEX = "variantIndex";
+const WIRE_FIELD_CONTRACT_ADDRESS = TEXT_CONTRACT_ADDRESS;
+const WIRE_FIELD_CODE_HASH = TEXT_CODE_HASH;
+const WIRE_FIELD_ELECTION_ID = TEXT_ELECTION_ID;
+const FIELD_COMMITMENT = TEXT_COMMITMENT;
+const FIELD_QUANTITY = "quantity";
+const FIELD_DESTINATION = "destination";
+const FIELD_METADATA = "metadata";
+const WIRE_TYPE_DATASPACE_RESTRICTED = "DataspaceRestricted";
+const WIRE_TYPE_INFINITELY = "Infinitely";
+const WIRE_FIELD_ORDER_ID = "order_id";
+const WIRE_TYPE_ISSUE_REPLICATION_ORDER = "IssueReplicationOrder";
+const WIRE_TYPE_COMPLETE_REPLICATION_ORDER = TEXT_COMPLETE_REPLICATION_ORDER_2;
+const WIRE_TYPE_EXPIRE_REPLICATION_ORDER = TEXT_EXPIRE_REPLICATION_ORDER_2;
 
 const ALIGNMENT = 16;
 const COMPACT_LEN_FLAG = 0x02;
@@ -87,61 +252,60 @@ const HASH_LITERAL_RE = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/;
 const CANONICAL_HASH_LITERAL_RE = /^hash:([0-9A-F]{64})#([0-9A-F]{4})$/;
 const MULTIHASH_LITERAL_RE = /^([0-9a-fA-F]+)$/;
 const SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
-  "zk::ScheduleConfidentialPolicyTransition";
+  ("zk::" + TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION);
 const CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID =
-  "zk::CancelConfidentialPolicyTransition";
+  ("zk::" + TEXT_CANCEL_CONFIDENTIAL_POLICY_TRANSITION);
 const SET_ASSET_TRANSFER_AVAILABILITY_VARIANT =
   "SetAssetTransferAvailability";
-const SET_ASSET_TRANSFER_BLACKLIST_VARIANT = "SetAssetTransferBlacklist";
+const SET_ASSET_TRANSFER_BLACKLIST_VARIANT = TEXT_SET_ASSET_TRANSFER_BLACKLIST_2;
 const SET_ASSET_TRANSFER_CONTROL_VARIANT = "SetAssetTransferControl";
-const SET_TRANSFER_REASON_CONTEXT = "SetAssetTransferAvailability.reason";
-const COMPLETE_ORDER_REVISION_CONTEXT = "CompleteReplicationOrder.expected_assignment_revision";
-const COMPLETE_ORDER_REVISION_MESSAGE = "CompleteReplicationOrder.expected_assignment_revision must be greater than zero";
-const CANCEL_LOCK_REMAINING_CONTEXT = "CancelAssetLock.expected_remaining_amount";
-const CANCEL_LOCK_REMAINING_MESSAGE = "CancelAssetLock.expected_remaining_amount must be greater than zero";
-const ISSUE_ORDER_DEADLINE_CONTEXT = "IssueReplicationOrder.deadline_epoch";
-const ISSUE_ORDER_DEADLINE_MESSAGE = "IssueReplicationOrder.deadline_epoch must be greater than issued_epoch";
-const ISSUE_ORDER_PAYLOAD_CONTEXT = "IssueReplicationOrder.order_payload";
-const ISSUE_ORDER_EPOCH_CONTEXT = "IssueReplicationOrder.issued_epoch";
-const ISSUE_ORDER_ID_CONTEXT = "IssueReplicationOrder.order_id";
-const EXPECTED_PREVIOUS_CONTRACT_CONTEXT = "CommitContractDeployment.expected_previous_contract_address";
-const SCHEDULE_CONVERSION_WINDOW_CONTEXT = "zk.ScheduleConfidentialPolicyTransition.conversion_window";
-const SCHEDULE_EFFECTIVE_HEIGHT_CONTEXT = "zk.ScheduleConfidentialPolicyTransition.effective_height";
-const SCHEDULE_TRANSITION_ID_CONTEXT = "zk.ScheduleConfidentialPolicyTransition.transition_id";
-const CANCEL_TRANSITION_ID_CONTEXT = "zk.CancelConfidentialPolicyTransition.transition_id";
+const SET_TRANSFER_REASON_CONTEXT = (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "reason");
+const COMPLETE_ORDER_REVISION_CONTEXT = (TEXT_COMPLETE_REPLICATION_ORDER + TEXT_EXPECTED_ASSIGNMENT_REVISION);
+const COMPLETE_ORDER_REVISION_MESSAGE = (TEXT_COMPLETE_REPLICATION_ORDER + "expected_assignment_revision" + TEXT_MUST_BE_GREATER_THAN_ZERO);
+const CANCEL_LOCK_REMAINING_CONTEXT = (TEXT_CANCEL_ASSET_LOCK + TEXT_EXPECTED_REMAINING_AMOUNT);
+const CANCEL_LOCK_REMAINING_MESSAGE = (TEXT_CANCEL_ASSET_LOCK + "expected_remaining_amount" + TEXT_MUST_BE_GREATER_THAN_ZERO);
+const ISSUE_ORDER_DEADLINE_CONTEXT = (TEXT_ISSUE_REPLICATION_ORDER + "deadline_epoch");
+const ISSUE_ORDER_DEADLINE_MESSAGE = (TEXT_ISSUE_REPLICATION_ORDER + "deadline_epoch" + TEXT_MUST_BE + "greater than issued_epoch");
+const ISSUE_ORDER_PAYLOAD_CONTEXT = (TEXT_ISSUE_REPLICATION_ORDER + "order_payload");
+const ISSUE_ORDER_EPOCH_CONTEXT = (TEXT_ISSUE_REPLICATION_ORDER + "issued_epoch");
+const ISSUE_ORDER_ID_CONTEXT = (TEXT_ISSUE_REPLICATION_ORDER + "order_id");
+const EXPECTED_PREVIOUS_CONTRACT_CONTEXT = (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "expected_previous_" + TEXT_CONTRACT_ADDRESS_2);
+const SCHEDULE_CONVERSION_WINDOW_CONTEXT = (TEXT_ZK_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "conversion_window");
+const SCHEDULE_EFFECTIVE_HEIGHT_CONTEXT = (TEXT_ZK_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "effective_height");
+const SCHEDULE_TRANSITION_ID_CONTEXT = (TEXT_ZK_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "transition_id");
 const SUPPORTED_JS_CANONICALIZATION_INSTRUCTIONS = [
   "Mint.Asset",
-  "Mint.TriggerRepetitions",
+  CONTEXT_MINT_TRIGGER_REPETITIONS,
   "Burn.Asset",
-  "Burn.TriggerRepetitions",
-  "Transfer.Domain",
-  "Transfer.AssetDefinition",
+  CONTEXT_BURN_TRIGGER_REPETITIONS,
+  CONTEXT_TRANSFER_DOMAIN,
+  CONTEXT_TRANSFER_ASSET_DEFINITION,
   "Transfer.Asset",
   "Transfer.Nft",
-  "Register.Domain",
-  "Register.Account",
-  "Register.AssetDefinition",
+  CONTEXT_REGISTER_DOMAIN,
+  CONTEXT_REGISTER_ACCOUNT,
+  CONTEXT_REGISTER_ASSET_DEFINITION,
   "ExecuteTrigger",
   "Custom",
   "Kaigi.*",
   "Governance.*",
   "Social.*",
   "SmartContract.*",
-  "TopUpKagemushaV1",
+  WIRE_TYPE_TOP_UP_KAGEMUSHA_V1,
   "zk.*",
   "VerifyingKey.*",
   "Rwa.*",
-  "CancelAssetLock",
+  WIRE_TYPE_CANCEL_ASSET_LOCK,
   SET_ASSET_TRANSFER_AVAILABILITY_VARIANT,
   SET_ASSET_TRANSFER_BLACKLIST_VARIANT,
   SET_ASSET_TRANSFER_CONTROL_VARIANT,
   "SoraFS.ReplicationOrder.*",
-  "RecordSccpMessage",
+  WIRE_TYPE_RECORD_SCCP_MESSAGE,
 ];
 const CANCEL_ASSET_LOCK_WIRE_ID =
-  "iroha.instruction.v1::escrow::CancelAssetLock";
+  (TEXT_IROHA_INSTRUCTION_V1 + "escrow::CancelAssetLock");
 const CANCEL_ASSET_LOCK_INNER_TYPE_NAME =
-  "iroha_data_model::isi::escrow::CancelAssetLock";
+  `${TEXT_IROHA_DATA_MODEL_ISI}escrow::CancelAssetLock`;
 const CANCEL_ASSET_LOCK_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   CANCEL_ASSET_LOCK_INNER_TYPE_NAME,
 );
@@ -159,13 +323,13 @@ const SET_ASSET_TRANSFER_CONTROL_WIRE_ID =
   "iroha.asset.transfer.control.set";
 const ASSET_TRANSFER_AVAILABILITY_MAX_REASON_BYTES_V1 = 512;
 const RECORD_SCCP_MESSAGE_WIRE_ID =
-  "iroha.instruction.v1::bridge::RecordSccpMessage";
+  (TEXT_IROHA_INSTRUCTION_V1 + "bridge::RecordSccpMessage");
 const ISSUE_REPLICATION_ORDER_WIRE_ID =
-  "iroha.instruction.v1::sorafs::IssueReplicationOrder";
+  (TEXT_IROHA_INSTRUCTION_V1 + "sorafs::IssueReplicationOrder");
 const COMPLETE_REPLICATION_ORDER_WIRE_ID =
-  "iroha.instruction.v1::sorafs::CompleteReplicationOrder";
+  (TEXT_IROHA_INSTRUCTION_V1 + "sorafs::" + TEXT_COMPLETE_REPLICATION_ORDER_2);
 const EXPIRE_REPLICATION_ORDER_WIRE_ID =
-  "iroha.instruction.v1::sorafs::ExpireReplicationOrder";
+  (TEXT_IROHA_INSTRUCTION_V1 + "sorafs::" + TEXT_EXPIRE_REPLICATION_ORDER_2);
 const REPLICATION_ORDER_V1_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
   "sorafs_manifest::capacity::ReplicationOrderV1",
 );
@@ -188,10 +352,10 @@ const MULTISIG_CONTRACT_CALL_APPROVE_DTO_SCHEMA_HASH = /* @__PURE__ */ schemaHas
   "iroha_torii::routing::MultisigContractCallApproveDto",
 );
 const OPEN_VERIFY_ENVELOPE_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
-  "iroha_data_model::zk::OpenVerifyEnvelope",
+  (TEXT_IROHA_DATA_MODEL + "zk::OpenVerifyEnvelope"),
 );
 const EVENT_FILTER_BOX_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
-  "iroha_data_model::events::model::EventFilterBox",
+  (TEXT_IROHA_DATA_MODEL + "events::model::EventFilterBox"),
 );
 export const PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_NAME_V1 =
   "iroha.privacy.exact12-typed-fixture-bundle.v1";
@@ -228,10 +392,10 @@ const PRIVACY_EXACT12_ENVELOPE_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTyp
   "iroha.privacy.proof-envelope.v1",
 );
 const PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
-  "iroha_data_model::isi::privacy::SubmitPrivacyProofV1",
+  `${TEXT_IROHA_DATA_MODEL_ISI}privacy::SubmitPrivacyProofV1`,
 );
 const PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1 = /* @__PURE__ */ schemaHashForTypeName(
-  "iroha_data_model::transaction::signed::model::TransactionPayload",
+  (TEXT_IROHA_DATA_MODEL + "transaction::signed::model::TransactionPayload"),
 );
 const PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1 =
   "iroha.privacy.submit_proof.v1";
@@ -246,9 +410,9 @@ const PRIVACY_EXACT12_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "statement_norito",
   "envelope_norito",
   "submit_proof_wire_id",
-  "submit_proof_instruction_norito",
-  "transaction_intent_projection_norito",
-  "transaction_intent_digest",
+  TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO,
+  (TEXT_TRANSACTION_INTENT + "projection_norito"),
+  (TEXT_TRANSACTION_INTENT + "digest"),
   "unsigned_transaction_payload_norito",
   "signed_transaction_versioned_norito",
   "signed_transaction_hash",
@@ -258,16 +422,16 @@ const PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze(
   "statementNorito",
   "envelopeNorito",
   "submitProofWireId",
-  "submitProofInstructionNorito",
-  "transactionIntentProjectionNorito",
+  TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_2,
+  TEXT_TRANSACTION_INTENT_PROJECTION_NORITO_2,
   "transactionIntentDigest",
-  "unsignedTransactionPayloadNorito",
+  TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_3,
   "signedTransactionVersionedNorito",
   "signedTransactionHash",
 ]);
 const PRIVACY_EXACT12_ENVELOPE_FIELD_NAMES_V1 = /* @__PURE__ */ Object.freeze([
   "wire_magic",
-  "catalog_commitment",
+  ("catalog_" + TEXT_COMMITMENT),
   "protocol_id",
   "proof_system_id",
   "engine_id",
@@ -304,45 +468,45 @@ const CONTRACT_MANIFEST_SIGNATURE_PAYLOAD_SCHEMA_HASH = Buffer.from(
   HEX_ENCODING,
 );
 const BLOCK_PROOFS_TYPE_NAME =
-  "iroha_data_model::block::proofs::BlockProofs";
-const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RegisterSmartContractCode";
-const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RegisterSmartContractBytes";
-const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::DeactivateContractInstance";
-const ACTIVATE_CONTRACT_INSTANCE_WIRE_ID = "iroha.instruction.v1::smart_contract_code::ActivateContractInstance";
-const SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID = "iroha.instruction.v1::smart_contract_code::SetContractParliamentDelegation";
-const OFFER_CONTRACT_OWNERSHIP_WIRE_ID = "iroha.instruction.v1::smart_contract_code::OfferContractOwnership";
-const ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID = "iroha.instruction.v1::smart_contract_code::AcceptContractOwnership";
-const CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CancelContractOwnershipOffer";
-const COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CommitContractDeployment";
-const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = "iroha.instruction.v1::smart_contract_code::UploadSmartContractCodeChunk";
-const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha.instruction.v1::smart_contract_code::FinalizeSmartContractCodeUpload";
-const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = "iroha.instruction.v1::smart_contract_code::CancelSmartContractCodeUpload";
-const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = "iroha.instruction.v1::smart_contract_code::RemoveSmartContractBytes";
-const CREATE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::CreateKaigi";
-const JOIN_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::JoinKaigi";
-const LEAVE_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::LeaveKaigi";
-const END_KAIGI_WIRE_ID = "iroha.instruction.v1::kaigi::EndKaigi";
-const RECORD_KAIGI_USAGE_WIRE_ID = "iroha.instruction.v1::kaigi::RecordKaigiUsage";
-const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = "iroha.instruction.v1::kaigi::SetKaigiRelayManifest";
-const REGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::RegisterKaigiRelay";
-const UNREGISTER_KAIGI_RELAY_WIRE_ID = "iroha.instruction.v1::kaigi::UnregisterKaigiRelay";
-const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = "iroha.instruction.v1::kaigi::ReportKaigiRelayHealth";
+  (TEXT_IROHA_DATA_MODEL + "block::proofs::BlockProofs");
+const REGISTER_SMART_CONTRACT_CODE_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "RegisterSmartContractCode");
+const REGISTER_SMART_CONTRACT_BYTES_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "RegisterSmartContractBytes");
+const DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "DeactivateContractInstance");
+const ACTIVATE_CONTRACT_INSTANCE_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "ActivateContractInstance");
+const SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "SetContractParliamentDelegation");
+const OFFER_CONTRACT_OWNERSHIP_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "OfferContractOwnership");
+const ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "AcceptContractOwnership");
+const CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "CancelContractOwnershipOffer");
+const COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "CommitContractDeployment");
+const UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "UploadSmartContractCodeChunk");
+const FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "FinalizeSmartContractCodeUpload");
+const CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "CancelSmartContractCodeUpload");
+const REMOVE_SMART_CONTRACT_BYTES_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + TEXT_SMART_CONTRACT_CODE + "RemoveSmartContractBytes");
+const CREATE_KAIGI_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::CreateKaigi");
+const JOIN_KAIGI_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::JoinKaigi");
+const LEAVE_KAIGI_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::LeaveKaigi");
+const END_KAIGI_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::EndKaigi");
+const RECORD_KAIGI_USAGE_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::RecordKaigiUsage");
+const SET_KAIGI_RELAY_MANIFEST_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::" + TEXT_SET_KAIGI_RELAY_MANIFEST);
+const REGISTER_KAIGI_RELAY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::RegisterKaigiRelay");
+const UNREGISTER_KAIGI_RELAY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::UnregisterKaigiRelay");
+const REPORT_KAIGI_RELAY_HEALTH_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "kaigi::" + TEXT_REPORT_KAIGI_RELAY_HEALTH);
 const PROPOSE_DEPLOY_CONTRACT_WIRE_ID =
-  "iroha.instruction.v1::governance::ProposeDeployContract";
-const CAST_ZK_BALLOT_WIRE_ID = "iroha.instruction.v1::governance::CastZkBallot";
-const CAST_PLAIN_BALLOT_WIRE_ID = "iroha.instruction.v1::governance::CastPlainBallot";
-const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = "iroha.instruction.v1::social::ClaimTwitterFollowReward";
-const SEND_TO_TWITTER_WIRE_ID = "iroha.instruction.v1::social::SendToTwitter";
-const CANCEL_TWITTER_ESCROW_WIRE_ID = "iroha.instruction.v1::social::CancelTwitterEscrow";
-const REGISTER_ZK_ASSET_WIRE_ID = "iroha.instruction.v1::zk::RegisterZkAsset";
-const CREATE_ELECTION_WIRE_ID = "iroha.instruction.v1::zk::CreateElection";
-const SUBMIT_BALLOT_WIRE_ID = "iroha.instruction.v1::zk::SubmitBallot";
-const FINALIZE_ELECTION_WIRE_ID = "iroha.instruction.v1::zk::FinalizeElection";
-const REGISTER_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::RegisterVerifyingKey";
-const UPDATE_VERIFYING_KEY_WIRE_ID = "iroha.instruction.v1::verifying_keys::UpdateVerifyingKey";
+  (TEXT_IROHA_INSTRUCTION_V1 + "governance::ProposeDeployContract");
+const CAST_ZK_BALLOT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "governance::CastZkBallot");
+const CAST_PLAIN_BALLOT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "governance::CastPlainBallot");
+const CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "social::" + TEXT_CLAIM_TWITTER_FOLLOW_REWARD);
+const SEND_TO_TWITTER_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "social::SendToTwitter");
+const CANCEL_TWITTER_ESCROW_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "social::CancelTwitterEscrow");
+const REGISTER_ZK_ASSET_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::" + TEXT_REGISTER_ZK_ASSET);
+const CREATE_ELECTION_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::CreateElection");
+const SUBMIT_BALLOT_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::SubmitBallot");
+const FINALIZE_ELECTION_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "zk::" + TEXT_FINALIZE_ELECTION);
+const REGISTER_VERIFYING_KEY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "verifying_keys::" + TEXT_REGISTER_VERIFYING_KEY);
+const UPDATE_VERIFYING_KEY_WIRE_ID = (TEXT_IROHA_INSTRUCTION_V1 + "verifying_keys::" + TEXT_UPDATE_VERIFYING_KEY);
 const TOP_UP_KAGEMUSHA_WIRE_ID = "iroha.kagemusha.v1.top_up";
 const TOP_UP_KAGEMUSHA_INNER_TYPE_NAME =
-  "iroha_data_model::isi::kagemusha_v1::TopUpKagemushaV1";
+  `${TEXT_IROHA_DATA_MODEL_ISI}kagemusha_v1::TopUpKagemushaV1`;
 const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_NAME =
   "iroha.torii.v1.kagemusha.top_up.request";
 const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeName(
@@ -351,93 +515,93 @@ const KAGEMUSHA_TOP_UP_REQUEST_SCHEMA_HASH = /* @__PURE__ */ schemaHashForTypeNa
 const KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES = 16 * 1024;
 const KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING = 8;
 const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({
-  ...Object.fromEntries(NFT_MARKET_INSTRUCTION_NAMES_V1.map((name, index) => [NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[index], `iroha_data_model::isi::nft_market::${name}`])),
-  ...Object.fromEntries(GAME_INSTRUCTION_NAMES_V1.map((name, index) => [GAME_INSTRUCTION_WIRE_IDS_V1[index], `iroha_data_model::isi::game::${name}`])),
-  "iroha.mint": "iroha_data_model::isi::mint_burn::MintBox",
-  "iroha.burn": "iroha_data_model::isi::mint_burn::BurnBox",
-  "iroha.register": "iroha_data_model::isi::register::RegisterBox",
-  "iroha.transfer": "iroha_data_model::isi::transfer::TransferBox",
-  "iroha.custom": "iroha_data_model::isi::transparent::CustomInstruction",
-  "iroha.execute_trigger": "iroha_data_model::isi::transparent::ExecuteTrigger",
-  "iroha.rwa": "iroha_data_model::isi::rwa::RwaInstructionBox",
+  ...Object.fromEntries(NFT_MARKET_INSTRUCTION_NAMES_V1.map((name, index) => [NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[index], `${TEXT_IROHA_DATA_MODEL_ISI}nft_market::${name}`])),
+  ...Object.fromEntries(GAME_INSTRUCTION_NAMES_V1.map((name, index) => [GAME_INSTRUCTION_WIRE_IDS_V1[index], `${TEXT_IROHA_DATA_MODEL_ISI}game::${name}`])),
+  "iroha.mint": `${TEXT_IROHA_DATA_MODEL_ISI}mint_burn::MintBox`,
+  "iroha.burn": `${TEXT_IROHA_DATA_MODEL_ISI}mint_burn::BurnBox`,
+  "iroha.register": `${TEXT_IROHA_DATA_MODEL_ISI}register::RegisterBox`,
+  "iroha.transfer": `${TEXT_IROHA_DATA_MODEL_ISI}transfer::TransferBox`,
+  "iroha.custom": `${TEXT_IROHA_DATA_MODEL_ISI}transparent::CustomInstruction`,
+  "iroha.execute_trigger": `${TEXT_IROHA_DATA_MODEL_ISI}transparent::ExecuteTrigger`,
+  "iroha.rwa": `${TEXT_IROHA_DATA_MODEL_ISI}rwa::RwaInstructionBox`,
   [CANCEL_ASSET_LOCK_WIRE_ID]: CANCEL_ASSET_LOCK_INNER_TYPE_NAME,
   [SET_ASSET_TRANSFER_AVAILABILITY_WIRE_ID]:
-    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferAvailability",
+    `${TEXT_IROHA_DATA_MODEL_ISI}asset_transfer_control::SetAssetTransferAvailability`,
   [SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID]:
-    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferBlacklist",
+    `${TEXT_IROHA_DATA_MODEL_ISI}asset_transfer_control::${TEXT_SET_ASSET_TRANSFER_BLACKLIST_2}`,
   [SET_ASSET_TRANSFER_CONTROL_WIRE_ID]:
-    "iroha_data_model::isi::asset_transfer_control::SetAssetTransferControl",
+    `${TEXT_IROHA_DATA_MODEL_ISI}asset_transfer_control::SetAssetTransferControl`,
   [RECORD_SCCP_MESSAGE_WIRE_ID]:
-    "iroha_data_model::isi::bridge::RecordSccpMessage",
+    `${TEXT_IROHA_DATA_MODEL_ISI}bridge::RecordSccpMessage`,
   [ISSUE_REPLICATION_ORDER_WIRE_ID]:
-    "iroha_data_model::isi::sorafs::IssueReplicationOrder",
+    `${TEXT_IROHA_DATA_MODEL_ISI}sorafs::IssueReplicationOrder`,
   [COMPLETE_REPLICATION_ORDER_WIRE_ID]:
-    "iroha_data_model::isi::sorafs::CompleteReplicationOrder",
+    `${TEXT_IROHA_DATA_MODEL_ISI}sorafs::${TEXT_COMPLETE_REPLICATION_ORDER_2}`,
   [EXPIRE_REPLICATION_ORDER_WIRE_ID]:
-    "iroha_data_model::isi::sorafs::ExpireReplicationOrder",
-  [CREATE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::CreateKaigi",
-  [JOIN_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::JoinKaigi",
-  [LEAVE_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::LeaveKaigi",
-  [END_KAIGI_WIRE_ID]: "iroha_data_model::isi::kaigi::EndKaigi",
+    `${TEXT_IROHA_DATA_MODEL_ISI}sorafs::${TEXT_EXPIRE_REPLICATION_ORDER_2}`,
+  [CREATE_KAIGI_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::CreateKaigi`,
+  [JOIN_KAIGI_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::JoinKaigi`,
+  [LEAVE_KAIGI_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::LeaveKaigi`,
+  [END_KAIGI_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::EndKaigi`,
   [RECORD_KAIGI_USAGE_WIRE_ID]:
-    "iroha_data_model::isi::kaigi::RecordKaigiUsage",
+    `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::RecordKaigiUsage`,
   [SET_KAIGI_RELAY_MANIFEST_WIRE_ID]:
-    "iroha_data_model::isi::kaigi::SetKaigiRelayManifest",
+    `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::${TEXT_SET_KAIGI_RELAY_MANIFEST}`,
   [REGISTER_KAIGI_RELAY_WIRE_ID]:
-    "iroha_data_model::isi::kaigi::RegisterKaigiRelay",
+    `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::RegisterKaigiRelay`,
   [UNREGISTER_KAIGI_RELAY_WIRE_ID]:
-    "iroha_data_model::isi::kaigi::UnregisterKaigiRelay",
+    `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::UnregisterKaigiRelay`,
   [REPORT_KAIGI_RELAY_HEALTH_WIRE_ID]:
-    "iroha_data_model::isi::kaigi::ReportKaigiRelayHealth",
+    `${TEXT_IROHA_DATA_MODEL_ISI}kaigi::${TEXT_REPORT_KAIGI_RELAY_HEALTH}`,
   [PROPOSE_DEPLOY_CONTRACT_WIRE_ID]:
-    "iroha_data_model::isi::governance::ProposeDeployContract",
+    `${TEXT_IROHA_DATA_MODEL_ISI}governance::ProposeDeployContract`,
   [CAST_ZK_BALLOT_WIRE_ID]:
-    "iroha_data_model::isi::governance::CastZkBallot",
+    `${TEXT_IROHA_DATA_MODEL_ISI}governance::CastZkBallot`,
   [CAST_PLAIN_BALLOT_WIRE_ID]:
-    "iroha_data_model::isi::governance::CastPlainBallot",
+    `${TEXT_IROHA_DATA_MODEL_ISI}governance::CastPlainBallot`,
   [CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID]:
-    "iroha_data_model::isi::social::ClaimTwitterFollowReward",
-  [SEND_TO_TWITTER_WIRE_ID]: "iroha_data_model::isi::social::SendToTwitter",
+    `${TEXT_IROHA_DATA_MODEL_ISI}social::${TEXT_CLAIM_TWITTER_FOLLOW_REWARD}`,
+  [SEND_TO_TWITTER_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}social::SendToTwitter`,
   [CANCEL_TWITTER_ESCROW_WIRE_ID]:
-    "iroha_data_model::isi::social::CancelTwitterEscrow",
+    `${TEXT_IROHA_DATA_MODEL_ISI}social::CancelTwitterEscrow`,
   [REGISTER_SMART_CONTRACT_CODE_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}RegisterSmartContractCode`,
   [REGISTER_SMART_CONTRACT_BYTES_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::RegisterSmartContractBytes",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}RegisterSmartContractBytes`,
   [DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}DeactivateContractInstance`,
   [ACTIVATE_CONTRACT_INSTANCE_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::ActivateContractInstance",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}ActivateContractInstance`,
   [SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::SetContractParliamentDelegation",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}SetContractParliamentDelegation`,
   [OFFER_CONTRACT_OWNERSHIP_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::OfferContractOwnership",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}OfferContractOwnership`,
   [ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::AcceptContractOwnership",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}AcceptContractOwnership`,
   [CANCEL_CONTRACT_OWNERSHIP_OFFER_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::CancelContractOwnershipOffer",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}CancelContractOwnershipOffer`,
   [COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::CommitContractDeployment",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}CommitContractDeployment`,
   [UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}UploadSmartContractCodeChunk`,
   [FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}FinalizeSmartContractCodeUpload`,
   [CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}CancelSmartContractCodeUpload`,
   [REMOVE_SMART_CONTRACT_BYTES_WIRE_ID]:
-    "iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes",
-  [REGISTER_ZK_ASSET_WIRE_ID]: "iroha_data_model::isi::zk::RegisterZkAsset",
+    `${TEXT_IROHA_DATA_MODEL_ISI}${TEXT_SMART_CONTRACT_CODE}RemoveSmartContractBytes`,
+  [REGISTER_ZK_ASSET_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}zk::${TEXT_REGISTER_ZK_ASSET}`,
   [SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID]:
-    "iroha_data_model::isi::zk::ScheduleConfidentialPolicyTransition",
+    `${TEXT_IROHA_DATA_MODEL_ISI}zk::${TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION}`,
   [CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID]:
-    "iroha_data_model::isi::zk::CancelConfidentialPolicyTransition",
-  [CREATE_ELECTION_WIRE_ID]: "iroha_data_model::isi::zk::CreateElection",
-  [SUBMIT_BALLOT_WIRE_ID]: "iroha_data_model::isi::zk::SubmitBallot",
-  [FINALIZE_ELECTION_WIRE_ID]: "iroha_data_model::isi::zk::FinalizeElection",
+    `${TEXT_IROHA_DATA_MODEL_ISI}zk::${TEXT_CANCEL_CONFIDENTIAL_POLICY_TRANSITION}`,
+  [CREATE_ELECTION_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}zk::CreateElection`,
+  [SUBMIT_BALLOT_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}zk::SubmitBallot`,
+  [FINALIZE_ELECTION_WIRE_ID]: `${TEXT_IROHA_DATA_MODEL_ISI}zk::${TEXT_FINALIZE_ELECTION}`,
   [REGISTER_VERIFYING_KEY_WIRE_ID]:
-    "iroha_data_model::isi::verifying_keys::RegisterVerifyingKey",
+    `${TEXT_IROHA_DATA_MODEL_ISI}verifying_keys::${TEXT_REGISTER_VERIFYING_KEY}`,
   [UPDATE_VERIFYING_KEY_WIRE_ID]:
-    "iroha_data_model::isi::verifying_keys::UpdateVerifyingKey",
+    `${TEXT_IROHA_DATA_MODEL_ISI}verifying_keys::${TEXT_UPDATE_VERIFYING_KEY}`,
   [TOP_UP_KAGEMUSHA_WIRE_ID]: TOP_UP_KAGEMUSHA_INNER_TYPE_NAME,
 });
 const INSTRUCTION_WIRE_SCHEMA_BINDINGS = /* @__PURE__ */ (() => Object.freeze(
@@ -686,10 +850,10 @@ export function noritoEncodeInstruction(instruction) {
  */
 export function noritoEncodeTransactionPayloadBatch(payloads) {
   if (!Array.isArray(payloads)) {
-    rejectType("transaction payload batch must be an array");
+    rejectType(("transaction payload batch" + TEXT_MUST_BE + "an array"));
   }
   if (payloads.length === 0) {
-    rejectType("transaction payload batch must contain at least one payload");
+    rejectType(("transaction payload batch" + TEXT_MUST_CONTAIN + "at least one payload"));
   }
   const payload = withNoritoCompactLengths(() =>
     encodeNoritoVec(payloads, (item, index) =>
@@ -714,7 +878,7 @@ export function noritoEncodeTransactionPayloadBatch(payloads) {
  */
 export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
   if (!isPlainObject(proof)) {
-    rejectType("SoraFS billing acknowledgement proof must be an object");
+    rejectType((TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT + "proof" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   const keys = Object.keys(proof);
   if (
@@ -722,7 +886,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     !Object.prototype.hasOwnProperty.call(proof, "requestNonceHex") ||
     !Object.prototype.hasOwnProperty.call(proof, "authenticationProof")
   ) {
-    rejectType("SoraFS billing acknowledgement proof must contain exactly requestNonceHex and authenticationProof");
+    rejectType((TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT + "proof" + TEXT_MUST_CONTAIN + "exactly requestNonceHex and authenticationProof"));
   }
   const requestNonceHex = proof.requestNonceHex;
   if (
@@ -730,7 +894,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     !/^[0-9a-f]{64}$/u.test(requestNonceHex) ||
     /^0{64}$/u.test(requestNonceHex)
   ) {
-    rejectType("SoraFS billing acknowledgement requestNonceHex must be one non-zero lowercase 32-byte hexadecimal digest");
+    rejectType((TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT + "requestNonceHex" + TEXT_MUST_BE + "one non-zero lowercase 32-byte hexadecimal digest"));
   }
   const authenticationProof = proof.authenticationProof;
   if (
@@ -738,7 +902,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     !ArrayBuffer.isView(authenticationProof) &&
     !(authenticationProof instanceof ArrayBuffer)
   ) {
-    rejectType("SoraFS billing acknowledgement authenticationProof must be binary bytes");
+    rejectType((TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT + "authenticationProof" + TEXT_MUST_BE + "binary bytes"));
   }
   const proofBytes = Buffer.isBuffer(authenticationProof)
     ? Buffer.from(authenticationProof)
@@ -754,7 +918,7 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
     proofBytes.length >
       SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1
   ) {
-    rejectRange(`SoraFS billing acknowledgement authenticationProof must contain 1..=${SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes`);
+    rejectRange(`${TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT}authenticationProof${TEXT_MUST_CONTAIN}1..=${SORAFS_BILLING_ACKNOWLEDGEMENT_PROOF_MAX_BYTES_V1} bytes`);
   }
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
@@ -762,13 +926,13 @@ export function noritoEncodeSorafsBillingAcknowledgementProofV1(proof) {
         encodeFixedBytesValue(
           Buffer.from(requestNonceHex, HEX_ENCODING),
           32,
-          "SoraFS billing acknowledgement requestNonceHex",
+          (TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT + "requestNonceHex"),
         ),
       ],
       [
         encodeByteVecValue(
           proofBytes,
-          "SoraFS billing acknowledgement authenticationProof",
+          (TEXT_SORA_FS_BILLING_ACKNOWLEDGEMENT + "authenticationProof"),
         ),
       ],
     ]),
@@ -805,15 +969,15 @@ export function noritoEncodeContractManifestSignaturePayload(manifest) {
 
 function encodeFeePaymentIntentValue(intent, context) {
   if (!isPlainObject(intent)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertOnlyObjectKeys(intent, ["payer", "value"], context);
   const payer = assertNonEmptyString(intent.payer, `${context}.payer`);
   if (payer !== "authority" && payer !== "sponsor") {
-    rejectType(`${context}.payer must be authority or sponsor`);
+    rejectType(`${context}.payer${TEXT_MUST_BE}authority or sponsor`);
   }
   if (!isPlainObject(intent.value)) {
-    rejectType(`${context}.value must be an object`);
+    rejectType(`${context}.value${TEXT_MUST_BE_AN_OBJECT_2}`);
   }
   const allowedValueFields = ["charge_limits", "gas_limit"];
   if (payer === "sponsor") {
@@ -821,46 +985,46 @@ function encodeFeePaymentIntentValue(intent, context) {
   }
   assertOnlyObjectKeys(intent.value, allowedValueFields, `${context}.value`);
   if (!Array.isArray(intent.value.charge_limits)) {
-    rejectType(`${context}.value.charge_limits must be an array`);
+    rejectType(`${context}${TEXT_VALUE_CHARGE_LIMITS_MUST}be an array`);
   }
   let previousKind = -1;
   const chargeLimits = encodeNoritoVec(
     Array.from(intent.value.charge_limits, (limit, index) => {
       const itemContext = `${context}.value.charge_limits[${index}]`;
       if (!Object.prototype.hasOwnProperty.call(intent.value.charge_limits, index)) {
-        rejectType(`${context}.value.charge_limits must not contain holes`);
+        rejectType(`${context}${TEXT_VALUE_CHARGE_LIMITS_MUST}not contain holes`);
       }
       if (!isPlainObject(limit)) {
-        rejectType(`${itemContext} must be an object`);
+        rejectType(`${itemContext}${TEXT_MUST_BE_AN_OBJECT}`);
       }
       assertOnlyObjectKeys(
         limit,
-        ["kind", "asset_definition_id", "max_amount"],
+        ["kind", WIRE_FIELD_ASSET_DEFINITION_ID, "max_amount"],
         itemContext,
       );
       if (!isPlainObject(limit.kind)) {
-        rejectType(`${itemContext}.kind must be a tagged unit object`);
+        rejectType(`${itemContext}.kind${TEXT_MUST_BE}a tagged unit object`);
       }
       assertOnlyObjectKeys(limit.kind, ["kind", "value"], `${itemContext}.kind`);
       const kind = assertNonEmptyString(limit.kind.kind, `${itemContext}.kind.kind`);
       const kindTag = kind === "nexus" ? 0 : kind === "pipeline_gas" ? 1 : -1;
       if (kindTag < 0 || limit.kind.value !== null) {
-        rejectType(`${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`);
+        rejectType(`${itemContext}.kind must be the${TEXT_CANONICAL}nexus or pipeline_gas tagged unit`);
       }
       if (kindTag <= previousKind) {
-        rejectType(`${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`);
+        rejectType(`${context}${TEXT_VALUE_CHARGE_LIMITS_MUST}be unique and ordered nexus before pipeline_gas`);
       }
       previousKind = kindTag;
       const quantity = NumericV1.decodeQuantityJson(limit.max_amount);
       if (quantity.mantissa <= 0n) {
-        rejectType(`${itemContext}.max_amount must be greater than zero`);
+        rejectType(`${itemContext}.max_amount${TEXT_MUST_BE_GREATER_THAN_ZERO}`);
       }
       return encodeStructValue([
         [encodeEnumTagValue(kindTag)],
         [
           encodeAssetDefinitionIdValue(
             limit.asset_definition_id,
-            `${itemContext}.asset_definition_id`,
+            `${itemContext}.${TEXT_ASSET_DEFINITION_ID}`,
           ),
         ],
         [encodeQuantityValue(limit.max_amount, `${itemContext}.max_amount`)],
@@ -879,7 +1043,7 @@ function encodeFeePaymentIntentValue(intent, context) {
       `${context}.value.gas_limit`,
     );
     if (normalizedGas === 0n) {
-      rejectType(`${context}.value.gas_limit must be non-zero`);
+      rejectType(`${context}.value.gas_limit${TEXT_MUST_BE}non-zero`);
     }
   }
   if (payer === "authority") {
@@ -888,36 +1052,36 @@ function encodeFeePaymentIntentValue(intent, context) {
     );
   }
   if (!isPlainObject(intent.value.program_id)) {
-    rejectType(`${context}.value.program_id must be an object`);
+    rejectType(`${context}${TEXT_VALUE_PROGRAM}id${TEXT_MUST_BE_AN_OBJECT_2}`);
   }
   assertOnlyObjectKeys(
     intent.value.program_id,
     ["sponsor", "name"],
-    `${context}.value.program_id`,
+    `${context}${TEXT_VALUE_PROGRAM}id`,
   );
   const name = assertNonEmptyString(
     intent.value.program_id.name,
-    `${context}.value.program_id.name`,
+    `${context}${TEXT_VALUE_PROGRAM}id.name`,
   );
   if (
     name !== intent.value.program_id.name ||
     name.normalize("NFC") !== name ||
     /[\s@#$\/]/u.test(name)
   ) {
-    rejectType(`${context}.value.program_id.name must be a canonical Iroha Name`);
+    rejectType(`${context}${TEXT_VALUE_PROGRAM}id.name must be a${TEXT_CANONICAL}Iroha Name`);
   }
   const revision = normalizeU64Input(
     intent.value.program_revision,
-    `${context}.value.program_revision`,
+    `${context}${TEXT_VALUE_PROGRAM}revision`,
   );
   if (revision === 0n) {
-    rejectType(`${context}.value.program_revision must be non-zero`);
+    rejectType(`${context}${TEXT_VALUE_PROGRAM}revision${TEXT_MUST_BE}non-zero`);
   }
   const programId = encodeStructValue([
     [
       encodeAccountIdValue(
         intent.value.program_id.sponsor,
-        `${context}.value.program_id.sponsor`,
+        `${context}${TEXT_VALUE_PROGRAM}id.sponsor`,
       ),
     ],
     [encodeNoritoStringValue(name)],
@@ -925,7 +1089,7 @@ function encodeFeePaymentIntentValue(intent, context) {
   return encodeEnumTagValue(1, () =>
     encodeStructValue([
       [programId],
-      [encodeU64Value(revision, `${context}.value.program_revision`)],
+      [encodeU64Value(revision, `${context}${TEXT_VALUE_PROGRAM}revision`)],
       [chargeLimits],
       [gasLimit],
     ]),
@@ -975,82 +1139,82 @@ function rejectInlinePrivateKeyFields(request, context) {
  */
 function encodeMultisigProposeRequest(request, nativeRuntime) {
   if (!isPlainObject(request)) {
-    rejectType("MultisigProposeDto request must be an object");
+    rejectType(("MultisigProposeDto request" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   if (!Array.isArray(request.instructions)) {
-    rejectType("MultisigProposeDto.instructions must be an array");
+    rejectType((TEXT_MULTISIG_PROPOSE_DTO + "instructions" + TEXT_MUST_BE + "an array"));
   }
   rejectInlinePrivateKeyFields(request, "MultisigProposeDto");
   const validationFeeMetadata = normalizeMultisigProposeValidationFeeMetadata(request);
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
-      ...encodeMultisigAccountSelectorFields(request, "MultisigProposeDto.selector"),
+      ...encodeMultisigAccountSelectorFields(request, (TEXT_MULTISIG_PROPOSE_DTO + "selector")),
       [
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
-          "MultisigProposeDto.signer_account_id",
+          (TEXT_MULTISIG_PROPOSE_DTO + "signer_" + TEXT_ACCOUNT_ID),
         ),
       ],
       [
         encodeOptionValue(
           request.public_key_hex ?? request.publicKeyHex ?? null,
           encodeNoritoStringValue,
-          "MultisigProposeDto.public_key_hex",
+          (TEXT_MULTISIG_PROPOSE_DTO + "public_key_hex"),
         ),
       ],
       [
         encodeOptionValue(
           request.signature_b64 ?? request.signatureB64 ?? null,
           encodeExactBase64StringValue,
-          "MultisigProposeDto.signature_b64",
+          (TEXT_MULTISIG_PROPOSE_DTO + "signature_b64"),
         ),
       ],
       [
         encodeOptionValue(
           request.creation_time_ms ?? request.creationTimeMs ?? null,
           encodeU64NumberValue,
-          "MultisigProposeDto.creation_time_ms",
+          (TEXT_MULTISIG_PROPOSE_DTO + TEXT_CREATION_TIME_MS),
         ),
       ],
       [
         encodeFeePaymentIntentValue(
           request.fee_payment ?? request.feePayment,
-          "MultisigProposeDto.fee_payment",
+          (TEXT_MULTISIG_PROPOSE_DTO + "fee_payment"),
         ),
       ],
       [
         encodeOptionValue(
           request.memo ?? null,
           encodeNoritoStringValue,
-          "MultisigProposeDto.memo",
+          (TEXT_MULTISIG_PROPOSE_DTO + "memo"),
         ),
       ],
       [
         encodeOptionValue(
           validationFeeMetadata.policyVersion,
           encodeNoritoStringValue,
-          "MultisigProposeDto.validation_fee_policy_version",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_version`,
         ),
       ],
       [
         encodeOptionValue(
           validationFeeMetadata.policyHash,
           encodeNoritoStringValue,
-          "MultisigProposeDto.validation_fee_policy_hash",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_hash`,
         ),
       ],
       [
         encodeOptionValue(
           validationFeeMetadata.hijiriFeeQuoteHash,
           encodeNoritoStringValue,
-          "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}hijiri_fee_quote_hash`,
         ),
       ],
       [
         encodeNoritoVec(request.instructions, (instruction, index) =>
           encodeEmbeddedInstructionBox(
             instruction,
-            `MultisigProposeDto.instructions[${index}]`,
+            `${TEXT_MULTISIG_PROPOSE_DTO}instructions[${index}]`,
             nativeRuntime,
           ),
         ),
@@ -1059,14 +1223,14 @@ function encodeMultisigProposeRequest(request, nativeRuntime) {
         encodeOptionValue(
           validationFeeMetadata.instructionIndex,
           encodeNoritoStringValue,
-          "MultisigProposeDto.validation_fee_instruction_index",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}instruction_index`,
         ),
       ],
       [
         encodeOptionValue(
           validationFeeMetadata.transferEntryIndex,
           encodeNoritoStringValue,
-          "MultisigProposeDto.validation_fee_transfer_entry_index",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index`,
         ),
       ],
     ]),
@@ -1092,19 +1256,19 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
   const hasInstructionIndex = instructionIndex !== null && instructionIndex !== undefined;
   const hasTransferEntryIndex = transferEntryIndex !== null && transferEntryIndex !== undefined;
   if (hasPolicyVersion !== hasPolicyHash) {
-    rejectType("MultisigProposeDto.validation_fee_policy_version and validation_fee_policy_hash must be provided together");
+    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_version and validation_fee_policy_hash${TEXT_MUST_BE}provided together`);
   }
   if (!hasPolicyVersion && hasHijiriFeeQuoteHash) {
-    rejectType("MultisigProposeDto.validation_fee_hijiri_fee_quote_hash requires validation fee policy metadata");
+    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}hijiri_fee_quote_hash${TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA}`);
   }
   if (!hasPolicyVersion && hasInstructionIndex) {
-    rejectType("MultisigProposeDto.validation_fee_instruction_index requires validation fee policy metadata");
+    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}instruction_index${TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA}`);
   }
   if (!hasPolicyVersion && hasTransferEntryIndex) {
-    rejectType("MultisigProposeDto.validation_fee_transfer_entry_index requires validation fee policy metadata");
+    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index${TEXT_REQUIRES_VALIDATION_FEE_POLICY_METADATA}`);
   }
   if (hasTransferEntryIndex && !hasInstructionIndex) {
-    rejectType("MultisigProposeDto.validation_fee_transfer_entry_index requires validation_fee_instruction_index");
+    rejectType(`${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index requires ${TEXT_VALIDATION_FEE}instruction_index`);
   }
   if (!hasPolicyVersion) {
     return {
@@ -1118,28 +1282,28 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
   return {
     policyVersion: normalizeU64Input(
       policyVersion,
-      "MultisigProposeDto.validation_fee_policy_version",
+      `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_version`,
     ).toString(),
     policyHash: normalizeValidationFeePolicyHashString(
       policyHash,
-      "MultisigProposeDto.validation_fee_policy_hash",
+      `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}policy_hash`,
     ),
     hijiriFeeQuoteHash: hasHijiriFeeQuoteHash
       ? normalizeValidationFeePolicyHashString(
           hijiriFeeQuoteHash,
-          "MultisigProposeDto.validation_fee_hijiri_fee_quote_hash",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}hijiri_fee_quote_hash`,
         )
       : null,
     instructionIndex: hasInstructionIndex
       ? normalizeU64Input(
           instructionIndex,
-          "MultisigProposeDto.validation_fee_instruction_index",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}instruction_index`,
         ).toString()
       : null,
     transferEntryIndex: hasTransferEntryIndex
       ? normalizeU64Input(
           transferEntryIndex,
-          "MultisigProposeDto.validation_fee_transfer_entry_index",
+          `${TEXT_MULTISIG_PROPOSE_DTO_VALIDATION_FEE}transfer_entry_index`,
         ).toString()
       : null,
   };
@@ -1147,26 +1311,26 @@ function normalizeMultisigProposeValidationFeeMetadata(request) {
 
 function rejectValidationFeeCamelCaseDtoFields(request) {
   for (const [camelName, snakeName] of [
-    ["validationFeePolicyVersion", "validation_fee_policy_version"],
-    ["validationFeePolicyHash", "validation_fee_policy_hash"],
-    ["validationFeeHijiriFeeQuoteHash", "validation_fee_hijiri_fee_quote_hash"],
-    ["validationFeeInstructionIndex", "validation_fee_instruction_index"],
-    ["validationFeeTransferEntryIndex", "validation_fee_transfer_entry_index"],
+    ["validationFeePolicyVersion", (TEXT_VALIDATION_FEE + "policy_version")],
+    ["validationFeePolicyHash", (TEXT_VALIDATION_FEE + "policy_hash")],
+    ["validationFeeHijiriFeeQuoteHash", (TEXT_VALIDATION_FEE + "hijiri_fee_quote_hash")],
+    ["validationFeeInstructionIndex", (TEXT_VALIDATION_FEE + "instruction_index")],
+    ["validationFeeTransferEntryIndex", (TEXT_VALIDATION_FEE + "transfer_entry_index")],
   ]) {
     if (Object.prototype.hasOwnProperty.call(request, camelName)) {
-      rejectType(`MultisigProposeDto uses unsupported camelCase validation fee field ${camelName}; use ${snakeName}`);
+      rejectType(`MultisigProposeDto uses ${TEXT_UNSUPPORTED}camelCase validation fee field ${camelName}; use ${snakeName}`);
     }
   }
 }
 
 function normalizeValidationFeePolicyHashString(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context} must be a 32-byte hex string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}32-byte hex string`);
   }
   const trimmed = value.trim().toLowerCase();
   const normalized = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
   if (!/^[0-9a-f]{64}$/.test(normalized)) {
-    rejectType(`${context} must be a 32-byte hex string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}32-byte hex string`);
   }
   return normalized;
 }
@@ -1182,7 +1346,7 @@ function normalizeValidationFeePolicyHashString(value, context) {
  */
 export function noritoEncodeMultisigContractCallProposeRequest(request) {
   if (!isPlainObject(request)) {
-    rejectType("MultisigContractCallProposeDto request must be an object");
+    rejectType(("MultisigContractCallProposeDto request" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   rejectInlinePrivateKeyFields(request, "MultisigContractCallProposeDto");
   const contractAddress = request.contract_address ?? request.contractAddress ?? null;
@@ -1195,54 +1359,54 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
     encodeStructValue([
       ...encodeMultisigAccountSelectorFields(
         request,
-        "MultisigContractCallProposeDto.selector",
+        (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "selector"),
       ),
       [
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
-          "MultisigContractCallProposeDto.signer_account_id",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "signer_" + TEXT_ACCOUNT_ID),
         ),
       ],
       [
         encodeOptionValue(
           request.public_key_hex ?? request.publicKeyHex ?? null,
           encodeNoritoStringValue,
-          "MultisigContractCallProposeDto.public_key_hex",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "public_key_hex"),
         ),
       ],
       [
         encodeOptionValue(
           request.signature_b64 ?? request.signatureB64 ?? null,
           encodeExactBase64StringValue,
-          "MultisigContractCallProposeDto.signature_b64",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "signature_b64"),
         ),
       ],
       [
         encodeOptionValue(
           request.creation_time_ms ?? request.creationTimeMs ?? null,
           encodeU64NumberValue,
-          "MultisigContractCallProposeDto.creation_time_ms",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + TEXT_CREATION_TIME_MS),
         ),
       ],
       [
         encodeOptionValue(
           contractAddress,
           encodeNoritoStringValue,
-          "MultisigContractCallProposeDto.contract_address",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + TEXT_CONTRACT_ADDRESS_2),
         ),
       ],
       [
         encodeOptionValue(
           contractAlias,
           encodeNoritoStringValue,
-          "MultisigContractCallProposeDto.contract_alias",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "contract_alias"),
         ),
       ],
       [
         encodeNoritoStringValue(
           assertNonEmptyString(
             request.entrypoint,
-            "MultisigContractCallProposeDto.entrypoint",
+            (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "entrypoint"),
           ),
         ),
       ],
@@ -1250,13 +1414,13 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
         encodeOptionValue(
           payloadValue,
           encodeNoritoJsonValue,
-          "MultisigContractCallProposeDto.payload",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "payload"),
         ),
       ],
       [
         encodeFeePaymentIntentValue(
           request.fee_payment ?? request.feePayment,
-          "MultisigContractCallProposeDto.fee_payment",
+          (TEXT_MULTISIG_CONTRACT_CALL_PROPOSE_DTO + "fee_payment"),
         ),
       ],
     ]),
@@ -1276,7 +1440,7 @@ export function noritoEncodeMultisigContractCallProposeRequest(request) {
  */
 export function noritoEncodeMultisigContractCallApproveRequest(request) {
   if (!isPlainObject(request)) {
-    rejectType("MultisigContractCallApproveDto request must be an object");
+    rejectType(("MultisigContractCallApproveDto request" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   rejectInlinePrivateKeyFields(request, "MultisigContractCallApproveDto");
   const proposalId = request.proposal_id ?? request.proposalId ?? null;
@@ -1288,53 +1452,53 @@ export function noritoEncodeMultisigContractCallApproveRequest(request) {
     encodeStructValue([
       ...encodeMultisigAccountSelectorFields(
         request,
-        "MultisigContractCallApproveDto.selector",
+        (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "selector"),
       ),
       [
         encodeAccountIdValue(
           request.signer_account_id ?? request.signerAccountId,
-          "MultisigContractCallApproveDto.signer_account_id",
+          (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "signer_" + TEXT_ACCOUNT_ID),
         ),
       ],
       [
         encodeOptionValue(
           request.public_key_hex ?? request.publicKeyHex ?? null,
           encodeNoritoStringValue,
-          "MultisigContractCallApproveDto.public_key_hex",
+          (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "public_key_hex"),
         ),
       ],
       [
         encodeOptionValue(
           request.signature_b64 ?? request.signatureB64 ?? null,
           encodeExactBase64StringValue,
-          "MultisigContractCallApproveDto.signature_b64",
+          (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "signature_b64"),
         ),
       ],
       [
         encodeOptionValue(
           request.creation_time_ms ?? request.creationTimeMs ?? null,
           encodeU64NumberValue,
-          "MultisigContractCallApproveDto.creation_time_ms",
+          (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + TEXT_CREATION_TIME_MS),
         ),
       ],
       [
         encodeFeePaymentIntentValue(
           request.fee_payment ?? request.feePayment,
-          "MultisigContractCallApproveDto.fee_payment",
+          (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "fee_payment"),
         ),
       ],
       [
         encodeOptionValue(
           proposalId,
           encodeNoritoStringValue,
-          "MultisigContractCallApproveDto.proposal_id",
+          (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "proposal_id"),
         ),
       ],
       [
         encodeOptionValue(
           instructionsHash,
           encodeNoritoStringValue,
-          "MultisigContractCallApproveDto.instructions_hash",
+          (TEXT_MULTISIG_CONTRACT_CALL_APPROVE_DTO + "instructions_hash"),
         ),
       ],
     ]),
@@ -1358,7 +1522,7 @@ function encodeMultisigAccountSelectorFields(request, context) {
       encodeOptionValue(
         multisigAccountId,
         encodeAccountIdValue,
-        `${context}.multisig_account_id`,
+        `${context}.multisig_${TEXT_ACCOUNT_ID}`,
       ),
     ],
     [
@@ -1397,7 +1561,7 @@ function encodeEmbeddedInstructionBox(
  */
 function encodeInstructionBoxArchive(instruction, nativeRuntime) {
   return withNoritoLengthFlags(COMPACT_LEN_FLAG, () =>
-    encodeEmbeddedInstructionBox(instruction, "instruction", nativeRuntime),
+    encodeEmbeddedInstructionBox(instruction, FIELD_INSTRUCTION, nativeRuntime),
   );
 }
 
@@ -1423,12 +1587,12 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
   const outerFlags = COMPACT_LEN_FLAG;
   const outerReader = new BufferReader(
     archive,
-    "instruction archive",
+    (TEXT_INSTRUCTION + "archive"),
     outerFlags,
   );
   const wireId = decodeStringValue(
     readNoritoField(outerReader, "wire"),
-    "instruction archive.wire",
+    (TEXT_INSTRUCTION + "archive.wire"),
     outerFlags,
   );
   const innerField = readNoritoField(outerReader, "inner");
@@ -1436,14 +1600,14 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
 
   const innerReader = new BufferReader(
     innerField,
-    "instruction archive.inner",
+    (TEXT_INSTRUCTION + "archive.inner"),
     0,
   );
   const innerFrame = readNoritoField(innerReader, "frame");
   innerReader.assertEof();
   const inner = decodeNoritoFrame(
     innerFrame,
-    "instruction archive.frame",
+    (TEXT_INSTRUCTION + "archive.frame"),
     INNER_SCHEMA_HASH_BY_WIRE_ID[wireId] ?? null,
   );
   const decoded = withNoritoLengthFlags(inner.flags, () =>
@@ -1455,7 +1619,7 @@ export function noritoDecodeInstructionBoxArchive(bytes) {
   );
   const canonical = noritoEncodeInstructionBoxArchive(decoded);
   if (!archive.equals(canonical)) {
-    rejectError("instruction archive is not canonical Norito");
+    rejectError(("instruction archive is not" + TEXT_CANONICAL + "Norito"));
   }
   return decoded;
 }
@@ -1513,14 +1677,14 @@ function validateDecodedInstructionProofAttachments(instruction) {
   }
   for (const [variant, field] of [
     ["SubmitBallot", "ballot_proof"],
-    ["FinalizeElection", "tally_proof"],
+    [TEXT_FINALIZE_ELECTION, "tally_proof"],
   ]) {
     const payload = instruction.zk[variant];
     if (!isPlainObject(payload)) {
       continue;
     }
     if (!Object.prototype.hasOwnProperty.call(payload, field)) {
-      rejectType(`zk.${variant}.${field} is required`);
+      rejectType(`zk.${variant}.${field}${TEXT_IS_REQUIRED}`);
     }
     normalizeCanonicalProofAttachmentValue(
       payload[field],
@@ -1546,7 +1710,7 @@ function inspectTriggerAction(encodedAction, nativeRuntime) {
     encodedAction.length === 0 ||
     encodedAction.trim() !== encodedAction
   ) {
-    rejectType("inspectSubscriptionTriggerAction encodedAction must be a canonical non-empty string");
+    rejectType(("inspectSubscriptionTriggerAction encodedAction must be a" + TEXT_CANONICAL + "non-empty string"));
   }
   const native = resolveNative(
     "inspectSubscriptionTriggerAction",
@@ -1604,7 +1768,7 @@ function decodeBlockMerkleCommitmentValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["root", "leaf_count"]);
   const leafCount = decodeU64Value(fields.leaf_count, `${context}.leaf_count`);
   if (leafCount === "0") {
-    rejectError(`${context}.leaf_count must be non-zero`);
+    rejectError(`${context}.leaf_count${TEXT_MUST_BE}non-zero`);
   }
   return {
     root: decodeHashValue(fields.root, `${context}.root`),
@@ -1695,7 +1859,7 @@ function decodeFastpqTranscriptMap(payload, context) {
     const valuePayload = readNoritoField(reader, `value${index}`);
     const keyBytes = decodeFixedBytesValue(keyPayload, 32, `${context}.key[${index}]`);
     if (previousKey !== null && Buffer.compare(previousKey, keyBytes) >= 0) {
-      rejectError(`${context} keys are not in canonical strict order`);
+      rejectError(`${context} keys are not in${TEXT_CANONICAL}strict order`);
     }
     previousKey = keyBytes;
     const key = decodeHashValue(keyPayload, `${context}.key[${index}]`);
@@ -1728,7 +1892,7 @@ export function noritoDecodeBlockProofs(bytes) {
     requireNonEmptyPayload: true,
   });
   if ((frame.flags & (NORITO_PACKED_SEQ_FLAG | NORITO_PACKED_STRUCT_FLAG | NORITO_FIELD_BITSET_FLAG)) !== 0) {
-    rejectError("BlockProofs uses an unsupported packed Norito layout");
+    rejectError(("BlockProofs uses an " + TEXT_UNSUPPORTED + "packed Norito layout"));
   }
   return withNoritoLengthFlags(frame.flags & COMPACT_LEN_FLAG, () => {
     const fields = decodeStructFields(frame.payload, "BlockProofs", [
@@ -1736,48 +1900,48 @@ export function noritoDecodeBlockProofs(bytes) {
       "block_hash",
       "executed_block_wire_hash",
       "entry_hash",
-      "entry_commitment",
+      ("entry_" + TEXT_COMMITMENT),
       "entry_proof",
-      "result_commitment",
+      ("result_" + TEXT_COMMITMENT),
       "result_proof",
       "fastpq_transcripts",
     ]);
-    const blockHeight = decodeU64Value(fields.block_height, "BlockProofs.block_height");
+    const blockHeight = decodeU64Value(fields.block_height, (TEXT_BLOCK_PROOFS + "block_height"));
     if (blockHeight === "0") {
-      rejectError("BlockProofs.block_height must be non-zero");
+      rejectError((TEXT_BLOCK_PROOFS + "block_height" + TEXT_MUST_BE + "non-zero"));
     }
     const entryCommitment = decodeBlockMerkleCommitmentValue(
       fields.entry_commitment,
-      "BlockProofs.entry_commitment",
+      (TEXT_BLOCK_PROOFS + "entry_" + TEXT_COMMITMENT),
     );
     const resultCommitment = decodeBlockMerkleCommitmentValue(
       fields.result_commitment,
-      "BlockProofs.result_commitment",
+      (TEXT_BLOCK_PROOFS + "result_" + TEXT_COMMITMENT),
     );
     if (entryCommitment.leaf_count !== resultCommitment.leaf_count) {
       rejectError("BlockProofs entry/result commitment leaf counts must match");
     }
     return {
       block_height: blockHeight,
-      block_hash: decodeHashValue(fields.block_hash, "BlockProofs.block_hash"),
+      block_hash: decodeHashValue(fields.block_hash, (TEXT_BLOCK_PROOFS + "block_hash")),
       executed_block_wire_hash: decodeHashValue(
         fields.executed_block_wire_hash,
-        "BlockProofs.executed_block_wire_hash",
+        (TEXT_BLOCK_PROOFS + "executed_block_wire_hash"),
       ),
-      entry_hash: decodeHashValue(fields.entry_hash, "BlockProofs.entry_hash"),
+      entry_hash: decodeHashValue(fields.entry_hash, (TEXT_BLOCK_PROOFS + "entry_hash")),
       entry_commitment: entryCommitment,
       entry_proof: decodeBlockReceiptProofValue(
         fields.entry_proof,
-        "BlockProofs.entry_proof",
+        (TEXT_BLOCK_PROOFS + "entry_proof"),
       ),
       result_commitment: resultCommitment,
       result_proof: decodeBlockReceiptProofValue(
         fields.result_proof,
-        "BlockProofs.result_proof",
+        (TEXT_BLOCK_PROOFS + "result_proof"),
       ),
       fastpq_transcripts: decodeFastpqTranscriptMap(
         fields.fastpq_transcripts,
-        "BlockProofs.fastpq_transcripts",
+        (TEXT_BLOCK_PROOFS + "fastpq_transcripts"),
       ),
     };
   });
@@ -1794,7 +1958,7 @@ export { verifyBlockMerkleProof, verifyBlockProofs };
  * @returns {Buffer}
  */
 export function noritoEncodeOpenVerifyEnvelope(envelope) {
-  const payload = encodeOpenVerifyEnvelopePayload(envelope, "OpenVerifyEnvelope");
+  const payload = encodeOpenVerifyEnvelopePayload(envelope, WIRE_TYPE_OPEN_VERIFY_ENVELOPE);
   return frameNoritoPayload(payload, OPEN_VERIFY_ENVELOPE_SCHEMA_HASH, 0);
 }
 
@@ -1818,12 +1982,12 @@ export function noritoDecodeOpenVerifyEnvelope(bytes) {
   }
   const frame = decodeNoritoFrame(
     buffer,
-    "OpenVerifyEnvelope",
+    WIRE_TYPE_OPEN_VERIFY_ENVELOPE,
     OPEN_VERIFY_ENVELOPE_SCHEMA_HASH,
   );
   return decodeOpenVerifyEnvelopePayload(
     frame.payload,
-    "OpenVerifyEnvelope",
+    WIRE_TYPE_OPEN_VERIFY_ENVELOPE,
     frame.flags,
   );
 }
@@ -1839,11 +2003,11 @@ export function noritoDecodePrivacyExact12FixtureBundleBase64V1(value) {
   const maximumBase64Length =
     Math.ceil(PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1 / 3) * 4;
   if (typeof value !== JS_TYPE_STRING || value.length > maximumBase64Length) {
-    rejectRange(`PrivacyExact12FixtureBundleV1 base64 exceeds the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
+    rejectRange(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2}base64${TEXT_EXCEEDS_THE}${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
   }
   const archive = decodeExactStandardBase64(
     value,
-    "PrivacyExact12FixtureBundleV1 base64",
+    (TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2 + "base64"),
   );
   return noritoDecodePrivacyExact12FixtureBundleV1(archive);
 }
@@ -1859,27 +2023,27 @@ export function noritoDecodePrivacyExact12FixtureBundleBase64V1(value) {
 export function noritoDecodePrivacyExact12FixtureBundleV1(bytes) {
   const view = toBuffer(bytes);
   if (view.length === 0) {
-    rejectType("PrivacyExact12FixtureBundleV1 archive must not be empty");
+    rejectType((TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2 + "archive" + TEXT_MUST_NOT_BE + "empty"));
   }
   if (view.length > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-    rejectRange(`PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`);
+    rejectRange(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2}archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`);
   }
   const archive = Buffer.from(view);
   const frame = validateNoritoFrame(archive, {
-    context: "PrivacyExact12FixtureBundleV1",
+    context: WIRE_TYPE_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1,
     expectedSchemaHash: PRIVACY_EXACT12_FIXTURE_BUNDLE_SCHEMA_HASH_V1,
     expectedPaddingLength: 0,
     requireNonEmptyPayload: true,
   });
   if (frame.flags !== COMPACT_LEN_FLAG) {
-    rejectError(`PrivacyExact12FixtureBundleV1 must use canonical layout flags 0x${COMPACT_LEN_FLAG.toString(16)}`);
+    rejectError(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2}must use${TEXT_CANONICAL}layout flags 0x${COMPACT_LEN_FLAG.toString(16)}`);
   }
   const bundle = withNoritoCompactLengths(() =>
     decodePrivacyExact12FixtureBundlePayloadV1(frame.payload),
   );
   const canonical = encodePrivacyExact12FixtureBundleCanonicalV1(bundle);
   if (!canonical.equals(archive)) {
-    rejectError("PrivacyExact12FixtureBundleV1 archive is not canonical or contains trailing data");
+    rejectError((TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2 + "archive is not" + TEXT_CANONICAL + "or contains trailing data"));
   }
   return externalizePrivacyExact12FixtureBundleV1(bundle);
 }
@@ -1926,28 +2090,28 @@ export function noritoDecodeConfidentialMemoEnvelopeV1(bytes) {
 }
 
 function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
-  const fields = decodeStructFields(payload, "PrivacyExact12FixtureBundleV1", [
+  const fields = decodeStructFields(payload, WIRE_TYPE_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1, [
     "version",
     "rows",
   ]);
   const version = decodeU32Value(
     fields.version,
-    "PrivacyExact12FixtureBundleV1.version",
+    (TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 + "version"),
   );
   if (version !== 1) {
-    rejectRange("PrivacyExact12FixtureBundleV1.version must be exactly 1");
+    rejectRange((TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 + "version" + TEXT_MUST_BE + "exactly 1"));
   }
   const reader = new BufferReader(
     fields.rows,
-    "PrivacyExact12FixtureBundleV1.rows",
+    (TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 + "rows"),
     COMPACT_LEN_FLAG,
   );
   const count = bigintToSafeNumber(
     reader.readU64LE("count"),
-    "PrivacyExact12FixtureBundleV1.rows.count",
+    (TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 + "rows.count"),
   );
   if (count !== PRIVACY_EXACT12_PROTOCOL_IDS_V1.length) {
-    rejectRange(`PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`);
+    rejectRange(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1}rows${TEXT_MUST_CONTAIN}exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`);
   }
   const rows = [];
   for (let index = 0; index < count; index += 1) {
@@ -1963,7 +2127,7 @@ function decodePrivacyExact12FixtureBundlePayloadV1(payload) {
 }
 
 function decodePrivacyExact12FixtureRowV1(payload, rowIndex) {
-  const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+  const context = `${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1}rows[${rowIndex}]`;
   const fields = decodeStructFields(
     payload,
     context,
@@ -1996,32 +2160,32 @@ function decodePrivacyExact12FixtureRowV1(payload, rowIndex) {
     ),
     submitProofInstructionNorito: decodePrivacyExact12NonEmptyByteVectorV1(
       fields.submit_proof_instruction_norito,
-      `${context}.submit_proof_instruction_norito`,
+      `${context}.${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO}`,
     ),
     transactionIntentProjectionNorito:
       decodePrivacyExact12NonEmptyByteVectorV1(
         fields.transaction_intent_projection_norito,
-        `${context}.transaction_intent_projection_norito`,
+        `${context}${TEXT_TRANSACTION_INTENT_PROJECTION_NORITO}`,
       ),
     transactionIntentDigest: decodeFixedBytesValue(
       fields.transaction_intent_digest,
       32,
-      `${context}.transaction_intent_digest`,
+      `${context}.${TEXT_TRANSACTION_INTENT}digest`,
     ),
     unsignedTransactionPayloadNorito:
       decodePrivacyExact12NonEmptyByteVectorV1(
         fields.unsigned_transaction_payload_norito,
-        `${context}.unsigned_transaction_payload_norito`,
+        `${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_2}`,
       ),
     signedTransactionVersionedNorito:
       decodePrivacyExact12NonEmptyByteVectorV1(
         fields.signed_transaction_versioned_norito,
-        `${context}.signed_transaction_versioned_norito`,
+        `${context}${TEXT_SIGNED_TRANSACTION}versioned_norito`,
       ),
     signedTransactionHash: decodeFixedBytesValue(
       fields.signed_transaction_hash,
       32,
-      `${context}.signed_transaction_hash`,
+      `${context}${TEXT_SIGNED_TRANSACTION}hash`,
     ),
   };
   validatePrivacyExact12FixtureRowBindingsV1(row, rowIndex, context);
@@ -2035,7 +2199,7 @@ function decodePrivacyExact12NonEmptyByteVectorV1(payload, context) {
     PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1,
   );
   if (bytes.length === 0) {
-    rejectType(`${context} must not be empty`);
+    rejectType(`${context}${TEXT_MUST_NOT_BE}empty`);
   }
   return bytes;
 }
@@ -2055,7 +2219,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     rejectType(`${context}.protocolId is unknown, duplicated, or out of order`);
   }
   if (row.submitProofWireId !== PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1) {
-    rejectType(`${context}.submitProofWireId must be exactly ${PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1}`);
+    rejectType(`${context}${TEXT_SUBMIT_PROOF_WIRE_ID_MUST_BE}exactly ${PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1}`);
   }
 
   const statementFrame = validatePrivacyExact12NestedFrameV1(
@@ -2069,7 +2233,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     `${context}.statementNorito.payload`,
   );
   if (statement.tag !== rowIndex) {
-    rejectType(`${context}.statementNorito carries a substituted protocol`);
+    rejectType(`${context}.statementNorito${TEXT_CARRIES_A_SUBSTITUTED}protocol`);
   }
 
   const envelopeFrame = validatePrivacyExact12NestedFrameV1(
@@ -2095,12 +2259,12 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     rejectType(`${context}.envelopeNorito carries an invalid final V1 wire marker`);
   }
   if (!envelopeFields.catalog_commitment.equals(PRIVACY_EXACT12_CATALOG_COMMITMENT_V1)) {
-    rejectType(`${context}.envelopeNorito carries a substituted Exact12 catalog commitment`);
+    rejectType(`${context}${TEXT_ENVELOPE_NORITO_CARRIES_A_SUBSTITUTED}Exact12 catalog ${TEXT_COMMITMENT}`);
   }
   for (const field of ["proof_system_id", "engine_id"]) {
     if (decodeU32Value(envelopeFields[field], `${context}.${field}`) !==
         PRIVACY_EXACT12_PROOF_ENGINE_TAGS_V1[rowIndex]) {
-      rejectType(`${context}.envelopeNorito carries a substituted ${field}`);
+      rejectType(`${context}${TEXT_ENVELOPE_NORITO_CARRIES_A_SUBSTITUTED}${field}`);
     }
   }
   if (
@@ -2109,7 +2273,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
       `${context}.envelopeNorito.protocol_id`,
     ) !== rowIndex
   ) {
-    rejectType(`${context}.envelopeNorito carries a substituted protocol`);
+    rejectType(`${context}${TEXT_ENVELOPE_NORITO_CARRIES_A_SUBSTITUTED}protocol`);
   }
   if (!envelopeFields.statement.equals(statementFrame.payload)) {
     rejectType(`${context}.envelopeNorito does not contain statementNorito`);
@@ -2119,19 +2283,19 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     `${context}.envelopeNorito.proof`,
   );
   if (proof.tag !== rowIndex) {
-    rejectType(`${context}.envelopeNorito proof carries a substituted protocol`);
+    rejectType(`${context}.envelopeNorito proof${TEXT_CARRIES_A_SUBSTITUTED}protocol`);
   }
 
   const instructionFrame = validatePrivacyExact12NestedFrameV1(
     row.submitProofInstructionNorito,
     PRIVACY_EXACT12_SUBMIT_PROOF_SCHEMA_HASH_V1,
     PRIVACY_EXACT12_ALIGNED_NESTED_FRAME_PADDING_V1,
-    `${context}.submitProofInstructionNorito`,
+    `${context}.${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_2}`,
   );
   const instructionFields = withNoritoCompactLengths(() =>
     decodeStructFields(
       instructionFrame.payload,
-      `${context}.submitProofInstructionNorito.payload`,
+      `${context}${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_PAYLOAD}`,
       ["envelope"],
     ),
   );
@@ -2139,7 +2303,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     instructionFrame.payload,
     instructionFields,
     ["envelope"],
-    `${context}.submitProofInstructionNorito.payload`,
+    `${context}${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_PAYLOAD}`,
   );
   if (!instructionFields.envelope.equals(envelopeFrame.payload)) {
     rejectType(`${context}.submitProofInstructionNorito does not contain envelopeNorito`);
@@ -2149,7 +2313,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     row.transactionIntentProjectionNorito,
     PRIVACY_EXACT12_TRANSACTION_PAYLOAD_SCHEMA_HASH_V1,
     PRIVACY_EXACT12_TRANSACTION_PAYLOAD_FRAME_PADDING_V1,
-    `${context}.transactionIntentProjectionNorito`,
+    `${context}.${TEXT_TRANSACTION_INTENT_PROJECTION_NORITO_2}`,
   );
   const projectionFields = decodePrivacyExact12TransactionPayloadV1(
     projectionFrame.payload,
@@ -2157,7 +2321,7 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
   );
   const unsignedFields = decodePrivacyExact12TransactionPayloadV1(
     row.unsignedTransactionPayloadNorito,
-    `${context}.unsignedTransactionPayloadNorito`,
+    `${context}.${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_3}`,
   );
   validatePrivacyExact12NetworkBindingsV1({
     statementTag: statement.tag,
@@ -2175,29 +2339,29 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     unsignedFields.admission_intent.length !== 4 ||
     unsignedFields.admission_intent.readUInt32LE(0) !== 0
   ) {
-    rejectType(`${context}.unsignedTransactionPayloadNorito.admission_intent must be TransactionAdmissionIntent::Ordinary`);
+    rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO}admission_intent${TEXT_MUST_BE}TransactionAdmissionIntent::Ordinary`);
   }
   const expectedCreationTime = 1_700_000_000_000n + BigInt(rowIndex);
   if (
     decodeU64Value(
       unsignedFields.creation_time_ms,
-      `${context}.unsignedTransactionPayloadNorito.creation_time_ms`,
+      `${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO}${TEXT_CREATION_TIME_MS}`,
     ) !== expectedCreationTime.toString()
   ) {
-    rejectType(`${context} carries a substituted transaction creation time`);
+    rejectType(`${context}${TEXT_CARRIES_A_SUBSTITUTED}transaction creation time`);
   }
   const nonce = decodeOptionValue(
     unsignedFields.nonce,
     decodeU32Value,
-    `${context}.unsignedTransactionPayloadNorito.nonce`,
+    `${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO}nonce`,
   );
   if (nonce !== rowIndex + 1) {
-    rejectType(`${context} carries a substituted transaction nonce`);
+    rejectType(`${context}${TEXT_CARRIES_A_SUBSTITUTED}transaction nonce`);
   }
   const attachments = decodeOptionValue(
     unsignedFields.attachments,
     (payload) => payload,
-    `${context}.unsignedTransactionPayloadNorito.attachments`,
+    `${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO}attachments`,
   );
   if (attachments !== null) {
     rejectType(`${context} must not carry transaction attachments`);
@@ -2207,14 +2371,14 @@ function validatePrivacyExact12FixtureRowBindingsCompactV1(
     row.submitProofInstructionNorito,
   );
   if (instructionOffset < 0) {
-    rejectType(`${context}.unsignedTransactionPayloadNorito does not contain the byte-complete instruction`);
+    rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_DOES_NOT_CONTAIN_THE}byte-complete instruction`);
   }
   if (
     row.unsignedTransactionPayloadNorito.indexOf(
       Buffer.from(PRIVACY_EXACT12_SUBMIT_PROOF_WIRE_ID_V1, UTF8_ENCODING),
     ) < 0
   ) {
-    rejectType(`${context}.unsignedTransactionPayloadNorito does not contain the exact submission wire id`);
+    rejectType(`${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_DOES_NOT_CONTAIN_THE}exact submission wire id`);
   }
 
   const expectedIntentDigest = Buffer.from(
@@ -2257,7 +2421,7 @@ function validatePrivacyExact12NestedFrameV1(
     requireNonEmptyPayload: true,
   });
   if (frame.flags !== COMPACT_LEN_FLAG) {
-    rejectError(`${context} must use canonical compact-length layout flags`);
+    rejectError(`${context} must use${TEXT_CANONICAL}compact-length layout flags`);
   }
   const canonical = frameNoritoPayload(
     frame.payload,
@@ -2266,7 +2430,7 @@ function validatePrivacyExact12NestedFrameV1(
     expectedPaddingLength,
   );
   if (!canonical.equals(bytes)) {
-    rejectError(`${context} is not a canonical uncompressed Norito frame`);
+    rejectError(`${context} is not a${TEXT_CANONICAL}uncompressed Norito frame`);
   }
   return frame;
 }
@@ -2282,7 +2446,7 @@ function decodePrivacyExact12TaggedPayloadV1(payload, context) {
     content,
   ]);
   if (!canonical.equals(payload)) {
-    rejectError(`${context} is not a canonical tagged payload`);
+    rejectError(`${context} is not a${TEXT_CANONICAL}tagged payload`);
   }
   return { tag, content };
 }
@@ -2321,13 +2485,13 @@ function assertPrivacyExact12CanonicalStructPayloadV1(
 function validatePrivacyExact12SignedTransactionV1(row, context) {
   const signed = row.signedTransactionVersionedNorito;
   if (signed[0] !== 1) {
-    rejectType(`${context}.signedTransactionVersionedNorito must use version 1`);
+    rejectType(`${context}${TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO}must use version 1`);
   }
   const payload = signed.subarray(1);
   const fields = withNoritoCompactLengths(() =>
     decodeStructFields(
       payload,
-      `${context}.signedTransactionVersionedNorito.payload`,
+      `${context}${TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO_2}payload`,
       ["signature", "payload", "multisig_signatures"],
     ),
   );
@@ -2335,38 +2499,38 @@ function validatePrivacyExact12SignedTransactionV1(row, context) {
     payload,
     fields,
     ["signature", "payload", "multisig_signatures"],
-    `${context}.signedTransactionVersionedNorito.payload`,
+    `${context}${TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO_2}payload`,
   );
   if (fields.signature.length === 0) {
-    rejectType(`${context}.signedTransactionVersionedNorito has no signature`);
+    rejectType(`${context}${TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO}has no signature`);
   }
   if (!fields.payload.equals(row.unsignedTransactionPayloadNorito)) {
-    rejectType(`${context}.signedTransactionVersionedNorito does not contain the unsigned payload`);
+    rejectType(`${context}${TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO}does not contain the unsigned payload`);
   }
   const multisig = decodeOptionValue(
     fields.multisig_signatures,
     (entry) => entry,
-    `${context}.signedTransactionVersionedNorito.multisig_signatures`,
+    `${context}${TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO_2}multisig_signatures`,
   );
   if (multisig !== null) {
-    rejectType(`${context}.signedTransactionVersionedNorito must not carry multisig signatures`);
+    rejectType(`${context}${TEXT_SIGNED_TRANSACTION_VERSIONED_NORITO}must not carry multisig signatures`);
   }
 }
 
 function normalizePrivacyExact12FixtureBundleInputV1(value) {
-  assertExactObjectKeys(value, ["version", "rows"], "PrivacyExact12FixtureBundleV1");
+  assertExactObjectKeys(value, ["version", "rows"], WIRE_TYPE_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1);
   if (value.version !== 1) {
-    rejectType("PrivacyExact12FixtureBundleV1.version must be exactly 1");
+    rejectType((TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 + "version" + TEXT_MUST_BE + "exactly 1"));
   }
   if (
     !Array.isArray(value.rows) ||
     value.rows.length !== PRIVACY_EXACT12_PROTOCOL_IDS_V1.length
   ) {
-    rejectType(`PrivacyExact12FixtureBundleV1.rows must contain exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`);
+    rejectType(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1}rows${TEXT_MUST_CONTAIN}exactly ${PRIVACY_EXACT12_PROTOCOL_IDS_V1.length} rows`);
   }
   preflightPrivacyExact12FixtureBundleInputV1(value.rows);
   const rows = value.rows.map((row, rowIndex) => {
-    const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+    const context = `${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1}rows[${rowIndex}]`;
     const normalized = {
       protocolId: row.protocolId,
       statementNorito: normalizePrivacyExact12InputBytesV1(
@@ -2380,11 +2544,11 @@ function normalizePrivacyExact12FixtureBundleInputV1(value) {
       submitProofWireId: row.submitProofWireId,
       submitProofInstructionNorito: normalizePrivacyExact12InputBytesV1(
         row.submitProofInstructionNorito,
-        `${context}.submitProofInstructionNorito`,
+        `${context}.${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO_2}`,
       ),
       transactionIntentProjectionNorito: normalizePrivacyExact12InputBytesV1(
         row.transactionIntentProjectionNorito,
-        `${context}.transactionIntentProjectionNorito`,
+        `${context}.${TEXT_TRANSACTION_INTENT_PROJECTION_NORITO_2}`,
       ),
       transactionIntentDigest: normalizePrivacyExact12InputBytesV1(
         row.transactionIntentDigest,
@@ -2393,7 +2557,7 @@ function normalizePrivacyExact12FixtureBundleInputV1(value) {
       ),
       unsignedTransactionPayloadNorito: normalizePrivacyExact12InputBytesV1(
         row.unsignedTransactionPayloadNorito,
-        `${context}.unsignedTransactionPayloadNorito`,
+        `${context}.${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_3}`,
       ),
       signedTransactionVersionedNorito: normalizePrivacyExact12InputBytesV1(
         row.signedTransactionVersionedNorito,
@@ -2406,7 +2570,7 @@ function normalizePrivacyExact12FixtureBundleInputV1(value) {
       ),
     };
     if (typeof normalized.submitProofWireId !== JS_TYPE_STRING) {
-      rejectType(`${context}.submitProofWireId must be a string`);
+      rejectType(`${context}${TEXT_SUBMIT_PROOF_WIRE_ID_MUST_BE}a string`);
     }
     validatePrivacyExact12FixtureRowBindingsV1(normalized, rowIndex, context);
     return normalized;
@@ -2418,7 +2582,7 @@ function preflightPrivacyExact12FixtureBundleInputV1(rows) {
   let declaredBytes = 0;
   for (let rowIndex = 0; rowIndex < rows.length; rowIndex += 1) {
     const row = rows[rowIndex];
-    const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+    const context = `${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1}rows[${rowIndex}]`;
     assertExactObjectKeys(row, PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1, context);
     for (const field of PRIVACY_EXACT12_PUBLIC_ROW_FIELD_NAMES_V1) {
       if (field === "protocolId" || field === "submitProofWireId") {
@@ -2426,19 +2590,19 @@ function preflightPrivacyExact12FixtureBundleInputV1(rows) {
       }
       const length = binaryByteLength(row[field]);
       if (length === null) {
-        rejectType(`${context}.${field} must be an exact byte sequence`);
+        rejectType(`${context}.${field}${TEXT_MUST_BE}an exact byte sequence`);
       }
       declaredBytes += length;
       if (declaredBytes > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-        rejectRange(`PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
+        rejectRange(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2}fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
       }
     }
     if (typeof row.submitProofWireId !== JS_TYPE_STRING) {
-      rejectType(`${context}.submitProofWireId must be a string`);
+      rejectType(`${context}${TEXT_SUBMIT_PROOF_WIRE_ID_MUST_BE}a string`);
     }
     declaredBytes += Buffer.byteLength(row.submitProofWireId, UTF8_ENCODING);
     if (declaredBytes > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-      rejectRange(`PrivacyExact12FixtureBundleV1 fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
+      rejectRange(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2}fields exceed the ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1}-byte archive limit`);
     }
   }
 }
@@ -2457,18 +2621,18 @@ function normalizePrivacyExact12InputBytesV1(value, context, exactLength = null)
     for (let index = 0; index < value.length; index += 1) {
       const byte = value[index];
       if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
-        rejectType(`${context}[${index}] must be an unsigned byte`);
+        rejectType(`${context}[${index}]${TEXT_MUST_BE}an unsigned byte`);
       }
       bytes[index] = byte;
     }
   } else {
-    rejectType(`${context} must be an exact byte sequence`);
+    rejectType(`${context}${TEXT_MUST_BE}an exact byte sequence`);
   }
   if (exactLength === null && bytes.length === 0) {
-    rejectType(`${context} must not be empty`);
+    rejectType(`${context}${TEXT_MUST_NOT_BE}empty`);
   }
   if (exactLength !== null && bytes.length !== exactLength) {
-    rejectType(`${context} must contain exactly ${exactLength} bytes`);
+    rejectType(`${context}${TEXT_MUST_CONTAIN_EXACTLY}${exactLength} bytes`);
   }
   return bytes;
 }
@@ -2476,7 +2640,7 @@ function normalizePrivacyExact12InputBytesV1(value, context, exactLength = null)
 function encodePrivacyExact12FixtureBundleCanonicalV1(bundle) {
   const payload = withNoritoCompactLengths(() =>
     encodeStructValue([
-      [encodeU32Value(bundle.version, "PrivacyExact12FixtureBundleV1.version")],
+      [encodeU32Value(bundle.version, (TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1 + "version"))],
       [
         encodeNoritoVec(bundle.rows, (row, rowIndex) =>
           encodePrivacyExact12FixtureRowV1(row, rowIndex),
@@ -2491,13 +2655,13 @@ function encodePrivacyExact12FixtureBundleCanonicalV1(bundle) {
     0,
   );
   if (archive.length > PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1) {
-    rejectRange(`PrivacyExact12FixtureBundleV1 archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`);
+    rejectRange(`${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1_2}archive exceeds ${PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1} bytes`);
   }
   return archive;
 }
 
 function encodePrivacyExact12FixtureRowV1(row, rowIndex) {
-  const context = `PrivacyExact12FixtureBundleV1.rows[${rowIndex}]`;
+  const context = `${TEXT_PRIVACY_EXACT12_FIXTURE_BUNDLE_V1}rows[${rowIndex}]`;
   return encodeStructValue([
     [encodeU32Value(rowIndex, `${context}.protocol_id`)],
     [encodeByteVecValue(row.statementNorito, `${context}.statement_norito`)],
@@ -2506,39 +2670,39 @@ function encodePrivacyExact12FixtureRowV1(row, rowIndex) {
     [
       encodeByteVecValue(
         row.submitProofInstructionNorito,
-        `${context}.submit_proof_instruction_norito`,
+        `${context}.${TEXT_SUBMIT_PROOF_INSTRUCTION_NORITO}`,
       ),
     ],
     [
       encodeByteVecValue(
         row.transactionIntentProjectionNorito,
-        `${context}.transaction_intent_projection_norito`,
+        `${context}${TEXT_TRANSACTION_INTENT_PROJECTION_NORITO}`,
       ),
     ],
     [
       encodeFixedBytesValue(
         row.transactionIntentDigest,
         32,
-        `${context}.transaction_intent_digest`,
+        `${context}.${TEXT_TRANSACTION_INTENT}digest`,
       ),
     ],
     [
       encodeByteVecValue(
         row.unsignedTransactionPayloadNorito,
-        `${context}.unsigned_transaction_payload_norito`,
+        `${context}${TEXT_UNSIGNED_TRANSACTION_PAYLOAD_NORITO_2}`,
       ),
     ],
     [
       encodeByteVecValue(
         row.signedTransactionVersionedNorito,
-        `${context}.signed_transaction_versioned_norito`,
+        `${context}${TEXT_SIGNED_TRANSACTION}versioned_norito`,
       ),
     ],
     [
       encodeFixedBytesValue(
         row.signedTransactionHash,
         32,
-        `${context}.signed_transaction_hash`,
+        `${context}${TEXT_SIGNED_TRANSACTION}hash`,
       ),
     ],
   ]);
@@ -2588,7 +2752,7 @@ function toBuffer(value) {
   if (value instanceof ArrayBuffer) {
     return Buffer.from(value);
   }
-  rejectType("bytes must be a Buffer, ArrayBuffer, or typed array");
+  rejectType(("bytes" + TEXT_MUST_BE + "a Buffer, ArrayBuffer, or typed array"));
 }
 
 function encodePureJsInstruction(instruction) {
@@ -2600,7 +2764,7 @@ function encodePureJsInstruction(instruction) {
 function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
   const archive = toBuffer(value);
   if (archive.length === 0 || archive.length > KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES) {
-    rejectRange(`${context} must be a non-empty canonical KAGEMUSHA top-up request no larger than ${KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES} bytes`);
+    rejectRange(`${context}${TEXT_MUST_BE_A}non-empty${TEXT_CANONICAL}KAGEMUSHA top-up request no larger than ${KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES} bytes`);
   }
   const decoded = validateNoritoFrame(archive, {
     context,
@@ -2609,7 +2773,7 @@ function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
     requireNonEmptyPayload: true,
   });
   if (decoded.flags !== COMPACT_LEN_FLAG) {
-    rejectError(`${context} must use the canonical compact-length Norito layout`);
+    rejectError(`${context} must use the${TEXT_CANONICAL}compact-length Norito layout`);
   }
   const canonical = frameNoritoPayload(
     decoded.payload,
@@ -2618,13 +2782,13 @@ function decodeCanonicalKagemushaTopUpRequestArchive(value, context) {
     KAGEMUSHA_TOP_UP_REQUEST_HEADER_PADDING,
   );
   if (!archive.equals(canonical)) {
-    rejectError(`${context} is not canonical Norito`);
+    rejectError(`${context} is not${TEXT_CANONICAL}Norito`);
   }
   return decoded.payload;
 }
 
 function encodeTopUpKagemushaInstruction(value) {
-  assertOnlyObjectKeys(value, ["request"], "TopUpKagemushaV1");
+  assertOnlyObjectKeys(value, ["request"], WIRE_TYPE_TOP_UP_KAGEMUSHA_V1);
   const requestPayload = decodeCanonicalKagemushaTopUpRequestArchive(
     value.request,
     "TopUpKagemushaV1.request",
@@ -2637,9 +2801,9 @@ function encodeTopUpKagemushaInstruction(value) {
 
 function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
   if (innerFlags !== COMPACT_LEN_FLAG) {
-    rejectError("TopUpKagemushaV1 must use the canonical compact-length Norito layout");
+    rejectError(("TopUpKagemushaV1 must use the" + TEXT_CANONICAL + "compact-length Norito layout"));
   }
-  const reader = new BufferReader(payload, "TopUpKagemushaV1", innerFlags);
+  const reader = new BufferReader(payload, WIRE_TYPE_TOP_UP_KAGEMUSHA_V1, innerFlags);
   const requestPayload = readNoritoField(reader, "request");
   reader.assertEof();
   const request = frameNoritoPayload(
@@ -2658,23 +2822,23 @@ function decodeTopUpKagemushaInstructionPayload(payload, innerFlags) {
 function encodePureJsInstructionPayload(instruction) {
   const nftNames = NFT_MARKET_INSTRUCTION_NAMES_V1.filter(name => Object.prototype.hasOwnProperty.call(instruction, name));
   if (nftNames.length) {
-    const name = nftNames[0]; assertExactObjectKeys(instruction, [name], "instruction");
+    const name = nftNames[0]; assertExactObjectKeys(instruction, [name], FIELD_INSTRUCTION);
     return encodeInstructionEnvelope(NFT_MARKET_INSTRUCTION_WIRE_IDS_V1[NFT_MARKET_INSTRUCTION_NAMES_V1.indexOf(name)], nftMarketCodecsV1.encode(name, instruction[name]));
   }
 
   const gameNames = GAME_INSTRUCTION_NAMES_V1.filter((name) => Object.prototype.hasOwnProperty.call(instruction, name));
   if (gameNames.length > 0) {
-    assertExactObjectKeys(instruction, [gameNames[0]], "instruction");
+    assertExactObjectKeys(instruction, [gameNames[0]], FIELD_INSTRUCTION);
     const name = gameNames[0];
-    return encodeInstructionEnvelope(GAME_INSTRUCTION_WIRE_IDS_V1[GAME_INSTRUCTION_NAMES_V1.indexOf(name)], gameCodecsV1.encode(name, instruction[name]));
+    return encodeInstructionEnvelope(GAME_INSTRUCTION_WIRE_IDS_V1[GAME_INSTRUCTION_NAMES_V1.indexOf(name)], instructionGameCodecsV1.encode(name, instruction[name]));
   }
   if (!isPlainObject(instruction)) {
-    rejectType("instruction must be a JSON object");
+    rejectType(("instruction" + TEXT_MUST_BE + "a JSON object"));
   }
-  if (Object.prototype.hasOwnProperty.call(instruction, "TopUpKagemushaV1")) {
-    assertOnlyObjectKeys(instruction, ["TopUpKagemushaV1"], "instruction");
+  if (Object.prototype.hasOwnProperty.call(instruction, WIRE_TYPE_TOP_UP_KAGEMUSHA_V1)) {
+    assertOnlyObjectKeys(instruction, [WIRE_TYPE_TOP_UP_KAGEMUSHA_V1], FIELD_INSTRUCTION);
     if (!isPlainObject(instruction.TopUpKagemushaV1)) {
-      rejectType("TopUpKagemushaV1 must be an object");
+      rejectType(("TopUpKagemushaV1" + TEXT_MUST_BE_AN_OBJECT_2));
     }
     return encodeTopUpKagemushaInstruction(instruction.TopUpKagemushaV1);
   }
@@ -2686,7 +2850,7 @@ function encodePureJsInstructionPayload(instruction) {
     if (isPlainObject(instruction.Mint.TriggerRepetitions)) {
       const body = encodeTriggerRepetitionsBody(
         instruction.Mint.TriggerRepetitions,
-        "Mint.TriggerRepetitions",
+        CONTEXT_MINT_TRIGGER_REPETITIONS,
       );
       return encodeEnumInstruction("iroha.mint", 1, body);
     }
@@ -2699,22 +2863,22 @@ function encodePureJsInstructionPayload(instruction) {
     if (isPlainObject(instruction.Burn.TriggerRepetitions)) {
       const body = encodeTriggerRepetitionsBody(
         instruction.Burn.TriggerRepetitions,
-        "Burn.TriggerRepetitions",
+        CONTEXT_BURN_TRIGGER_REPETITIONS,
       );
       return encodeEnumInstruction("iroha.burn", 1, body);
     }
   }
   if (isPlainObject(instruction.Transfer) && isPlainObject(instruction.Transfer.Asset)) {
     const body = encodeTransferAssetBody(instruction.Transfer.Asset);
-    return encodeEnumInstruction("iroha.transfer", 2, body);
+    return encodeEnumInstruction(WIRE_ID_IROHA_TRANSFER, 2, body);
   }
   if (isPlainObject(instruction.Transfer) && isPlainObject(instruction.Transfer.Domain)) {
     return encodeEnumInstruction(
-      "iroha.transfer",
+      WIRE_ID_IROHA_TRANSFER,
       0,
       encodeTransferObjectBody(
         instruction.Transfer.Domain,
-        "Transfer.Domain",
+        CONTEXT_TRANSFER_DOMAIN,
         encodeAccountIdValue,
         encodeDomainIdValue,
         encodeAccountIdValue,
@@ -2726,11 +2890,11 @@ function encodePureJsInstructionPayload(instruction) {
     isPlainObject(instruction.Transfer.AssetDefinition)
   ) {
     return encodeEnumInstruction(
-      "iroha.transfer",
+      WIRE_ID_IROHA_TRANSFER,
       1,
       encodeTransferObjectBody(
         instruction.Transfer.AssetDefinition,
-        "Transfer.AssetDefinition",
+        CONTEXT_TRANSFER_ASSET_DEFINITION,
         encodeAccountIdValue,
         encodeAssetDefinitionIdValue,
         encodeAccountIdValue,
@@ -2739,7 +2903,7 @@ function encodePureJsInstructionPayload(instruction) {
   }
   if (isPlainObject(instruction.Transfer) && isPlainObject(instruction.Transfer.Nft)) {
     return encodeEnumInstruction(
-      "iroha.transfer",
+      WIRE_ID_IROHA_TRANSFER,
       3,
       encodeTransferObjectBody(
         instruction.Transfer.Nft,
@@ -2752,16 +2916,16 @@ function encodePureJsInstructionPayload(instruction) {
   }
   if (isPlainObject(instruction.Register) && isPlainObject(instruction.Register.Domain)) {
     return encodeEnumInstruction(
-      "iroha.register",
+      WIRE_ID_IROHA_REGISTER,
       1,
-      encodeNoritoField(encodeNewDomainValue(instruction.Register.Domain, "Register.Domain")),
+      encodeNoritoField(encodeNewDomainValue(instruction.Register.Domain, CONTEXT_REGISTER_DOMAIN)),
     );
   }
   if (isPlainObject(instruction.Register) && isPlainObject(instruction.Register.Account)) {
     return encodeEnumInstruction(
-      "iroha.register",
+      WIRE_ID_IROHA_REGISTER,
       2,
-      encodeNoritoField(encodeNewAccountValue(instruction.Register.Account, "Register.Account")),
+      encodeNoritoField(encodeNewAccountValue(instruction.Register.Account, CONTEXT_REGISTER_ACCOUNT)),
     );
   }
   if (
@@ -2769,12 +2933,12 @@ function encodePureJsInstructionPayload(instruction) {
     isPlainObject(instruction.Register.AssetDefinition)
   ) {
     return encodeEnumInstruction(
-      "iroha.register",
+      WIRE_ID_IROHA_REGISTER,
       3,
       encodeNoritoField(
         encodeNewAssetDefinitionValue(
           instruction.Register.AssetDefinition,
-          "Register.AssetDefinition",
+          CONTEXT_REGISTER_ASSET_DEFINITION,
         ),
       ),
     );
@@ -2783,8 +2947,8 @@ function encodePureJsInstructionPayload(instruction) {
     const payload = encodeExecuteTriggerPayload(instruction.ExecuteTrigger);
     return encodeInstructionEnvelope("iroha.execute_trigger", payload);
   }
-  if (Object.prototype.hasOwnProperty.call(instruction, "CancelAssetLock")) {
-    assertOnlyObjectKeys(instruction, ["CancelAssetLock"], "instruction");
+  if (Object.prototype.hasOwnProperty.call(instruction, WIRE_TYPE_CANCEL_ASSET_LOCK)) {
+    assertOnlyObjectKeys(instruction, [WIRE_TYPE_CANCEL_ASSET_LOCK], FIELD_INSTRUCTION);
     return encodeCancelAssetLockInstruction(instruction.CancelAssetLock);
   }
   if (
@@ -2796,7 +2960,7 @@ function encodePureJsInstructionPayload(instruction) {
     assertOnlyObjectKeys(
       instruction,
       [SET_ASSET_TRANSFER_AVAILABILITY_VARIANT],
-      "instruction",
+      FIELD_INSTRUCTION,
     );
     return encodeSetAssetTransferAvailabilityInstruction(
       instruction.SetAssetTransferAvailability,
@@ -2811,7 +2975,7 @@ function encodePureJsInstructionPayload(instruction) {
     assertOnlyObjectKeys(
       instruction,
       [SET_ASSET_TRANSFER_BLACKLIST_VARIANT],
-      "instruction",
+      FIELD_INSTRUCTION,
     );
     return encodeSetAssetTransferBlacklistInstruction(
       instruction.SetAssetTransferBlacklist,
@@ -2826,7 +2990,7 @@ function encodePureJsInstructionPayload(instruction) {
     assertOnlyObjectKeys(
       instruction,
       [SET_ASSET_TRANSFER_CONTROL_VARIANT],
-      "instruction",
+      FIELD_INSTRUCTION,
     );
     return encodeSetAssetTransferControlInstruction(
       instruction.SetAssetTransferControl,
@@ -2844,37 +3008,37 @@ function encodePureJsInstructionPayload(instruction) {
   }
   if (isPlainObject(instruction.Custom)) {
     return encodeInstructionEnvelope(
-      "iroha.custom",
+      WIRE_ID_IROHA_CUSTOM,
       encodeCustomInstructionPayload(instruction.Custom),
     );
   }
   if (isPlainObject(instruction.Multisig)) {
     return encodeInstructionEnvelope(
-      "iroha.custom",
+      WIRE_ID_IROHA_CUSTOM,
       encodeCustomInstructionPayload({ payload: instruction.Multisig }),
     );
   }
   if (isPlainObject(instruction.MultisigRegister)) {
     return encodeInstructionEnvelope(
-      "iroha.custom",
+      WIRE_ID_IROHA_CUSTOM,
       encodeCustomInstructionPayload({ payload: { Register: instruction.MultisigRegister } }),
     );
   }
   if (isPlainObject(instruction.MultisigPropose)) {
     return encodeInstructionEnvelope(
-      "iroha.custom",
+      WIRE_ID_IROHA_CUSTOM,
       encodeCustomInstructionPayload({ payload: { Propose: instruction.MultisigPropose } }),
     );
   }
   if (isPlainObject(instruction.MultisigApprove)) {
     return encodeInstructionEnvelope(
-      "iroha.custom",
+      WIRE_ID_IROHA_CUSTOM,
       encodeCustomInstructionPayload({ payload: { Approve: instruction.MultisigApprove } }),
     );
   }
   if (isPlainObject(instruction.MultisigCancel)) {
     return encodeInstructionEnvelope(
-      "iroha.custom",
+      WIRE_ID_IROHA_CUSTOM,
       encodeCustomInstructionPayload({ payload: { Cancel: instruction.MultisigCancel } }),
     );
   }
@@ -2962,18 +3126,18 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
   const gameIndex = GAME_INSTRUCTION_WIRE_IDS_V1.indexOf(wireId);
   if (gameIndex >= 0) {
     const name = GAME_INSTRUCTION_NAMES_V1[gameIndex];
-    return { [name]: gameCodecsV1.decode(name, payload) };
+    return { [name]: instructionGameCodecsV1.decode(name, payload) };
   }
   switch (wireId) {
     case "iroha.mint":
       return { Mint: decodeMintPayload(payload) };
     case "iroha.burn":
       return { Burn: decodeBurnPayload(payload) };
-    case "iroha.register":
+    case WIRE_ID_IROHA_REGISTER:
       return { Register: decodeRegisterPayload(payload) };
-    case "iroha.transfer":
+    case WIRE_ID_IROHA_TRANSFER:
       return { Transfer: decodeTransferPayload(payload) };
-    case "iroha.custom":
+    case WIRE_ID_IROHA_CUSTOM:
       return { Custom: decodeCustomInstructionPayload(payload) };
     case "iroha.execute_trigger":
       return { ExecuteTrigger: decodeExecuteTriggerPayload(payload) };
@@ -3041,13 +3205,13 @@ function decodePureJsInstructionPayload(wireId, payload, innerFlags) {
       return decodeVerifyingKeyInstructionPayload(wireId, payload);
     default:
       throw new PureJsUnsupportedInstructionError(
-        `Internal Norito decoder does not support ${wireId}. Run \`npm run build:native\` for full instruction coverage.`,
+        `${TEXT_INTERNAL_NORITO_DECODER_DOES_NOT_SUPPORT}${wireId}. Run \`npm run build:native\` for full instruction coverage.`,
       );
   }
 }
 
 function decodeInstructionEnvelope(bytes) {
-  const outer = decodeNoritoFrame(bytes, "instruction", INSTRUCTION_BOX_SCHEMA_HASH);
+  const outer = decodeNoritoFrame(bytes, FIELD_INSTRUCTION, INSTRUCTION_BOX_SCHEMA_HASH);
   const outerReader = new BufferReader(outer.payload, "instruction.outer", outer.flags);
   const wireId = decodeStringValue(
     readNoritoField(outerReader, "wire"),
@@ -3075,7 +3239,7 @@ function encodeInstructionBoxPayload(
   wireId,
   innerPayload,
   outerFlags,
-  context = "instruction",
+  context = FIELD_INSTRUCTION,
   innerFlags = noritoLengthFlags & COMPACT_LEN_FLAG,
   decodedInnerFrame = null,
 ) {
@@ -3091,7 +3255,7 @@ function encodeInstructionBoxPayload(
   } else if (decodedInnerFrame !== null) {
     innerFrame = Buffer.from(decodedInnerFrame);
   } else {
-    rejectError(`${context} uses unsupported instruction wire id ${wireId}; native embedding requires a schema hash`);
+    rejectError(`${context}${TEXT_USES_UNSUPPORTED}${TEXT_INSTRUCTION}wire id ${wireId}; native embedding requires a schema hash`);
   }
   const innerFieldPayload = withNoritoU64Lengths(() => encodeNoritoField(innerFrame));
   return withNoritoLengthFlags(outerFlags, () =>
@@ -3108,7 +3272,7 @@ function encodeInstructionEnvelope(wireId, innerPayload) {
     wireId,
     innerPayload,
     flags,
-    "instruction",
+    FIELD_INSTRUCTION,
     flags,
   );
   return frameNoritoPayload(outerPayload, INSTRUCTION_BOX_SCHEMA_HASH, flags);
@@ -3129,7 +3293,7 @@ function recordSccpPayloadBytes(input) {
     input.payload_bytes_hex ??
     input.payloadBytesHex;
   if (selected === undefined || selected === null) {
-    rejectType("RecordSccpMessage.payload_bytes is required");
+    rejectType((TEXT_RECORD_SCCP_MESSAGE_PAYLOAD + "bytes is required"));
   }
   return Buffer.from(normalizeBytes(selected));
 }
@@ -3151,7 +3315,7 @@ function encodeRecordSccpMessageInstruction(input) {
     RECORD_SCCP_MESSAGE_WIRE_ID,
     payload,
     COMPACT_LEN_FLAG,
-    "RecordSccpMessage",
+    WIRE_TYPE_RECORD_SCCP_MESSAGE,
     COMPACT_LEN_FLAG,
   );
   return frameNoritoPayload(
@@ -3162,19 +3326,19 @@ function encodeRecordSccpMessageInstruction(input) {
 }
 
 function decodeRecordSccpMessagePayload(payload, innerFlags) {
-  const reader = new BufferReader(payload, "RecordSccpMessage", innerFlags);
+  const reader = new BufferReader(payload, WIRE_TYPE_RECORD_SCCP_MESSAGE, innerFlags);
   const field = readNoritoField(reader, "payload_bytes");
   reader.assertEof();
   if (field.length < 8) {
-    rejectError("RecordSccpMessage.payload_bytes is too short");
+    rejectError((TEXT_RECORD_SCCP_MESSAGE_PAYLOAD + "bytes is too short"));
   }
   const count = bigintToSafeNumber(
     field.readBigUInt64LE(0),
-    "RecordSccpMessage.payload_bytes.length",
+    (TEXT_RECORD_SCCP_MESSAGE_PAYLOAD + "bytes.length"),
   );
   const payloadBytes = field.subarray(8);
   if (payloadBytes.length !== count) {
-    rejectError("RecordSccpMessage.payload_bytes length mismatch");
+    rejectError((TEXT_RECORD_SCCP_MESSAGE_PAYLOAD + "bytes length mismatch"));
   }
   return { payload_bytes: Array.from(payloadBytes) };
 }
@@ -3185,11 +3349,11 @@ function assertWellFormedUtf16(value, context) {
     if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
       const next = value.charCodeAt(index + 1);
       if (!(next >= 0xdc00 && next <= 0xdfff)) {
-        rejectType(`${context} must not contain unpaired UTF-16 surrogates`);
+        rejectType(`${context}${TEXT_MUST_NOT_CONTAIN}unpaired UTF-16 surrogates`);
       }
       index += 1;
     } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
-      rejectType(`${context} must not contain unpaired UTF-16 surrogates`);
+      rejectType(`${context}${TEXT_MUST_NOT_CONTAIN}unpaired UTF-16 surrogates`);
     }
   }
 }
@@ -3203,47 +3367,47 @@ function normalizeStrictCancelAssetLockV1(value) {
     prototype !== Object.prototype &&
     prototype !== null
   ) {
-    rejectType("CancelAssetLockV1 must be a plain object");
+    rejectType((TEXT_CANCEL_ASSET_LOCK_V1_2 + "must be a plain object"));
   }
   const keys = Reflect.ownKeys(value);
   if (
     keys.length !== 2 ||
     !keys.includes("escrow_id") ||
-    !keys.includes("expected_remaining_amount")
+    !keys.includes(WIRE_FIELD_EXPECTED_REMAINING_AMOUNT)
   ) {
-    rejectType("CancelAssetLockV1 must contain exactly escrow_id and expected_remaining_amount");
+    rejectType((TEXT_CANCEL_ASSET_LOCK_V1_2 + "must contain exactly escrow_id and " + TEXT_EXPECTED_REMAINING_AMOUNT));
   }
 
   const { escrow_id: escrowId, expected_remaining_amount: expectedRemainingAmount } =
     value;
   if (typeof escrowId !== JS_TYPE_STRING) {
-    rejectType("CancelAssetLockV1.escrow_id must be a string");
+    rejectType((TEXT_CANCEL_ASSET_LOCK_V1 + "escrow_id" + TEXT_MUST_BE + "a string"));
   }
-  assertWellFormedUtf16(escrowId, "CancelAssetLockV1.escrow_id");
+  assertWellFormedUtf16(escrowId, (TEXT_CANCEL_ASSET_LOCK_V1 + "escrow_id"));
   const hashMatch = CANONICAL_HASH_LITERAL_RE.exec(escrowId);
   if (hashMatch === null) {
-    rejectType("CancelAssetLockV1.escrow_id must be one canonical uppercase checksummed hash literal");
+    rejectType((TEXT_CANCEL_ASSET_LOCK_V1 + "escrow_id must be one" + TEXT_CANONICAL + "uppercase checksummed hash literal"));
   }
   const [, hashBody, checksum] = hashMatch;
   const expectedChecksum = computeHashLiteralCrc("hash", hashBody);
   if (checksum !== expectedChecksum) {
-    rejectType(`CancelAssetLockV1.escrow_id has invalid checksum; expected ${expectedChecksum}`);
+    rejectType(`${TEXT_CANCEL_ASSET_LOCK_V1}escrow_id has invalid checksum; expected ${expectedChecksum}`);
   }
   const hashBytes = Buffer.from(hashBody, HEX_ENCODING);
   if ((hashBytes[hashBytes.length - 1] & 1) === 0) {
-    rejectType("CancelAssetLockV1.escrow_id must use a native hash with its marker bit set");
+    rejectType((TEXT_CANCEL_ASSET_LOCK_V1 + "escrow_id" + TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET_2));
   }
 
   if (typeof expectedRemainingAmount !== JS_TYPE_STRING) {
-    rejectType("CancelAssetLockV1.expected_remaining_amount must be a canonical quantity string");
+    rejectType((TEXT_CANCEL_ASSET_LOCK_V1 + "expected_remaining_amount must be a" + TEXT_CANONICAL + "quantity string"));
   }
   assertWellFormedUtf16(
     expectedRemainingAmount,
-    "CancelAssetLockV1.expected_remaining_amount",
+    (TEXT_CANCEL_ASSET_LOCK_V1 + TEXT_EXPECTED_REMAINING_AMOUNT),
   );
   const quantity = NumericV1.decodeQuantityJson(expectedRemainingAmount);
   if (quantity.mantissa <= 0n) {
-    rejectRange("CancelAssetLockV1.expected_remaining_amount must be greater than zero");
+    rejectRange((TEXT_CANCEL_ASSET_LOCK_V1 + "expected_remaining_amount" + TEXT_MUST_BE_GREATER_THAN_ZERO));
   }
 
   return {
@@ -3254,16 +3418,16 @@ function normalizeStrictCancelAssetLockV1(value) {
 
 function encodeCancelAssetLockPayload(value) {
   if (!isPlainObject(value)) {
-    rejectType("CancelAssetLock must be an object");
+    rejectType(("CancelAssetLock" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   assertOnlyObjectKeys(
     value,
-    ["escrow_id", "expected_remaining_amount"],
-    "CancelAssetLock",
+    ["escrow_id", WIRE_FIELD_EXPECTED_REMAINING_AMOUNT],
+    WIRE_TYPE_CANCEL_ASSET_LOCK,
   );
-  for (const field of ["escrow_id", "expected_remaining_amount"]) {
+  for (const field of ["escrow_id", WIRE_FIELD_EXPECTED_REMAINING_AMOUNT]) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      rejectType(`CancelAssetLock.${field} is required`);
+      rejectType(`${TEXT_CANCEL_ASSET_LOCK}${field}${TEXT_IS_REQUIRED}`);
     }
   }
   const expected = parseNumericLiteral(
@@ -3277,7 +3441,7 @@ function encodeCancelAssetLockPayload(value) {
     [
       encodeEscrowIdValue(
         value.escrow_id,
-        "CancelAssetLock.escrow_id",
+        (TEXT_CANCEL_ASSET_LOCK + "escrow_id"),
       ),
     ],
     [
@@ -3298,9 +3462,9 @@ function encodeCancelAssetLockInstruction(value) {
 }
 
 function decodeCancelAssetLockInstructionPayload(payload) {
-  const fields = decodeStructFields(payload, "CancelAssetLock", [
+  const fields = decodeStructFields(payload, WIRE_TYPE_CANCEL_ASSET_LOCK, [
     "escrow_id",
-    "expected_remaining_amount",
+    WIRE_FIELD_EXPECTED_REMAINING_AMOUNT,
   ]);
   const expectedRemainingAmount = decodeQuantityValue(
     fields.expected_remaining_amount,
@@ -3315,7 +3479,7 @@ function decodeCancelAssetLockInstructionPayload(payload) {
     CancelAssetLock: {
       escrow_id: decodeEscrowIdValue(
         fields.escrow_id,
-        "CancelAssetLock.escrow_id",
+        (TEXT_CANCEL_ASSET_LOCK + "escrow_id"),
       ),
       expected_remaining_amount: expectedRemainingAmount,
     },
@@ -3381,13 +3545,13 @@ function isExactOwnedUint8Array(value) {
  */
 export function decodeCancelAssetLockV1(bytes) {
   if (!isExactOwnedUint8Array(bytes)) {
-    rejectType("CancelAssetLockV1 archive must be an owned, full-span Uint8Array");
+    rejectType((TEXT_CANCEL_ASSET_LOCK_V1_2 + "archive" + TEXT_MUST_BE + "an owned, full-span Uint8Array"));
   }
   if (
     bytes.byteLength < CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES ||
     bytes.byteLength > CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES
   ) {
-    rejectRange(`CancelAssetLockV1 archive must contain between ${CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES} and ${CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES} canonical bytes`);
+    rejectRange(`${TEXT_CANCEL_ASSET_LOCK_V1_2}archive${TEXT_MUST_CONTAIN}between ${CANCEL_ASSET_LOCK_V1_MIN_ARCHIVE_BYTES} and ${CANCEL_ASSET_LOCK_V1_MAX_ARCHIVE_BYTES}${TEXT_CANONICAL}bytes`);
   }
   const archive = Buffer.from(bytes.buffer);
   const frame = validateNoritoFrame(archive, {
@@ -3397,7 +3561,7 @@ export function decodeCancelAssetLockV1(bytes) {
     requireNonEmptyPayload: true,
   });
   if (frame.flags !== COMPACT_LEN_FLAG) {
-    rejectError("CancelAssetLockV1 must use exactly the compact-length Norito flag");
+    rejectError((TEXT_CANCEL_ASSET_LOCK_V1_2 + "must use exactly the compact-length Norito flag"));
   }
   const decoded = withNoritoCompactLengths(
     () => decodeCancelAssetLockInstructionPayload(frame.payload).CancelAssetLock,
@@ -3405,7 +3569,7 @@ export function decodeCancelAssetLockV1(bytes) {
   const canonical = normalizeStrictCancelAssetLockV1(decoded);
   const reencoded = encodeCancelAssetLockV1(canonical);
   if (!archive.equals(reencoded)) {
-    rejectError("CancelAssetLockV1 archive is not byte-canonical");
+    rejectError((TEXT_CANCEL_ASSET_LOCK_V1_2 + "archive is not byte-canonical"));
   }
   return canonical;
 }
@@ -3417,7 +3581,7 @@ function encodeAssetTransferAvailabilityValue(value, context) {
   if (value === "Disabled") {
     return encodeEnumTagValue(1);
   }
-  rejectType(`${context} must be exactly "Enabled" or "Disabled"`);
+  rejectType(`${context}${TEXT_MUST_BE}exactly "Enabled" or "Disabled"`);
 }
 
 function decodeAssetTransferAvailabilityValue(payload, context) {
@@ -3430,7 +3594,7 @@ function decodeAssetTransferAvailabilityValue(payload, context) {
   if (tag === 1) {
     return "Disabled";
   }
-  rejectError(`${context} uses unsupported availability tag ${tag}`);
+  rejectError(`${context}${TEXT_USES_UNSUPPORTED}availability tag ${tag}`);
 }
 
 function validateAssetTransferAvailabilityReason(reason, context) {
@@ -3442,10 +3606,10 @@ function validateAssetTransferAvailabilityReason(reason, context) {
     reason.length === 0 ||
     reason.trim() !== reason
   ) {
-    rejectType(`${context} must be non-empty unpadded text when provided`);
+    rejectType(`${context}${TEXT_MUST_BE}non-empty unpadded text when provided`);
   }
   if (/[\u0000-\u001f\u007f-\u009f]/u.test(reason)) {
-    rejectType(`${context} must not contain control characters`);
+    rejectType(`${context}${TEXT_MUST_NOT_CONTAIN}control characters`);
   }
   if (
     Buffer.byteLength(reason, UTF8_ENCODING) >
@@ -3457,12 +3621,12 @@ function validateAssetTransferAvailabilityReason(reason, context) {
 
 function encodeSetAssetTransferAvailabilityInstruction(value) {
   if (!isPlainObject(value)) {
-    rejectType("SetAssetTransferAvailability must be an object");
+    rejectType(("SetAssetTransferAvailability" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   const fields = [
-    "account_id",
-    "asset_definition_id",
-    "expected_revision",
+    WIRE_FIELD_ACCOUNT_ID,
+    WIRE_FIELD_ASSET_DEFINITION_ID,
+    WIRE_FIELD_EXPECTED_REVISION,
     "incoming",
     "outgoing",
     "reason",
@@ -3470,7 +3634,7 @@ function encodeSetAssetTransferAvailabilityInstruction(value) {
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_AVAILABILITY_VARIANT);
   for (const field of fields.slice(0, 5)) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      rejectType(`SetAssetTransferAvailability.${field} is required`);
+      rejectType(`${TEXT_SET_ASSET_TRANSFER_AVAILABILITY}${field}${TEXT_IS_REQUIRED}`);
     }
   }
   const reason = value.reason ?? null;
@@ -3482,31 +3646,31 @@ function encodeSetAssetTransferAvailabilityInstruction(value) {
     [
       encodeAccountIdValue(
         value.account_id,
-        "SetAssetTransferAvailability.account_id",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ACCOUNT_ID),
       ),
     ],
     [
       encodeAssetDefinitionIdValue(
         value.asset_definition_id,
-        "SetAssetTransferAvailability.asset_definition_id",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ASSET_DEFINITION_ID),
       ),
     ],
     [
       encodeU64NumberValue(
         value.expected_revision,
-        "SetAssetTransferAvailability.expected_revision",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_EXPECTED_REVISION_2),
       ),
     ],
     [
       encodeAssetTransferAvailabilityValue(
         value.incoming,
-        "SetAssetTransferAvailability.incoming",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "incoming"),
       ),
     ],
     [
       encodeAssetTransferAvailabilityValue(
         value.outgoing,
-        "SetAssetTransferAvailability.outgoing",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "outgoing"),
       ),
     ],
     [
@@ -3525,9 +3689,9 @@ function encodeSetAssetTransferAvailabilityInstruction(value) {
 
 function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
   const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_AVAILABILITY_VARIANT, [
-    "account_id",
-    "asset_definition_id",
-    "expected_revision",
+    WIRE_FIELD_ACCOUNT_ID,
+    WIRE_FIELD_ASSET_DEFINITION_ID,
+    WIRE_FIELD_EXPECTED_REVISION,
     "incoming",
     "outgoing",
     "reason",
@@ -3545,23 +3709,23 @@ function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
     SetAssetTransferAvailability: {
       account_id: decodeAccountIdValue(
         fields.account_id,
-        "SetAssetTransferAvailability.account_id",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ACCOUNT_ID),
       ),
       asset_definition_id: decodeAssetDefinitionIdValue(
         fields.asset_definition_id,
-        "SetAssetTransferAvailability.asset_definition_id",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_ASSET_DEFINITION_ID),
       ),
       expected_revision: decodeU64Value(
         fields.expected_revision,
-        "SetAssetTransferAvailability.expected_revision",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + TEXT_EXPECTED_REVISION_2),
       ),
       incoming: decodeAssetTransferAvailabilityValue(
         fields.incoming,
-        "SetAssetTransferAvailability.incoming",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "incoming"),
       ),
       outgoing: decodeAssetTransferAvailabilityValue(
         fields.outgoing,
-        "SetAssetTransferAvailability.outgoing",
+        (TEXT_SET_ASSET_TRANSFER_AVAILABILITY + "outgoing"),
       ),
       reason,
     },
@@ -3570,61 +3734,25 @@ function decodeSetAssetTransferAvailabilityInstructionPayload(payload) {
 
 function encodeSetAssetTransferBlacklistInstruction(value) {
   if (!isPlainObject(value)) {
-    rejectType("SetAssetTransferBlacklist must be an object");
+    rejectType(("SetAssetTransferBlacklist" + TEXT_MUST_BE_AN_OBJECT_2));
   }
-  const fields = ["account_id", "asset_definition_id", "blacklisted"];
+  const fields = [WIRE_FIELD_ACCOUNT_ID, WIRE_FIELD_ASSET_DEFINITION_ID, "blacklisted"];
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_BLACKLIST_VARIANT);
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      rejectType(`SetAssetTransferBlacklist.${field} is required`);
+      rejectType(`${TEXT_SET_ASSET_TRANSFER_BLACKLIST}${field}${TEXT_IS_REQUIRED}`);
     }
   }
   return encodeInstructionEnvelope(
     SET_ASSET_TRANSFER_BLACKLIST_WIRE_ID,
-    encodeStructValue([
-      [
-        encodeAccountIdValue(
-          value.account_id,
-          "SetAssetTransferBlacklist.account_id",
-        ),
-      ],
-      [
-        encodeAssetDefinitionIdValue(
-          value.asset_definition_id,
-          "SetAssetTransferBlacklist.asset_definition_id",
-        ),
-      ],
-      [
-        encodeBoolValue(
-          value.blacklisted,
-          "SetAssetTransferBlacklist.blacklisted",
-        ),
-      ],
-    ]),
+    encodeCanonicalRecordFields(value, TEXT_SET_ASSET_TRANSFER_BLACKLIST_2, SetAssetTransferBlacklistInstructionFields),
   );
 }
 
 function decodeSetAssetTransferBlacklistInstructionPayload(payload) {
-  const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_BLACKLIST_VARIANT, [
-    "account_id",
-    "asset_definition_id",
-    "blacklisted",
-  ]);
+
   return {
-    SetAssetTransferBlacklist: {
-      account_id: decodeAccountIdValue(
-        fields.account_id,
-        "SetAssetTransferBlacklist.account_id",
-      ),
-      asset_definition_id: decodeAssetDefinitionIdValue(
-        fields.asset_definition_id,
-        "SetAssetTransferBlacklist.asset_definition_id",
-      ),
-      blacklisted: decodeBoolValue(
-        fields.blacklisted,
-        "SetAssetTransferBlacklist.blacklisted",
-      ),
-    },
+    SetAssetTransferBlacklist: decodeRecordFields(payload, SET_ASSET_TRANSFER_BLACKLIST_VARIANT, SetAssetTransferBlacklistInstructionFields),
   };
 }
 
@@ -3637,7 +3765,7 @@ function encodeAssetTransferControlWindowValue(value, context) {
     case "Month":
       return encodeEnumTagValue(2);
     default:
-      rejectType(`${context} must be exactly "Day", "Week", or "Month"`);
+      rejectType(`${context}${TEXT_MUST_BE}exactly "Day", "Week", or "Month"`);
   }
 }
 
@@ -3653,36 +3781,27 @@ function decodeAssetTransferControlWindowValue(payload, context) {
     case 2:
       return "Month";
     default:
-      rejectError(`${context} uses unsupported transfer-control window tag ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}transfer-control window tag ${tag}`);
   }
 }
 
 function encodeAssetTransferLimitValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   const fields = ["window", "cap_amount"];
   assertOnlyObjectKeys(value, fields, context);
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      rejectType(`${context}.${field} is required`);
+      rejectType(`${context}.${field}${TEXT_IS_REQUIRED}`);
     }
   }
-  return encodeStructValue([
-    [encodeAssetTransferControlWindowValue(value.window, `${context}.window`)],
-    [
-      encodeOptionValue(
-        value.cap_amount,
-        encodeQuantityValue,
-        `${context}.cap_amount`,
-      ),
-    ],
-  ]);
+  return encodeCanonicalRecordFields(value, context, AssetTransferLimitValueFields);
 }
 
 const AssetTransferLimitValueFields = [
-    ["window", decodeAssetTransferControlWindowValue, 0],
-    ["cap_amount", decodeQuantityValue, 1],
+    ["window", decodeAssetTransferControlWindowValue, 0, encodeAssetTransferControlWindowValue, 0],
+    ["cap_amount", decodeQuantityValue, 1, encodeQuantityValue, 1],
   ];
 
   function decodeAssetTransferLimitValue(payload, context) {
@@ -3691,21 +3810,21 @@ const AssetTransferLimitValueFields = [
 
 function encodeSetAssetTransferControlInstruction(value) {
   if (!isPlainObject(value)) {
-    rejectType("SetAssetTransferControl must be an object");
+    rejectType(("SetAssetTransferControl" + TEXT_MUST_BE_AN_OBJECT_2));
   }
-  const fields = ["account_id", "asset_definition_id", "limits"];
+  const fields = [WIRE_FIELD_ACCOUNT_ID, WIRE_FIELD_ASSET_DEFINITION_ID, "limits"];
   assertOnlyObjectKeys(value, fields, SET_ASSET_TRANSFER_CONTROL_VARIANT);
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      rejectType(`SetAssetTransferControl.${field} is required`);
+      rejectType(`${TEXT_SET_ASSET_TRANSFER_CONTROL}${field}${TEXT_IS_REQUIRED}`);
     }
   }
   if (!Array.isArray(value.limits)) {
-    rejectType("SetAssetTransferControl.limits must be an array");
+    rejectType((TEXT_SET_ASSET_TRANSFER_CONTROL + "limits" + TEXT_MUST_BE + "an array"));
   }
   for (let index = 0; index < value.limits.length; index += 1) {
     if (!Object.prototype.hasOwnProperty.call(value.limits, index)) {
-      rejectType("SetAssetTransferControl.limits must not contain holes");
+      rejectType((TEXT_SET_ASSET_TRANSFER_CONTROL + "limits must not contain holes"));
     }
   }
   return encodeInstructionEnvelope(
@@ -3714,20 +3833,20 @@ function encodeSetAssetTransferControlInstruction(value) {
       [
         encodeAccountIdValue(
           value.account_id,
-          "SetAssetTransferControl.account_id",
+          (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ACCOUNT_ID),
         ),
       ],
       [
         encodeAssetDefinitionIdValue(
           value.asset_definition_id,
-          "SetAssetTransferControl.asset_definition_id",
+          (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ASSET_DEFINITION_ID),
         ),
       ],
       [
         encodeNoritoVec(value.limits, (limit, index) =>
           encodeAssetTransferLimitValue(
             limit,
-            `SetAssetTransferControl.limits[${index}]`,
+            `${TEXT_SET_ASSET_TRANSFER_CONTROL}limits[${index}]`,
           ),
         ),
       ],
@@ -3737,28 +3856,28 @@ function encodeSetAssetTransferControlInstruction(value) {
 
 function decodeSetAssetTransferControlInstructionPayload(payload) {
   const fields = decodeStructFields(payload, SET_ASSET_TRANSFER_CONTROL_VARIANT, [
-    "account_id",
-    "asset_definition_id",
+    WIRE_FIELD_ACCOUNT_ID,
+    WIRE_FIELD_ASSET_DEFINITION_ID,
     "limits",
   ]);
   return {
     SetAssetTransferControl: {
       account_id: decodeAccountIdValue(
         fields.account_id,
-        "SetAssetTransferControl.account_id",
+        (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ACCOUNT_ID),
       ),
       asset_definition_id: decodeAssetDefinitionIdValue(
         fields.asset_definition_id,
-        "SetAssetTransferControl.asset_definition_id",
+        (TEXT_SET_ASSET_TRANSFER_CONTROL + TEXT_ASSET_DEFINITION_ID),
       ),
       limits: decodeNoritoVec(
         fields.limits,
         (limit, index) =>
           decodeAssetTransferLimitValue(
             limit,
-            `SetAssetTransferControl.limits[${index}]`,
+            `${TEXT_SET_ASSET_TRANSFER_CONTROL}limits[${index}]`,
           ),
-        "SetAssetTransferControl.limits",
+        (TEXT_SET_ASSET_TRANSFER_CONTROL + "limits"),
       ),
     },
   };
@@ -3766,7 +3885,7 @@ function decodeSetAssetTransferControlInstructionPayload(payload) {
 
 function decodeMintPayload(payload) {
   const reader = new BufferReader(payload, "Mint");
-  const variantIndex = reader.readU32LE("variantIndex");
+  const variantIndex = reader.readU32LE(FIELD_VARIANT_INDEX);
   const body = readNoritoField(reader, "body");
   reader.assertEof();
   switch (variantIndex) {
@@ -3774,16 +3893,16 @@ function decodeMintPayload(payload) {
       return { Asset: decodeAssetInstructionBody(body, "Mint.Asset") };
     case 1:
       return {
-        TriggerRepetitions: decodeTriggerRepetitionsBody(body, "Mint.TriggerRepetitions"),
+        TriggerRepetitions: decodeTriggerRepetitionsBody(body, CONTEXT_MINT_TRIGGER_REPETITIONS),
       };
     default:
-      rejectError(`Internal Norito decoder does not support Mint variant ${variantIndex}`);
+      rejectError(`${TEXT_INTERNAL_NORITO_DECODER_DOES_NOT_SUPPORT}Mint variant ${variantIndex}`);
   }
 }
 
 function decodeBurnPayload(payload) {
   const reader = new BufferReader(payload, "Burn");
-  const variantIndex = reader.readU32LE("variantIndex");
+  const variantIndex = reader.readU32LE(FIELD_VARIANT_INDEX);
   const body = readNoritoField(reader, "body");
   reader.assertEof();
   switch (variantIndex) {
@@ -3791,16 +3910,16 @@ function decodeBurnPayload(payload) {
       return { Asset: decodeAssetInstructionBody(body, "Burn.Asset") };
     case 1:
       return {
-        TriggerRepetitions: decodeTriggerRepetitionsBody(body, "Burn.TriggerRepetitions"),
+        TriggerRepetitions: decodeTriggerRepetitionsBody(body, CONTEXT_BURN_TRIGGER_REPETITIONS),
       };
     default:
-      rejectError(`Internal Norito decoder does not support Burn variant ${variantIndex}`);
+      rejectError(`${TEXT_INTERNAL_NORITO_DECODER_DOES_NOT_SUPPORT}Burn variant ${variantIndex}`);
   }
 }
 
 function decodeTransferPayload(payload) {
   const reader = new BufferReader(payload, "Transfer");
-  const variantIndex = reader.readU32LE("variantIndex");
+  const variantIndex = reader.readU32LE(FIELD_VARIANT_INDEX);
   const body = readNoritoField(reader, "body");
   reader.assertEof();
   switch (variantIndex) {
@@ -3808,7 +3927,7 @@ function decodeTransferPayload(payload) {
       return {
         Domain: decodeTransferObjectBody(
           body,
-          "Transfer.Domain",
+          CONTEXT_TRANSFER_DOMAIN,
           decodeAccountIdValue,
           decodeDomainIdValue,
           decodeAccountIdValue,
@@ -3818,7 +3937,7 @@ function decodeTransferPayload(payload) {
       return {
         AssetDefinition: decodeTransferObjectBody(
           body,
-          "Transfer.AssetDefinition",
+          CONTEXT_TRANSFER_ASSET_DEFINITION,
           decodeAccountIdValue,
           decodeAssetDefinitionIdValue,
           decodeAccountIdValue,
@@ -3837,39 +3956,39 @@ function decodeTransferPayload(payload) {
         ),
       };
     default:
-      rejectError(`Internal Norito decoder does not support Transfer variant ${variantIndex}.`);
+      rejectError(`${TEXT_INTERNAL_NORITO_DECODER_DOES_NOT_SUPPORT}Transfer variant ${variantIndex}.`);
   }
 }
 
 function decodeRegisterPayload(payload) {
   const reader = new BufferReader(payload, "Register");
-  const variantIndex = reader.readU32LE("variantIndex");
+  const variantIndex = reader.readU32LE(FIELD_VARIANT_INDEX);
   const body = readNoritoField(reader, "body");
   reader.assertEof();
   switch (variantIndex) {
     case 1:
       return {
         Domain: decodeNewDomainValue(
-          unwrapStructBody(body, "Register.Domain"),
-          "Register.Domain",
+          unwrapStructBody(body, CONTEXT_REGISTER_DOMAIN),
+          CONTEXT_REGISTER_DOMAIN,
         ),
       };
     case 2:
       return {
         Account: decodeNewAccountValue(
-          unwrapStructBody(body, "Register.Account"),
-          "Register.Account",
+          unwrapStructBody(body, CONTEXT_REGISTER_ACCOUNT),
+          CONTEXT_REGISTER_ACCOUNT,
         ),
       };
     case 3:
       return {
         AssetDefinition: decodeNewAssetDefinitionValue(
-          unwrapStructBody(body, "Register.AssetDefinition"),
-          "Register.AssetDefinition",
+          unwrapStructBody(body, CONTEXT_REGISTER_ASSET_DEFINITION),
+          CONTEXT_REGISTER_ASSET_DEFINITION,
         ),
       };
     default:
-      rejectError(`Internal Norito decoder does not support Register variant ${variantIndex}.`);
+      rejectError(`${TEXT_INTERNAL_NORITO_DECODER_DOES_NOT_SUPPORT}Register variant ${variantIndex}.`);
   }
 }
 
@@ -3884,8 +4003,8 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
   switch (wireId) {
     case PROPOSE_DEPLOY_CONTRACT_WIRE_ID: {
       const fields = decodeStructFields(payload, "ProposeDeployContract", [
-        "contract_address",
-        "code_hash",
+        WIRE_FIELD_CONTRACT_ADDRESS,
+        WIRE_FIELD_CODE_HASH,
         "abi_hash",
         "abi_version",
         "manifest_provenance",
@@ -3893,25 +4012,25 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
       const decoded = {
         contract_address: decodeStringValue(
           fields.contract_address,
-          "ProposeDeployContract.contract_address",
+          (TEXT_PROPOSE_DEPLOY_CONTRACT + TEXT_CONTRACT_ADDRESS_2),
         ),
         code_hash: decodeGovernanceHash32Value(
           fields.code_hash,
-          "ProposeDeployContract.code_hash",
+          (TEXT_PROPOSE_DEPLOY_CONTRACT + TEXT_CODE_HASH_2),
         ),
         abi_hash: decodeGovernanceHash32Value(
           fields.abi_hash,
-          "ProposeDeployContract.abi_hash",
+          (TEXT_PROPOSE_DEPLOY_CONTRACT + "abi_hash"),
         ),
         abi_version: decodeGovernanceAbiVersionValue(
           fields.abi_version,
-          "ProposeDeployContract.abi_version",
+          (TEXT_PROPOSE_DEPLOY_CONTRACT + "abi_version"),
         ),
       };
       const manifestProvenance = decodeOptionValue(
         fields.manifest_provenance,
         decodeManifestProvenanceValue,
-        "ProposeDeployContract.manifest_provenance",
+        (TEXT_PROPOSE_DEPLOY_CONTRACT + "manifest_provenance"),
       );
       if (manifestProvenance !== null) {
         decoded.manifest_provenance = manifestProvenance;
@@ -3919,199 +4038,83 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
       return { ProposeDeployContract: decoded };
     }
     case CAST_ZK_BALLOT_WIRE_ID: {
-      const fields = decodeStructFields(payload, "CastZkBallot", [
-        "election_id",
-        "proof_b64",
-        "public_inputs_json",
-      ]);
+
       return {
-        CastZkBallot: {
-          election_id: decodeStringValue(fields.election_id, "CastZkBallot.election_id"),
-          proof_b64: decodeStringValue(fields.proof_b64, "CastZkBallot.proof_b64"),
-          public_inputs_json: decodeStringValue(
-            fields.public_inputs_json,
-            "CastZkBallot.public_inputs_json",
-          ),
-        },
+        CastZkBallot: decodeRecordFields(payload, "CastZkBallot", CastZkBallotInstructionFields),
       };
     }
     case CAST_PLAIN_BALLOT_WIRE_ID: {
-      const fields = decodeStructFields(payload, "CastPlainBallot", [
-        "referendum_id",
-        "owner",
-        "amount",
-        "duration_blocks",
-        "direction",
-      ]);
+
       return {
-        CastPlainBallot: {
-          referendum_id: decodeStringValue(fields.referendum_id, "CastPlainBallot.referendum_id"),
-          owner: decodeAccountIdValue(fields.owner, "CastPlainBallot.owner"),
-          amount: decodeQuantityValue(fields.amount, "CastPlainBallot.amount"),
-          duration_blocks: decodeU64NumberValue(
-            fields.duration_blocks,
-            "CastPlainBallot.duration_blocks",
-          ),
-          direction: decodeU8Value(fields.direction, "CastPlainBallot.direction"),
-        },
+        CastPlainBallot: decodeRecordFields(payload, "CastPlainBallot", CastPlainBallotInstructionFields),
       };
     }
     default:
-      rejectError(`unsupported governance wire id ${wireId}`);
+      rejectError(`${TEXT_UNSUPPORTED}governance wire id ${wireId}`);
   }
 }
 
 function decodeSocialInstructionPayload(wireId, payload) {
   switch (wireId) {
     case CLAIM_TWITTER_FOLLOW_REWARD_WIRE_ID: {
-      const fields = decodeStructFields(payload, "ClaimTwitterFollowReward", ["binding_hash"]);
+
       return {
-        ClaimTwitterFollowReward: {
-          binding_hash: decodeKeyedHashValue(
-            fields.binding_hash,
-            "ClaimTwitterFollowReward.binding_hash",
-          ),
-        },
+        ClaimTwitterFollowReward: decodeRecordFields(payload, TEXT_CLAIM_TWITTER_FOLLOW_REWARD, ClaimTwitterFollowRewardInstructionFields),
       };
     }
     case SEND_TO_TWITTER_WIRE_ID: {
-      const fields = decodeStructFields(payload, "SendToTwitter", ["binding_hash", "amount"]);
+
       return {
-        SendToTwitter: {
-          binding_hash: decodeKeyedHashValue(fields.binding_hash, "SendToTwitter.binding_hash"),
-          amount: decodeQuantityValue(fields.amount, "SendToTwitter.amount"),
-        },
+        SendToTwitter: decodeRecordFields(payload, "SendToTwitter", SendToTwitterInstructionFields),
       };
     }
     case CANCEL_TWITTER_ESCROW_WIRE_ID: {
-      const fields = decodeStructFields(payload, "CancelTwitterEscrow", ["binding_hash"]);
+
       return {
-        CancelTwitterEscrow: {
-          binding_hash: decodeKeyedHashValue(
-            fields.binding_hash,
-            "CancelTwitterEscrow.binding_hash",
-          ),
-        },
+        CancelTwitterEscrow: decodeRecordFields(payload, "CancelTwitterEscrow", CancelTwitterEscrowInstructionFields),
       };
     }
     default:
-      rejectError(`unsupported social wire id ${wireId}`);
+      rejectError(`${TEXT_UNSUPPORTED}social wire id ${wireId}`);
   }
 }
 
 function decodeSmartContractInstructionPayload(wireId, payload) {
   switch (wireId) {
     case REGISTER_SMART_CONTRACT_CODE_WIRE_ID: {
-      const fields = decodeStructFields(payload, "RegisterSmartContractCode", ["manifest"]);
+
       return {
-        RegisterSmartContractCode: {
-          manifest: decodeContractManifestValue(
-            fields.manifest,
-            "RegisterSmartContractCode.manifest",
-          ),
-        },
+        RegisterSmartContractCode: decodeRecordFields(payload, "RegisterSmartContractCode", RegisterSmartContractCodeInstructionFields),
       };
     }
     case REGISTER_SMART_CONTRACT_BYTES_WIRE_ID: {
-      const fields = decodeStructFields(payload, "RegisterSmartContractBytes", [
-        "code_hash",
-        "code",
-      ]);
+
       return {
-        RegisterSmartContractBytes: {
-          code_hash: decodeHashValue(fields.code_hash, "RegisterSmartContractBytes.code_hash"),
-          code: decodeByteVecAsBase64(fields.code, "RegisterSmartContractBytes.code"),
-        },
+        RegisterSmartContractBytes: decodeRecordFields(payload, TEXT_REGISTER_SMART_CONTRACT_BYTES, RegisterSmartContractBytesInstructionFields),
       };
     }
     case DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
-      const fields = decodeStructFields(payload, "DeactivateContractInstance", [
-        "contract_address",
-        "expected_revision",
-        "reason",
-      ]);
+
       return {
-        DeactivateContractInstance: {
-          contract_address: decodeStringValue(
-            fields.contract_address,
-            "DeactivateContractInstance.contract_address",
-          ),
-          expected_revision: decodeU64Value(
-            fields.expected_revision,
-            "DeactivateContractInstance.expected_revision",
-          ),
-          reason: decodeOptionValue(
-            fields.reason,
-            decodeStringValue,
-            "DeactivateContractInstance.reason",
-          ),
-        },
+        DeactivateContractInstance: decodeRecordFields(payload, TEXT_DEACTIVATE_CONTRACT_INSTANCE_2, DeactivateContractInstanceInstructionFields),
       };
     }
     case ACTIVATE_CONTRACT_INSTANCE_WIRE_ID: {
-      const fields = decodeStructFields(payload, "ActivateContractInstance", [
-        "contract_address",
-        "expected_revision",
-        "code_hash",
-      ]);
+
       return {
-        ActivateContractInstance: {
-          contract_address: decodeStringValue(
-            fields.contract_address,
-            "ActivateContractInstance.contract_address",
-          ),
-          expected_revision: decodeU64Value(
-            fields.expected_revision,
-            "ActivateContractInstance.expected_revision",
-          ),
-          code_hash: decodeHashValue(fields.code_hash, "ActivateContractInstance.code_hash"),
-        },
+        ActivateContractInstance: decodeRecordFields(payload, TEXT_ACTIVATE_CONTRACT_INSTANCE, ActivateContractInstanceInstructionFields),
       };
     }
     case SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID: {
-      const fields = decodeStructFields(payload, "SetContractParliamentDelegation", [
-        "contract_address",
-        "expected_revision",
-        "delegated",
-      ]);
+
       return {
-        SetContractParliamentDelegation: {
-          contract_address: decodeStringValue(
-            fields.contract_address,
-            "SetContractParliamentDelegation.contract_address",
-          ),
-          expected_revision: decodeU64Value(
-            fields.expected_revision,
-            "SetContractParliamentDelegation.expected_revision",
-          ),
-          delegated: decodeBoolValue(
-            fields.delegated,
-            "SetContractParliamentDelegation.delegated",
-          ),
-        },
+        SetContractParliamentDelegation: decodeRecordFields(payload, TEXT_SET_CONTRACT_PARLIAMENT_DELEGATION_2, SetContractParliamentDelegationInstructionFields),
       };
     }
     case OFFER_CONTRACT_OWNERSHIP_WIRE_ID: {
-      const fields = decodeStructFields(payload, "OfferContractOwnership", [
-        "contract_address",
-        "expected_revision",
-        "new_owner",
-      ]);
+
       return {
-        OfferContractOwnership: {
-          contract_address: decodeStringValue(
-            fields.contract_address,
-            "OfferContractOwnership.contract_address",
-          ),
-          expected_revision: decodeU64Value(
-            fields.expected_revision,
-            "OfferContractOwnership.expected_revision",
-          ),
-          new_owner: decodeContractLifecycleOwnerValue(
-            fields.new_owner,
-            "OfferContractOwnership.new_owner",
-          ),
-        },
+        OfferContractOwnership: decodeRecordFields(payload, TEXT_OFFER_CONTRACT_OWNERSHIP, OfferContractOwnershipInstructionFields),
       };
     }
     case ACCEPT_CONTRACT_OWNERSHIP_WIRE_ID:
@@ -4120,187 +4123,64 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
         ? "AcceptContractOwnership"
         : "CancelContractOwnershipOffer";
       const fields = decodeStructFields(payload, name, [
-        "contract_address",
-        "expected_revision",
+        WIRE_FIELD_CONTRACT_ADDRESS,
+        WIRE_FIELD_EXPECTED_REVISION,
       ]);
       return {
         [name]: {
           contract_address: decodeStringValue(
             fields.contract_address,
-            `${name}.contract_address`,
+            `${name}.${TEXT_CONTRACT_ADDRESS_2}`,
           ),
           expected_revision: decodeU64Value(
             fields.expected_revision,
-            `${name}.expected_revision`,
+            `${name}.${TEXT_EXPECTED_REVISION_2}`,
           ),
         },
       };
     }
     case COMMIT_CONTRACT_DEPLOYMENT_WIRE_ID: {
-      const fields = decodeStructFields(payload, "CommitContractDeployment", [
-        "expected_deploy_nonce",
-        "contract_address",
-        "code_hash",
-        "contract_alias",
-        "lease_expiry_ms",
-        "expected_previous_contract_address",
-      ]);
+
       return {
-        CommitContractDeployment: {
-          expected_deploy_nonce: decodeU64Value(
-            fields.expected_deploy_nonce,
-            "CommitContractDeployment.expected_deploy_nonce",
-          ),
-          contract_address: decodeStringValue(
-            fields.contract_address,
-            "CommitContractDeployment.contract_address",
-          ),
-          code_hash: decodeHashValue(
-            fields.code_hash,
-            "CommitContractDeployment.code_hash",
-          ),
-          contract_alias: decodeStringValue(
-            fields.contract_alias,
-            "CommitContractDeployment.contract_alias",
-          ),
-          lease_expiry_ms: decodeOptionValue(
-            fields.lease_expiry_ms,
-            decodeU64Value,
-            "CommitContractDeployment.lease_expiry_ms",
-          ),
-          expected_previous_contract_address: decodeOptionValue(
-            fields.expected_previous_contract_address,
-            decodeStringValue,
-            EXPECTED_PREVIOUS_CONTRACT_CONTEXT,
-          ),
-        },
+        CommitContractDeployment: decodeRecordFields(payload, "CommitContractDeployment", CommitContractDeploymentInstructionFields),
       };
     }
     case UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID: {
-      const fields = decodeStructFields(payload, "UploadSmartContractCodeChunk", [
-        "code_hash",
-        "total_size",
-        "chunk_index",
-        "chunk_count",
-        "chunk",
-      ]);
+
       return {
-        UploadSmartContractCodeChunk: {
-          code_hash: decodeHashValue(
-            fields.code_hash,
-            "UploadSmartContractCodeChunk.code_hash",
-          ),
-          total_size: decodeU64Value(
-            fields.total_size,
-            "UploadSmartContractCodeChunk.total_size",
-          ),
-          chunk_index: decodeU32Value(
-            fields.chunk_index,
-            "UploadSmartContractCodeChunk.chunk_index",
-          ),
-          chunk_count: decodeU32Value(
-            fields.chunk_count,
-            "UploadSmartContractCodeChunk.chunk_count",
-          ),
-          chunk: decodeByteVecAsBase64(
-            fields.chunk,
-            "UploadSmartContractCodeChunk.chunk",
-          ),
-        },
+        UploadSmartContractCodeChunk: decodeRecordFields(payload, TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK_2, UploadSmartContractCodeChunkInstructionFields),
       };
     }
     case FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID: {
-      const fields = decodeStructFields(payload, "FinalizeSmartContractCodeUpload", [
-        "code_hash",
-        "total_size",
-        "chunk_count",
-      ]);
+
       return {
-        FinalizeSmartContractCodeUpload: {
-          code_hash: decodeHashValue(
-            fields.code_hash,
-            "FinalizeSmartContractCodeUpload.code_hash",
-          ),
-          total_size: decodeU64Value(
-            fields.total_size,
-            "FinalizeSmartContractCodeUpload.total_size",
-          ),
-          chunk_count: decodeU32Value(
-            fields.chunk_count,
-            "FinalizeSmartContractCodeUpload.chunk_count",
-          ),
-        },
+        FinalizeSmartContractCodeUpload: decodeRecordFields(payload, TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD_2, FinalizeSmartContractCodeUploadInstructionFields),
       };
     }
     case CANCEL_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID: {
-      const fields = decodeStructFields(payload, "CancelSmartContractCodeUpload", [
-        "code_hash",
-      ]);
+
       return {
-        CancelSmartContractCodeUpload: {
-          code_hash: decodeHashValue(
-            fields.code_hash,
-            "CancelSmartContractCodeUpload.code_hash",
-          ),
-        },
+        CancelSmartContractCodeUpload: decodeRecordFields(payload, "CancelSmartContractCodeUpload", CancelSmartContractCodeUploadInstructionFields),
       };
     }
     case REMOVE_SMART_CONTRACT_BYTES_WIRE_ID: {
-      const fields = decodeStructFields(payload, "RemoveSmartContractBytes", [
-        "code_hash",
-        "reason",
-      ]);
+
       return {
-        RemoveSmartContractBytes: {
-          code_hash: decodeHashValue(fields.code_hash, "RemoveSmartContractBytes.code_hash"),
-          reason: decodeOptionValue(
-            fields.reason,
-            decodeStringValue,
-            "RemoveSmartContractBytes.reason",
-          ),
-        },
+        RemoveSmartContractBytes: decodeRecordFields(payload, TEXT_REMOVE_SMART_CONTRACT_BYTES, RemoveSmartContractBytesInstructionFields),
       };
     }
     default:
-      rejectError(`unsupported smart-contract wire id ${wireId}`);
+      rejectError(`${TEXT_UNSUPPORTED}smart-contract wire id ${wireId}`);
   }
 }
 
 function decodeKaigiInstructionPayload(wireId, payload) {
   switch (wireId) {
     case CREATE_KAIGI_WIRE_ID: {
-      const fields = decodeStructFields(payload, "Kaigi.CreateKaigi", [
-        "call",
-        "commitment",
-        "nullifier",
-        "roster_root",
-        "proof",
-      ]);
+
       return {
         Kaigi: {
-          CreateKaigi: {
-            call: decodeNewKaigiPayload(fields.call, "Kaigi.CreateKaigi.call"),
-            commitment: decodeOptionValue(
-              fields.commitment,
-              decodeKaigiParticipantCommitmentValue,
-              "Kaigi.CreateKaigi.commitment",
-            ),
-            nullifier: decodeOptionValue(
-              fields.nullifier,
-              decodeKaigiParticipantNullifierValue,
-              "Kaigi.CreateKaigi.nullifier",
-            ),
-            roster_root: decodeOptionValue(
-              fields.roster_root,
-              decodeHashValue,
-              "Kaigi.CreateKaigi.roster_root",
-            ),
-            proof: decodeOptionValue(
-              fields.proof,
-              decodeByteVecAsBase64,
-              "Kaigi.CreateKaigi.proof",
-            ),
-          },
+          CreateKaigi: decodeRecordFields(payload, "Kaigi.CreateKaigi", Kaigi_CreateKaigiInstructionFields),
         },
       };
     }
@@ -4309,7 +4189,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
       const fields = decodeStructFields(payload, `Kaigi.${wireId}`, [
         "call_id",
         "participant",
-        "commitment",
+        FIELD_COMMITMENT,
         "nullifier",
         "roster_root",
         "proof",
@@ -4326,7 +4206,7 @@ function decodeKaigiInstructionPayload(wireId, payload) {
             commitment: decodeOptionValue(
               fields.commitment,
               decodeKaigiParticipantCommitmentValue,
-              `Kaigi.${name}.commitment`,
+              `Kaigi.${name}.${TEXT_COMMITMENT}`,
             ),
             nullifier: decodeOptionValue(
               fields.nullifier,
@@ -4348,256 +4228,87 @@ function decodeKaigiInstructionPayload(wireId, payload) {
       };
     }
     case END_KAIGI_WIRE_ID: {
-      const fields = decodeStructFields(payload, "Kaigi.EndKaigi", [
-        "call_id",
-        "ended_at_ms",
-        "commitment",
-        "nullifier",
-        "roster_root",
-        "proof",
-      ]);
+
       return {
         Kaigi: {
-          EndKaigi: {
-            call_id: decodeKaigiIdValue(fields.call_id, "Kaigi.EndKaigi.call_id"),
-            ended_at_ms: decodeOptionValue(
-              fields.ended_at_ms,
-              decodeU64NumberValue,
-              "Kaigi.EndKaigi.ended_at_ms",
-            ),
-            commitment: decodeOptionValue(
-              fields.commitment,
-              decodeKaigiParticipantCommitmentValue,
-              "Kaigi.EndKaigi.commitment",
-            ),
-            nullifier: decodeOptionValue(
-              fields.nullifier,
-              decodeKaigiParticipantNullifierValue,
-              "Kaigi.EndKaigi.nullifier",
-            ),
-            roster_root: decodeOptionValue(
-              fields.roster_root,
-              decodeHashValue,
-              "Kaigi.EndKaigi.roster_root",
-            ),
-            proof: decodeOptionValue(
-              fields.proof,
-              decodeByteVecAsBase64,
-              "Kaigi.EndKaigi.proof",
-            ),
-          },
+          EndKaigi: decodeRecordFields(payload, "Kaigi.EndKaigi", Kaigi_EndKaigiInstructionFields),
         },
       };
     }
     case RECORD_KAIGI_USAGE_WIRE_ID: {
-      const fields = decodeStructFields(payload, "Kaigi.RecordKaigiUsage", [
-        "call_id",
-        "duration_ms",
-        "billed_gas",
-        "usage_commitment",
-        "proof",
-      ]);
+
       return {
         Kaigi: {
-          RecordKaigiUsage: {
-            call_id: decodeKaigiIdValue(fields.call_id, "Kaigi.RecordKaigiUsage.call_id"),
-            duration_ms: decodeU64NumberValue(
-              fields.duration_ms,
-              "Kaigi.RecordKaigiUsage.duration_ms",
-            ),
-            billed_gas: decodeU64NumberValue(
-              fields.billed_gas,
-              "Kaigi.RecordKaigiUsage.billed_gas",
-            ),
-            usage_commitment: decodeOptionValue(
-              fields.usage_commitment,
-              decodeKaigiScalarValue,
-              "Kaigi.RecordKaigiUsage.usage_commitment",
-            ),
-            proof: decodeOptionValue(
-              fields.proof,
-              decodeByteVecAsBase64,
-              "Kaigi.RecordKaigiUsage.proof",
-            ),
-          },
+          RecordKaigiUsage: decodeRecordFields(payload, "Kaigi.RecordKaigiUsage", Kaigi_RecordKaigiUsageInstructionFields),
         },
       };
     }
     case SET_KAIGI_RELAY_MANIFEST_WIRE_ID: {
-      const fields = decodeStructFields(payload, "Kaigi.SetKaigiRelayManifest", [
-        "call_id",
-        "relay_manifest",
-      ]);
+
       return {
         Kaigi: {
-          SetKaigiRelayManifest: {
-            call_id: decodeKaigiIdValue(
-              fields.call_id,
-              "Kaigi.SetKaigiRelayManifest.call_id",
-            ),
-            relay_manifest: decodeOptionValue(
-              fields.relay_manifest,
-              decodeKaigiRelayManifestValue,
-              "Kaigi.SetKaigiRelayManifest.relay_manifest",
-            ),
-          },
+          SetKaigiRelayManifest: decodeRecordFields(payload, ("Kaigi." + TEXT_SET_KAIGI_RELAY_MANIFEST), Kaigi_SetKaigiRelayManifestInstructionFields),
         },
       };
     }
     case REGISTER_KAIGI_RELAY_WIRE_ID: {
-      const fields = decodeStructFields(payload, "Kaigi.RegisterKaigiRelay", ["relay"]);
+
       return {
         Kaigi: {
-          RegisterKaigiRelay: {
-            relay: decodeKaigiRelayRegistrationValue(
-              fields.relay,
-              "Kaigi.RegisterKaigiRelay.relay",
-            ),
-          },
+          RegisterKaigiRelay: decodeRecordFields(payload, "Kaigi.RegisterKaigiRelay", Kaigi_RegisterKaigiRelayInstructionFields),
         },
       };
     }
     case UNREGISTER_KAIGI_RELAY_WIRE_ID: {
-      const fields = decodeStructFields(payload, "Kaigi.UnregisterKaigiRelay", [
-        "relay_id",
-      ]);
+
       return {
         Kaigi: {
-          UnregisterKaigiRelay: {
-            relay_id: decodeAccountIdValue(
-              fields.relay_id,
-              "Kaigi.UnregisterKaigiRelay.relay_id",
-            ),
-          },
+          UnregisterKaigiRelay: decodeRecordFields(payload, "Kaigi.UnregisterKaigiRelay", Kaigi_UnregisterKaigiRelayInstructionFields),
         },
       };
     }
     case REPORT_KAIGI_RELAY_HEALTH_WIRE_ID: {
-      const fields = decodeStructFields(payload, "Kaigi.ReportKaigiRelayHealth", [
-        "call_id",
-        "relay_id",
-        "status",
-        "reported_at_ms",
-        "notes",
-      ]);
+
       return {
         Kaigi: {
-          ReportKaigiRelayHealth: {
-            call_id: decodeKaigiIdValue(
-              fields.call_id,
-              "Kaigi.ReportKaigiRelayHealth.call_id",
-            ),
-            relay_id: decodeAccountIdValue(
-              fields.relay_id,
-              "Kaigi.ReportKaigiRelayHealth.relay_id",
-            ),
-            status: decodeKaigiRelayHealthStatusValue(
-              fields.status,
-              "Kaigi.ReportKaigiRelayHealth.status",
-            ),
-            reported_at_ms: decodeU64NumberValue(
-              fields.reported_at_ms,
-              "Kaigi.ReportKaigiRelayHealth.reported_at_ms",
-            ),
-            notes: decodeOptionValue(
-              fields.notes,
-              decodeKaigiRelayHealthNotesValue,
-              "Kaigi.ReportKaigiRelayHealth.notes",
-            ),
-          },
+          ReportKaigiRelayHealth: decodeRecordFields(payload, ("Kaigi." + TEXT_REPORT_KAIGI_RELAY_HEALTH), Kaigi_ReportKaigiRelayHealthInstructionFields),
         },
       };
     }
     default:
-      rejectError(`unsupported Kaigi wire id ${wireId}`);
+      rejectError(`${TEXT_UNSUPPORTED}Kaigi wire id ${wireId}`);
   }
 }
 
 function decodeZkInstructionPayload(wireId, payload) {
   switch (wireId) {
     case REGISTER_ZK_ASSET_WIRE_ID: {
-      const fields = decodeStructFields(payload, "zk.RegisterZkAsset", [
-        "asset",
-        "vk_unshield",
-        "vk_shield",
-      ]);
+
       return {
         zk: {
-          RegisterZkAsset: {
-            asset: decodeAssetDefinitionIdValue(fields.asset, "zk.RegisterZkAsset.asset"),
-            vk_unshield: decodeOptionValue(
-              fields.vk_unshield,
-              decodeVerifyingKeyIdValue,
-              "zk.RegisterZkAsset.vk_unshield",
-            ),
-            vk_shield: decodeOptionValue(
-              fields.vk_shield,
-              decodeVerifyingKeyIdValue,
-              "zk.RegisterZkAsset.vk_shield",
-            ),
-          },
+          RegisterZkAsset: decodeRecordFields(payload, ("zk." + TEXT_REGISTER_ZK_ASSET), zk_RegisterZkAssetInstructionFields),
         },
       };
     }
     case SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID: {
-      const fields = decodeStructFields(payload, "zk.ScheduleConfidentialPolicyTransition", [
-        "asset",
-        "new_mode",
-        "effective_height",
-        "transition_id",
-        "conversion_window",
-      ]);
+
       return {
         zk: {
-          ScheduleConfidentialPolicyTransition: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.ScheduleConfidentialPolicyTransition.asset",
-            ),
-            new_mode: decodeConfidentialPolicyModeValue(
-              fields.new_mode,
-              "zk.ScheduleConfidentialPolicyTransition.new_mode",
-            ),
-            effective_height: decodeU64NumberValue(
-              fields.effective_height,
-              SCHEDULE_EFFECTIVE_HEIGHT_CONTEXT,
-            ),
-            transition_id: decodeHashValue(
-              fields.transition_id,
-              SCHEDULE_TRANSITION_ID_CONTEXT,
-            ),
-            conversion_window: decodeOptionValue(
-              fields.conversion_window,
-              decodeU64NumberValue,
-              SCHEDULE_CONVERSION_WINDOW_CONTEXT,
-            ),
-          },
+          ScheduleConfidentialPolicyTransition: decodeRecordFields(payload, ("zk." + TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION), zk_ScheduleConfidentialPolicyTransitionInstructionFields),
         },
       };
     }
     case CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID: {
-      const fields = decodeStructFields(payload, "zk.CancelConfidentialPolicyTransition", [
-        "asset",
-        "transition_id",
-      ]);
+
       return {
         zk: {
-          CancelConfidentialPolicyTransition: {
-            asset: decodeAssetDefinitionIdValue(
-              fields.asset,
-              "zk.CancelConfidentialPolicyTransition.asset",
-            ),
-            transition_id: decodeHashValue(
-              fields.transition_id,
-              CANCEL_TRANSITION_ID_CONTEXT,
-            ),
-          },
+          CancelConfidentialPolicyTransition: decodeRecordFields(payload, ("zk." + TEXT_CANCEL_CONFIDENTIAL_POLICY_TRANSITION), zk_CancelConfidentialPolicyTransitionInstructionFields),
         },
       };
     }
     case CREATE_ELECTION_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.CreateElection", [
-        "election_id",
+        WIRE_FIELD_ELECTION_ID,
         "options",
         "eligible_root",
         "start_ts",
@@ -4609,29 +4320,29 @@ function decodeZkInstructionPayload(wireId, payload) {
       return {
         zk: {
           CreateElection: {
-            election_id: decodeStringValue(fields.election_id, "zk.CreateElection.election_id"),
-            options: decodeU32Value(fields.options, "zk.CreateElection.options"),
+            election_id: decodeStringValue(fields.election_id, (TEXT_ZK_CREATE_ELECTION + TEXT_ELECTION_ID)),
+            options: decodeU32Value(fields.options, (TEXT_ZK_CREATE_ELECTION + "options")),
             eligible_root: Array.from(
-              decodeFixedBytesValue(fields.eligible_root, 32, "zk.CreateElection.eligible_root"),
+              decodeFixedBytesValue(fields.eligible_root, 32, (TEXT_ZK_CREATE_ELECTION + "eligible_root")),
             ),
-            start_ts: decodeU64NumberValue(fields.start_ts, "zk.CreateElection.start_ts"),
-            end_ts: decodeU64NumberValue(fields.end_ts, "zk.CreateElection.end_ts"),
+            start_ts: decodeU64NumberValue(fields.start_ts, (TEXT_ZK_CREATE_ELECTION + "start_ts")),
+            end_ts: decodeU64NumberValue(fields.end_ts, (TEXT_ZK_CREATE_ELECTION + "end_ts")),
             vk_ballot: decodeVerifyingKeyIdValue(
               fields.vk_ballot,
-              "zk.CreateElection.vk_ballot",
+              (TEXT_ZK_CREATE_ELECTION + "vk_ballot"),
             ),
             vk_tally: decodeVerifyingKeyIdValue(
               fields.vk_tally,
-              "zk.CreateElection.vk_tally",
+              (TEXT_ZK_CREATE_ELECTION + "vk_tally"),
             ),
-            domain_tag: decodeStringValue(fields.domain_tag, "zk.CreateElection.domain_tag"),
+            domain_tag: decodeStringValue(fields.domain_tag, (TEXT_ZK_CREATE_ELECTION + "domain_tag")),
           },
         },
       };
     }
     case SUBMIT_BALLOT_WIRE_ID: {
       const fields = decodeStructFields(payload, "zk.SubmitBallot", [
-        "election_id",
+        WIRE_FIELD_ELECTION_ID,
         "ciphertext",
         "ballot_proof",
         "nullifier",
@@ -4639,24 +4350,24 @@ function decodeZkInstructionPayload(wireId, payload) {
       return {
         zk: {
           SubmitBallot: {
-            election_id: decodeStringValue(fields.election_id, "zk.SubmitBallot.election_id"),
+            election_id: decodeStringValue(fields.election_id, (TEXT_ZK_SUBMIT_BALLOT + TEXT_ELECTION_ID)),
             ciphertext: Array.from(
-              decodeByteVecValue(fields.ciphertext, "zk.SubmitBallot.ciphertext"),
+              decodeByteVecValue(fields.ciphertext, (TEXT_ZK_SUBMIT_BALLOT + "ciphertext")),
             ),
             ballot_proof: decodeProofAttachmentValue(
               fields.ballot_proof,
-              "zk.SubmitBallot.ballot_proof",
+              (TEXT_ZK_SUBMIT_BALLOT + "ballot_proof"),
             ),
             nullifier: Array.from(
-              decodeFixedBytesValue(fields.nullifier, 32, "zk.SubmitBallot.nullifier"),
+              decodeFixedBytesValue(fields.nullifier, 32, (TEXT_ZK_SUBMIT_BALLOT + "nullifier")),
             ),
           },
         },
       };
     }
     case FINALIZE_ELECTION_WIRE_ID: {
-      const fields = decodeStructFields(payload, "zk.FinalizeElection", [
-        "election_id",
+      const fields = decodeStructFields(payload, ("zk." + TEXT_FINALIZE_ELECTION), [
+        WIRE_FIELD_ELECTION_ID,
         "tally",
         "tally_proof",
       ]);
@@ -4665,59 +4376,49 @@ function decodeZkInstructionPayload(wireId, payload) {
           FinalizeElection: {
             election_id: decodeStringValue(
               fields.election_id,
-              "zk.FinalizeElection.election_id",
+              (TEXT_ZK_FINALIZE_ELECTION + TEXT_ELECTION_ID),
             ),
             tally: decodeNoritoVec(
               fields.tally,
               (entry, index) =>
-                decodeU64NumberValue(entry, `zk.FinalizeElection.tally[${index}]`),
-              "zk.FinalizeElection.tally",
+                decodeU64NumberValue(entry, `${TEXT_ZK_FINALIZE_ELECTION}tally[${index}]`),
+              (TEXT_ZK_FINALIZE_ELECTION + "tally"),
             ),
             tally_proof: decodeProofAttachmentValue(
               fields.tally_proof,
-              "zk.FinalizeElection.tally_proof",
+              (TEXT_ZK_FINALIZE_ELECTION + "tally_proof"),
             ),
           },
         },
       };
     }
     default:
-      rejectError(`unsupported zk wire id ${wireId}`);
+      rejectError(`${TEXT_UNSUPPORTED}zk wire id ${wireId}`);
   }
 }
 
 function decodeRwaInstructionPayload(payload) {
   const reader = new BufferReader(payload, "Rwa");
-  const variantIndex = reader.readU32LE("variantIndex");
+  const variantIndex = reader.readU32LE(FIELD_VARIANT_INDEX);
   const body = readNoritoField(reader, "body");
   reader.assertEof();
   switch (variantIndex) {
     case 0: {
-      const fields = decodeStructFields(body, "RegisterRwa", ["rwa"]);
-      return { RegisterRwa: { rwa: decodeNewRwaValue(fields.rwa, "RegisterRwa.rwa") } };
+
+      return { RegisterRwa: decodeRecordFields(body, "RegisterRwa", RegisterRwaInstructionFields) };
     }
     case 1: {
-      const fields = decodeStructFields(body, "TransferRwa", [
-        "source",
-        "rwa",
-        "quantity",
-        "destination",
-      ]);
+
       return {
-        TransferRwa: {
-          source: decodeAccountIdValue(fields.source, "TransferRwa.source"),
-          rwa: decodeRwaIdValue(fields.rwa, "TransferRwa.rwa"),
-          quantity: decodeQuantityValue(fields.quantity, "TransferRwa.quantity"),
-          destination: decodeAccountIdValue(fields.destination, "TransferRwa.destination"),
-        },
+        TransferRwa: decodeRecordFields(body, "TransferRwa", TransferRwaInstructionFields),
       };
     }
     case 2: {
       const fields = decodeStructFields(body, "MergeRwas", [
         "parents",
-        "primary_reference",
+        TEXT_PRIMARY_REFERENCE,
         "status",
-        "metadata",
+        FIELD_METADATA,
       ]);
       return {
         MergeRwas: {
@@ -4728,7 +4429,7 @@ function decodeRwaInstructionPayload(payload) {
           ),
           primary_reference: decodeStringValue(
             fields.primary_reference,
-            "MergeRwas.primary_reference",
+            ("MergeRwas." + TEXT_PRIMARY_REFERENCE),
           ),
           status: decodeOptionValue(fields.status, decodeNameValue, "MergeRwas.status"),
           metadata: decodeMetadataValue(fields.metadata, "MergeRwas.metadata"),
@@ -4746,49 +4447,31 @@ function decodeRwaInstructionPayload(payload) {
     case 7:
       return decodeSimpleRwaQuantityInstruction(body, "ReleaseRwa");
     case 8: {
-      const fields = decodeStructFields(body, "ForceTransferRwa", [
-        "rwa",
-        "quantity",
-        "destination",
-      ]);
+
       return {
-        ForceTransferRwa: {
-          rwa: decodeRwaIdValue(fields.rwa, "ForceTransferRwa.rwa"),
-          quantity: decodeQuantityValue(fields.quantity, "ForceTransferRwa.quantity"),
-          destination: decodeAccountIdValue(fields.destination, "ForceTransferRwa.destination"),
-        },
+        ForceTransferRwa: decodeRecordFields(body, "ForceTransferRwa", ForceTransferRwaInstructionFields),
       };
     }
     case 9: {
-      const fields = decodeStructFields(body, "SetRwaControls", ["rwa", "controls"]);
+
       return {
-        SetRwaControls: {
-          rwa: decodeRwaIdValue(fields.rwa, "SetRwaControls.rwa"),
-          controls: decodeRwaControlPolicyValue(fields.controls, "SetRwaControls.controls"),
-        },
+        SetRwaControls: decodeRecordFields(body, "SetRwaControls", SetRwaControlsInstructionFields),
       };
     }
     case 10: {
-      const fields = decodeStructFields(body, "SetRwaKeyValue", ["rwa", "key", "value"]);
+
       return {
-        SetRwaKeyValue: {
-          rwa: decodeRwaIdValue(fields.rwa, "SetRwaKeyValue.rwa"),
-          key: decodeNameValue(fields.key, "SetRwaKeyValue.key"),
-          value: decodeNestedJsonValue(fields.value, "SetRwaKeyValue.value"),
-        },
+        SetRwaKeyValue: decodeRecordFields(body, "SetRwaKeyValue", SetRwaKeyValueInstructionFields),
       };
     }
     case 11: {
-      const fields = decodeStructFields(body, "RemoveRwaKeyValue", ["rwa", "key"]);
+
       return {
-        RemoveRwaKeyValue: {
-          rwa: decodeRwaIdValue(fields.rwa, "RemoveRwaKeyValue.rwa"),
-          key: decodeNameValue(fields.key, "RemoveRwaKeyValue.key"),
-        },
+        RemoveRwaKeyValue: decodeRecordFields(body, "RemoveRwaKeyValue", RemoveRwaKeyValueInstructionFields),
       };
     }
     default:
-      rejectError(`Internal Norito decoder does not support RWA variant ${variantIndex}`);
+      rejectError(`${TEXT_INTERNAL_NORITO_DECODER_DOES_NOT_SUPPORT}RWA variant ${variantIndex}`);
   }
 }
 
@@ -4802,7 +4485,7 @@ function decodeSimpleRwaInstruction(payload, name) {
 }
 
 function decodeSimpleRwaQuantityInstruction(payload, name) {
-  const fields = decodeStructFields(payload, name, ["rwa", "quantity"]);
+  const fields = decodeStructFields(payload, name, ["rwa", FIELD_QUANTITY]);
   return {
     [name]: {
       rwa: decodeRwaIdValue(fields.rwa, `${name}.rwa`),
@@ -4821,7 +4504,7 @@ function encodeTransferObjectBody(
   return encodeStructValue([
     [encodeSource(value.source, `${context}.source`)],
     [encodeObject(value.object, `${context}.object`)],
-    [encodeDestination(value.destination, `${context}.destination`)],
+    [encodeDestination(value.destination, `${context}${TEXT_DESTINATION}`)],
   ]);
 }
 
@@ -4832,11 +4515,11 @@ function decodeTransferObjectBody(
   decodeObject,
   decodeDestination,
 ) {
-  const fields = decodeStructFields(payload, context, ["source", JS_TYPE_OBJECT, "destination"]);
+  const fields = decodeStructFields(payload, context, ["source", JS_TYPE_OBJECT, FIELD_DESTINATION]);
   return {
     source: decodeSource(fields.source, `${context}.source`),
     object: decodeObject(fields.object, `${context}.object`),
-    destination: decodeDestination(fields.destination, `${context}.destination`),
+    destination: decodeDestination(fields.destination, `${context}${TEXT_DESTINATION}`),
   };
 }
 
@@ -4897,14 +4580,14 @@ function decodeOptionValue(payload, decode, context) {
 
 function encodeBoolValue(value, context) {
   if (typeof value !== "boolean") {
-    rejectType(`${context} must be a boolean`);
+    rejectType(`${context}${TEXT_MUST_BE_A}boolean`);
   }
   return Buffer.of(value ? 1 : 0);
 }
 
 function decodeBoolValue(payload, context) {
   if (payload.length !== 1 || (payload[0] !== 0 && payload[0] !== 1)) {
-    rejectError(`${context} must contain a canonical boolean byte`);
+    rejectError(`${context}${TEXT_MUST_CONTAIN}a canonical boolean byte`);
   }
   return payload[0] === 1;
 }
@@ -4912,14 +4595,14 @@ function decodeBoolValue(payload, context) {
 function encodeFixedBytesValue(value, length, context) {
   const bytes = Buffer.from(normalizeBytes(value));
   if (bytes.length !== length) {
-    rejectType(`${context} must contain exactly ${length} bytes`);
+    rejectType(`${context}${TEXT_MUST_CONTAIN_EXACTLY}${length} bytes`);
   }
   return bytes;
 }
 
 function decodeFixedBytesValue(payload, length, context) {
   if (payload.length !== length) {
-    rejectError(`${context} must contain exactly ${length} bytes`);
+    rejectError(`${context}${TEXT_MUST_CONTAIN_EXACTLY}${length} bytes`);
   }
   return Buffer.from(payload);
 }
@@ -4988,7 +4671,7 @@ function decodeU64NumberValue(payload, context) {
 function encodeDomainIdValue(value, context) {
   const literal = assertExactNonEmptyString(value, context);
   if (literal.trim() !== literal) {
-    rejectType(`${context} must not contain surrounding whitespace`);
+    rejectType(`${context}${TEXT_MUST_NOT_CONTAIN}surrounding whitespace`);
   }
   const segments = literal.split(".");
   if (segments.length !== 2 || segments.some((segment) => segment.length === 0)) {
@@ -5022,7 +4705,7 @@ function decodeArchivedDomainIdValue(payload, context) {
 function encodeNameValue(value, context) {
   const literal = assertExactNonEmptyString(value, context);
   if (/\p{White_Space}/u.test(literal)) {
-    rejectType(`${context} must not contain whitespace`);
+    rejectType(`${context}${TEXT_MUST_NOT_CONTAIN}whitespace`);
   }
   if (/[@#$]/u.test(literal)) {
     rejectType(`${context} contains a reserved Name character`);
@@ -5033,7 +4716,7 @@ function encodeNameValue(value, context) {
 function decodeNameValue(payload, context) {
   const literal = decodeStringValue(payload, context);
   if (literal.length === 0 || /\p{White_Space}/u.test(literal)) {
-    rejectType(`${context} must be a non-empty Name without whitespace`);
+    rejectType(`${context}${TEXT_MUST_BE_A}non-empty Name without whitespace`);
   }
   if (/[@#$]/u.test(literal)) {
     rejectType(`${context} contains a reserved Name character`);
@@ -5092,7 +4775,7 @@ function decodeRwaIdValue(payload, context) {
 
 function encodeCustomInstructionPayload(value) {
   if (!isPlainObject(value)) {
-    rejectType("Custom must be an object");
+    rejectType(("Custom" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   return encodeStructValue([
     [encodeNoritoField(encodeNoritoJsonValue(value.payload ?? null))],
@@ -5100,8 +4783,8 @@ function encodeCustomInstructionPayload(value) {
 }
 
 function decodeCustomInstructionPayload(payload) {
-  const fields = decodeStructFields(payload, "Custom", ["payload"]);
-  return { payload: decodeNestedJsonValue(fields.payload, "Custom.payload") };
+
+  return decodeRecordFields(payload, "Custom", CustomInstructionFields);
 }
 
 function encodeNewDomainValue(value, context) {
@@ -5115,7 +4798,7 @@ function encodeNewDomainValue(value, context) {
 const NewDomainValueFields = [
     ["id", decodeDomainIdValue, 0],
     ["logo", decodeSorafsUriValue, 1],
-    ["metadata", decodeMetadataValue, 0],
+    [FIELD_METADATA, decodeMetadataValue, 0],
   ];
 
   function decodeNewDomainValue(payload, context) {
@@ -5136,7 +4819,7 @@ function encodeNewAccountValue(value, context) {
 
 const NewAccountValueFields = [
     ["id", decodeAccountIdValue, 0],
-    ["metadata", decodeMetadataValue, 0],
+    [FIELD_METADATA, decodeMetadataValue, 0],
     ["label", decodeStringValue, 1],
     ["uaid", decodeJsonValue, 1],
     ["opaque_ids", decodeJsonValue, 2],
@@ -5148,7 +4831,7 @@ const NewAccountValueFields = [
 
 function encodeNewAssetDefinitionValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   const hasOwningDomain = Object.prototype.hasOwnProperty.call(value, "owning_domain");
   const hasCamelOwningDomain = Object.prototype.hasOwnProperty.call(value, "owningDomain");
@@ -5164,7 +4847,7 @@ function encodeNewAssetDefinitionValue(value, context) {
   }
   const owningDomain = hasOwningDomain ? value.owning_domain : value.owningDomain;
   if (owningDomain === undefined) {
-    rejectType(`${context}.owning_domain must be a domain identifier or null`);
+    rejectType(`${context}.owning_domain${TEXT_MUST_BE}a domain identifier or null`);
   }
   const hasBalanceScopePolicy = Object.prototype.hasOwnProperty.call(
     value,
@@ -5187,14 +4870,14 @@ function encodeNewAssetDefinitionValue(value, context) {
   const balanceScopePolicy = hasBalanceScopePolicy
     ? value.balance_scope_policy
     : value.balanceScopePolicy;
-  if (balanceScopePolicy === "DataspaceRestricted" && owningDomain === null) {
+  if (balanceScopePolicy === WIRE_TYPE_DATASPACE_RESTRICTED && owningDomain === null) {
     rejectType(`${context}.owning_domain is required for DataspaceRestricted balances`);
   }
   if (
     Object.prototype.hasOwnProperty.call(value, "confidential_policy") ||
     Object.prototype.hasOwnProperty.call(value, "confidentialPolicy")
   ) {
-    rejectType(`${context} cannot carry confidential policy; use RegisterZkAsset with canonical verifier bindings`);
+    rejectType(`${context} cannot carry confidential policy; use RegisterZkAsset with${TEXT_CANONICAL}verifier bindings`);
   }
   return encodeStructValue([
     [encodeAssetDefinitionIdValue(value.id, `${context}.id`)],
@@ -5208,7 +4891,7 @@ function encodeNewAssetDefinitionValue(value, context) {
       ),
     ],
     [encodeNumericSpecValue(value.spec ?? { scale: null }, `${context}.spec`)],
-    [encodeMintableValue(value.mintable ?? "Infinitely", `${context}.mintable`)],
+    [encodeMintableValue(value.mintable ?? WIRE_TYPE_INFINITELY, `${context}.mintable`)],
     [encodeOptionValue(value.logo ?? null, encodeSorafsUriValue, `${context}.logo`)],
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
     [
@@ -5229,7 +4912,7 @@ const NewAssetDefinitionValueFields = [
     ["spec", decodeNumericSpecValue, 0],
     ["mintable", decodeMintableValue, 0],
     ["logo", decodeSorafsUriValue, 1],
-    ["metadata", decodeMetadataValue, 0],
+    [FIELD_METADATA, decodeMetadataValue, 0],
     ["balance_scope_policy", decodeAssetBalancePolicyValue, 0],
     ["owning_domain", decodeDomainIdValue, 1],
   ];
@@ -5240,7 +4923,7 @@ const NewAssetDefinitionValueFields = [
 
 function encodeMetadataValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   const entries = Object.keys(value)
     .sort()
@@ -5284,10 +4967,10 @@ function decodeNestedValue(payload, decode, context) {
 
 function decodeCanonicalReplicationId(value, context) {
   if (typeof value !== JS_TYPE_STRING || !/^[0-9a-f]{64}$/u.test(value)) {
-    rejectType(`${context} must contain exactly 64 lowercase hexadecimal characters`);
+    rejectType(`${context}${TEXT_MUST_CONTAIN_EXACTLY}64 lowercase hexadecimal characters`);
   }
   if (/^0{64}$/u.test(value)) {
-    rejectType(`${context} must not be the zero identifier`);
+    rejectType(`${context}${TEXT_MUST_NOT_BE}the zero identifier`);
   }
   return Buffer.from(value, HEX_ENCODING);
 }
@@ -5303,14 +4986,14 @@ function decodeReplicationIdValue(payload, context) {
     `${context}.value`,
   );
   if (bytes.every((byte) => byte === 0)) {
-    rejectType(`${context} must not be the zero identifier`);
+    rejectType(`${context}${TEXT_MUST_NOT_BE}the zero identifier`);
   }
   return bytes.toString(HEX_ENCODING);
 }
 
 function assertExactObjectKeys(value, expectedKeys, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertOnlyObjectKeys(value, expectedKeys, context);
   const missing = expectedKeys.find(
@@ -5324,18 +5007,18 @@ function assertExactObjectKeys(value, expectedKeys, context) {
 function decodeNonzeroFixedBytesHex(payload, context) {
   const bytes = decodeFixedBytesValue(payload, 32, context);
   if (bytes.every((byte) => byte === 0)) {
-    rejectType(`${context} must not be zero`);
+    rejectType(`${context}${TEXT_MUST_NOT_BE}zero`);
   }
   return bytes.toString(HEX_ENCODING);
 }
 
 function encodeExactAccountIdValue(value, context) {
   if (typeof value !== JS_TYPE_STRING || value.trim() !== value) {
-    rejectType(`${context} must be an exact canonical I105 account id`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_EXACT_CANONICAL_I105_ACCOUNT_ID}`);
   }
   const canonical = normalizeAccountId(value, context);
   if (canonical !== value) {
-    rejectType(`${context} must be an exact canonical I105 account id`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_EXACT_CANONICAL_I105_ACCOUNT_ID}`);
   }
   return encodeAccountIdValue(canonical, context);
 }
@@ -5343,18 +5026,18 @@ function encodeExactAccountIdValue(value, context) {
 function encodeProviderIngestCompletionSignerPolicyValue(value, context) {
   assertExactObjectKeys(
     value,
-    ["policy_id", "revision", "predecessor_digest", "policy_digest"],
+    ["policy_id", "revision", TEXT_PREDECESSOR_DIGEST, "policy_digest"],
     context,
   );
   const revision = normalizeU64Input(value.revision, `${context}.revision`);
   if (revision === 0n) {
-    rejectType(`${context}.revision must be greater than zero`);
+    rejectType(`${context}.revision${TEXT_MUST_BE_GREATER_THAN_ZERO}`);
   }
   if (revision === 1n && value.predecessor_digest !== null) {
-    rejectType(`${context}.predecessor_digest must be null at revision 1`);
+    rejectType(`${context}${TEXT_PREDECESSOR_DIGEST_MUST_BE_NULL_AT_REVISION_1}`);
   }
   if (revision > 1n && value.predecessor_digest === null) {
-    rejectType(`${context}.predecessor_digest is required after revision 1`);
+    rejectType(`${context}${TEXT_PREDECESSOR_DIGEST_IS_REQUIRED_AFTER_REVISION_1}`);
   }
   const policyId = decodeCanonicalReplicationId(
     value.policy_id,
@@ -5376,7 +5059,7 @@ function encodeProviderIngestCompletionSignerPolicyValue(value, context) {
             32,
             innerContext,
           ),
-        `${context}.predecessor_digest`,
+        `${context}.${TEXT_PREDECESSOR_DIGEST}`,
       ),
     ],
     [policyDigest],
@@ -5387,29 +5070,29 @@ function decodeProviderIngestCompletionSignerPolicyValue(payload, context) {
   const fields = decodeStructFields(payload, context, [
     "policy_id",
     "revision",
-    "predecessor_digest",
+    TEXT_PREDECESSOR_DIGEST,
     "policy_digest",
   ]);
   const revision = decodeU64NumberValue(fields.revision, `${context}.revision`);
   if (revision === 0) {
-    rejectType(`${context}.revision must be greater than zero`);
+    rejectType(`${context}.revision${TEXT_MUST_BE_GREATER_THAN_ZERO}`);
   }
   const predecessorDigest = decodeOptionValue(
     fields.predecessor_digest,
     (entry, innerContext) => {
       const bytes = decodeFixedByteArrayArchiveValue(entry, 32, innerContext);
       if (bytes.every((byte) => byte === 0)) {
-        rejectType(`${innerContext} must not be zero`);
+        rejectType(`${innerContext}${TEXT_MUST_NOT_BE}zero`);
       }
       return bytes.toString(HEX_ENCODING);
     },
-    `${context}.predecessor_digest`,
+    `${context}.${TEXT_PREDECESSOR_DIGEST}`,
   );
   if (revision === 1 && predecessorDigest !== null) {
-    rejectType(`${context}.predecessor_digest must be null at revision 1`);
+    rejectType(`${context}${TEXT_PREDECESSOR_DIGEST_MUST_BE_NULL_AT_REVISION_1}`);
   }
   if (revision > 1 && predecessorDigest === null) {
-    rejectType(`${context}.predecessor_digest is required after revision 1`);
+    rejectType(`${context}${TEXT_PREDECESSOR_DIGEST_IS_REQUIRED_AFTER_REVISION_1}`);
   }
   return {
     policy_id: decodeNonzeroFixedBytesHex(
@@ -5431,25 +5114,12 @@ function encodeProviderIngestCompletionAuthorityValue(value, context) {
     ["provider_owner", "signer_policy"],
     context,
   );
-  return encodeStructValue([
-    [
-      encodeExactAccountIdValue(
-        value.provider_owner,
-        `${context}.provider_owner`,
-      ),
-    ],
-    [
-      encodeProviderIngestCompletionSignerPolicyValue(
-        value.signer_policy,
-        `${context}.signer_policy`,
-      ),
-    ],
-  ]);
+  return encodeCanonicalRecordFields(value, context, ProviderIngestCompletionAuthorityValueFields);
 }
 
 const ProviderIngestCompletionAuthorityValueFields = [
-    ["provider_owner", decodeAccountIdValue, 0],
-    ["signer_policy", decodeProviderIngestCompletionSignerPolicyValue, 0],
+    ["provider_owner", decodeAccountIdValue, 0, encodeExactAccountIdValue, 0],
+    ["signer_policy", decodeProviderIngestCompletionSignerPolicyValue, 0, encodeProviderIngestCompletionSignerPolicyValue, 0],
   ];
 
   function decodeProviderIngestCompletionAuthorityValue(payload, context) {
@@ -5460,7 +5130,7 @@ function encodeProviderIngestFinalizedAnchorValue(value, context) {
   assertExactObjectKeys(value, ["height", "block_hash"], context);
   const height = normalizeU64Input(value.height, `${context}.height`);
   if (height === 0n) {
-    rejectType(`${context}.height must be greater than zero`);
+    rejectType(`${context}.height${TEXT_MUST_BE_GREATER_THAN_ZERO}`);
   }
   return encodeStructValue([
     [encodeU64Value(height, `${context}.height`)],
@@ -5477,7 +5147,7 @@ function decodeProviderIngestFinalizedAnchorValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["height", "block_hash"]);
   const height = decodeU64NumberValue(fields.height, `${context}.height`);
   if (height === 0) {
-    rejectType(`${context}.height must be greater than zero`);
+    rejectType(`${context}.height${TEXT_MUST_BE_GREATER_THAN_ZERO}`);
   }
   return {
     height,
@@ -5488,300 +5158,57 @@ function decodeProviderIngestFinalizedAnchorValue(payload, context) {
   };
 }
 
-function decodeReplicationAssignmentValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "provider_id",
-    "slice_gib",
-    "lane",
-  ]);
-  const providerId = decodeFixedBytesValue(
-    fields.provider_id,
-    32,
-    `${context}.provider_id`,
-  );
-  if (providerId.every((byte) => byte === 0)) {
-    rejectType(`${context}.provider_id must not be zero`);
-  }
-  const sliceGib = decodeU64Value(fields.slice_gib, `${context}.slice_gib`);
-  if (sliceGib === "0") {
-    rejectType(`${context}.slice_gib must be greater than zero`);
-  }
-  const lane = decodeOptionValue(
-    fields.lane,
-    decodeStringValue,
-    `${context}.lane`,
-  );
-  if (
-    lane !== null &&
-    (lane.length === 0 ||
-      Buffer.byteLength(lane, UTF8_ENCODING) > 64 ||
-      !/^[a-z0-9._-]+$/u.test(lane))
-  ) {
-    rejectType(`${context}.lane must be a canonical lane label`);
-  }
-  return {
-    providerIdHex: providerId.toString(HEX_ENCODING),
-    sliceGiB: sliceGib,
-    lane,
-  };
-}
-
-function decodeReplicationOrderSlaValue(payload, context) {
-  const fields = decodeStructFields(payload, context, [
-    "ingest_deadline_secs",
-    "min_availability_percent_milli",
-    "min_por_success_percent_milli",
-  ]);
-  const ingestDeadlineSecs = decodeU32Value(
-    fields.ingest_deadline_secs,
-    `${context}.ingest_deadline_secs`,
-  );
-  const minAvailabilityPercentMilli = decodeU32Value(
-    fields.min_availability_percent_milli,
-    `${context}.min_availability_percent_milli`,
-  );
-  const minPorSuccessPercentMilli = decodeU32Value(
-    fields.min_por_success_percent_milli,
-    `${context}.min_por_success_percent_milli`,
-  );
-  if (ingestDeadlineSecs === 0) {
-    rejectType(`${context}.ingest_deadline_secs must be greater than zero`);
-  }
-  if (
-    minAvailabilityPercentMilli === 0 ||
-    minAvailabilityPercentMilli > 100_000 ||
-    minPorSuccessPercentMilli === 0 ||
-    minPorSuccessPercentMilli > 100_000
-  ) {
-    rejectType(`${context} percentage thresholds must be in 1..=100000`);
-  }
-  return {
-    ingestDeadlineSecs,
-    minAvailabilityPercentMilli,
-    minPorSuccessPercentMilli,
-  };
-}
-
-function decodeReplicationOrderMetadataValue(payload, context) {
-  const fields = decodeStructFields(payload, context, ["key", "value"]);
-  const key = decodeStringValue(fields.key, `${context}.key`);
-  const value = decodeStringValue(fields.value, `${context}.value`);
-  if (
-    key.length === 0 ||
-    key.trim() !== key ||
-    Buffer.byteLength(key, UTF8_ENCODING) > 128 ||
-    !/^[a-z0-9._-]+$/u.test(key)
-  ) {
-    rejectType(`${context}.key must be a canonical metadata key`);
-  }
-  if (
-    value.length === 0 ||
-    value.trim() !== value ||
-    Buffer.byteLength(value, UTF8_ENCODING) > 4096 ||
-    /\p{Cc}/u.test(value)
-  ) {
-    rejectType(`${context}.value must be canonical and at most 4096 bytes`);
-  }
-  return { key, value };
-}
-
-/**
- * Validate a canonical Norito `ReplicationOrderV1` archive and its optional
- * instruction-level order identifier binding.
- *
- * @param {ArrayBufferView | ArrayBuffer | Buffer} value
- * @param {string | null} [expectedOrderId]
- * @returns {{orderId: string, manifestCidBase64: string, manifestDigestHex: string, chunkingProfile: string, targetReplicas: number, assignments: Array<{providerIdHex: string, sliceGiB: string, lane: string | null}>, providerIds: string[], issuedAt: string, deadlineAt: string, sla: {ingestDeadlineSecs: number, minAvailabilityPercentMilli: number, minPorSuccessPercentMilli: number}, metadata: Array<{key: string, value: string}>}}
- */
-export function validateSorafsReplicationOrderPayloadV1(
-  value,
-  expectedOrderId = null,
-) {
-  const bytes = Buffer.from(normalizeBytes(value));
-  if (
-    bytes.length === 0 ||
-    bytes.length > SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1
-  ) {
-    rejectType(`ReplicationOrderV1 payload must contain 1..${SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1} bytes`);
-  }
-  const frame = decodeNoritoFrame(
-    bytes,
-    "ReplicationOrderV1",
-    REPLICATION_ORDER_V1_SCHEMA_HASH,
-  );
-  const canonical = frameNoritoPayload(
-    frame.payload,
-    REPLICATION_ORDER_V1_SCHEMA_HASH,
-    frame.flags,
-  );
-  if (!canonical.equals(bytes)) {
-    rejectType("ReplicationOrderV1 payload must use canonical unpadded Norito framing");
-  }
-
-  return withNoritoLengthFlags(frame.flags, () => {
-    const fields = decodeStructFields(frame.payload, "ReplicationOrderV1", [
-      "version",
-      "order_id",
-      "manifest_cid",
-      "manifest_digest",
-      "chunking_profile",
-      "target_replicas",
-      "assignments",
-      "issued_at",
-      "deadline_at",
-      "sla",
-      "metadata",
-    ]);
-    if (decodeU8Value(fields.version, "ReplicationOrderV1.version") !== 1) {
-      rejectType("ReplicationOrderV1.version must be 1");
-    }
-    const orderIdBytes = decodeFixedBytesValue(
-      fields.order_id,
-      32,
-      "ReplicationOrderV1.order_id",
-    );
-    if (orderIdBytes.every((byte) => byte === 0)) {
-      rejectType("ReplicationOrderV1.order_id must not be zero");
-    }
-    const orderId = orderIdBytes.toString(HEX_ENCODING);
-    if (expectedOrderId !== null) {
-      const expected = decodeCanonicalReplicationId(
-        expectedOrderId,
-        ISSUE_ORDER_ID_CONTEXT,
-      );
-      if (!expected.equals(orderIdBytes)) {
-        rejectType("IssueReplicationOrder.order_id must match ReplicationOrderV1.order_id");
-      }
-    }
-
-    const manifestCid = decodeByteVecValue(
-      fields.manifest_cid,
-      "ReplicationOrderV1.manifest_cid",
-      36,
-    );
-    if (
-      manifestCid.length !== 36 ||
-      manifestCid[0] !== 1 ||
-      manifestCid[1] !== 0x71 ||
-      manifestCid[2] !== 0x1f ||
-      manifestCid[3] !== 32 ||
-      manifestCid.subarray(4).every((byte) => byte === 0)
-    ) {
-      rejectType("ReplicationOrderV1.manifest_cid must be canonical CIDv1/dag-cbor/BLAKE3-256 bytes");
-    }
-    const manifestDigestHex = decodeNonzeroFixedBytesHex(
-      fields.manifest_digest,
-      "ReplicationOrderV1.manifest_digest",
-    );
-    const chunkingProfile = decodeStringValue(
-      fields.chunking_profile,
-      "ReplicationOrderV1.chunking_profile",
-    );
-    if (!SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1.has(chunkingProfile)) {
-      rejectType("ReplicationOrderV1.chunking_profile must be a canonical registered handle");
-    }
-
-    const targetReplicas = decodeU16Value(
-      fields.target_replicas,
-      "ReplicationOrderV1.target_replicas",
-    );
-    if (targetReplicas === 0) {
-      rejectType("ReplicationOrderV1.target_replicas must be greater than zero");
-    }
-    const assignments = decodeNoritoVec(
-      fields.assignments,
-      (entry, index) =>
-        decodeReplicationAssignmentValue(
-          entry,
-          `ReplicationOrderV1.assignments[${index}]`,
-        ),
-      "ReplicationOrderV1.assignments",
-    );
-    if (
-      assignments.length === 0 ||
-      assignments.length > 1024 ||
-      targetReplicas > assignments.length
-    ) {
-      rejectType("ReplicationOrderV1 assignments must contain 1..1024 entries and cover target_replicas");
-    }
-    for (let index = 1; index < assignments.length; index += 1) {
-      if (assignments[index - 1].providerIdHex >= assignments[index].providerIdHex) {
-        rejectType("ReplicationOrderV1 assignments must use unique, strictly increasing provider_id values");
-      }
-    }
-
-    const issuedAt = decodeU64Value(
-      fields.issued_at,
-      "ReplicationOrderV1.issued_at",
-    );
-    const deadlineAt = decodeU64Value(
-      fields.deadline_at,
-      "ReplicationOrderV1.deadline_at",
-    );
-    if (BigInt(deadlineAt) <= BigInt(issuedAt)) {
-      rejectType("ReplicationOrderV1.deadline_at must be greater than issued_at");
-    }
-    const sla = decodeReplicationOrderSlaValue(
-      fields.sla,
-      "ReplicationOrderV1.sla",
-    );
-    if (BigInt(sla.ingestDeadlineSecs) > BigInt(deadlineAt) - BigInt(issuedAt)) {
-      rejectType("ReplicationOrderV1.sla.ingest_deadline_secs exceeds the order window");
-    }
-    const metadata = decodeNoritoVec(
-      fields.metadata,
-      (entry, index) =>
-        decodeReplicationOrderMetadataValue(
-          entry,
-          `ReplicationOrderV1.metadata[${index}]`,
-        ),
-      "ReplicationOrderV1.metadata",
-      64,
-    );
-    const metadataKeys = new Set();
-    let metadataBytes = 0;
-    for (const entry of metadata) {
-      if (metadataKeys.has(entry.key)) {
-        rejectType("ReplicationOrderV1.metadata contains a duplicate key");
-      }
-      metadataKeys.add(entry.key);
-      metadataBytes +=
-        Buffer.byteLength(entry.key, UTF8_ENCODING) +
-        Buffer.byteLength(entry.value, UTF8_ENCODING);
-    }
-    if (metadataBytes > 64 * 1024) {
-      rejectType("ReplicationOrderV1.metadata exceeds the 65536-byte limit");
-    }
-    return {
-      orderId,
-      manifestCidBase64: manifestCid.toString(BASE64_ENCODING),
-      manifestDigestHex,
-      chunkingProfile,
-      targetReplicas,
-      assignments,
-      providerIds: assignments.map((assignment) => assignment.providerIdHex),
-      issuedAt,
-      deadlineAt,
-      sla,
-      metadata,
-    };
-  });
-}
+export const validateSorafsReplicationOrderPayloadV1 = /* @__PURE__ */ createNoritoReplicationOrderValidator(
+  BASE64_ENCODING,
+  FIELD_METADATA,
+  HEX_ENCODING,
+  ISSUE_ORDER_ID_CONTEXT,
+  REPLICATION_ORDER_V1_SCHEMA_HASH,
+  SORAFS_REPLICATION_ORDER_CHUNKER_HANDLES_V1,
+  SORAFS_REPLICATION_ORDER_MAX_PAYLOAD_BYTES_V1,
+  TEXT_CANONICAL,
+  TEXT_EXCEEDS_THE,
+  TEXT_ISSUE_REPLICATION_ORDER,
+  TEXT_MUST_BE,
+  TEXT_MUST_BE_GREATER_THAN_ZERO,
+  TEXT_MUST_CONTAIN,
+  TEXT_MUST_NOT_BE,
+  TEXT_REPLICATION_ORDER_V1,
+  UTF8_ENCODING,
+  WIRE_FIELD_ORDER_ID,
+  decodeByteVecValue,
+  decodeCanonicalReplicationId,
+  decodeFixedBytesValue,
+  decodeNonzeroFixedBytesHex,
+  decodeNoritoFrame,
+  decodeNoritoVec,
+  decodeOptionValue,
+  decodeStringValue,
+  decodeStructFields,
+  decodeU16Value,
+  decodeU32Value,
+  decodeU64Value,
+  decodeU8Value,
+  frameNoritoPayload,
+  normalizeBytes,
+  rejectType,
+  withNoritoLengthFlags,
+);
 
 function encodeReplicationOrderInstruction(instruction) {
   if (isPlainObject(instruction.IssueReplicationOrder)) {
-    assertOnlyObjectKeys(instruction, ["IssueReplicationOrder"], "instruction");
+    assertOnlyObjectKeys(instruction, [WIRE_TYPE_ISSUE_REPLICATION_ORDER], FIELD_INSTRUCTION);
     const value = instruction.IssueReplicationOrder;
     assertExactObjectKeys(
       value,
       [
-        "order_id",
+        WIRE_FIELD_ORDER_ID,
         "order_payload",
         "issued_epoch",
         "deadline_epoch",
         "musubi_archive",
       ],
-      "IssueReplicationOrder",
+      WIRE_TYPE_ISSUE_REPLICATION_ORDER,
     );
     const orderPayload = decodeExactStandardBase64(
       value.order_payload,
@@ -5815,7 +5242,7 @@ function encodeReplicationOrderInstruction(instruction) {
           encodeOptionValue(
             value.musubi_archive,
             encodeReplicationIdValue,
-            "IssueReplicationOrder.musubi_archive",
+            (TEXT_ISSUE_REPLICATION_ORDER + "musubi_archive"),
           ),
         ],
       ]),
@@ -5824,21 +5251,21 @@ function encodeReplicationOrderInstruction(instruction) {
   if (isPlainObject(instruction.CompleteReplicationOrder)) {
     assertExactObjectKeys(
       instruction,
-      ["CompleteReplicationOrder"],
-      "instruction",
+      [WIRE_TYPE_COMPLETE_REPLICATION_ORDER],
+      FIELD_INSTRUCTION,
     );
     const value = instruction.CompleteReplicationOrder;
     assertExactObjectKeys(
       value,
       [
-        "order_id",
+        WIRE_FIELD_ORDER_ID,
         "provider_id",
-        "completion_epoch",
-        "expected_authority",
-        "expected_assignment_revision",
-        "finalized_anchor",
+        TEXT_COMPLETION_EPOCH,
+        TEXT_EXPECTED_AUTHORITY,
+        TEXT_EXPECTED_ASSIGNMENT_REVISION,
+        TEXT_FINALIZED_ANCHOR,
       ],
-      "CompleteReplicationOrder",
+      WIRE_TYPE_COMPLETE_REPLICATION_ORDER,
     );
     const expectedAssignmentRevision = normalizeU64Input(
       value.expected_assignment_revision,
@@ -5853,23 +5280,23 @@ function encodeReplicationOrderInstruction(instruction) {
         [
           encodeReplicationIdValue(
             value.order_id,
-            "CompleteReplicationOrder.order_id",
+            (TEXT_COMPLETE_REPLICATION_ORDER + "order_id"),
           ),
         ],
         [
           encodeReplicationIdValue(
             value.provider_id,
-            "CompleteReplicationOrder.provider_id",
+            (TEXT_COMPLETE_REPLICATION_ORDER + "provider_id"),
           ),
         ],
         [encodeU64Value(
           value.completion_epoch,
-          "CompleteReplicationOrder.completion_epoch",
+          (TEXT_COMPLETE_REPLICATION_ORDER + TEXT_COMPLETION_EPOCH),
         )],
         [
           encodeProviderIngestCompletionAuthorityValue(
             value.expected_authority,
-            "CompleteReplicationOrder.expected_authority",
+            (TEXT_COMPLETE_REPLICATION_ORDER + TEXT_EXPECTED_AUTHORITY),
           ),
         ],
         [
@@ -5881,43 +5308,32 @@ function encodeReplicationOrderInstruction(instruction) {
         [
           encodeProviderIngestFinalizedAnchorValue(
             value.finalized_anchor,
-            "CompleteReplicationOrder.finalized_anchor",
+            (TEXT_COMPLETE_REPLICATION_ORDER + TEXT_FINALIZED_ANCHOR),
           ),
         ],
       ]),
     );
   }
   if (isPlainObject(instruction.ExpireReplicationOrder)) {
-    assertOnlyObjectKeys(instruction, ["ExpireReplicationOrder"], "instruction");
+    assertOnlyObjectKeys(instruction, [WIRE_TYPE_EXPIRE_REPLICATION_ORDER], FIELD_INSTRUCTION);
     const value = instruction.ExpireReplicationOrder;
     assertOnlyObjectKeys(
       value,
-      ["order_id", "expiration_epoch"],
-      "ExpireReplicationOrder",
+      [WIRE_FIELD_ORDER_ID, TEXT_EXPIRATION_EPOCH],
+      WIRE_TYPE_EXPIRE_REPLICATION_ORDER,
     );
     return encodeInstructionEnvelope(
       EXPIRE_REPLICATION_ORDER_WIRE_ID,
-      encodeStructValue([
-        [
-          encodeReplicationIdValue(
-            value.order_id,
-            "ExpireReplicationOrder.order_id",
-          ),
-        ],
-        [encodeU64Value(
-          value.expiration_epoch,
-          "ExpireReplicationOrder.expiration_epoch",
-        )],
-      ]),
+      encodeCanonicalRecordFields(value, TEXT_EXPIRE_REPLICATION_ORDER_2, CanonicalEncodingFields3),
     );
   }
-  rejectType("unsupported SoraFS replication-order instruction");
+  rejectType((TEXT_UNSUPPORTED + "SoraFS replication-order instruction"));
 }
 
 function decodeReplicationOrderInstructionPayload(wireId, payload) {
   if (wireId === ISSUE_REPLICATION_ORDER_WIRE_ID) {
-    const fields = decodeStructFields(payload, "IssueReplicationOrder", [
-      "order_id",
+    const fields = decodeStructFields(payload, WIRE_TYPE_ISSUE_REPLICATION_ORDER, [
+      WIRE_FIELD_ORDER_ID,
       "order_payload",
       "issued_epoch",
       "deadline_epoch",
@@ -5943,7 +5359,7 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
     const musubiArchive = decodeOptionValue(
       fields.musubi_archive,
       decodeReplicationIdValue,
-      "IssueReplicationOrder.musubi_archive",
+      (TEXT_ISSUE_REPLICATION_ORDER + "musubi_archive"),
     );
     if (deadlineEpoch <= issuedEpoch) {
       rejectType(ISSUE_ORDER_DEADLINE_MESSAGE);
@@ -5959,13 +5375,13 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
     };
   }
   if (wireId === COMPLETE_REPLICATION_ORDER_WIRE_ID) {
-    const fields = decodeStructFields(payload, "CompleteReplicationOrder", [
-      "order_id",
+    const fields = decodeStructFields(payload, WIRE_TYPE_COMPLETE_REPLICATION_ORDER, [
+      WIRE_FIELD_ORDER_ID,
       "provider_id",
-      "completion_epoch",
-      "expected_authority",
-      "expected_assignment_revision",
-      "finalized_anchor",
+      TEXT_COMPLETION_EPOCH,
+      TEXT_EXPECTED_AUTHORITY,
+      TEXT_EXPECTED_ASSIGNMENT_REVISION,
+      TEXT_FINALIZED_ANCHOR,
     ]);
     const expectedAssignmentRevision = decodeU64NumberValue(
       fields.expected_assignment_revision,
@@ -5978,41 +5394,41 @@ function decodeReplicationOrderInstructionPayload(wireId, payload) {
       CompleteReplicationOrder: {
         order_id: decodeReplicationIdValue(
           fields.order_id,
-          "CompleteReplicationOrder.order_id",
+          (TEXT_COMPLETE_REPLICATION_ORDER + "order_id"),
         ),
         provider_id: decodeReplicationIdValue(
           fields.provider_id,
-          "CompleteReplicationOrder.provider_id",
+          (TEXT_COMPLETE_REPLICATION_ORDER + "provider_id"),
         ),
         completion_epoch: decodeU64NumberValue(
           fields.completion_epoch,
-          "CompleteReplicationOrder.completion_epoch",
+          (TEXT_COMPLETE_REPLICATION_ORDER + TEXT_COMPLETION_EPOCH),
         ),
         expected_authority: decodeProviderIngestCompletionAuthorityValue(
           fields.expected_authority,
-          "CompleteReplicationOrder.expected_authority",
+          (TEXT_COMPLETE_REPLICATION_ORDER + TEXT_EXPECTED_AUTHORITY),
         ),
         expected_assignment_revision: expectedAssignmentRevision,
         finalized_anchor: decodeProviderIngestFinalizedAnchorValue(
           fields.finalized_anchor,
-          "CompleteReplicationOrder.finalized_anchor",
+          (TEXT_COMPLETE_REPLICATION_ORDER + TEXT_FINALIZED_ANCHOR),
         ),
       },
     };
   }
-  const fields = decodeStructFields(payload, "ExpireReplicationOrder", [
-    "order_id",
-    "expiration_epoch",
+  const fields = decodeStructFields(payload, WIRE_TYPE_EXPIRE_REPLICATION_ORDER, [
+    WIRE_FIELD_ORDER_ID,
+    TEXT_EXPIRATION_EPOCH,
   ]);
   return {
     ExpireReplicationOrder: {
       order_id: decodeReplicationIdValue(
         fields.order_id,
-        "ExpireReplicationOrder.order_id",
+        (TEXT_EXPIRE_REPLICATION_ORDER + "order_id"),
       ),
       expiration_epoch: decodeU64NumberValue(
         fields.expiration_epoch,
-        "ExpireReplicationOrder.expiration_epoch",
+        (TEXT_EXPIRE_REPLICATION_ORDER + TEXT_EXPIRATION_EPOCH),
       ),
     },
   };
@@ -6037,7 +5453,7 @@ function encodeGovernanceInstruction(instruction) {
       encodeCastPlainBallotPayload(instruction.CastPlainBallot),
     );
   }
-  rejectError(`Internal Norito canonicalization does not support governance instruction ${describeInstructionShape(instruction)}`);
+  rejectError(`${TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT}governance ${TEXT_INSTRUCTION}${describeInstructionShape(instruction)}`);
 }
 
 function encodeSocialInstruction(instruction) {
@@ -6055,10 +5471,7 @@ function encodeSocialInstruction(instruction) {
   if (isPlainObject(instruction.SendToTwitter)) {
     return encodeInstructionEnvelope(
       SEND_TO_TWITTER_WIRE_ID,
-      encodeStructValue([
-        [encodeKeyedHashValue(instruction.SendToTwitter.binding_hash, "SendToTwitter.binding_hash")],
-        [encodeQuantityValue(instruction.SendToTwitter.amount, "SendToTwitter.amount")],
-      ]),
+      encodeCanonicalRecordFields(instruction, "SendToTwitter", SendToTwitterInstructionFields, "SendToTwitter"),
     );
   }
   if (isPlainObject(instruction.CancelTwitterEscrow)) {
@@ -6072,7 +5485,7 @@ function encodeSocialInstruction(instruction) {
       ]),
     );
   }
-  rejectError(`Internal Norito canonicalization does not support social instruction ${describeInstructionShape(instruction)}`);
+  rejectError(`${TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT}social ${TEXT_INSTRUCTION}${describeInstructionShape(instruction)}`);
 }
 
 function encodeContractLifecycleOwnerValue(value, context) {
@@ -6083,11 +5496,11 @@ function encodeContractLifecycleOwnerValue(value, context) {
   }
   if (value.owner === "Parliament") {
     if (value.value !== null) {
-      rejectType(`${context}.value must be null for Parliament`);
+      rejectType(`${context}.value${TEXT_MUST_BE}null for Parliament`);
     }
     return encodeEnumTagValue(1);
   }
-  rejectType(`${context}.owner must be Account or Parliament`);
+  rejectType(`${context}.owner${TEXT_MUST_BE}Account or Parliament`);
 }
 
 function decodeContractLifecycleOwnerValue(payload, context) {
@@ -6105,7 +5518,7 @@ function decodeContractLifecycleOwnerValue(payload, context) {
     reader.assertEof();
     return { owner: "Parliament", value: null };
   }
-  rejectType(`${context}.owner contains unsupported variant ${tag}`);
+  rejectType(`${context}.owner contains ${TEXT_UNSUPPORTED}variant ${tag}`);
 }
 
 function encodeSmartContractInstruction(instruction) {
@@ -6129,97 +5542,31 @@ function encodeSmartContractInstructionCompact(instruction) {
   if (isPlainObject(instruction.RegisterSmartContractBytes)) {
     return encodeInstructionEnvelope(
       REGISTER_SMART_CONTRACT_BYTES_WIRE_ID,
-      encodeStructValue([
-        [encodeHashValue(
-          instruction.RegisterSmartContractBytes.code_hash,
-          "RegisterSmartContractBytes.code_hash",
-        )],
-        [encodeByteVecValue(
-          instruction.RegisterSmartContractBytes.code,
-          "RegisterSmartContractBytes.code",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_REGISTER_SMART_CONTRACT_BYTES, RegisterSmartContractBytesInstructionFields, TEXT_REGISTER_SMART_CONTRACT_BYTES),
     );
   }
   if (isPlainObject(instruction.DeactivateContractInstance)) {
     return encodeInstructionEnvelope(
       DEACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
-      encodeStructValue([
-        [encodeNoritoStringValue(
-          assertNonEmptyString(
-            instruction.DeactivateContractInstance.contract_address,
-            "DeactivateContractInstance.contract_address",
-          ),
-        )],
-        [encodeU64Value(
-          instruction.DeactivateContractInstance.expected_revision,
-          "DeactivateContractInstance.expected_revision",
-        )],
-        [encodeOptionValue(
-          instruction.DeactivateContractInstance.reason,
-          encodeNoritoStringValue,
-          "DeactivateContractInstance.reason",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_DEACTIVATE_CONTRACT_INSTANCE_2, DeactivateContractInstanceInstructionFields, TEXT_DEACTIVATE_CONTRACT_INSTANCE_2),
     );
   }
   if (isPlainObject(instruction.ActivateContractInstance)) {
     return encodeInstructionEnvelope(
       ACTIVATE_CONTRACT_INSTANCE_WIRE_ID,
-      encodeStructValue([
-        [encodeNoritoStringValue(
-          assertNonEmptyString(
-            instruction.ActivateContractInstance.contract_address,
-            "ActivateContractInstance.contract_address",
-          ),
-        )],
-        [encodeU64Value(
-          instruction.ActivateContractInstance.expected_revision,
-          "ActivateContractInstance.expected_revision",
-        )],
-        [encodeHashValue(
-          instruction.ActivateContractInstance.code_hash,
-          "ActivateContractInstance.code_hash",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_ACTIVATE_CONTRACT_INSTANCE, ActivateContractInstanceInstructionFields, TEXT_ACTIVATE_CONTRACT_INSTANCE),
     );
   }
   if (isPlainObject(instruction.SetContractParliamentDelegation)) {
     return encodeInstructionEnvelope(
       SET_CONTRACT_PARLIAMENT_DELEGATION_WIRE_ID,
-      encodeStructValue([
-        [encodeNoritoStringValue(assertNonEmptyString(
-          instruction.SetContractParliamentDelegation.contract_address,
-          "SetContractParliamentDelegation.contract_address",
-        ))],
-        [encodeU64Value(
-          instruction.SetContractParliamentDelegation.expected_revision,
-          "SetContractParliamentDelegation.expected_revision",
-        )],
-        [encodeBoolValue(
-          instruction.SetContractParliamentDelegation.delegated,
-          "SetContractParliamentDelegation.delegated",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_SET_CONTRACT_PARLIAMENT_DELEGATION_2, SetContractParliamentDelegationInstructionFields, TEXT_SET_CONTRACT_PARLIAMENT_DELEGATION_2),
     );
   }
   if (isPlainObject(instruction.OfferContractOwnership)) {
     return encodeInstructionEnvelope(
       OFFER_CONTRACT_OWNERSHIP_WIRE_ID,
-      encodeStructValue([
-        [encodeNoritoStringValue(assertNonEmptyString(
-          instruction.OfferContractOwnership.contract_address,
-          "OfferContractOwnership.contract_address",
-        ))],
-        [encodeU64Value(
-          instruction.OfferContractOwnership.expected_revision,
-          "OfferContractOwnership.expected_revision",
-        )],
-        [encodeContractLifecycleOwnerValue(
-          instruction.OfferContractOwnership.new_owner,
-          "OfferContractOwnership.new_owner",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_OFFER_CONTRACT_OWNERSHIP, OfferContractOwnershipInstructionFields, TEXT_OFFER_CONTRACT_OWNERSHIP),
     );
   }
   for (const [name, wireId] of [
@@ -6232,11 +5579,11 @@ function encodeSmartContractInstructionCompact(instruction) {
         encodeStructValue([
           [encodeNoritoStringValue(assertNonEmptyString(
             instruction[name].contract_address,
-            `${name}.contract_address`,
+            `${name}.${TEXT_CONTRACT_ADDRESS_2}`,
           ))],
           [encodeU64Value(
             instruction[name].expected_revision,
-            `${name}.expected_revision`,
+            `${name}.${TEXT_EXPECTED_REVISION_2}`,
           )],
         ]),
       );
@@ -6248,24 +5595,24 @@ function encodeSmartContractInstructionCompact(instruction) {
       encodeStructValue([
         [encodeU64Value(
           instruction.CommitContractDeployment.expected_deploy_nonce,
-          "CommitContractDeployment.expected_deploy_nonce",
+          (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "expected_deploy_nonce"),
         )],
         [encodeNoritoStringValue(assertNonEmptyString(
           instruction.CommitContractDeployment.contract_address,
-          "CommitContractDeployment.contract_address",
+          (TEXT_COMMIT_CONTRACT_DEPLOYMENT + TEXT_CONTRACT_ADDRESS_2),
         ))],
         [encodeHashValue(
           instruction.CommitContractDeployment.code_hash,
-          "CommitContractDeployment.code_hash",
+          (TEXT_COMMIT_CONTRACT_DEPLOYMENT + TEXT_CODE_HASH_2),
         )],
         [encodeNoritoStringValue(assertNonEmptyString(
           instruction.CommitContractDeployment.contract_alias,
-          "CommitContractDeployment.contract_alias",
+          (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "contract_alias"),
         ))],
         [encodeOptionValue(
           instruction.CommitContractDeployment.lease_expiry_ms,
           encodeU64Value,
-          "CommitContractDeployment.lease_expiry_ms",
+          (TEXT_COMMIT_CONTRACT_DEPLOYMENT + "lease_expiry_ms"),
         )],
         [encodeOptionValue(
           instruction.CommitContractDeployment.expected_previous_contract_address,
@@ -6278,47 +5625,13 @@ function encodeSmartContractInstructionCompact(instruction) {
   if (isPlainObject(instruction.UploadSmartContractCodeChunk)) {
     return encodeInstructionEnvelope(
       UPLOAD_SMART_CONTRACT_CODE_CHUNK_WIRE_ID,
-      encodeStructValue([
-        [encodeHashValue(
-          instruction.UploadSmartContractCodeChunk.code_hash,
-          "UploadSmartContractCodeChunk.code_hash",
-        )],
-        [encodeU64Value(
-          instruction.UploadSmartContractCodeChunk.total_size,
-          "UploadSmartContractCodeChunk.total_size",
-        )],
-        [encodeU32Value(
-          instruction.UploadSmartContractCodeChunk.chunk_index,
-          "UploadSmartContractCodeChunk.chunk_index",
-        )],
-        [encodeU32Value(
-          instruction.UploadSmartContractCodeChunk.chunk_count,
-          "UploadSmartContractCodeChunk.chunk_count",
-        )],
-        [encodeByteVecValue(
-          instruction.UploadSmartContractCodeChunk.chunk,
-          "UploadSmartContractCodeChunk.chunk",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK_2, UploadSmartContractCodeChunkInstructionFields, TEXT_UPLOAD_SMART_CONTRACT_CODE_CHUNK_2),
     );
   }
   if (isPlainObject(instruction.FinalizeSmartContractCodeUpload)) {
     return encodeInstructionEnvelope(
       FINALIZE_SMART_CONTRACT_CODE_UPLOAD_WIRE_ID,
-      encodeStructValue([
-        [encodeHashValue(
-          instruction.FinalizeSmartContractCodeUpload.code_hash,
-          "FinalizeSmartContractCodeUpload.code_hash",
-        )],
-        [encodeU64Value(
-          instruction.FinalizeSmartContractCodeUpload.total_size,
-          "FinalizeSmartContractCodeUpload.total_size",
-        )],
-        [encodeU32Value(
-          instruction.FinalizeSmartContractCodeUpload.chunk_count,
-          "FinalizeSmartContractCodeUpload.chunk_count",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD_2, FinalizeSmartContractCodeUploadInstructionFields, TEXT_FINALIZE_SMART_CONTRACT_CODE_UPLOAD_2),
     );
   }
   if (isPlainObject(instruction.CancelSmartContractCodeUpload)) {
@@ -6327,7 +5640,7 @@ function encodeSmartContractInstructionCompact(instruction) {
       encodeStructValue([
         [encodeHashValue(
           instruction.CancelSmartContractCodeUpload.code_hash,
-          "CancelSmartContractCodeUpload.code_hash",
+          ("CancelSmartContractCodeUpload." + TEXT_CODE_HASH_2),
         )],
       ]),
     );
@@ -6335,20 +5648,10 @@ function encodeSmartContractInstructionCompact(instruction) {
   if (isPlainObject(instruction.RemoveSmartContractBytes)) {
     return encodeInstructionEnvelope(
       REMOVE_SMART_CONTRACT_BYTES_WIRE_ID,
-      encodeStructValue([
-        [encodeHashValue(
-          instruction.RemoveSmartContractBytes.code_hash,
-          "RemoveSmartContractBytes.code_hash",
-        )],
-        [encodeOptionValue(
-          instruction.RemoveSmartContractBytes.reason,
-          encodeNoritoStringValue,
-          "RemoveSmartContractBytes.reason",
-        )],
-      ]),
+      encodeCanonicalRecordFields(instruction, TEXT_REMOVE_SMART_CONTRACT_BYTES, RemoveSmartContractBytesInstructionFields, TEXT_REMOVE_SMART_CONTRACT_BYTES),
     );
   }
-  rejectError(`Internal Norito canonicalization does not support smart-contract instruction ${describeInstructionShape(instruction)}`);
+  rejectError(`${TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT}smart-contract ${TEXT_INSTRUCTION}${describeInstructionShape(instruction)}`);
 }
 
 const GOVERNANCE_HASH32_WIRE_VERSION_V1 = 1;
@@ -6361,7 +5664,7 @@ function encodeGovernanceHash32Value(value, context) {
     value !== value.toLowerCase() ||
     !/^[0-9a-f]{64}$/u.test(value)
   ) {
-    rejectType(`${context} must be exactly 32 bytes of lowercase hexadecimal`);
+    rejectType(`${context}${TEXT_MUST_BE}exactly 32 bytes of lowercase hexadecimal`);
   }
   return encodeStructValue([
     [encodeU16Value(GOVERNANCE_HASH32_WIRE_VERSION_V1, `${context}.version`)],
@@ -6378,11 +5681,11 @@ function decodeGovernanceHash32Value(payload, context) {
   ]);
   const version = decodeU16Value(fields.version, `${context}.version`);
   if (version !== GOVERNANCE_HASH32_WIRE_VERSION_V1) {
-    rejectError(`${context}.version must be ${GOVERNANCE_HASH32_WIRE_VERSION_V1}`);
+    rejectError(`${context}.version${TEXT_MUST_BE}${GOVERNANCE_HASH32_WIRE_VERSION_V1}`);
   }
   const declaredLength = decodeU16Value(fields.declared_len, `${context}.declared_len`);
   if (declaredLength !== GOVERNANCE_HASH32_LENGTH) {
-    rejectError(`${context}.declared_len must be ${GOVERNANCE_HASH32_LENGTH}`);
+    rejectError(`${context}.declared_len${TEXT_MUST_BE}${GOVERNANCE_HASH32_LENGTH}`);
   }
   return decodeFixedBytesValue(
     fields.bytes,
@@ -6403,14 +5706,14 @@ function decodeGovernanceAbiVersionValue(payload, context) {
 function encodeProposeDeployContractPayload(value) {
   validateProposeDeployContractPayload(value);
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
-    [encodeGovernanceHash32Value(value.code_hash, "ProposeDeployContract.code_hash")],
-    [encodeGovernanceHash32Value(value.abi_hash, "ProposeDeployContract.abi_hash")],
-    [encodeGovernanceAbiVersionValue(value.abi_version, "ProposeDeployContract.abi_version")],
+    [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, (TEXT_PROPOSE_DEPLOY_CONTRACT + TEXT_CONTRACT_ADDRESS_2)))],
+    [encodeGovernanceHash32Value(value.code_hash, (TEXT_PROPOSE_DEPLOY_CONTRACT + TEXT_CODE_HASH_2))],
+    [encodeGovernanceHash32Value(value.abi_hash, (TEXT_PROPOSE_DEPLOY_CONTRACT + "abi_hash"))],
+    [encodeGovernanceAbiVersionValue(value.abi_version, (TEXT_PROPOSE_DEPLOY_CONTRACT + "abi_version"))],
     [encodeOptionValue(
       value.manifest_provenance ?? null,
       encodeManifestProvenanceValue,
-      "ProposeDeployContract.manifest_provenance",
+      (TEXT_PROPOSE_DEPLOY_CONTRACT + "manifest_provenance"),
     )],
   ]);
 }
@@ -6418,7 +5721,7 @@ function encodeProposeDeployContractPayload(value) {
 function encodeCastZkBallotPayload(value) {
   validateCastZkBallotPayload(value);
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, "CastZkBallot.election_id"))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.election_id, ("CastZkBallot." + TEXT_ELECTION_ID)))],
     [encodeExactBase64StringValue(value.proof_b64, "CastZkBallot.proof_b64")],
     [encodeNoritoStringValue(
       assertNonEmptyString(value.public_inputs_json ?? "{}", "CastZkBallot.public_inputs_json"),
@@ -6494,24 +5797,18 @@ function encodeKaigiInstruction(instruction) {
       encodeReportKaigiRelayHealthPayload(instruction.ReportKaigiRelayHealth),
     );
   }
-  rejectError(`Internal Norito canonicalization does not support Kaigi instruction ${describeInstructionShape(instruction)}`);
+  rejectError(`${TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT}Kaigi ${TEXT_INSTRUCTION}${describeInstructionShape(instruction)}`);
 }
 
 function encodeCreateKaigiPayload(value) {
-  return encodeStructValue([
-    [encodeNewKaigiValue(value.call, "Kaigi.CreateKaigi.call")],
-    [encodeOptionValue(value.commitment, encodeKaigiParticipantCommitmentValue, "Kaigi.CreateKaigi.commitment")],
-    [encodeOptionValue(value.nullifier, encodeKaigiParticipantNullifierValue, "Kaigi.CreateKaigi.nullifier")],
-    [encodeOptionValue(value.roster_root, encodeHashValue, "Kaigi.CreateKaigi.roster_root")],
-    [encodeOptionValue(value.proof, encodeByteVecValue, "Kaigi.CreateKaigi.proof")],
-  ]);
+  return encodeCanonicalRecordFields(value, "Kaigi.CreateKaigi", Kaigi_CreateKaigiInstructionFields);
 }
 
 function encodeJoinLeaveKaigiPayload(value, name) {
   return encodeStructValue([
     [encodeKaigiIdValue(value.call_id, `Kaigi.${name}.call_id`)],
     [encodeAccountIdValue(value.participant, `Kaigi.${name}.participant`)],
-    [encodeOptionValue(value.commitment, encodeKaigiParticipantCommitmentValue, `Kaigi.${name}.commitment`)],
+    [encodeOptionValue(value.commitment, encodeKaigiParticipantCommitmentValue, `Kaigi.${name}.${TEXT_COMMITMENT}`)],
     [encodeOptionValue(value.nullifier, encodeKaigiParticipantNullifierValue, `Kaigi.${name}.nullifier`)],
     [encodeOptionValue(value.roster_root, encodeHashValue, `Kaigi.${name}.roster_root`)],
     [encodeOptionValue(value.proof, encodeByteVecValue, `Kaigi.${name}.proof`)],
@@ -6519,31 +5816,15 @@ function encodeJoinLeaveKaigiPayload(value, name) {
 }
 
 function encodeEndKaigiPayload(value) {
-  return encodeStructValue([
-    [encodeKaigiIdValue(value.call_id, "Kaigi.EndKaigi.call_id")],
-    [encodeOptionValue(value.ended_at_ms, encodeU64NumberValue, "Kaigi.EndKaigi.ended_at_ms")],
-    [encodeOptionValue(value.commitment, encodeKaigiParticipantCommitmentValue, "Kaigi.EndKaigi.commitment")],
-    [encodeOptionValue(value.nullifier, encodeKaigiParticipantNullifierValue, "Kaigi.EndKaigi.nullifier")],
-    [encodeOptionValue(value.roster_root, encodeHashValue, "Kaigi.EndKaigi.roster_root")],
-    [encodeOptionValue(value.proof, encodeByteVecValue, "Kaigi.EndKaigi.proof")],
-  ]);
+  return encodeCanonicalRecordFields(value, "Kaigi.EndKaigi", Kaigi_EndKaigiInstructionFields);
 }
 
 function encodeRecordKaigiUsagePayload(value) {
-  return encodeStructValue([
-    [encodeKaigiIdValue(value.call_id, "Kaigi.RecordKaigiUsage.call_id")],
-    [encodeU64NumberValue(value.duration_ms, "Kaigi.RecordKaigiUsage.duration_ms")],
-    [encodeU64NumberValue(value.billed_gas, "Kaigi.RecordKaigiUsage.billed_gas")],
-    [encodeOptionValue(value.usage_commitment, encodeKaigiScalarValue, "Kaigi.RecordKaigiUsage.usage_commitment")],
-    [encodeOptionValue(value.proof, encodeByteVecValue, "Kaigi.RecordKaigiUsage.proof")],
-  ]);
+  return encodeCanonicalRecordFields(value, "Kaigi.RecordKaigiUsage", Kaigi_RecordKaigiUsageInstructionFields);
 }
 
 function encodeSetKaigiRelayManifestPayload(value) {
-  return encodeStructValue([
-    [encodeKaigiIdValue(value.call_id, "Kaigi.SetKaigiRelayManifest.call_id")],
-    [encodeOptionValue(value.relay_manifest, encodeKaigiRelayManifestValue, "Kaigi.SetKaigiRelayManifest.relay_manifest")],
-  ]);
+  return encodeCanonicalRecordFields(value, ("Kaigi." + TEXT_SET_KAIGI_RELAY_MANIFEST), Kaigi_SetKaigiRelayManifestInstructionFields);
 }
 
 function encodeRegisterKaigiRelayPayload(value) {
@@ -6559,40 +5840,18 @@ function encodeUnregisterKaigiRelayPayload(value) {
 }
 
 function encodeReportKaigiRelayHealthPayload(value) {
-  return encodeStructValue([
-    [encodeKaigiIdValue(value.call_id, "Kaigi.ReportKaigiRelayHealth.call_id")],
-    [encodeAccountIdValue(value.relay_id, "Kaigi.ReportKaigiRelayHealth.relay_id")],
-    [
-      encodeKaigiRelayHealthStatusValue(
-        value.status,
-        "Kaigi.ReportKaigiRelayHealth.status",
-      ),
-    ],
-    [
-      encodeU64NumberValue(
-        value.reported_at_ms,
-        "Kaigi.ReportKaigiRelayHealth.reported_at_ms",
-      ),
-    ],
-    [
-      encodeOptionValue(
-        value.notes,
-        encodeKaigiRelayHealthNotesValue,
-        "Kaigi.ReportKaigiRelayHealth.notes",
-      ),
-    ],
-  ]);
+  return encodeCanonicalRecordFields(value, ("Kaigi." + TEXT_REPORT_KAIGI_RELAY_HEALTH), Kaigi_ReportKaigiRelayHealthInstructionFields);
 }
 
 function encodeVerifyingKeyInstruction(instruction) {
   const entries = [
     [
-      "RegisterVerifyingKey",
+      TEXT_REGISTER_VERIFYING_KEY,
       REGISTER_VERIFYING_KEY_WIRE_ID,
       encodeVerifyingKeyInstructionPayload,
     ],
     [
-      "UpdateVerifyingKey",
+      TEXT_UPDATE_VERIFYING_KEY,
       UPDATE_VERIFYING_KEY_WIRE_ID,
       encodeVerifyingKeyInstructionPayload,
     ],
@@ -6601,36 +5860,33 @@ function encodeVerifyingKeyInstruction(instruction) {
     if (isPlainObject(instruction[key])) {
       return encodeInstructionEnvelope(
         wireId,
-        encode(instruction[key], `verifying_keys.${key}`),
+        encode(instruction[key], `${TEXT_VERIFYING_KEYS}${key}`),
       );
     }
   }
-  rejectError(`Internal Norito canonicalization does not support verifying-key instruction ${describeInstructionShape(instruction)}`);
+  rejectError(`${TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT}verifying-key ${TEXT_INSTRUCTION}${describeInstructionShape(instruction)}`);
 }
 
 function encodeVerifyingKeyInstructionPayload(value, context) {
-  return encodeStructValue([
-    [encodeVerifyingKeyIdValue(value.id, `${context}.id`)],
-    [encodeVerifyingKeyRecordValue(value.record, `${context}.record`)],
-  ]);
+  return encodeCanonicalRecordFields(value, context, CanonicalEncodingFields18);
 }
 
 function decodeVerifyingKeyInstructionPayload(wireId, payload) {
   const variant =
     wireId === REGISTER_VERIFYING_KEY_WIRE_ID
-      ? "RegisterVerifyingKey"
-      : "UpdateVerifyingKey";
-  const fields = decodeStructFields(payload, `verifying_keys.${variant}`, [
+      ? TEXT_REGISTER_VERIFYING_KEY
+      : TEXT_UPDATE_VERIFYING_KEY;
+  const fields = decodeStructFields(payload, `${TEXT_VERIFYING_KEYS}${variant}`, [
     "id",
     "record",
   ]);
   return {
     verifying_keys: {
       [variant]: {
-        id: decodeVerifyingKeyIdValue(fields.id, `verifying_keys.${variant}.id`),
+        id: decodeVerifyingKeyIdValue(fields.id, `${TEXT_VERIFYING_KEYS}${variant}.id`),
         record: decodeVerifyingKeyRecordValue(
           fields.record,
-          `verifying_keys.${variant}.record`,
+          `${TEXT_VERIFYING_KEYS}${variant}.record`,
         ),
       },
     },
@@ -6639,38 +5895,34 @@ function decodeVerifyingKeyInstructionPayload(wireId, payload) {
 
 function encodeZkInstruction(instruction) {
   const entries = [
-    ["RegisterZkAsset", REGISTER_ZK_ASSET_WIRE_ID, encodeRegisterZkAssetPayload],
-    ["ScheduleConfidentialPolicyTransition", SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID, encodeScheduleConfidentialPolicyTransitionPayload],
-    ["CancelConfidentialPolicyTransition", CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID, encodeCancelConfidentialPolicyTransitionPayload],
+    [TEXT_REGISTER_ZK_ASSET, REGISTER_ZK_ASSET_WIRE_ID, encodeRegisterZkAssetPayload],
+    [TEXT_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION, SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID, encodeScheduleConfidentialPolicyTransitionPayload],
+    [TEXT_CANCEL_CONFIDENTIAL_POLICY_TRANSITION, CANCEL_CONFIDENTIAL_POLICY_TRANSITION_WIRE_ID, encodeCancelConfidentialPolicyTransitionPayload],
     ["CreateElection", CREATE_ELECTION_WIRE_ID, encodeCreateElectionPayload],
     ["SubmitBallot", SUBMIT_BALLOT_WIRE_ID, encodeSubmitBallotPayload],
-    ["FinalizeElection", FINALIZE_ELECTION_WIRE_ID, encodeFinalizeElectionPayload],
+    [TEXT_FINALIZE_ELECTION, FINALIZE_ELECTION_WIRE_ID, encodeFinalizeElectionPayload],
   ];
   for (const [key, wireId, encode] of entries) {
     if (isPlainObject(instruction[key])) {
       return encodeInstructionEnvelope(wireId, encode(instruction[key], `zk.${key}`));
     }
   }
-  rejectError(`Internal Norito canonicalization does not support zk instruction ${describeInstructionShape(instruction)}`);
+  rejectError(`${TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT}zk ${TEXT_INSTRUCTION}${describeInstructionShape(instruction)}`);
 }
 
 function encodeRegisterZkAssetPayload(value) {
   assertExactObjectKeys(
     value,
     ["asset", "vk_unshield", "vk_shield"],
-    "zk.RegisterZkAsset",
+    ("zk." + TEXT_REGISTER_ZK_ASSET),
   );
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.RegisterZkAsset.asset")],
-    [encodeOptionValue(value.vk_unshield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_unshield")],
-    [encodeOptionValue(value.vk_shield, encodeVerifyingKeyIdValue, "zk.RegisterZkAsset.vk_shield")],
-  ]);
+  return encodeCanonicalRecordFields(value, ("zk." + TEXT_REGISTER_ZK_ASSET), zk_RegisterZkAssetInstructionFields);
 }
 
 function encodeScheduleConfidentialPolicyTransitionPayload(value) {
   return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.ScheduleConfidentialPolicyTransition.asset")],
-    [encodeConfidentialPolicyModeValue(value.new_mode, "zk.ScheduleConfidentialPolicyTransition.new_mode")],
+    [encodeAssetDefinitionIdValue(value.asset, (TEXT_ZK_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "asset"))],
+    [encodeConfidentialPolicyModeValue(value.new_mode, (TEXT_ZK_SCHEDULE_CONFIDENTIAL_POLICY_TRANSITION + "new_mode"))],
     [encodeU64NumberValue(value.effective_height, SCHEDULE_EFFECTIVE_HEIGHT_CONTEXT)],
     [encodeHashValue(value.transition_id, SCHEDULE_TRANSITION_ID_CONTEXT)],
     [encodeOptionValue(value.conversion_window, encodeU64NumberValue, SCHEDULE_CONVERSION_WINDOW_CONTEXT)],
@@ -6678,25 +5930,22 @@ function encodeScheduleConfidentialPolicyTransitionPayload(value) {
 }
 
 function encodeCancelConfidentialPolicyTransitionPayload(value) {
-  return encodeStructValue([
-    [encodeAssetDefinitionIdValue(value.asset, "zk.CancelConfidentialPolicyTransition.asset")],
-    [encodeHashValue(value.transition_id, CANCEL_TRANSITION_ID_CONTEXT)],
-  ]);
+  return encodeCanonicalRecordFields(value, ("zk." + TEXT_CANCEL_CONFIDENTIAL_POLICY_TRANSITION), zk_CancelConfidentialPolicyTransitionInstructionFields);
 }
 
 function encodeCreateElectionPayload(value) {
   return encodeStructValue([
     [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
       value.election_id,
-      "zk.CreateElection.election_id",
+      (TEXT_ZK_CREATE_ELECTION + TEXT_ELECTION_ID),
     ))],
-    [encodeU32Value(value.options, "zk.CreateElection.options")],
-    [encodeFixedBytesValue(value.eligible_root, 32, "zk.CreateElection.eligible_root")],
-    [encodeU64NumberValue(value.start_ts, "zk.CreateElection.start_ts")],
-    [encodeU64NumberValue(value.end_ts, "zk.CreateElection.end_ts")],
-    [encodeVerifyingKeyIdValue(value.vk_ballot, "zk.CreateElection.vk_ballot")],
-    [encodeVerifyingKeyIdValue(value.vk_tally, "zk.CreateElection.vk_tally")],
-    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, "zk.CreateElection.domain_tag"))],
+    [encodeU32Value(value.options, (TEXT_ZK_CREATE_ELECTION + "options"))],
+    [encodeFixedBytesValue(value.eligible_root, 32, (TEXT_ZK_CREATE_ELECTION + "eligible_root"))],
+    [encodeU64NumberValue(value.start_ts, (TEXT_ZK_CREATE_ELECTION + "start_ts"))],
+    [encodeU64NumberValue(value.end_ts, (TEXT_ZK_CREATE_ELECTION + "end_ts"))],
+    [encodeVerifyingKeyIdValue(value.vk_ballot, (TEXT_ZK_CREATE_ELECTION + "vk_ballot"))],
+    [encodeVerifyingKeyIdValue(value.vk_tally, (TEXT_ZK_CREATE_ELECTION + "vk_tally"))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.domain_tag, (TEXT_ZK_CREATE_ELECTION + "domain_tag")))],
   ]);
 }
 
@@ -6704,11 +5953,11 @@ function encodeSubmitBallotPayload(value) {
   return encodeStructValue([
     [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
       value.election_id,
-      "zk.SubmitBallot.election_id",
+      (TEXT_ZK_SUBMIT_BALLOT + TEXT_ELECTION_ID),
     ))],
-    [encodeByteVecValue(value.ciphertext, "zk.SubmitBallot.ciphertext")],
-    [encodeProofAttachmentValue(value.ballot_proof, "zk.SubmitBallot.ballot_proof")],
-    [encodeFixedBytesValue(value.nullifier, 32, "zk.SubmitBallot.nullifier")],
+    [encodeByteVecValue(value.ciphertext, (TEXT_ZK_SUBMIT_BALLOT + "ciphertext"))],
+    [encodeProofAttachmentValue(value.ballot_proof, (TEXT_ZK_SUBMIT_BALLOT + "ballot_proof"))],
+    [encodeFixedBytesValue(value.nullifier, 32, (TEXT_ZK_SUBMIT_BALLOT + "nullifier"))],
   ]);
 }
 
@@ -6716,12 +5965,12 @@ function encodeFinalizeElectionPayload(value) {
   return encodeStructValue([
     [encodeNoritoStringValue(assertCanonicalGovernanceSelectorV1(
       value.election_id,
-      "zk.FinalizeElection.election_id",
+      (TEXT_ZK_FINALIZE_ELECTION + TEXT_ELECTION_ID),
     ))],
     [encodeNoritoVec(value.tally ?? [], (entry, index) =>
-      encodeU64NumberValue(entry, `zk.FinalizeElection.tally[${index}]`),
+      encodeU64NumberValue(entry, `${TEXT_ZK_FINALIZE_ELECTION}tally[${index}]`),
     )],
-    [encodeProofAttachmentValue(value.tally_proof, "zk.FinalizeElection.tally_proof")],
+    [encodeProofAttachmentValue(value.tally_proof, (TEXT_ZK_FINALIZE_ELECTION + "tally_proof"))],
   ]);
 }
 
@@ -6745,7 +5994,7 @@ function encodeRwaInstruction(instruction) {
       return encodeEnumInstruction("iroha.rwa", index, encode(instruction[key], key));
     }
   }
-  rejectError(`Internal Norito canonicalization does not support RWA instruction ${describeInstructionShape(instruction)}`);
+  rejectError(`${TEXT_INTERNAL_NORITO_CANONICALIZATION_DOES_NOT_SUPPORT}RWA ${TEXT_INSTRUCTION}${describeInstructionShape(instruction)}`);
 }
 
 function encodeKaigiIdValue(value, context) {
@@ -6796,7 +6045,7 @@ const NewKaigiPayloadFields = [
     ["description", decodeStringValue, 1],
     ["max_participants", decodeU32Value, 1],
     ["gas_rate_per_minute", decodeU64NumberValue, 0],
-    ["metadata", decodeMetadataValue, 0],
+    [FIELD_METADATA, decodeMetadataValue, 0],
     ["scheduled_start_ms", decodeU64NumberValue, 1],
     ["billing_account", decodeAccountIdValue, 1],
     ["privacy_mode", decodeKaigiPrivacyModeValue, 0],
@@ -6817,16 +6066,16 @@ function decodeKaigiScalarValue(payload, context) {
 }
 
 function encodeKaigiParticipantCommitmentValue(value, context) {
-  if (Object.keys(value).length !== 1 || !("commitment" in value)) {
-    rejectType(`${context} requires only commitment`);
+  if (Object.keys(value).length !== 1 || !(FIELD_COMMITMENT in value)) {
+    rejectType(`${context} requires only ${TEXT_COMMITMENT}`);
   }
   return encodeStructValue([
-    [encodeKaigiScalarValue(value.commitment, `${context}.commitment`)],
+    [encodeKaigiScalarValue(value.commitment, `${context}.${TEXT_COMMITMENT}`)],
   ]);
 }
 
 const KaigiParticipantCommitmentValueFields = [
-    ["commitment", decodeKaigiScalarValue, 0],
+    [FIELD_COMMITMENT, decodeKaigiScalarValue, 0],
   ];
 
   function decodeKaigiParticipantCommitmentValue(payload, context) {
@@ -6851,17 +6100,12 @@ const KaigiParticipantNullifierValueFields = [
   }
 
 function encodeKaigiRelayManifestValue(value, context) {
-  return encodeStructValue([
-    [encodeNoritoVec(value.hops ?? [], (hop, index) =>
-      encodeKaigiRelayHopValue(hop, `${context}.hops[${index}]`),
-    )],
-    [encodeU64NumberValue(value.expiry_ms, `${context}.expiry_ms`)],
-  ]);
+  return encodeCanonicalRecordFields(value, context, KaigiRelayManifestValueFields);
 }
 
 const KaigiRelayManifestValueFields = [
-    ["hops", decodeKaigiRelayHopValue, 2],
-    ["expiry_ms", decodeU64NumberValue, 0],
+    ["hops", decodeKaigiRelayHopValue, 2, encodeKaigiRelayHopValue, 3],
+    ["expiry_ms", decodeU64NumberValue, 0, encodeU64NumberValue, 0],
   ];
 
   function decodeKaigiRelayManifestValue(payload, context) {
@@ -6869,17 +6113,13 @@ const KaigiRelayManifestValueFields = [
   }
 
 function encodeKaigiRelayHopValue(value, context) {
-  return encodeStructValue([
-    [encodeAccountIdValue(value.relay_id, `${context}.relay_id`)],
-    [encodeByteVecValue(value.hpke_public_key, `${context}.hpke_public_key`)],
-    [encodeU8Value(value.weight, `${context}.weight`)],
-  ]);
+  return encodeCanonicalRecordFields(value, context, KaigiRelayHopValueFields);
 }
 
 const KaigiRelayHopValueFields = [
-    ["relay_id", decodeAccountIdValue, 0],
-    ["hpke_public_key", decodeByteVecAsBase64, 0],
-    ["weight", decodeU8Value, 0],
+    ["relay_id", decodeAccountIdValue, 0, encodeAccountIdValue, 0],
+    ["hpke_public_key", decodeByteVecAsBase64, 0, encodeByteVecValue, 0],
+    ["weight", decodeU8Value, 0, encodeU8Value, 0],
   ];
 
   function decodeKaigiRelayHopValue(payload, context) {
@@ -6887,17 +6127,13 @@ const KaigiRelayHopValueFields = [
   }
 
 function encodeKaigiRelayRegistrationValue(value, context) {
-  return encodeStructValue([
-    [encodeAccountIdValue(value.relay_id, `${context}.relay_id`)],
-    [encodeByteVecValue(value.hpke_public_key, `${context}.hpke_public_key`)],
-    [encodeU8Value(value.bandwidth_class, `${context}.bandwidth_class`)],
-  ]);
+  return encodeCanonicalRecordFields(value, context, KaigiRelayRegistrationValueFields);
 }
 
 const KaigiRelayRegistrationValueFields = [
-    ["relay_id", decodeAccountIdValue, 0],
-    ["hpke_public_key", decodeByteVecAsBase64, 0],
-    ["bandwidth_class", decodeU8Value, 0],
+    ["relay_id", decodeAccountIdValue, 0, encodeAccountIdValue, 0],
+    ["hpke_public_key", decodeByteVecAsBase64, 0, encodeByteVecValue, 0],
+    ["bandwidth_class", decodeU8Value, 0, encodeU8Value, 0],
   ];
 
   function decodeKaigiRelayRegistrationValue(payload, context) {
@@ -6914,7 +6150,7 @@ function encodeKaigiRelayHealthStatusValue(value, context) {
     case "Unavailable":
       return encodeEnumTagValue(2);
     default:
-      rejectType(`${context} must be Healthy, Degraded, or Unavailable`);
+      rejectType(`${context}${TEXT_MUST_BE}Healthy, Degraded, or Unavailable`);
   }
 }
 
@@ -6934,14 +6170,14 @@ function decodeKaigiRelayHealthStatusValue(payload, context) {
       status = "Unavailable";
       break;
     default:
-      rejectError(`${context} uses unsupported relay health status ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}relay health status ${tag}`);
   }
   return { status, state: null };
 }
 
 function validateKaigiRelayHealthNotesValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context} must be a string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}string`);
   }
   assertWellFormedUtf16(value, context);
   let scalarCount = 0;
@@ -6978,12 +6214,7 @@ function encodeRegisterRwaPayload(value) {
 }
 
 function encodeTransferRwaPayload(value) {
-  return encodeStructValue([
-    [encodeAccountIdValue(value.source, "TransferRwa.source")],
-    [encodeRwaIdValue(value.rwa, "TransferRwa.rwa")],
-    [encodeQuantityValue(value.quantity, "TransferRwa.quantity")],
-    [encodeAccountIdValue(value.destination, "TransferRwa.destination")],
-  ]);
+  return encodeCanonicalRecordFields(value, "TransferRwa", TransferRwaInstructionFields);
 }
 
 function encodeMergeRwasPayload(value) {
@@ -6991,17 +6222,14 @@ function encodeMergeRwasPayload(value) {
     [encodeNoritoVec(value.parents ?? [], (parent, index) =>
       encodeRwaParentRefValue(parent, `MergeRwas.parents[${index}]`),
     )],
-    [encodeNoritoStringValue(assertNonEmptyString(value.primary_reference, "MergeRwas.primary_reference"))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.primary_reference, ("MergeRwas." + TEXT_PRIMARY_REFERENCE)))],
     [encodeOptionValue(value.status, encodeNameValue, "MergeRwas.status")],
     [encodeMetadataValue(value.metadata ?? {}, "MergeRwas.metadata")],
   ]);
 }
 
 function encodeRedeemRwaPayload(value) {
-  return encodeStructValue([
-    [encodeRwaIdValue(value.rwa, "RedeemRwa.rwa")],
-    [encodeQuantityValue(value.quantity, "RedeemRwa.quantity")],
-  ]);
+  return encodeCanonicalRecordFields(value, "RedeemRwa", CanonicalEncodingFields25);
 }
 
 function encodeFreezeRwaPayload(value) {
@@ -7017,32 +6245,19 @@ function encodeUnfreezeRwaPayload(value) {
 }
 
 function encodeHoldRwaPayload(value) {
-  return encodeStructValue([
-    [encodeRwaIdValue(value.rwa, "HoldRwa.rwa")],
-    [encodeQuantityValue(value.quantity, "HoldRwa.quantity")],
-  ]);
+  return encodeCanonicalRecordFields(value, "HoldRwa", CanonicalEncodingFields26);
 }
 
 function encodeReleaseRwaPayload(value) {
-  return encodeStructValue([
-    [encodeRwaIdValue(value.rwa, "ReleaseRwa.rwa")],
-    [encodeQuantityValue(value.quantity, "ReleaseRwa.quantity")],
-  ]);
+  return encodeCanonicalRecordFields(value, "ReleaseRwa", CanonicalEncodingFields27);
 }
 
 function encodeForceTransferRwaPayload(value) {
-  return encodeStructValue([
-    [encodeRwaIdValue(value.rwa, "ForceTransferRwa.rwa")],
-    [encodeQuantityValue(value.quantity, "ForceTransferRwa.quantity")],
-    [encodeAccountIdValue(value.destination, "ForceTransferRwa.destination")],
-  ]);
+  return encodeCanonicalRecordFields(value, "ForceTransferRwa", ForceTransferRwaInstructionFields);
 }
 
 function encodeSetRwaControlsPayload(value) {
-  return encodeStructValue([
-    [encodeRwaIdValue(value.rwa, "SetRwaControls.rwa")],
-    [encodeRwaControlPolicyValue(value.controls, "SetRwaControls.controls")],
-  ]);
+  return encodeCanonicalRecordFields(value, "SetRwaControls", SetRwaControlsInstructionFields);
 }
 
 function encodeSetRwaKeyValuePayload(value) {
@@ -7054,10 +6269,7 @@ function encodeSetRwaKeyValuePayload(value) {
 }
 
 function encodeRemoveRwaKeyValuePayload(value) {
-  return encodeStructValue([
-    [encodeRwaIdValue(value.rwa, "RemoveRwaKeyValue.rwa")],
-    [encodeNameValue(value.key, "RemoveRwaKeyValue.key")],
-  ]);
+  return encodeCanonicalRecordFields(value, "RemoveRwaKeyValue", RemoveRwaKeyValueInstructionFields);
 }
 
 function encodeNewRwaValue(value, context) {
@@ -7065,7 +6277,7 @@ function encodeNewRwaValue(value, context) {
     [encodeArchivedDomainIdValue(value.domain, `${context}.domain`)],
     [encodeQuantityValue(value.quantity, `${context}.quantity`)],
     [encodeNumericSpecValue(value.spec ?? { scale: null }, `${context}.spec`)],
-    [encodeNoritoStringValue(assertNonEmptyString(value.primary_reference, `${context}.primary_reference`))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.primary_reference, `${context}.${TEXT_PRIMARY_REFERENCE}`))],
     [encodeOptionValue(value.status, encodeNameValue, `${context}.status`)],
     [encodeMetadataValue(value.metadata ?? {}, `${context}.metadata`)],
     [encodeNoritoVec(value.parents ?? [], (parent, index) =>
@@ -7077,11 +6289,11 @@ function encodeNewRwaValue(value, context) {
 
 const NewRwaValueFields = [
     ["domain", decodeArchivedDomainIdValue, 0],
-    ["quantity", decodeQuantityValue, 0],
+    [FIELD_QUANTITY, decodeQuantityValue, 0],
     ["spec", decodeNumericSpecValue, 0],
-    ["primary_reference", decodeStringValue, 0],
+    [TEXT_PRIMARY_REFERENCE, decodeStringValue, 0],
     ["status", decodeNameValue, 1],
-    ["metadata", decodeMetadataValue, 0],
+    [FIELD_METADATA, decodeMetadataValue, 0],
     ["parents", decodeRwaParentRefValue, 2],
     ["controls", decodeRwaControlPolicyValue, 0],
   ];
@@ -7091,15 +6303,12 @@ const NewRwaValueFields = [
   }
 
 function encodeRwaParentRefValue(value, context) {
-  return encodeStructValue([
-    [encodeRwaIdValue(value.rwa, `${context}.rwa`)],
-    [encodeQuantityValue(value.quantity, `${context}.quantity`)],
-  ]);
+  return encodeCanonicalRecordFields(value, context, RwaParentRefValueFields);
 }
 
 const RwaParentRefValueFields = [
-    ["rwa", decodeRwaIdValue, 0],
-    ["quantity", decodeQuantityValue, 0],
+    ["rwa", decodeRwaIdValue, 0, encodeRwaIdValue, 0],
+    ["quantity", decodeQuantityValue, 0, encodeQuantityValue, 0],
   ];
 
   function decodeRwaParentRefValue(payload, context) {
@@ -7137,7 +6346,7 @@ const RwaControlPolicyValueFields = [
 function encodeAssetInstructionBody(value, context) {
   return Buffer.concat([
     encodeNoritoField(encodeQuantityValue(value.object, `${context}.object`)),
-    encodeNoritoField(encodeAssetIdValue(value.destination, `${context}.destination`)),
+    encodeNoritoField(encodeAssetIdValue(value.destination, `${context}${TEXT_DESTINATION}`)),
   ]);
 }
 
@@ -7145,8 +6354,8 @@ function decodeAssetInstructionBody(payload, context) {
   const reader = new BufferReader(payload, context);
   const object = decodeQuantityValue(readNoritoField(reader, JS_TYPE_OBJECT), `${context}.object`);
   const destination = decodeAssetIdValue(
-    readNoritoField(reader, "destination"),
-    `${context}.destination`,
+    readNoritoField(reader, FIELD_DESTINATION),
+    `${context}${TEXT_DESTINATION}`,
   );
   reader.assertEof();
   return { object, destination };
@@ -7165,7 +6374,7 @@ function decodeTransferAssetBody(payload) {
   const source = decodeAssetIdValue(readNoritoField(reader, "source"), "Transfer.Asset.source");
   const object = decodeQuantityValue(readNoritoField(reader, JS_TYPE_OBJECT), "Transfer.Asset.object");
   const destination = decodeAccountIdValue(
-    readNoritoField(reader, "destination"),
+    readNoritoField(reader, FIELD_DESTINATION),
     "Transfer.Asset.destination",
   );
   reader.assertEof();
@@ -7178,7 +6387,7 @@ function encodeTriggerRepetitionsBody(value, context) {
     encodeNoritoField(
       encodeNoritoField(
         encodeNoritoStringValue(
-          assertNonEmptyString(value.destination, `${context}.destination`),
+          assertNonEmptyString(value.destination, `${context}${TEXT_DESTINATION}`),
         ),
       ),
     ),
@@ -7190,10 +6399,10 @@ function decodeTriggerRepetitionsBody(payload, context) {
   const object = decodeU32Value(readNoritoField(reader, JS_TYPE_OBJECT), `${context}.object`);
   const destination = decodeStringValue(
     readNoritoField(
-      new BufferReader(readNoritoField(reader, "destination"), `${context}.destination.outer`),
+      new BufferReader(readNoritoField(reader, FIELD_DESTINATION), `${context}.destination.outer`),
       "value",
     ),
-    `${context}.destination`,
+    `${context}${TEXT_DESTINATION}`,
   );
   reader.assertEof();
   return { object, destination };
@@ -7201,7 +6410,7 @@ function decodeTriggerRepetitionsBody(payload, context) {
 
 function encodeExecuteTriggerPayload(value) {
   if (!isPlainObject(value)) {
-    rejectType("ExecuteTrigger must be an object");
+    rejectType(("ExecuteTrigger" + TEXT_MUST_BE_AN_OBJECT_2));
   }
   const trigger = assertNonEmptyString(value.trigger, "ExecuteTrigger.trigger");
   return Buffer.concat([
@@ -7249,7 +6458,7 @@ function encodeAccountIdValue(value, context) {
         encodeNoritoField(encodeMultisigPolicyPayload(controller, context)),
       ]);
     default:
-      rejectError(`${context} uses unsupported account controller tag ${controller.tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}account controller tag ${controller.tag}`);
   }
 }
 
@@ -7287,7 +6496,7 @@ function decodeAccountIdValue(payload, context) {
     header = { version: 0, classId: 1, normVersion: 1, extFlag: false };
     controller = { tag: 1, ...policy };
   } else {
-    rejectError(`${context} uses unsupported account controller variant ${kind}`);
+    rejectError(`${context}${TEXT_USES_UNSUPPORTED}account controller variant ${kind}`);
   }
   return new AccountAddress(header, controller).toI105();
 }
@@ -7328,7 +6537,7 @@ function decodeConstVecU8Value(payload, context) {
   for (let index = 0; index < count; index += 1) {
     const item = readNoritoField(reader, `item${index}`);
     if (item.length !== 1) {
-      rejectError(`${context}[${index}] must contain exactly one byte`);
+      rejectError(`${context}[${index}]${TEXT_MUST_CONTAIN}exactly one byte`);
     }
     bytes[index] = item[0];
   }
@@ -7362,7 +6571,7 @@ function algorithmTagForCurveId(curve, context) {
     case "sm2":
       return 10;
     default:
-      rejectError(`${context} uses unsupported public-key algorithm ${algorithm}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}public-key algorithm ${algorithm}`);
   }
 }
 
@@ -7391,13 +6600,13 @@ function curveIdForAlgorithmTag(tag, context) {
     case 10:
       return curveIdFromAlgorithm("sm2");
     default:
-      rejectError(`${context} uses unsupported public-key algorithm tag ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}public-key algorithm tag ${tag}`);
   }
 }
 
 function encodeMultisigPolicyPayload(policy, context) {
   if (!Array.isArray(policy.members) || policy.members.length === 0) {
-    rejectError(`${context} multisig policy must contain at least one member`);
+    rejectError(`${context} multisig policy${TEXT_MUST_CONTAIN}at least one member`);
   }
   return Buffer.concat([
     encodeNoritoField(encodeU8Value(policy.version, `${context}.version`)),
@@ -7540,7 +6749,7 @@ function decodeAssetBalanceScopeValue(payload, context) {
     reader.assertEof();
     return `#dataspace:${dataspace}`;
   }
-  rejectError(`${context} uses unsupported scope variant ${kind}`);
+  rejectError(`${context}${TEXT_USES_UNSUPPORTED}scope variant ${kind}`);
 }
 
 function encodeHashValue(value, context) {
@@ -7553,7 +6762,7 @@ function decodeHashValue(payload, context) {
 
 function encodeEscrowIdValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context} must be a canonical checksummed hash literal`);
+    rejectType(`${context}${TEXT_MUST_BE_A}canonical checksummed hash literal`);
   }
   const match = HASH_LITERAL_RE.exec(value);
   if (
@@ -7561,25 +6770,25 @@ function encodeEscrowIdValue(value, context) {
     match[1] !== match[1].toUpperCase() ||
     match[2] !== match[2].toUpperCase()
   ) {
-    rejectType(`${context} must use canonical uppercase hash:<hex>#<checksum> syntax`);
+    rejectType(`${context} must use${TEXT_CANONICAL}uppercase hash:<hex>#<checksum> syntax`);
   }
   const bytes = encodeHashValue(value, context);
   if ((bytes[bytes.length - 1] & 1) === 0) {
-    rejectType(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context}${TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET}`);
   }
   return bytes;
 }
 
 function decodeEscrowIdValue(payload, context) {
   if (payload.length !== 32 || (payload[payload.length - 1] & 1) === 0) {
-    rejectType(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context}${TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET}`);
   }
   return decodeHashValue(payload, context);
 }
 
 function encodeStringValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context} must be a string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}string`);
   }
   return encodeNoritoStringValue(value);
 }
@@ -7602,11 +6811,11 @@ function encodeHashLiteralBytes(value, context) {
     } else if (/^[0-9A-Fa-f]{64}$/.test(literal)) {
       bytes = Buffer.from(literal, HEX_ENCODING);
     } else {
-      rejectError(`${context} must be a 32-byte hash literal or hex string`);
+      rejectError(`${context}${TEXT_MUST_BE_A}32-byte hash literal or hex string`);
     }
   }
   if ((bytes[bytes.length - 1] & 1) === 0) {
-    rejectType(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context}${TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET}`);
   }
   return bytes;
 }
@@ -7614,7 +6823,7 @@ function encodeHashLiteralBytes(value, context) {
 function decodeHashLiteral(payload, context) {
   const bytes = decodeFixedBytesValue(payload, 32, context);
   if ((bytes[bytes.length - 1] & 1) === 0) {
-    rejectType(`${context} must use a native hash with its marker bit set`);
+    rejectType(`${context}${TEXT_MUST_USE_A_NATIVE_HASH_WITH_ITS_MARKER_BIT_SET}`);
   }
   const body = bytes.toString(HEX_ENCODING).toUpperCase();
   return `hash:${body}#${computeHashLiteralCrc("hash", body)}`;
@@ -7622,17 +6831,14 @@ function decodeHashLiteral(payload, context) {
 
 function encodeKeyedHashValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
-  return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.pepper_id, `${context}.pepper_id`))],
-    [encodeHashValue(value.digest, `${context}.digest`)],
-  ]);
+  return encodeCanonicalRecordFields(value, context, KeyedHashValueFields);
 }
 
 const KeyedHashValueFields = [
-    ["pepper_id", decodeStringValue, 0],
-    ["digest", decodeHashValue, 0],
+    ["pepper_id", decodeStringValue, 0, encodeRequiredRecordString, 0],
+    ["digest", decodeHashValue, 0, encodeHashValue, 0],
   ];
 
   function decodeKeyedHashValue(payload, context) {
@@ -7653,7 +6859,7 @@ function decodeNumericSpecValue(payload, context) {
 function encodeMintableValue(value, context) {
   const normalized = parseMintableLabel(value, context);
   switch (normalized.kind) {
-    case "Infinitely":
+    case WIRE_TYPE_INFINITELY:
       return encodeEnumTagValue(0);
     case "Once":
       return encodeEnumTagValue(1);
@@ -7664,7 +6870,7 @@ function encodeMintableValue(value, context) {
         encodeStructValue([[encodeU32Value(normalized.tokens, `${context}.tokens`)]]),
       );
     default:
-      rejectError(`${context} uses unsupported mintability ${normalized.kind}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}mintability ${normalized.kind}`);
   }
 }
 
@@ -7673,40 +6879,40 @@ function decodeMintableValue(payload, context) {
   const tag = reader.readU32LE("tag");
   if (tag === 0 || tag === 1 || tag === 2) {
     reader.assertEof();
-    return ["Infinitely", "Once", "Not"][tag];
+    return [WIRE_TYPE_INFINITELY, "Once", "Not"][tag];
   }
   if (tag !== 3) {
-    rejectError(`${context} uses unsupported mintability ${tag}`);
+    rejectError(`${context}${TEXT_USES_UNSUPPORTED}mintability ${tag}`);
   }
   const body = readNoritoField(reader, "tokens");
   reader.assertEof();
   const fields = decodeStructFields(body, `${context}.tokens`, ["value"]);
   const tokens = decodeU32Value(fields.value, `${context}.tokens.value`);
   if (tokens === 0) {
-    rejectError(`${context}.tokens must be non-zero`);
+    rejectError(`${context}.tokens${TEXT_MUST_BE}non-zero`);
   }
   return `Limited(${tokens})`;
 }
 
 function parseMintableLabel(value, context) {
   const label = assertNonEmptyString(value, context);
-  if (label === "Infinitely" || label === "Once" || label === "Not") {
+  if (label === WIRE_TYPE_INFINITELY || label === "Once" || label === "Not") {
     return { kind: label };
   }
   const match = /^Limited\((\d+)\)$/.exec(label);
   if (match) {
     return { kind: "Limited", tokens: parseMintabilityTokens(match[1], `${context}.tokens`) };
   }
-  rejectError(`${context} must be Infinitely, Once, Not, or Limited(n)`);
+  rejectError(`${context}${TEXT_MUST_BE}Infinitely, Once, Not, or Limited(n)`);
 }
 
 function parseMintabilityTokens(value, context) {
   if (typeof value !== JS_TYPE_STRING || !/^\d+$/.test(value)) {
-    rejectType(`${context} must be a positive unsigned 32-bit integer`);
+    rejectType(`${context}${TEXT_MUST_BE_A}positive unsigned 32-bit integer`);
   }
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized <= 0 || normalized > 0xffff_ffff) {
-    rejectType(`${context} must be a positive unsigned 32-bit integer`);
+    rejectType(`${context}${TEXT_MUST_BE_A}positive unsigned 32-bit integer`);
   }
   return normalized;
 }
@@ -7716,10 +6922,10 @@ function encodeAssetBalancePolicyValue(value, context) {
   if (normalized === "Global") {
     return encodeEnumTagValue(0);
   }
-  if (normalized === "DataspaceRestricted") {
+  if (normalized === WIRE_TYPE_DATASPACE_RESTRICTED) {
     return encodeEnumTagValue(1);
   }
-  rejectError(`${context} must be Global or DataspaceRestricted`);
+  rejectError(`${context}${TEXT_MUST_BE}Global or DataspaceRestricted`);
 }
 
 function decodeAssetBalancePolicyValue(payload, context) {
@@ -7730,9 +6936,9 @@ function decodeAssetBalancePolicyValue(payload, context) {
     case 0:
       return "Global";
     case 1:
-      return "DataspaceRestricted";
+      return WIRE_TYPE_DATASPACE_RESTRICTED;
     default:
-      rejectError(`${context} uses unsupported balance policy ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}balance policy ${tag}`);
   }
 }
 
@@ -7750,10 +6956,10 @@ function decodeAssetDefinitionAliasValue(payload, context) {
 
 function encodeSorafsUriValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context} must be a string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}string`);
   }
   if (value.trim() !== value || value.includes("\u0000") || /[\u0001-\u001f\u007f]/u.test(value)) {
-    rejectError(`${context} must not contain whitespace padding or control characters`);
+    rejectError(`${context}${TEXT_MUST_NOT_CONTAIN}whitespace padding or control characters`);
   }
   if (!value.startsWith("sorafs://") || value.length === "sorafs://".length) {
     rejectError(`${context} must use a non-empty sorafs:// URI`);
@@ -7780,7 +6986,7 @@ function encodeKaigiPrivacyModeValue(value, context) {
   if (normalized === "zkrosterv1") {
     return encodeEnumTagValue(1);
   }
-  rejectError(`${context} must be Transparent or ZkRosterV1`);
+  rejectError(`${context}${TEXT_MUST_BE}Transparent or ZkRosterV1`);
 }
 
 function decodeKaigiPrivacyModeValue(payload, context) {
@@ -7793,7 +6999,7 @@ function decodeKaigiPrivacyModeValue(payload, context) {
     case 1:
       return { mode: "ZkRosterV1", state: null };
     default:
-      rejectError(`${context} uses unsupported privacy mode ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}privacy mode ${tag}`);
   }
 }
 
@@ -7806,7 +7012,7 @@ function encodeKaigiRoomPolicyValue(value, context) {
   if (normalized === "authenticated") {
     return encodeEnumTagValue(1);
   }
-  rejectError(`${context} must be Public or Authenticated`);
+  rejectError(`${context}${TEXT_MUST_BE}Public or Authenticated`);
 }
 
 function decodeKaigiRoomPolicyValue(payload, context) {
@@ -7819,7 +7025,7 @@ function decodeKaigiRoomPolicyValue(payload, context) {
     case 1:
       return { policy: "Authenticated", state: null };
     default:
-      rejectError(`${context} uses unsupported room policy ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}room policy ${tag}`);
   }
 }
 
@@ -7834,7 +7040,7 @@ function encodeConfidentialPolicyModeValue(value, context) {
   if (normalized === "convertible") {
     return encodeEnumTagValue(2);
   }
-  rejectError(`${context} must be TransparentOnly, ShieldedOnly, or Convertible`);
+  rejectError(`${context}${TEXT_MUST_BE}TransparentOnly, ShieldedOnly, or Convertible`);
 }
 
 function decodeConfidentialPolicyModeValue(payload, context) {
@@ -7849,16 +7055,16 @@ function decodeConfidentialPolicyModeValue(payload, context) {
     case 2:
       return "Convertible";
     default:
-      rejectError(`${context} uses unsupported confidential policy mode ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}confidential policy mode ${tag}`);
   }
 }
 
 function encodeVerifyingKeyIdValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}.backend`))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}${TEXT_BACKEND}`))],
     [encodeNoritoStringValue(assertNonEmptyString(value.name, `${context}.name`))],
   ]);
 }
@@ -7874,17 +7080,17 @@ const VerifyingKeyIdValueFields = [
 
 function encodeBackendBytesBoxValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}.backend`))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.backend, `${context}${TEXT_BACKEND}`))],
     [encodeByteVecValue(value.bytes, `${context}.bytes`)],
   ]);
 }
 
 function decodeProofBoxValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["backend", "bytes"]);
-  const backend = decodeStringValue(fields.backend, `${context}.backend`);
+  const backend = decodeStringValue(fields.backend, `${context}${TEXT_BACKEND}`);
   return {
     backend,
     bytes: Array.from(
@@ -7900,7 +7106,7 @@ function decodeProofBoxValue(payload, context) {
 function decodeVerifyingKeyBoxValue(payload, context) {
   const fields = decodeStructFields(payload, context, ["backend", "bytes"]);
   return {
-    backend: decodeStringValue(fields.backend, `${context}.backend`),
+    backend: decodeStringValue(fields.backend, `${context}${TEXT_BACKEND}`),
     bytes: Array.from(decodeByteVecValue(fields.bytes, `${context}.bytes`)),
   };
 }
@@ -7927,7 +7133,7 @@ function decodeBackendTagValue(payload, context) {
     case 1:
       return "stark";
     default:
-      rejectError(`${context} uses unsupported backend tag ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}backend tag ${tag}`);
   }
 }
 
@@ -7941,7 +7147,7 @@ function encodeConfidentialStatusValue(value, context) {
     case "withdrawn":
       return encodeU8Value(2, context);
     default:
-      rejectError(`${context} must be Proposed, Active, or Withdrawn`);
+      rejectError(`${context}${TEXT_MUST_BE}Proposed, Active, or Withdrawn`);
   }
 }
 
@@ -7955,23 +7161,23 @@ function decodeConfidentialStatusValue(payload, context) {
     case 2:
       return "Withdrawn";
     default:
-      rejectError(`${context} uses unsupported confidential status ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}confidential status ${tag}`);
   }
 }
 
 function encodeVerifyingKeyRecordValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   return encodeStructValue([
     [encodeU32Value(value.version, `${context}.version`)],
     [encodeNoritoStringValue(assertNonEmptyString(value.circuit_id, `${context}.circuit_id`))],
     [encodeOptionValue(value.owner_manifest_id, encodeNoritoStringValue, `${context}.owner_manifest_id`)],
     [encodeNoritoStringValue(assertNonEmptyString(value.namespace, `${context}.namespace`))],
-    [encodeBackendTagValue(value.backend, `${context}.backend`)],
+    [encodeBackendTagValue(value.backend, `${context}${TEXT_BACKEND}`)],
     [encodeNoritoStringValue(assertNonEmptyString(value.curve, `${context}.curve`))],
-    [encodeFixedBytesValue(value.public_inputs_schema_hash, 32, `${context}.public_inputs_schema_hash`)],
-    [encodeFixedBytesValue(value.commitment, 32, `${context}.commitment`)],
+    [encodeFixedBytesValue(value.public_inputs_schema_hash, 32, `${context}.${TEXT_PUBLIC_INPUTS_SCHEMA_HASH}`)],
+    [encodeFixedBytesValue(value.commitment, 32, `${context}.${TEXT_COMMITMENT}`)],
     [encodeU32Value(value.vk_len, `${context}.vk_len`)],
     [encodeU32Value(value.max_proof_bytes, `${context}.max_proof_bytes`)],
     [encodeOptionValue(value.gas_schedule_id, encodeNoritoStringValue, `${context}.gas_schedule_id`)],
@@ -7992,8 +7198,8 @@ function decodeVerifyingKeyRecordValue(payload, context) {
     "namespace",
     "backend",
     "curve",
-    "public_inputs_schema_hash",
-    "commitment",
+    TEXT_PUBLIC_INPUTS_SCHEMA_HASH,
+    FIELD_COMMITMENT,
     "vk_len",
     "max_proof_bytes",
     "gas_schedule_id",
@@ -8013,17 +7219,17 @@ function decodeVerifyingKeyRecordValue(payload, context) {
       `${context}.owner_manifest_id`,
     ),
     namespace: decodeStringValue(fields.namespace, `${context}.namespace`),
-    backend: decodeBackendTagValue(fields.backend, `${context}.backend`),
+    backend: decodeBackendTagValue(fields.backend, `${context}${TEXT_BACKEND}`),
     curve: decodeStringValue(fields.curve, `${context}.curve`),
     public_inputs_schema_hash: Array.from(
       decodeFixedBytesValue(
         fields.public_inputs_schema_hash,
         32,
-        `${context}.public_inputs_schema_hash`,
+        `${context}.${TEXT_PUBLIC_INPUTS_SCHEMA_HASH}`,
       ),
     ),
     commitment: Array.from(
-      decodeFixedBytesValue(fields.commitment, 32, `${context}.commitment`),
+      decodeFixedBytesValue(fields.commitment, 32, `${context}.${TEXT_COMMITMENT}`),
     ),
     vk_len: decodeU32Value(fields.vk_len, `${context}.vk_len`),
     max_proof_bytes: decodeU32Value(
@@ -8066,7 +7272,7 @@ function decodeVerifyingKeyRecordValue(payload, context) {
 
 function encodeOpenVerifyEnvelopePayload(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertOnlyObjectKeys(
     value,
@@ -8081,7 +7287,7 @@ function encodeOpenVerifyEnvelopePayload(value, context) {
     rejectType(`${context}.circuit_id must not contain surrounding whitespace`);
   }
   return encodeStructValue([
-    [encodeBackendTagValue(value.backend, `${context}.backend`)],
+    [encodeBackendTagValue(value.backend, `${context}${TEXT_BACKEND}`)],
     [encodeNoritoStringValue(circuitId)],
     [encodeFixedBytesValue(value.vk_hash, 32, `${context}.vk_hash`)],
     [encodeByteVecValue(value.public_inputs, `${context}.public_inputs`)],
@@ -8101,7 +7307,7 @@ function decodeOpenVerifyEnvelopePayload(payload, context, flags = 0) {
       "aux",
     ]);
     return {
-      backend: decodeBackendTagValue(fields.backend, `${context}.backend`),
+      backend: decodeBackendTagValue(fields.backend, `${context}${TEXT_BACKEND}`),
       circuit_id: decodeStringValue(fields.circuit_id, `${context}.circuit_id`),
       vk_hash: Array.from(decodeFixedBytesValue(fields.vk_hash, 32, `${context}.vk_hash`)),
       public_inputs: Array.from(
@@ -8132,7 +7338,7 @@ function encodeProofAttachmentValue(value, context) {
           attachment.vk_commitment,
           (entry, innerContext) =>
             encodeFixedByteArrayArchiveValue(entry, 32, innerContext),
-          `${context}.vk_commitment`,
+          `${context}.vk_${TEXT_COMMITMENT}`,
         ),
       ),
     );
@@ -8161,16 +7367,16 @@ function encodeProofAttachmentValue(value, context) {
 
 function decodeProofAttachmentValue(payload, context) {
   const reader = new BufferReader(payload, context);
-  const backend = decodeStringValue(readNoritoField(reader, "backend"), `${context}.backend`);
+  const backend = decodeStringValue(readNoritoField(reader, "backend"), `${context}${TEXT_BACKEND}`);
   const proof = decodeProofBoxValue(readNoritoField(reader, "proof"), `${context}.proof`);
   const vk_ref = decodeVerifyingKeyIdValue(readNoritoField(reader, "vk_ref"), `${context}.vk_ref`);
   const vk_commitment =
     reader.offset < reader.buffer.length
       ? decodeOptionValue(
-          readNoritoField(reader, "vk_commitment"),
+          readNoritoField(reader, ("vk_" + TEXT_COMMITMENT)),
           (entry, innerContext) =>
             Array.from(decodeFixedByteArrayArchiveValue(entry, 32, innerContext)),
-          `${context}.vk_commitment`,
+          `${context}.vk_${TEXT_COMMITMENT}`,
         )
       : null;
   const envelope_hash =
@@ -8203,33 +7409,33 @@ function decodeProofAttachmentValue(payload, context) {
 
 function normalizeCanonicalProofAttachmentValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertOnlyObjectKeys(
     value,
-    ["backend", "proof", "vk_ref", "vk_commitment", "envelope_hash", "lane_privacy"],
+    ["backend", "proof", "vk_ref", ("vk_" + TEXT_COMMITMENT), "envelope_hash", "lane_privacy"],
     context,
   );
   for (const field of ["backend", "proof", "vk_ref"]) {
     if (!Object.prototype.hasOwnProperty.call(value, field)) {
-      rejectType(`${context}.${field} is required`);
+      rejectType(`${context}.${field}${TEXT_IS_REQUIRED}`);
     }
   }
-  const backend = assertPortableProofIdField(value.backend, `${context}.backend`);
+  const backend = assertPortableProofIdField(value.backend, `${context}${TEXT_BACKEND}`);
   const proof = normalizeCanonicalProofBoxValue(value.proof, backend, `${context}.proof`);
   const vkRef = normalizeCanonicalProofVerifyingKeyId(
     value.vk_ref,
     `${context}.vk_ref`,
   );
   if (vkRef.backend !== backend) {
-    rejectType(`${context}.vk_ref.backend must match ${context}.backend`);
+    rejectType(`${context}.vk_ref.backend must match ${context}${TEXT_BACKEND}`);
   }
 
   const normalized = { backend, proof, vk_ref: vkRef };
   if (value.vk_commitment !== undefined && value.vk_commitment !== null) {
     normalized.vk_commitment = normalizeNonZeroProofDigest(
       value.vk_commitment,
-      `${context}.vk_commitment`,
+      `${context}.vk_${TEXT_COMMITMENT}`,
     );
   }
   if (value.envelope_hash !== undefined && value.envelope_hash !== null) {
@@ -8255,37 +7461,37 @@ function normalizeCanonicalProofAttachmentValue(value, context) {
 
 function normalizeCanonicalProofBoxValue(value, backend, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertExactObjectKeys(value, ["backend", "bytes"], context);
-  const proofBackend = assertPortableProofIdField(value.backend, `${context}.backend`);
+  const proofBackend = assertPortableProofIdField(value.backend, `${context}${TEXT_BACKEND}`);
   if (proofBackend !== backend) {
     rejectType(`${context}.backend must match the attachment backend`);
   }
   if (typeof value.bytes === JS_TYPE_STRING) {
-    rejectType(`${context}.bytes must be an exact non-empty byte sequence`);
+    rejectType(`${context}.bytes${TEXT_MUST_BE}an exact non-empty byte sequence`);
   }
   const declaredLength = binaryByteLength(value.bytes);
   if (declaredLength !== null && declaredLength > proofBoxMaxProofBytes(backend)) {
-    rejectRange(`${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`);
+    rejectRange(`${context}${TEXT_EXCEEDS_THE}complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`);
   }
   const bytes = Array.from(normalizeBytes(value.bytes));
   if (bytes.length === 0) {
-    rejectType(`${context}.bytes must not be empty`);
+    rejectType(`${context}.bytes${TEXT_MUST_NOT_BE}empty`);
   }
   if (!proofBoxFitsEncodedBudget(backend, bytes.length)) {
-    rejectRange(`${context} exceeds the complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`);
+    rejectRange(`${context}${TEXT_EXCEEDS_THE}complete ${PROOF_BOX_MAX_ENCODED_BYTES}-byte ProofBox limit`);
   }
   return { backend: proofBackend, bytes };
 }
 
 function normalizeCanonicalProofVerifyingKeyId(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertExactObjectKeys(value, ["backend", "name"], context);
   return {
-    backend: assertPortableProofIdField(value.backend, `${context}.backend`),
+    backend: assertPortableProofIdField(value.backend, `${context}${TEXT_BACKEND}`),
     name: assertPortableProofIdField(value.name, `${context}.name`),
   };
 }
@@ -8300,14 +7506,14 @@ function assertPortableProofIdField(value, context) {
 function normalizeNonZeroProofDigest(value, context) {
   const bytes = Array.from(encodeFixedBytesValue(value, 32, context));
   if (bytes.every((byte) => byte === 0)) {
-    rejectType(`${context} must be non-zero`);
+    rejectType(`${context}${TEXT_MUST_BE}non-zero`);
   }
   return bytes;
 }
 
 function normalizeCanonicalLanePrivacyProofValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertExactObjectKeys(value, ["commitment_id", "witness"], context);
   if (
@@ -8328,21 +7534,21 @@ function normalizeCanonicalLanePrivacyProofValue(value, context) {
 
 function normalizeCanonicalLanePrivacyWitnessValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   assertExactObjectKeys(value, ["kind", "payload"], context);
   if (value.kind !== "merkle") {
-    rejectType(`${context}.kind must be exactly merkle`);
+    rejectType(`${context}.kind${TEXT_MUST_BE}exactly merkle`);
   }
   if (!isPlainObject(value.payload)) {
-    rejectType(`${context}.payload must be an object`);
+    rejectType(`${context}.payload${TEXT_MUST_BE_AN_OBJECT_2}`);
   }
   assertExactObjectKeys(value.payload, ["leaf", "proof"], `${context}.payload`);
   const leaf = Array.from(
     encodeFixedBytesValue(value.payload.leaf, 32, `${context}.payload.leaf`),
   );
   if (!isPlainObject(value.payload.proof)) {
-    rejectType(`${context}.payload.proof must be an object`);
+    rejectType(`${context}.payload.proof${TEXT_MUST_BE_AN_OBJECT_2}`);
   }
   assertExactObjectKeys(
     value.payload.proof,
@@ -8356,27 +7562,27 @@ function normalizeCanonicalLanePrivacyWitnessValue(value, context) {
     auditPath.length < 1 ||
     auditPath.length > LANE_PRIVACY_MERKLE_MAX_DEPTH
   ) {
-    rejectRange(`${context}.payload.proof.audit_path must contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`);
+    rejectRange(`${context}${TEXT_PAYLOAD_PROOF_AUDIT_PATH_MUST}contain 1..=${LANE_PRIVACY_MERKLE_MAX_DEPTH} siblings`);
   }
   if (!laneMerkleLeafIndexFitsDepth(leafIndex, auditPath.length)) {
     rejectRange(`${context}.payload.proof.leaf_index is impossible for the Merkle path depth`);
   }
   const canonicalPath = auditPath.map((entry, index) => {
     if (entry === null || entry === undefined) {
-      rejectType(`${context}.payload.proof.audit_path[${index}] must contain a sibling`);
+      rejectType(`${context}.payload.proof.audit_path[${index}]${TEXT_MUST_CONTAIN}a sibling`);
     }
     const siblingContext = `${context}.payload.proof.audit_path[${index}]`;
     const siblingBytes = encodeHashLiteralBytes(entry, siblingContext);
     if (typeof entry === JS_TYPE_STRING) {
       const canonical = decodeHashLiteral(siblingBytes, siblingContext);
       if (entry !== canonical) {
-        rejectType(`${siblingContext} must be a canonical HashOf literal`);
+        rejectType(`${siblingContext}${TEXT_MUST_BE_A}canonical HashOf literal`);
       }
       return canonical;
     }
     const sibling = Array.from(siblingBytes);
     if ((sibling[31] & 1) === 0) {
-      rejectType(`${siblingContext} is not a canonical prehashed HashOf`);
+      rejectType(`${siblingContext} is not a${TEXT_CANONICAL}prehashed HashOf`);
     }
     return sibling;
   });
@@ -8400,15 +7606,12 @@ function binaryByteLength(value) {
 }
 
 function encodeLanePrivacyProofValue(value, context) {
-  return encodeStructValue([
-    [encodeU16Value(value.commitment_id, `${context}.commitment_id`)],
-    [encodeLanePrivacyWitnessValue(value.witness, `${context}.witness`)],
-  ]);
+  return encodeCanonicalRecordFields(value, context, LanePrivacyProofValueFields);
 }
 
 const LanePrivacyProofValueFields = [
-    ["commitment_id", decodeU16Value, 0],
-    ["witness", decodeLanePrivacyWitnessValue, 0],
+    ["commitment_id", decodeU16Value, 0, encodeU16Value, 0],
+    ["witness", decodeLanePrivacyWitnessValue, 0, encodeLanePrivacyWitnessValue, 0],
   ];
 
   function decodeLanePrivacyProofValue(payload, context) {
@@ -8417,17 +7620,17 @@ const LanePrivacyProofValueFields = [
 
 function encodeLanePrivacyWitnessValue(value, context) {
   if (!isPlainObject(value)) {
-    rejectType(`${context} must be an object`);
+    rejectType(`${context}${TEXT_MUST_BE_AN_OBJECT}`);
   }
   const kind = assertNonEmptyString(value.kind, `${context}.kind`).toLowerCase();
   if (kind === "merkle") {
     const auditPath =
       value.payload?.proof?.audit_path ?? value.payload?.proof?.auditPath;
     if (!Array.isArray(auditPath) || auditPath.length === 0) {
-      rejectError(`${context}.payload.proof.audit_path must contain at least one sibling`);
+      rejectError(`${context}${TEXT_PAYLOAD_PROOF_AUDIT_PATH_MUST}contain at least one sibling`);
     }
     if (auditPath.some((entry) => entry === null || entry === undefined)) {
-      rejectError(`${context}.payload.proof.audit_path must not omit siblings`);
+      rejectError(`${context}${TEXT_PAYLOAD_PROOF_AUDIT_PATH_MUST}not omit siblings`);
     }
     return encodeEnumTagValue(0, () =>
       encodeStructValue([
@@ -8436,7 +7639,7 @@ function encodeLanePrivacyWitnessValue(value, context) {
       ]),
     );
   }
-  rejectError(`${context}.kind must be merkle`);
+  rejectError(`${context}.kind${TEXT_MUST_BE}merkle`);
 }
 
 function decodeLanePrivacyWitnessValue(payload, context) {
@@ -8452,10 +7655,10 @@ function decodeLanePrivacyWitnessValue(payload, context) {
       ]);
       const proof = decodeMerkleProofValue(fields.proof, `${context}.payload.proof`);
       if (proof.audit_path.length === 0) {
-        rejectError(`${context}.payload.proof.audit_path must contain at least one sibling`);
+        rejectError(`${context}${TEXT_PAYLOAD_PROOF_AUDIT_PATH_MUST}contain at least one sibling`);
       }
       if (proof.audit_path.some((entry) => entry === null)) {
-        rejectError(`${context}.payload.proof.audit_path must not omit siblings`);
+        rejectError(`${context}${TEXT_PAYLOAD_PROOF_AUDIT_PATH_MUST}not omit siblings`);
       }
       return {
         kind: "merkle",
@@ -8466,7 +7669,7 @@ function decodeLanePrivacyWitnessValue(payload, context) {
       };
     }
     default:
-      rejectError(`${context} uses unsupported lane privacy witness ${tag}`);
+      rejectError(`${context}${TEXT_USES_UNSUPPORTED}lane privacy witness ${tag}`);
   }
 }
 
@@ -8534,7 +7737,44 @@ export function noritoDecodeNftMarketValueV1(name, value) {
     return decoded;
   });
 }
-const gameCodecsV1 = /* @__PURE__ */ createNoritoGameCodecs({
+// Resource primitives keep the same compact layout and exact re-encoding checks
+// as public values, without importing the complete application value catalog.
+const resourceCodecs = /* @__PURE__ */ createNoritoGameResourceEngine({
+  encodePrimitive(name, value) {
+    if (name !== "u8") return noritoEncodeNftMarketValueV1(name, value);
+    return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+      const bytes = instructionGameCodecsV1.encode(name, value);
+      if (bytes.length > gameValueMaximumBytesV1(name)) {
+        throw new RangeError(TEXT_NATIVE_GAME_VALUE_EXCEEDS_ITS_COMPILED_PAYLOAD_LIMIT);
+      }
+      return bytes;
+    });
+  },
+  decodePrimitive(name, value) {
+    if (name !== "u8") return noritoDecodeNftMarketValueV1(name, value);
+    const bytes = toBuffer(value);
+    if (bytes.length > gameValueMaximumBytesV1(name)) {
+      throw new RangeError(TEXT_NATIVE_GAME_VALUE_EXCEEDS_ITS_COMPILED_PAYLOAD_LIMIT);
+    }
+    return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
+      const decoded = instructionGameCodecsV1.decode(name, bytes);
+      if (!instructionGameCodecsV1.encode(name, decoded).equals(bytes)) {
+        throw new TypeError(TEXT_NATIVE_GAME_VALUE_IS_NOT_BYTE_CANONICAL);
+      }
+      return decoded;
+    });
+  },
+});
+/** Encode one exact bounded resource value using the canonical primitive owner. */
+export function encodeGameResourceValueV1(name, value) {
+  return resourceCodecs.encode(name, value);
+}
+/** Decode one bounded resource value with byte-canonical re-encoding. */
+export function decodeGameResourceValueV1(name, value) {
+  return resourceCodecs.decode(name, value);
+}
+const gamePrimitivesV1 = {
+  resourceCodecs,
   encodeNftIdValue, decodeNftIdValue,
   encodeStructValue, decodeStructFields, encodeNoritoVec, decodeNoritoVec,
   encodeEscrowIdValue, decodeEscrowIdValue,
@@ -8545,13 +7785,15 @@ const gameCodecsV1 = /* @__PURE__ */ createNoritoGameCodecs({
   encodePublicKeyValue, decodePublicKeyValue, parsePublicKeyLiteral, publicKeyLiteralFromParts,
   encodeConstVecU8Value, decodeConstVecU8Value, encodeByteVecValue, decodeByteVecValue,
   encodeOptionValue, decodeOptionValue, encodeAccountIdValue, decodeAccountIdValue, encodeEnumTagValue,
-});
+};
+const instructionGameCodecsV1 = /* @__PURE__ */ createNoritoGameInstructionCodecs(gamePrimitivesV1);
+const gameCodecsV1 = /* @__PURE__ */ createNoritoGameCodecs(gamePrimitivesV1);
 
 /** Encode one exact native game or compiled adapter value with the consensus bare compact layout. */
 export function noritoEncodeGameValueV1(name, value) {
   return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
     const bytes = gameCodecsV1.encode(name, value);
-    if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError("native game value exceeds its compiled payload limit");
+    if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError(TEXT_NATIVE_GAME_VALUE_EXCEEDS_ITS_COMPILED_PAYLOAD_LIMIT);
     return bytes;
   });
 }
@@ -8559,10 +7801,10 @@ export function noritoEncodeGameValueV1(name, value) {
 /** Decode an exact native game or compiled adapter value and reject noncanonical byte encodings. */
 export function noritoDecodeGameValueV1(name, value) {
   const bytes = toBuffer(value);
-  if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError("native game value exceeds its compiled payload limit");
+  if (bytes.length > gameValueMaximumBytesV1(name)) throw new RangeError(TEXT_NATIVE_GAME_VALUE_EXCEEDS_ITS_COMPILED_PAYLOAD_LIMIT);
   return withNoritoLengthFlags(COMPACT_LEN_FLAG, () => {
     const decoded = gameCodecsV1.decode(name, bytes);
-    if (!gameCodecsV1.encode(name, decoded).equals(bytes)) throw new TypeError("native game value is not byte-canonical");
+    if (!gameCodecsV1.encode(name, decoded).equals(bytes)) throw new TypeError(TEXT_NATIVE_GAME_VALUE_IS_NOT_BYTE_CANONICAL);
     return decoded;
   });
 }
@@ -8580,7 +7822,7 @@ function encodeEventFilterBoxFramePayload(value, context) {
     frame.flags,
   );
   if (!canonical.equals(frameBytes)) {
-    rejectError(`${context} must be a canonical unpadded EventFilterBox frame`);
+    rejectError(`${context}${TEXT_MUST_BE_A}canonical unpadded EventFilterBox frame`);
   }
   return frame.payload;
 }
@@ -8601,11 +7843,11 @@ function decodeExactStandardBase64(value, context) {
     value.length % 4 !== 0 ||
     !/^[A-Za-z0-9+/]*={0,2}$/u.test(value)
   ) {
-    rejectType(`${context} must be exact standard-base64`);
+    rejectType(`${context}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`);
   }
   const bytes = Buffer.from(value, BASE64_ENCODING);
   if (bytes.length === 0 || bytes.toString(BASE64_ENCODING) !== value) {
-    rejectType(`${context} must be exact standard-base64`);
+    rejectType(`${context}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`);
   }
   return bytes;
 }
@@ -8648,7 +7890,7 @@ function decodeNumericValue(payload, context) {
   const mantissaReader = new BufferReader(mantissaPayload, `${context}.mantissa`);
   const byteLength = mantissaReader.readU32LE("byteLength");
   if (byteLength > NumericV1.MAX_MANTISSA_BYTES) {
-    rejectRange(`${context}.mantissa exceeds the signed 512-bit bound`);
+    rejectRange(`${context}.mantissa${TEXT_EXCEEDS_THE}signed 512-bit bound`);
   }
   const bytes = mantissaReader.readBytes(byteLength, "bytes");
   mantissaReader.assertEof();
@@ -8683,14 +7925,14 @@ function decodeQuantityValue(payload, context) {
 function encodeU8Value(value, context) {
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized < 0 || normalized > 0xff) {
-    rejectType(`${context} must be an unsigned 8-bit integer`);
+    rejectType(`${context}${TEXT_MUST_BE}an unsigned 8-bit integer`);
   }
   return Buffer.of(normalized);
 }
 
 function decodeU8Value(payload, context) {
   if (payload.length !== 1) {
-    rejectError(`${context} must contain exactly one byte`);
+    rejectError(`${context}${TEXT_MUST_CONTAIN_EXACTLY}one byte`);
   }
   return payload[0];
 }
@@ -8698,14 +7940,14 @@ function decodeU8Value(payload, context) {
 function encodeU16Value(value, context) {
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized < 0 || normalized > 0xffff) {
-    rejectType(`${context} must be an unsigned 16-bit integer`);
+    rejectType(`${context}${TEXT_MUST_BE}an unsigned 16-bit integer`);
   }
   return u16ToLittleEndianBuffer(normalized);
 }
 
 function decodeU16Value(payload, context) {
   if (payload.length !== 2) {
-    rejectError(`${context} must contain exactly two bytes`);
+    rejectError(`${context}${TEXT_MUST_CONTAIN_EXACTLY}two bytes`);
   }
   return payload.readUInt16LE(0);
 }
@@ -8713,14 +7955,14 @@ function decodeU16Value(payload, context) {
 function encodeU32Value(value, context) {
   const normalized = Number(value);
   if (!Number.isInteger(normalized) || normalized < 0 || normalized > 0xffff_ffff) {
-    rejectType(`${context} must be an unsigned 32-bit integer`);
+    rejectType(`${context}${TEXT_MUST_BE}an unsigned 32-bit integer`);
   }
   return u32ToLittleEndianBuffer(normalized);
 }
 
 function decodeU32Value(payload, context) {
   if (payload.length !== 4) {
-    rejectError(`${context} must contain exactly four bytes`);
+    rejectError(`${context}${TEXT_MUST_CONTAIN_EXACTLY}four bytes`);
   }
   return payload.readUInt32LE(0);
 }
@@ -8732,7 +7974,7 @@ function encodeU64Value(value, context) {
 
 function decodeU64Value(payload, context) {
   if (payload.length !== 8) {
-    rejectError(`${context} must contain exactly eight bytes`);
+    rejectError(`${context}${TEXT_MUST_CONTAIN_EXACTLY}eight bytes`);
   }
   return payload.readBigUInt64LE(0).toString();
 }
@@ -8743,17 +7985,17 @@ function encodeNoritoStringValue(value) {
 
 function encodeExactBase64StringValue(value, context) {
   if (typeof value !== JS_TYPE_STRING) {
-    rejectType(`${context} must be a string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}string`);
   }
   if (value.length === 0 || value.trim() !== value || /\s/u.test(value)) {
-    rejectType(`${context} must be exact standard-base64`);
+    rejectType(`${context}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`);
   }
   if (!/^[A-Za-z0-9+/]*={0,2}$/u.test(value) || value.length % 4 !== 0) {
-    rejectType(`${context} must be exact standard-base64`);
+    rejectType(`${context}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`);
   }
   const decoded = Buffer.from(value, BASE64_ENCODING);
   if (decoded.length === 0 || decoded.toString(BASE64_ENCODING) !== value) {
-    rejectType(`${context} must be exact standard-base64`);
+    rejectType(`${context}${TEXT_MUST_BE_EXACT_STANDARD_BASE64}`);
   }
   return encodeNoritoStringValue(value);
 }
@@ -8823,7 +8065,7 @@ function decodeNoritoVec(payload, decode, context, maxCount = null) {
   const reader = new BufferReader(payload, context, noritoLengthFlags);
   const count = bigintToSafeNumber(reader.readU64LE("count"), `${context}.count`);
   if (maxCount !== null && count > maxCount) {
-    rejectRange(`${context} exceeds the ${maxCount}-item limit`);
+    rejectRange(`${context}${TEXT_EXCEEDS_THE}${maxCount}-item limit`);
   }
   const values = [];
   for (let index = 0; index < count; index += 1) {
@@ -8875,7 +8117,7 @@ export function validateNoritoFrame(bytes, options = {}) {
   const major = buffer[4];
   const minor = buffer[5];
   if (major !== 0 || minor !== 0) {
-    rejectError(`${context} uses unsupported NRT0 version ${major}.${minor}`);
+    rejectError(`${context}${TEXT_USES_UNSUPPORTED}NRT0 version ${major}.${minor}`);
   }
 
   const schemaHash = buffer.subarray(6, 22);
@@ -8886,7 +8128,7 @@ export function validateNoritoFrame(bytes, options = {}) {
   if (options.expectedSchemaHash !== undefined) {
     expectedSchemaHash = toBuffer(options.expectedSchemaHash);
     if (expectedSchemaHash.length !== 16) {
-      rejectType(`${context} expected schema hash must contain exactly 16 bytes`);
+      rejectType(`${context} expected schema hash${TEXT_MUST_CONTAIN}exactly 16 bytes`);
     }
   }
   if (options.expectedTypeName !== undefined) {
@@ -8894,7 +8136,7 @@ export function validateNoritoFrame(bytes, options = {}) {
       typeof options.expectedTypeName !== JS_TYPE_STRING ||
       options.expectedTypeName.length === 0
     ) {
-      rejectType(`${context} expected Rust type name must be non-empty`);
+      rejectType(`${context} expected Rust type name${TEXT_MUST_BE}non-empty`);
     }
     const fromTypeName = /* @__PURE__ */ schemaHashForTypeName(options.expectedTypeName);
     if (expectedSchemaHash !== null && !expectedSchemaHash.equals(fromTypeName)) {
@@ -8915,12 +8157,12 @@ export function validateNoritoFrame(bytes, options = {}) {
     `${context}.payloadLength`,
   );
   if (options.requireNonEmptyPayload === true && payloadLength === 0) {
-    rejectError(`${context} must contain a non-empty Norito payload`);
+    rejectError(`${context}${TEXT_MUST_CONTAIN}a non-empty Norito payload`);
   }
   const expectedCrc = buffer.readBigUInt64LE(31);
   const flags = buffer[39];
   if ((flags & ~NORITO_SUPPORTED_HEADER_FLAGS) !== 0) {
-    rejectError(`${context} uses unsupported Norito header flags 0x${flags.toString(16)}`);
+    rejectError(`${context}${TEXT_USES_UNSUPPORTED}Norito header flags 0x${flags.toString(16)}`);
   }
   if (
     (flags & NORITO_FIELD_BITSET_FLAG) !== 0 &&
@@ -8932,10 +8174,10 @@ export function validateNoritoFrame(bytes, options = {}) {
 
   const paddingLength = buffer.length - NORITO_FRAME_HEADER_LENGTH - payloadLength;
   if (paddingLength < 0) {
-    rejectError(`${context} payload length exceeds the available frame bytes`);
+    rejectError(`${context} payload length${TEXT_EXCEEDS_THE}available frame bytes`);
   }
   if (paddingLength > NORITO_MAX_HEADER_PADDING) {
-    rejectError(`${context} exceeds the ${NORITO_MAX_HEADER_PADDING}-byte Norito header-padding bound`);
+    rejectError(`${context}${TEXT_EXCEEDS_THE}${NORITO_MAX_HEADER_PADDING}-byte Norito header-padding bound`);
   }
   if (options.expectedPaddingLength !== undefined) {
     if (
@@ -8943,10 +8185,10 @@ export function validateNoritoFrame(bytes, options = {}) {
       options.expectedPaddingLength < 0 ||
       options.expectedPaddingLength > NORITO_MAX_HEADER_PADDING
     ) {
-      rejectType(`${context} expected padding length must be an integer from 0 through ${NORITO_MAX_HEADER_PADDING}`);
+      rejectType(`${context} expected padding length${TEXT_MUST_BE}an integer from 0 through ${NORITO_MAX_HEADER_PADDING}`);
     }
     if (paddingLength !== options.expectedPaddingLength) {
-      rejectError(`${context} must contain exactly ${options.expectedPaddingLength} bytes of header padding`);
+      rejectError(`${context}${TEXT_MUST_CONTAIN_EXACTLY}${options.expectedPaddingLength} bytes of header padding`);
     }
   }
   const payloadStart = NORITO_FRAME_HEADER_LENGTH + paddingLength;
@@ -9011,29 +8253,29 @@ function u64ToLittleEndianBuffer(value) {
 function normalizeU64Input(value, context) {
   if (typeof value === JS_TYPE_BIGINT) {
     if (value < 0n || value > UINT64_MASK) {
-      rejectRange(`${context} must fit in an unsigned 64-bit integer`);
+      rejectRange(`${context}${TEXT_MUST_FIT_IN_AN_UNSIGNED_64_BIT_INTEGER}`);
     }
     return value;
   }
   if (typeof value === JS_TYPE_NUMBER) {
     if (!Number.isInteger(value) || value < 0 || !Number.isSafeInteger(value)) {
-      rejectType(`${context} must be a non-negative safe integer or bigint`);
+      rejectType(`${context}${TEXT_MUST_BE_A}non-negative safe integer or bigint`);
     }
     return BigInt(value);
   }
   if (typeof value === JS_TYPE_STRING && /^\d+$/.test(value.trim())) {
     const parsed = BigInt(value.trim());
     if (parsed > UINT64_MASK) {
-      rejectRange(`${context} must fit in an unsigned 64-bit integer`);
+      rejectRange(`${context}${TEXT_MUST_FIT_IN_AN_UNSIGNED_64_BIT_INTEGER}`);
     }
     return parsed;
   }
-  rejectType(`${context} must be a bigint, integer number, or decimal string`);
+  rejectType(`${context}${TEXT_MUST_BE_A}bigint, integer number, or decimal string`);
 }
 
 function bigintToSafeNumber(value, context) {
   if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-    rejectRange(`${context} exceeds JavaScript's safe integer range`);
+    rejectRange(`${context}${TEXT_EXCEEDS_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE}`);
   }
   return Number(value);
 }
@@ -9047,7 +8289,7 @@ function parseNumericLiteral(value, context) {
   } else if (typeof value === JS_TYPE_BIGINT) {
     quantity = new KotodamaQuantity(value, 0);
   } else {
-    rejectType(`${context} must be a KotodamaQuantity, canonical quantity string, or bigint; JavaScript numbers are rejected`);
+    rejectType(`${context}${TEXT_MUST_BE_A}KotodamaQuantity,${TEXT_CANONICAL}quantity string, or bigint; JavaScript numbers are rejected`);
   }
   return { mantissa: quantity.mantissa, scale: quantity.scale };
 }
@@ -9119,7 +8361,7 @@ function publicKeyLiteralFromParts(curve, publicKey, context) {
   validatePublicKeyForCurve(curve, bytes, context);
   const multicodec = publicKeyMulticodecForCurveId(curve);
   if (multicodec === null) {
-    rejectError(`${context} uses unsupported public-key curve ${curve}`);
+    rejectError(`${context}${TEXT_USES_UNSUPPORTED}public-key curve ${curve}`);
   }
   const prefixHex = Buffer.concat([
     encodeUnsignedLeb128(multicodec),
@@ -9131,7 +8373,7 @@ function publicKeyLiteralFromParts(curve, publicKey, context) {
 function parsePublicKeyLiteral(literal, context) {
   const normalized = assertNonEmptyString(literal, context);
   if (!MULTIHASH_LITERAL_RE.test(normalized) || normalized.length % 2 !== 0) {
-    rejectError(`${context} must be a canonical public-key multihash literal`);
+    rejectError(`${context}${TEXT_MUST_BE_A}canonical public-key multihash literal`);
   }
   const bytes = Buffer.from(normalized, HEX_ENCODING);
   let offset = 0;
@@ -9169,7 +8411,7 @@ function decodeUnsignedLeb128(buffer, offset, context) {
     const byte = BigInt(buffer[cursor]);
     cursor += 1;
     if (used === 9 && (byte & 0xfen) !== 0n) {
-      rejectRange(`${context} varint exceeds an unsigned 64-bit integer`);
+      rejectRange(`${context}${TEXT_VARINT_EXCEEDS_AN_UNSIGNED_64_BIT_INTEGER}`);
     }
     value |= (byte & 0x7fn) << shift;
     if ((byte & 0x80n) === 0n) {
@@ -9177,7 +8419,7 @@ function decodeUnsignedLeb128(buffer, offset, context) {
         rejectError(`${context} varint is not minimally encoded`);
       }
       if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-        rejectRange(`${context} exceeds JavaScript's safe integer range`);
+        rejectRange(`${context}${TEXT_EXCEEDS_JAVA_SCRIPT_S_SAFE_INTEGER_RANGE}`);
       }
       return [Number(value), cursor - offset];
     }
@@ -9186,13 +8428,13 @@ function decodeUnsignedLeb128(buffer, offset, context) {
   if (cursor >= buffer.length) {
     rejectError(`${context} varint is truncated`);
   }
-  rejectRange(`${context} varint exceeds an unsigned 64-bit integer`);
+  rejectRange(`${context}${TEXT_VARINT_EXCEEDS_AN_UNSIGNED_64_BIT_INTEGER}`);
 }
 
 function curveIdForMulticodec(multicodec, context) {
   const entry = getCurveEntryByPublicKeyMulticodec(multicodec);
   if (!entry) {
-    rejectError(`${context} uses unsupported public-key multicodec ${multicodec}`);
+    rejectError(`${context}${TEXT_USES_UNSUPPORTED}public-key multicodec ${multicodec}`);
   }
   return entry.id;
 }
@@ -9217,7 +8459,7 @@ function decodeBase58(value, context) {
   for (const char of value) {
     const digit = BASE58_LOOKUP.get(char);
     if (digit === undefined) {
-      rejectError(`${context} must be valid Base58`);
+      rejectError(`${context}${TEXT_MUST_BE}valid Base58`);
     }
     number = number * 58n + digit;
   }
@@ -9283,14 +8525,14 @@ function canonicalizeJsonValue(value) {
 
 function assertNonEmptyString(value, context) {
   if (typeof value !== JS_TYPE_STRING || value.trim().length === 0) {
-    rejectType(`${context} must be a non-empty string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}non-empty string`);
   }
   return value.trim();
 }
 
 function assertExactNonEmptyString(value, context) {
   if (typeof value !== JS_TYPE_STRING || value.length === 0) {
-    rejectType(`${context} must be a non-empty string`);
+    rejectType(`${context}${TEXT_MUST_BE_A}non-empty string`);
   }
   return value;
 }
@@ -9428,3 +8670,233 @@ function tryDecodeWithRelocatedStorage(native, buffer) {
   }
   return null;
 }
+
+// Ordered instruction records share the existing primitive wire decoders.
+const SetAssetTransferBlacklistInstructionFields = [
+  [TEXT_ACCOUNT_ID, decodeAccountIdValue, 0, encodeAccountIdValue, 0],
+  [TEXT_ASSET_DEFINITION_ID, decodeAssetDefinitionIdValue, 0, encodeAssetDefinitionIdValue, 0],
+  ["blacklisted", decodeBoolValue, 0, encodeBoolValue, 0],
+];
+
+const CastZkBallotInstructionFields = [
+  [TEXT_ELECTION_ID, decodeStringValue],
+  ["proof_b64", decodeStringValue],
+  ["public_inputs_json", decodeStringValue],
+];
+
+const CastPlainBallotInstructionFields = [
+  ["referendum_id", decodeStringValue],
+  ["owner", decodeAccountIdValue],
+  ["amount", decodeQuantityValue],
+  ["duration_blocks", decodeU64NumberValue],
+  ["direction", decodeU8Value],
+];
+
+const ClaimTwitterFollowRewardInstructionFields = [
+  ["binding_hash", decodeKeyedHashValue],
+];
+
+const SendToTwitterInstructionFields = [
+  ["binding_hash", decodeKeyedHashValue, 0, encodeKeyedHashValue, 0],
+  ["amount", decodeQuantityValue, 0, encodeQuantityValue, 0],
+];
+
+const CancelTwitterEscrowInstructionFields = [
+  ["binding_hash", decodeKeyedHashValue],
+];
+
+const RegisterSmartContractCodeInstructionFields = [
+  ["manifest", decodeContractManifestValue],
+];
+
+const RegisterSmartContractBytesInstructionFields = [
+  [TEXT_CODE_HASH_2, decodeHashValue, 0, encodeHashValue, 0],
+  ["code", decodeByteVecAsBase64, 0, encodeByteVecValue, 0],
+];
+
+const DeactivateContractInstanceInstructionFields = [
+  [TEXT_CONTRACT_ADDRESS_2, decodeStringValue, 0, encodeRequiredRecordString, 0],
+  [TEXT_EXPECTED_REVISION_2, decodeU64Value, 0, encodeU64Value, 0],
+  ["reason", decodeStringValue, 1, encodeNoritoStringValue, 1],
+];
+
+const ActivateContractInstanceInstructionFields = [
+  [TEXT_CONTRACT_ADDRESS_2, decodeStringValue, 0, encodeRequiredRecordString, 0],
+  [TEXT_EXPECTED_REVISION_2, decodeU64Value, 0, encodeU64Value, 0],
+  [TEXT_CODE_HASH_2, decodeHashValue, 0, encodeHashValue, 0],
+];
+
+const SetContractParliamentDelegationInstructionFields = [
+  [TEXT_CONTRACT_ADDRESS_2, decodeStringValue, 0, encodeRequiredRecordString, 0],
+  [TEXT_EXPECTED_REVISION_2, decodeU64Value, 0, encodeU64Value, 0],
+  ["delegated", decodeBoolValue, 0, encodeBoolValue, 0],
+];
+
+const OfferContractOwnershipInstructionFields = [
+  [TEXT_CONTRACT_ADDRESS_2, decodeStringValue, 0, encodeRequiredRecordString, 0],
+  [TEXT_EXPECTED_REVISION_2, decodeU64Value, 0, encodeU64Value, 0],
+  ["new_owner", decodeContractLifecycleOwnerValue, 0, encodeContractLifecycleOwnerValue, 0],
+];
+
+const CommitContractDeploymentInstructionFields = [
+  ["expected_deploy_nonce", decodeU64Value],
+  [TEXT_CONTRACT_ADDRESS, decodeStringValue],
+  [TEXT_CODE_HASH, decodeHashValue],
+  ["contract_alias", decodeStringValue],
+  ["lease_expiry_ms", decodeU64Value, 1],
+  [("expected_previous_" + TEXT_CONTRACT_ADDRESS_2), decodeStringValue, 1],
+];
+
+const UploadSmartContractCodeChunkInstructionFields = [
+  [TEXT_CODE_HASH_2, decodeHashValue, 0, encodeHashValue, 0],
+  ["total_size", decodeU64Value, 0, encodeU64Value, 0],
+  ["chunk_index", decodeU32Value, 0, encodeU32Value, 0],
+  ["chunk_count", decodeU32Value, 0, encodeU32Value, 0],
+  ["chunk", decodeByteVecAsBase64, 0, encodeByteVecValue, 0],
+];
+
+const FinalizeSmartContractCodeUploadInstructionFields = [
+  [TEXT_CODE_HASH_2, decodeHashValue, 0, encodeHashValue, 0],
+  ["total_size", decodeU64Value, 0, encodeU64Value, 0],
+  ["chunk_count", decodeU32Value, 0, encodeU32Value, 0],
+];
+
+const CancelSmartContractCodeUploadInstructionFields = [
+  [TEXT_CODE_HASH, decodeHashValue],
+];
+
+const RemoveSmartContractBytesInstructionFields = [
+  [TEXT_CODE_HASH_2, decodeHashValue, 0, encodeHashValue, 0],
+  ["reason", decodeStringValue, 1, encodeNoritoStringValue, 1],
+];
+
+const Kaigi_CreateKaigiInstructionFields = [
+  ["call", decodeNewKaigiPayload, 0, encodeNewKaigiValue, 0],
+  [TEXT_COMMITMENT, decodeKaigiParticipantCommitmentValue, 1, encodeKaigiParticipantCommitmentValue, 1],
+  ["nullifier", decodeKaigiParticipantNullifierValue, 1, encodeKaigiParticipantNullifierValue, 1],
+  ["roster_root", decodeHashValue, 1, encodeHashValue, 1],
+  ["proof", decodeByteVecAsBase64, 1, encodeByteVecValue, 1],
+];
+
+const Kaigi_EndKaigiInstructionFields = [
+  ["call_id", decodeKaigiIdValue, 0, encodeKaigiIdValue, 0],
+  ["ended_at_ms", decodeU64NumberValue, 1, encodeU64NumberValue, 1],
+  [TEXT_COMMITMENT, decodeKaigiParticipantCommitmentValue, 1, encodeKaigiParticipantCommitmentValue, 1],
+  ["nullifier", decodeKaigiParticipantNullifierValue, 1, encodeKaigiParticipantNullifierValue, 1],
+  ["roster_root", decodeHashValue, 1, encodeHashValue, 1],
+  ["proof", decodeByteVecAsBase64, 1, encodeByteVecValue, 1],
+];
+
+const Kaigi_RecordKaigiUsageInstructionFields = [
+  ["call_id", decodeKaigiIdValue, 0, encodeKaigiIdValue, 0],
+  ["duration_ms", decodeU64NumberValue, 0, encodeU64NumberValue, 0],
+  ["billed_gas", decodeU64NumberValue, 0, encodeU64NumberValue, 0],
+  [("usage_" + TEXT_COMMITMENT), decodeKaigiScalarValue, 1, encodeKaigiScalarValue, 1],
+  ["proof", decodeByteVecAsBase64, 1, encodeByteVecValue, 1],
+];
+
+const Kaigi_SetKaigiRelayManifestInstructionFields = [
+  ["call_id", decodeKaigiIdValue, 0, encodeKaigiIdValue, 0],
+  ["relay_manifest", decodeKaigiRelayManifestValue, 1, encodeKaigiRelayManifestValue, 1],
+];
+
+const Kaigi_RegisterKaigiRelayInstructionFields = [
+  ["relay", decodeKaigiRelayRegistrationValue],
+];
+
+const Kaigi_UnregisterKaigiRelayInstructionFields = [
+  ["relay_id", decodeAccountIdValue],
+];
+
+const Kaigi_ReportKaigiRelayHealthInstructionFields = [
+  ["call_id", decodeKaigiIdValue, 0, encodeKaigiIdValue, 0],
+  ["relay_id", decodeAccountIdValue, 0, encodeAccountIdValue, 0],
+  ["status", decodeKaigiRelayHealthStatusValue, 0, encodeKaigiRelayHealthStatusValue, 0],
+  ["reported_at_ms", decodeU64NumberValue, 0, encodeU64NumberValue, 0],
+  ["notes", decodeKaigiRelayHealthNotesValue, 1, encodeKaigiRelayHealthNotesValue, 1],
+];
+
+const zk_RegisterZkAssetInstructionFields = [
+  ["asset", decodeAssetDefinitionIdValue, 0, encodeAssetDefinitionIdValue, 0],
+  ["vk_unshield", decodeVerifyingKeyIdValue, 1, encodeVerifyingKeyIdValue, 1],
+  ["vk_shield", decodeVerifyingKeyIdValue, 1, encodeVerifyingKeyIdValue, 1],
+];
+
+const zk_ScheduleConfidentialPolicyTransitionInstructionFields = [
+  ["asset", decodeAssetDefinitionIdValue],
+  ["new_mode", decodeConfidentialPolicyModeValue],
+  ["effective_height", decodeU64NumberValue],
+  ["transition_id", decodeHashValue],
+  ["conversion_window", decodeU64NumberValue, 1],
+];
+
+const zk_CancelConfidentialPolicyTransitionInstructionFields = [
+  ["asset", decodeAssetDefinitionIdValue, 0, encodeAssetDefinitionIdValue, 0],
+  ["transition_id", decodeHashValue, 0, encodeHashValue, 0],
+];
+
+const RegisterRwaInstructionFields = [
+  ["rwa", decodeNewRwaValue],
+];
+
+const TransferRwaInstructionFields = [
+  ["source", decodeAccountIdValue, 0, encodeAccountIdValue, 0],
+  ["rwa", decodeRwaIdValue, 0, encodeRwaIdValue, 0],
+  ["quantity", decodeQuantityValue, 0, encodeQuantityValue, 0],
+  ["destination", decodeAccountIdValue, 0, encodeAccountIdValue, 0],
+];
+
+const ForceTransferRwaInstructionFields = [
+  ["rwa", decodeRwaIdValue, 0, encodeRwaIdValue, 0],
+  ["quantity", decodeQuantityValue, 0, encodeQuantityValue, 0],
+  ["destination", decodeAccountIdValue, 0, encodeAccountIdValue, 0],
+];
+
+const SetRwaControlsInstructionFields = [
+  ["rwa", decodeRwaIdValue, 0, encodeRwaIdValue, 0],
+  ["controls", decodeRwaControlPolicyValue, 0, encodeRwaControlPolicyValue, 0],
+];
+
+const SetRwaKeyValueInstructionFields = [
+  ["rwa", decodeRwaIdValue],
+  ["key", decodeNameValue],
+  ["value", decodeNestedJsonValue],
+];
+
+const RemoveRwaKeyValueInstructionFields = [
+  ["rwa", decodeRwaIdValue, 0, encodeRwaIdValue, 0],
+  ["key", decodeNameValue, 0, encodeNameValue, 0],
+];
+
+const CustomInstructionFields = [
+  ["payload", decodeNestedJsonValue],
+];
+
+function encodeRequiredRecordString(value, context) { return encodeNoritoStringValue(assertNonEmptyString(value, context)); }
+const encodeCanonicalRecordFields = /* @__PURE__ */ createNoritoRecordEncoder(
+  encodeStructValue, encodeOptionValue, encodeNoritoVec,
+);
+const CanonicalEncodingFields3 = [
+  ["order_id", , , encodeReplicationIdValue, 0],
+  [TEXT_EXPIRATION_EPOCH, , , encodeU64Value, 0],
+];
+
+const CanonicalEncodingFields18 = [
+  ["id", , , encodeVerifyingKeyIdValue, 0],
+  ["record", , , encodeVerifyingKeyRecordValue, 0],
+];
+
+const CanonicalEncodingFields25 = [
+  ["rwa", , , encodeRwaIdValue, 0],
+  ["quantity", , , encodeQuantityValue, 0],
+];
+
+const CanonicalEncodingFields26 = [
+  ["rwa", , , encodeRwaIdValue, 0],
+  ["quantity", , , encodeQuantityValue, 0],
+];
+
+const CanonicalEncodingFields27 = [
+  ["rwa", , , encodeRwaIdValue, 0],
+  ["quantity", , , encodeQuantityValue, 0],
+];

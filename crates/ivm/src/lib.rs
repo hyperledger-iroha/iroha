@@ -39,6 +39,8 @@ mod error;
 mod execution_summary;
 pub mod field;
 pub mod field_dispatch;
+#[cfg(test)]
+mod frame_identity_tests;
 pub mod gas;
 mod gpu_manager;
 pub mod host;

@@ -1049,7 +1049,7 @@ pub mod stream {
     use iroha_schema::IntoSchema;
     use norito::{
         codec::{Decode, Encode},
-        core::{Error as NoritoError, NoritoSerialize, SerializePayload},
+        core::{Error as NoritoError, SerializePayload},
     };
     use std::{num::NonZeroU64, sync::Arc};
     #[model]
@@ -1104,11 +1104,7 @@ pub mod stream {
             <BlockMessage as norito::NoritoSchema>::frame_name()
         }
     }
-    impl NoritoSerialize for BlockMessageSend {
-        fn schema_hash() -> [u8; 16] {
-            <BlockMessage as NoritoSerialize>::schema_hash()
-        }
-    }
+
     impl SerializePayload for BlockMessageSend {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), NoritoError> {
             // Serialize as a BlockMessage wrapper to keep schema and layout consistent
@@ -1482,7 +1478,7 @@ fn write_signed_block_header(payload: &[u8], out: &mut Vec<u8>) -> Result<(), No
     out.extend_from_slice(MAGIC.as_slice());
     out.push(VERSION_MAJOR);
     out.push(VERSION_MINOR);
-    out.extend_from_slice(&<SignedBlock as norito::NoritoSerialize>::schema_hash());
+    out.extend_from_slice(&norito::schema::identity::frame_hash::<SignedBlock>());
     out.push(Compression::None as u8);
     let len = u64::try_from(payload.len()).map_err(|_| NoritoFrameError::LengthMismatch)?;
     out.extend_from_slice(&len.to_le_bytes());
@@ -1523,7 +1519,7 @@ fn validate_signed_block_header(payload: &[u8]) -> Result<(), NoritoFrameError> 
     }
     let mut schema_bytes = [0u8; 16];
     schema_bytes.copy_from_slice(&payload[6..22]);
-    if schema_bytes != <SignedBlock as norito::NoritoSerialize>::schema_hash() {
+    if schema_bytes != norito::schema::identity::frame_hash::<SignedBlock>() {
         return Err(NoritoFrameError::SchemaMismatch);
     }
     let compression = payload[22];

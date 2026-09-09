@@ -56,6 +56,8 @@ pub const PROVIDER_ADVERT_NOTES_MAX_BYTES_V1: usize = 4 * 1024;
 /// Maximum transport hints, equal to the V1 protocol enum cardinality.
 pub const PROVIDER_ADVERT_TRANSPORT_HINTS_MAX_V1: usize = 4;
 /// Norito payload advertised by storage providers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::ProviderAdvertV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdvertV1 {
     /// Version identifier; must equal [`PROVIDER_ADVERT_VERSION_V1`].
@@ -75,6 +77,8 @@ pub struct ProviderAdvertV1 {
     pub allow_unknown_capabilities: bool,
 }
 /// Canonical provider-advert fields covered by an envelope signature.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::ProviderAdvertSignaturePayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdvertSignaturePayloadV1 {
     /// Provider-advert schema version.
@@ -95,15 +99,10 @@ pub struct ProviderAdvertSignaturePayloadV1 {
     pub allow_unknown_capabilities: bool,
 }
 mod borrowed_norito {
-    use norito::core::{NoritoSerialize, SerializePayload};
+    use norito::core::SerializePayload;
     /// Borrowed value that delegates canonical Norito serialization.
     pub(super) struct Value<'a, T>(pub(super) &'a T);
-    impl<T: NoritoSerialize> NoritoSerialize for Value<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            T::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Value<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Value<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -119,12 +118,7 @@ mod borrowed_norito {
     }
     /// Borrowed vector that preserves the owned `Vec<T>` wire representation.
     pub(super) struct Vec<'a, T>(pub(super) &'a std::vec::Vec<T>);
-    impl<T: NoritoSerialize> NoritoSerialize for Vec<'_, T> {
-        fn schema_hash() -> [u8; 16] {
-            <std::vec::Vec<T>>::schema_hash()
-        }
-    }
-    impl<T: NoritoSerialize> SerializePayload for Vec<'_, T> {
+    impl<T: SerializePayload> SerializePayload for Vec<'_, T> {
         fn serialize(
             &self,
             writer: &mut norito::core::Encoder<'_>,
@@ -139,7 +133,7 @@ mod borrowed_norito {
         }
     }
 }
-#[derive(NoritoSerialize)]
+#[derive(norito::derive::SerializePayload)]
 struct ProviderAdvertSignaturePayloadViewWireV1<'a> {
     version: u8,
     issued_at: u64,
@@ -150,6 +144,11 @@ struct ProviderAdvertSignaturePayloadViewWireV1<'a> {
     signature_strict: bool,
     allow_unknown_capabilities: bool,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::provider_advert::ProviderAdvertSignaturePayloadViewV1",
+    frame = "sorafs_manifest::provider_advert::ProviderAdvertSignaturePayloadV1"
+)]
 struct ProviderAdvertSignaturePayloadViewV1<'a>(ProviderAdvertSignaturePayloadViewWireV1<'a>);
 impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a> {
     fn from(advert: &'a ProviderAdvertV1) -> Self {
@@ -165,11 +164,7 @@ impl<'a> From<&'a ProviderAdvertV1> for ProviderAdvertSignaturePayloadViewV1<'a>
         })
     }
 }
-impl norito::core::NoritoSerialize for ProviderAdvertSignaturePayloadViewV1<'_> {
-    fn schema_hash() -> [u8; 16] {
-        ProviderAdvertSignaturePayloadV1::schema_hash()
-    }
-}
+
 impl norito::core::SerializePayload for ProviderAdvertSignaturePayloadViewV1<'_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         self.0.serialize(writer)
@@ -261,6 +256,8 @@ impl ProviderAdvertV1 {
     }
 }
 /// Provider advertisement body included in the provider-signed envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::ProviderAdvertBodyV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderAdvertBodyV1 {
     /// Governance-controlled provider identifier (32-byte digest).
@@ -292,6 +289,8 @@ pub struct ProviderAdvertBodyV1 {
     pub transport_hints: Option<Vec<TransportHintV1>>,
 }
 /// Stake pointer encoded in the advertisement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::StakePointer")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StakePointer {
     /// Identifier of the staking pool.
@@ -307,6 +306,8 @@ impl StakePointer {
     }
 }
 /// QoS hints used by clients to pick storage providers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::QosHints")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct QosHints {
     /// Availability class advertised by the provider.
@@ -329,6 +330,8 @@ impl QosHints {
     }
 }
 /// Availability tier definitions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::AvailabilityTier")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum AvailabilityTier {
@@ -340,6 +343,8 @@ pub enum AvailabilityTier {
     Cold = 3,
 }
 /// Capability TLV advertised by a provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::CapabilityTlv")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapabilityTlv {
     /// Capability type identifier.
@@ -348,6 +353,8 @@ pub struct CapabilityTlv {
     pub payload: Vec<u8>,
 }
 /// Enumerates high-level capability families.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::CapabilityType")]
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord, Hash,
 )]
@@ -401,6 +408,8 @@ pub fn validate_potr_mldsa_capability(public_key: &[u8]) -> Result<(), PotrMldsa
     Ok(())
 }
 /// Payload describing range-fetch capability metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::ProviderCapabilityRangeV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderCapabilityRangeV1 {
     /// Maximum contiguous chunk span that may be served per request.
@@ -439,6 +448,8 @@ pub enum PqCapabilityError {
     StrictWithoutMajority,
 }
 /// Bitflag payload describing SoraNet PQ support levels.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::ProviderCapabilitySoranetPqV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ProviderCapabilitySoranetPqV1 {
     pub supports_guard: bool,
@@ -548,6 +559,8 @@ impl ProviderCapabilityRangeV1 {
     }
 }
 /// Advertised stream budget for ranged fetches.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::StreamBudgetV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamBudgetV1 {
     /// Maximum concurrent ranged fetches the provider will serve.
@@ -587,6 +600,8 @@ impl StreamBudgetV1 {
     }
 }
 /// Hint describing a supported ranged-fetch transport.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::TransportHintV1")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct TransportHintV1 {
     /// Transport protocol identifier.
@@ -615,6 +630,8 @@ impl<'a> DecodeFromSlice<'a> for TransportHintV1 {
     }
 }
 /// Transport protocols supported by providers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::TransportProtocol")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum TransportProtocol {
@@ -671,6 +688,8 @@ pub enum TransportHintError {
     InvalidPriority,
 }
 /// Service endpoint exposed by the provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::AdvertEndpoint")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct AdvertEndpoint {
     /// Logical endpoint type.
@@ -681,6 +700,8 @@ pub struct AdvertEndpoint {
     pub metadata: Vec<EndpointMetadata>,
 }
 /// Endpoint metadata TLV fields.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::EndpointMetadata")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct EndpointMetadata {
     /// Metadata field identifier.
@@ -689,6 +710,8 @@ pub struct EndpointMetadata {
     pub value: Vec<u8>,
 }
 /// Metadata keys for endpoint hints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::EndpointMetadataKey")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u16)]
 pub enum EndpointMetadataKey {
@@ -700,6 +723,8 @@ pub enum EndpointMetadataKey {
     Region = 0x0003,
 }
 /// Endpoint kind enumeration.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::EndpointKind")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EndpointKind {
@@ -711,6 +736,8 @@ pub enum EndpointKind {
     NoritoRpc = 3,
 }
 /// Rendezvous topic advertised for discovery.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::RendezvousTopic")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct RendezvousTopic {
     /// Topic identifier (e.g., `sorafs.sf1.primary`).
@@ -719,6 +746,8 @@ pub struct RendezvousTopic {
     pub region: String,
 }
 /// Path diversity policy to mitigate eclipse attacks.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::PathDiversityPolicy")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PathDiversityPolicy {
     /// Minimum guard weight (stake percentile) allowed per path.
@@ -729,6 +758,8 @@ pub struct PathDiversityPolicy {
     pub max_same_pool_per_path: u8,
 }
 /// Signature covering the domain-separated canonical advertisement envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::AdvertSignature")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 #[norito(decode_from_slice)]
 pub struct AdvertSignature {
@@ -740,6 +771,8 @@ pub struct AdvertSignature {
     pub signature: Vec<u8>,
 }
 /// Supported advertisement signature algorithms.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::provider_advert::SignatureAlgorithm")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum SignatureAlgorithm {
@@ -1654,7 +1687,7 @@ mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use iroha_crypto::{Algorithm, KeyPair};
-    use norito::{NoritoSerialize as _, SerializePayload as _, decode_from_bytes, to_bytes};
+    use norito::{SerializePayload as _, decode_from_bytes, to_bytes};
     fn encode_bare_with_flags<T: norito::core::NoritoSerialize>(value: &T, flags: u8) -> Vec<u8> {
         let _guard = norito::core::DecodeFlagsGuard::enter(flags);
         let mut bytes = Vec::new();
@@ -1755,7 +1788,7 @@ mod tests {
             allow_unknown_capabilities: false,
         }
     }
-    fn signed_sample_advert(now: u64) -> ProviderAdvertV1 {
+    pub(super) fn signed_sample_advert(now: u64) -> ProviderAdvertV1 {
         let mut advert = sample_advert(now);
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
         advert.signature = AdvertSignature {
@@ -1836,8 +1869,8 @@ mod tests {
         let owned = advert.signature_payload();
         let borrowed = ProviderAdvertSignaturePayloadViewV1::from(&advert);
         assert_eq!(
-            <ProviderAdvertSignaturePayloadViewV1<'_> as norito::core::NoritoSerialize>::schema_hash(),
-            ProviderAdvertSignaturePayloadV1::schema_hash()
+            norito::schema::identity::frame_hash::<ProviderAdvertSignaturePayloadViewV1<'_>>(),
+            norito::schema::identity::frame_hash::<ProviderAdvertSignaturePayloadV1>()
         );
         let owned_frame =
             norito::encode_canonical(&owned).expect("encode owned signature envelope");
@@ -2643,3 +2676,14 @@ mod tests {
         assert_eq!(err, AdvertValidationError::EmptyTransportHints);
     }
 }
+
+#[cfg(test)]
+include!("provider_advert/captured_owner_identity_tests.rs");
+
+#[cfg(test)]
+#[path = "provider_advert/borrowed_payload_tests.rs"]
+mod borrowed_payload_tests;
+
+#[cfg(test)]
+#[path = "provider_advert/signing_identity_tests.rs"]
+pub(crate) mod signing_identity_tests;

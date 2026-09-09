@@ -17,6 +17,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use thiserror::Error;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::da::receipts::StoredDaReceipt")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]

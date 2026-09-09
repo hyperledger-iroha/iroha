@@ -213,6 +213,9 @@ jobs:
       run_consistency: ${{ steps.classify.outputs.run_consistency }}
       run_kotodama_docs: ${{ steps.classify.outputs.run_kotodama_docs }}
       run_pytests: ${{ steps.classify.outputs.run_pytests }}
+      run_sora_parliament_lifecycle: ${{ steps.classify.outputs.run_sora_parliament_lifecycle }}
+      run_nexus_cross_dataspace_localnet: ${{ steps.classify.outputs.run_nexus_cross_dataspace_localnet }}
+      run_nexus_cross_lane_proofs: ${{ steps.classify.outputs.run_nexus_cross_lane_proofs }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -385,6 +388,7 @@ jobs:
       IROHA_TEST_REQUIRE_NETWORK: "1"
       TEST_NETWORK_BIN_IROHAD: bins/iroha3d
       TEST_NETWORK_BIN_IROHA: bins/iroha
+      TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL: bins/iroha3d_message_control
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -421,7 +425,7 @@ jobs:
   rust_required:
     name: Required affected Rust validation
     if: always()
-    needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests]
+    needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle, nexus_cross_dataspace_localnet, nexus_cross_lane_proofs]
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate dynamic Rust lane results
@@ -439,6 +443,12 @@ jobs:
           KOTODAMA_SELECTED: ${{ needs.rust_changes.outputs.run_kotodama_docs }}
           PYTESTS_RESULT: ${{ needs.pytests.result }}
           PYTESTS_SELECTED: ${{ needs.rust_changes.outputs.run_pytests }}
+          PARLIAMENT_RESULT: ${{ needs.sora_parliament_lifecycle.result }}
+          PARLIAMENT_SELECTED: ${{ needs.rust_changes.outputs.run_sora_parliament_lifecycle }}
+          NEXUS_DATASPACE_RESULT: ${{ needs.nexus_cross_dataspace_localnet.result }}
+          NEXUS_DATASPACE_SELECTED: ${{ needs.rust_changes.outputs.run_nexus_cross_dataspace_localnet }}
+          NEXUS_PROOFS_RESULT: ${{ needs.nexus_cross_lane_proofs.result }}
+          NEXUS_PROOFS_SELECTED: ${{ needs.rust_changes.outputs.run_nexus_cross_lane_proofs }}
         run: |
           set -euo pipefail
           test "$CLASSIFIER_RESULT" = success
@@ -454,6 +464,9 @@ jobs:
           check_result "$CONSISTENCY_SELECTED" "$CONSISTENCY_RESULT"
           check_result "$KOTODAMA_SELECTED" "$KOTODAMA_RESULT"
           check_result "$PYTESTS_SELECTED" "$PYTESTS_RESULT"
+          check_result "$PARLIAMENT_SELECTED" "$PARLIAMENT_RESULT"
+          check_result "$NEXUS_DATASPACE_SELECTED" "$NEXUS_DATASPACE_RESULT"
+          check_result "$NEXUS_PROOFS_SELECTED" "$NEXUS_PROOFS_RESULT"
 
   pytests:
     if: needs.rust_changes.outputs.run_pytests == 'true'
@@ -874,6 +887,8 @@ jobs:
           if-no-files-found: error
 
   nexus_cross_dataspace_localnet:
+    if: needs.rust_changes.outputs.run_nexus_cross_dataspace_localnet == 'true'
+    needs: rust_changes
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -883,6 +898,8 @@ jobs:
         run: bash ci/check_nexus_cross_dataspace_localnet.sh
 
   nexus_cross_lane_proofs:
+    if: needs.rust_changes.outputs.run_nexus_cross_lane_proofs == 'true'
+    needs: rust_changes
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08
@@ -892,6 +909,8 @@ jobs:
         run: bash ci/check_nexus_cross_lane_proofs.sh
 
   sora_parliament_lifecycle:
+    if: needs.rust_changes.outputs.run_sora_parliament_lifecycle == 'true'
+    needs: rust_changes
     runs-on: [self-hosted, Linux, iroha2]
     container:
       image: hyperledger/iroha2-ci:nightly-2025-05-08

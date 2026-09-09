@@ -102,7 +102,7 @@ impl StatePath {
         Ok((path, end))
     }
 }
-impl norito::core::NoritoSerialize for StatePath {}
+
 impl norito::core::SerializePayload for StatePath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <&str as norito::core::SerializePayload>::serialize(&self.as_ref(), writer)
@@ -114,7 +114,7 @@ impl norito::core::SerializePayload for StatePath {
         <&str as norito::core::SerializePayload>::encoded_len_exact(&self.as_ref())
     }
 }
-impl norito::core::NoritoDeserialize<'_> for StatePath {}
+
 impl<'a> norito::core::DeserializePayload<'a> for StatePath {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived)

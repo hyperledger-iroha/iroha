@@ -121,3 +121,66 @@ def test_complete_checker_calls_construction_contract_with_repo_root():
         "pending lifecycle closed predecessor wait", failures,
     )
     assert failures == []
+
+
+@pytest.mark.parametrize(
+    ("key", "original", "replacement"),
+    (
+        (
+            "ordinary_loop",
+            "LaneReservationReconciliationPlanning::AlreadyCompleted(observation) => { "
+            "break observe_completed_lane_reservation_reconciliation("
+            "queue.as_ref(), kura.as_ref(), observation,)?; }",
+            "LaneReservationReconciliationPlanning::AlreadyCompleted(_observation) => { "
+            "break LaneReservationReconciliationSummary::default(); }",
+        ),
+        (
+            "ordinary_loop",
+            "observe_completed_lane_reservation_reconciliation("
+            "queue.as_ref(), kura.as_ref(), observation,)?",
+            "observe_completed_lane_reservation_reconciliation("
+            "queue.as_ref(), kura.as_ref(), observation,).unwrap_or_default()",
+        ),
+        (
+            "ordinary_active",
+            "let pending = lane_work.has_pending_historical_recovery()?;",
+            "let pending = lane_work.has_pending_historical_recovery().unwrap_or(false);",
+        ),
+        (
+            "ordinary_active",
+            "let pending = lane_work.has_pending_historical_recovery()?;",
+            "let pending = lane_work.has_pending_historical_recovery().unwrap_or(true);",
+        ),
+    ),
+)
+def test_incoming_completed_observation_and_pending_errors_remain_fail_closed(
+    production_copy, tmp_path, key, original, replacement,
+):
+    """Fresh hashes cannot authorize bypassing the observed cut or swallowing reads."""
+    shutil.copytree(production_copy, tmp_path, dirs_exist_ok=True)
+    relative, symbol, _ = OWNERS[key]
+    path = tmp_path / PREFIX / relative
+    before = path.read_bytes()
+    source = before.decode()
+    item = CHECKER.rust_items(source, symbol)[0]
+    tokens = CHECKER.rust_code_tokens(item.source)
+    required = CHECKER.rust_code_tokens(original)
+    positions = CHECKER._token_sequence_positions(tokens, required)
+    assert len(positions) == 1
+    spans = list(CHECKER._RUST_TOKEN_RE.finditer(CHECKER.mask_rust_comments_and_literals(item.source)))
+    start = spans[positions[0]].start()
+    end = spans[positions[0] + len(required) - 1].end()
+    changed_owner = item.source[:start] + replacement + item.source[end:]
+    assert source.count(item.source) == 1
+    path.write_text(source.replace(item.source, changed_owner))
+    changed = CHECKER.rust_items(path.read_text(), symbol)[0]
+    errors = CHECKER._lifecycle_construction_reconciled_owner_errors(tmp_path)
+    (tmp_path / "rehashed-incoming-control.json").write_text(json.dumps({
+        "owner": key,
+        "old_source_sha256": hashlib.sha256(before).hexdigest(),
+        "new_source_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "new_owner_token_sha256": CHECKER._rust_item_token_sha256(changed),
+        "errors": errors,
+    }, indent=2) + "\n")
+    assert path.read_bytes() != before
+    assert any(f"lifecycle construction {key} lost reviewed authority" in error for error in errors)

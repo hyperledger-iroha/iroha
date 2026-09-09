@@ -119,6 +119,10 @@ where
 
 /// Exact fsynced prefix of one native-owned hash-chained journal.
 /// Decoded values are claims until the checkpoint guard authenticates the actual stored bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryJournalPrefixV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaRecoveryJournalPrefixV1 {
     /// Number of complete frames, including the journal initialization record.
@@ -147,6 +151,10 @@ impl KagemushaRecoveryJournalPrefixV1 {
 
 /// Recovery material selected atomically with the complete Core snapshot.
 /// This is a structural proposal, never evidence that files exist or hardware selected a root.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryJournalsV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaRecoveryJournalsV1 {
     /// Complete coordinator operation WAL prefix.
@@ -183,6 +191,10 @@ impl KagemushaRecoveryJournalsV1 {
 }
 
 /// Exact governed credential and authenticated catalog identity retained across restart.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaAcceptedCredentialFloorV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaAcceptedCredentialFloorV1 {
     /// Original credential, including its original issuer signature and expiry.
@@ -261,6 +273,10 @@ impl KagemushaAcceptedCredentialFloorV1 {
 }
 
 /// Exact hardware-selected predecessor identity. The all-zero identity is initial CAS only.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryCheckpointIdentityV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaRecoveryCheckpointIdentityV1 {
     /// Stable-wallet metadata revision.
@@ -285,6 +301,10 @@ impl KagemushaRecoveryCheckpointIdentityV1 {
 
 /// Immutable retail owner selected by the initial hardware checkpoint.
 /// This decoded projection is only a selector until authenticated through the complete snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryEnrollmentBindingV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaRecoveryEnrollmentBindingV1 {
     /// Stable enrollment identity derived from the exact typed owner.
@@ -316,6 +336,10 @@ impl KagemushaRecoveryEnrollmentBindingV1 {
 }
 
 /// Mandatory snapshot metadata; omitted or older layouts are never accepted on recovery.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryMetadataV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaRecoveryMetadataV1 {
     /// Immutable ownership established only from verified retail enrollment at bootstrap.
@@ -415,6 +439,10 @@ impl KagemushaRecoveryMetadataV1 {
 }
 
 /// Complete statement for one hardware metadata CAS and retained terminal certificate.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::recovery_metadata::KagemushaRecoveryCheckpointStatementV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaRecoveryCheckpointStatementV1 {
     /// Nonzero exact retry identity, not authorization by itself.

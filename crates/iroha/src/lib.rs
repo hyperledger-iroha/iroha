@@ -18,8 +18,14 @@ pub mod secrecy;
 #[cfg(feature = "sm")]
 pub mod sm;
 pub mod sns;
+pub mod stream;
 pub mod subscriptions;
-pub use error::{Error, Result, TransactionPreparationError, TransactionSigningError};
+pub use error::{
+    Error, Result, TransactionPreparationError, TransactionSigningError, TransportErrorKind,
+};
 pub use iroha_crypto as crypto;
 pub use iroha_data_model as data_model;
 pub use iroha_executor_data_model as executor_data_model;
+
+#[cfg(test)]
+mod frame_identity_tests;

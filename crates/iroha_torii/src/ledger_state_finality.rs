@@ -3,6 +3,8 @@
 use super::*;
 
 /// Closed response shared by both authenticated ledger-state endpoints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ledger_state_finality::StateFinalityResponse")]
 #[derive(
     Debug,
     Clone,

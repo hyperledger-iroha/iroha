@@ -30,6 +30,8 @@ const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
 pub const SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1: &[u8] =
     b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\0";
 /// Provider implementation class carried by external-signer provenance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::ExternalSignerBackendV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
 pub enum ExternalSignerBackendV1 {
@@ -56,6 +58,8 @@ pub(super) const fn native_role(
     }
 }
 /// Immutable public identity expected from one software signer service.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::SoftwareSignerPublicBindingV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerPublicBindingV1 {
     /// Exact binding format marker.
@@ -153,6 +157,10 @@ impl SoftwareSignerPublicBindingV1 {
     }
 }
 /// Live software-signer provenance returned by qualification and signing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::protocol::SoftwareSignerLiveProvenanceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerLiveProvenanceV1 {
     /// Immutable public service binding.
@@ -176,6 +184,8 @@ impl SoftwareSignerLiveProvenanceV1 {
             && self.revoked == other.revoked
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::SoftwareSignerFrameV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SoftwareSignerFrameV1 {
     pub magic: [u8; 8],
@@ -198,11 +208,15 @@ impl Drop for SoftwareSignerFrameV1 {
         scrub(&mut self.body);
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::QualifyRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct QualifyRequestV1 {
     pub binding_digest: [u8; 32],
     pub client_nonce: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::QualifyResponseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct QualifyResponseV1 {
     pub client_nonce: [u8; 32],
@@ -211,6 +225,8 @@ pub(super) struct QualifyResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::SignRequestV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignRequestV1 {
     pub binding_digest: [u8; 32],
@@ -237,6 +253,8 @@ impl Drop for SignRequestV1 {
         scrub(&mut self.payload);
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::SignStatusV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u8)]
 pub(super) enum SignStatusV1 {
@@ -247,6 +265,8 @@ pub(super) enum SignStatusV1 {
     StaleOrRevoked = 4,
     Unavailable = 5,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::SignResponseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SignResponseV1 {
     pub operation_id: [u8; 32],
@@ -260,6 +280,8 @@ pub(super) struct SignResponseV1 {
     pub response_digest: [u8; 32],
     pub response_attestation: Vec<u8>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::AdminCommandV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) enum AdminCommandV1 {
     Status,
@@ -279,12 +301,16 @@ pub(super) enum AdminCommandV1 {
         reason_digest: [u8; 32],
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::AdminRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AdminRequestV1 {
     pub binding_digest: [u8; 32],
     pub command: AdminCommandV1,
     pub request_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::AdminStatusV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(u8)]
 pub(super) enum AdminStatusV1 {
@@ -294,6 +320,8 @@ pub(super) enum AdminStatusV1 {
     Conflict = 3,
     Unavailable = 4,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::AdminResponseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct AdminResponseV1 {
     pub request_digest: [u8; 32],
@@ -323,9 +351,8 @@ pub(super) fn valid_software_signer_handle(role: SignerRoleV1, value: &str) -> b
         SignerRoleV1::PotrProvider => ("potr", Some("provider-")),
         SignerRoleV1::BillingStatement => ("billing", None),
         SignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
-        SignerRoleV1::StreamToken => ("stream-token", None),
         SignerRoleV1::PopCredentials => ("pop-credentials", None),
-        SignerRoleV1::ReleaseManifest => return false,
+        SignerRoleV1::ReleaseManifest | SignerRoleV1::StreamToken => return false,
     };
     let prefix = format!("software://sorafs/{role_segment}/");
     iroha_config::parameters::validate_production_runtime_handle(value).is_ok()
@@ -342,22 +369,7 @@ pub(super) fn public_key_digest(public_key: &PublicKey) -> Result<[u8; 32], ()> 
         &[&[algorithm as u8], payload],
     ))
 }
-pub(super) fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(domain);
-    for part in parts {
-        hasher.update(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_be_bytes());
-        hasher.update(part);
-    }
-    *hasher.finalize().as_bytes()
-}
-pub(super) fn digest_canonical<T: norito::NoritoSerialize>(
-    domain: &[u8],
-    value: &T,
-) -> Result<[u8; 32], ()> {
-    let bytes = norito::encode_canonical(value).map_err(|_| ())?;
-    Ok(digest_parts(domain, &[&bytes]))
-}
+pub(super) use crate::signer_operation::{digest_canonical, digest_parts};
 pub(super) fn payload_digest(payload: &[u8]) -> [u8; 32] {
     digest_parts(b"iroha.external-signer.payload.v1", &[payload])
 }

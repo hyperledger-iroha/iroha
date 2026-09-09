@@ -62,6 +62,8 @@ pub use pgc_account_root::{
 };
 const PRIVACY_PGC_POOL_INVARIANT_DIGEST_DOMAIN_V1: &[u8] = b"iroha:privacy:pgc-pool-invariant:v1";
 /// Typed key for the immutable activation registered for one protocol.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyActivationKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub struct PrivacyActivationKeyV1 {
     protocol_id: PrivacyProtocolIdV1,
@@ -442,6 +444,8 @@ pub(crate) fn validate_privacy_activations_at_committed_height_v1(
     Ok(())
 }
 /// Exact encrypted-account key in one Anonymous PGC pool.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcAccountKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) struct PrivacyPgcAccountKeyV1 {
     namespace: PrivacyNamespaceV1,
@@ -497,6 +501,8 @@ impl PrivacyPgcAccountKeyV1 {
     }
 }
 /// Typed key for the immutable audited invariant of one Anonymous PGC pool.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcPoolInvariantKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) struct PrivacyPgcPoolInvariantKeyV1 {
     namespace: PrivacyNamespaceV1,
@@ -526,6 +532,8 @@ impl PrivacyPgcPoolInvariantKeyV1 {
     }
 }
 /// Immutable supply and audit binding established by one verified PGC bootstrap.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcPoolInvariantV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyPgcPoolInvariantV1 {
     total_supply: u32,
@@ -534,6 +542,8 @@ pub(crate) struct PrivacyPgcPoolInvariantV1 {
     bootstrap_proof_digest: PrivacyPgcBootstrapProofDigestV1,
 }
 /// Domain-separated commitment copied into every retained PGC successor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcPoolInvariantDigestV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyPgcPoolInvariantDigestV1([u8; 32]);
 impl PrivacyPgcPoolInvariantDigestV1 {
@@ -630,6 +640,8 @@ impl PrivacyPgcPoolInvariantV1 {
     }
 }
 /// Domain-separated origin of one encrypted PGC account state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcAccountProvenanceV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(tag = "origin", content = "record")]
 pub(crate) enum PrivacyPgcAccountProvenanceV1 {
@@ -709,6 +721,8 @@ impl PrivacyPgcAccountProvenanceV1 {
     }
 }
 /// Canonical encrypted balance and epoch for one PGC account.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcAccountStateV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyPgcAccountStateV1 {
     encrypted_balance: PrivacyP256CiphertextV1,
@@ -2854,6 +2868,8 @@ impl PrivacyFcmpAccumulatorStateV1 {
 /// The fields remain private so only the validating constructors in this
 /// module can create or advance a frontier.  The type itself is public because
 /// it is part of the durable [`PrivacyStateItemRecordV1`] representation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyProofManagedAccumulatorStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyProofManagedAccumulatorStateV1 {
@@ -3059,6 +3075,8 @@ impl PrivacyProofManagedAccumulatorStateV1 {
 ///
 /// A pool always carries exactly one native frontier, and the enum discriminant prevents an FCMP++
 /// curve frontier from being decoded or persisted as an IVM/PQ SHA-256 note frontier.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyProofManagedPoolAccumulatorStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(tag = "kind", content = "state", deny_unknown_fields)]
 pub enum PrivacyProofManagedPoolAccumulatorStateV1 {
@@ -5178,6 +5196,8 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     Ok(())
 }
 /// Complete authoritative compact state for one governed Orchard V3 pool.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyOrchardPoolStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub struct PrivacyOrchardPoolStateV1 {
     bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
@@ -5807,6 +5827,8 @@ pub(crate) fn load_privacy_orchard_pool_snapshot_v1(
 ///
 /// The enum discriminant is part of canonical Norito key bytes. A ZK-AMS key image therefore cannot
 /// alias a future protocol nullifier carrying the same 32 bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyNullifierKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum PrivacyNullifierKeyV1 {
     /// One consumed ZK-ACE authorization nullifier in its exact policy lineage.
@@ -6154,6 +6176,8 @@ impl PrivacyNullifierKeyV1 {
 ///
 /// Distinct canonical enum variants provide protocol-level domain separation: issuer records, PHC
 /// hashes, and seed keys cannot collide even when their inner 32-byte values happen to be equal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyCommitmentKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum PrivacyCommitmentKeyV1 {
     /// Authoritative ZK-ACE policy selected by its stable identifier.
@@ -6862,6 +6886,8 @@ fn validate_proof_managed_pool_protocol_v1(
 /// Lexicographic order is namespace, semantic role, epoch, then root bytes.
 /// This gives deterministic oldest-first pruning while preserving exact
 /// `(namespace, role, epoch, root)` membership checks.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyRootKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub struct PrivacyRootKeyV1 {
     namespace: PrivacyNamespaceV1,
@@ -6946,6 +6972,8 @@ impl PrivacyRootKeyV1 {
     }
 }
 /// Exact key for the single current root of one independent history.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyRootHeadKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) struct PrivacyRootHeadKeyV1 {
     namespace: PrivacyNamespaceV1,
@@ -6984,6 +7012,8 @@ impl PrivacyRootHeadKeyV1 {
     }
 }
 /// Domain-separated provenance shared by root history and the current head.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyRootProvenanceV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(tag = "origin", content = "record", deny_unknown_fields)]
 pub(crate) enum PrivacyRootProvenanceV1 {
@@ -7721,6 +7751,8 @@ impl PrivacyRootProvenanceV1 {
     }
 }
 /// Exact last-pruned root immediately preceding the retained history window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyRootRetentionAnchorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyRootRetentionAnchorV1 {
     epoch: u64,
@@ -7749,6 +7781,8 @@ impl PrivacyRootRetentionAnchorV1 {
     }
 }
 /// Current canonical root, its provenance, and exact retained-prefix anchor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyRootHeadRecordV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyRootHeadRecordV1 {
     epoch: u64,
@@ -7828,6 +7862,8 @@ impl PrivacyRootHeadRecordV1 {
 /// Governance records and proof-produced items are distinct closed variants;
 /// governance can never manufacture a synthetic statement digest, and a proof
 /// path cannot impersonate the registry bootstrap.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyStateItemRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(tag = "origin", content = "record", deny_unknown_fields)]
 pub enum PrivacyStateItemRecordV1 {

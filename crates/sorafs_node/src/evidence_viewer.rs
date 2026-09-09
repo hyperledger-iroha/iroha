@@ -459,6 +459,8 @@ pub trait EvidenceViewerWebAuthnBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     ) -> Result<EvidenceViewerWebAuthnResultV1, EvidenceViewerExternalErrorV1>;
 }
 /// Claims bound into every rotating grant.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerGrantClaimsV1 {
     /// Session identifier.
@@ -535,6 +537,8 @@ pub enum EvidenceViewerCheckpointStoreExternalErrorV1 {
 /// form the monotonic lineage, `checkpoint_digest` binds the current payload-free checkpoint,
 /// `revision` is the deterministic CAS identity, and the existing governed receipt signer
 /// authenticates the whole public record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreRecordV1")]
 #[derive(Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerCheckpointStoreRecordV1 {
     /// Record schema version.
@@ -1151,7 +1155,8 @@ pub struct EvidenceViewerSessionIssuedV1 {
     pub receipt: EvidenceViewerSignedReceiptV1,
 }
 /// Payload-free case-bound security metadata for one session.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerSessionSecurityRecordV1")]
 pub struct EvidenceViewerSessionSecurityRecordV1 {
     /// Underlying local payload-free session record.
     pub local_session: ModerationEvidenceViewerSessionRecord,
@@ -1189,7 +1194,8 @@ pub struct EvidenceViewerSessionSecurityRecordV1 {
     pub revoked: bool,
 }
 /// Payload-free browser manifest.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerManifestV1")]
 pub struct EvidenceViewerManifestV1 {
     /// Schema version.
     pub version: u16,
@@ -1291,6 +1297,8 @@ pub enum EvidenceViewerReceiptKindV1 {
     ErasureDeniedLegalHold,
 }
 /// Canonical payload-free receipt body.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerReceiptBodyV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerReceiptBodyV1 {
     /// Schema version.
@@ -1327,6 +1335,8 @@ pub struct EvidenceViewerReceiptBodyV1 {
     pub previous_receipt_digest: [u8; 32],
 }
 /// Ed25519-authenticated payload-free receipt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerSignedReceiptV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedReceiptV1 {
     /// Canonical body.
@@ -1388,6 +1398,8 @@ pub struct EvidenceViewerReceiptCursorV1 {
 /// digest, retained receipt count, exact receipt-chain and compaction-archive
 /// heads, plus the qualified checkpoint-store handle, revision, and policy
 /// digest. Audit GETs return this retained anchor without invoking the signer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerSignedCheckpointAnchorV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedCheckpointAnchorV1 {
     /// Checkpoint/anchor schema version.
@@ -1492,6 +1504,8 @@ pub struct EvidenceViewerCompactionArchiveRequestV1 {
 /// The head contains only payload-free metadata. The archive artifact contains
 /// the exact expired challenge/session records and is durably installed under
 /// `operation_id` before the authoritative checkpoint may prune them.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerSignedCompactionArchiveHeadV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerSignedCompactionArchiveHeadV1 {
     /// Archive schema version.
@@ -1567,6 +1581,8 @@ impl EvidenceViewerSignedCompactionArchiveHeadV1 {
 /// `receipts` is a contiguous suffix of the authoritative signed checkpoint chain. It contains only
 /// receipt metadata and one-way actor/idempotency digests; evidence bytes, assertions, bearer
 /// grants, holder secrets, and raw viewer identities are never projected.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerTransparencyProjectionV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerTransparencyProjectionV1 {
     /// Transparency projection schema version.
@@ -1684,7 +1700,8 @@ impl EvidenceViewerTransparencyProjectionV1 {
     }
 }
 /// Legal-hold state for one evidence object.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerLegalHoldV1")]
 pub struct EvidenceViewerLegalHoldV1 {
     /// Stable legal-hold identifier.
     pub hold_id: [u8; 16],
@@ -1702,7 +1719,8 @@ pub struct EvidenceViewerLegalHoldV1 {
     pub released_at_unix_ms: Option<u64>,
 }
 /// Payload-free erasure state.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerErasureRecordV1")]
 pub struct EvidenceViewerErasureRecordV1 {
     /// Quarantine identifier.
     pub quarantine_id: [u8; 16],
@@ -1718,7 +1736,8 @@ pub struct EvidenceViewerErasureRecordV1 {
     pub receipt_digest: [u8; 32],
 }
 /// Payload-free signed retention decision.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerRetentionRecordV1")]
 pub struct EvidenceViewerRetentionRecordV1 {
     /// Quarantine identifier.
     pub quarantine_id: [u8; 16],
@@ -1736,7 +1755,8 @@ pub struct EvidenceViewerRetentionRecordV1 {
     pub receipt_digest: [u8; 32],
 }
 /// Payload-free audit/status projection.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerAuditStatusV1")]
 pub struct EvidenceViewerAuditStatusV1 {
     /// Checkpoint schema version.
     pub version: u16,
@@ -1755,6 +1775,8 @@ pub struct EvidenceViewerAuditStatusV1 {
     /// Exact signed checkpoint and receipt-chain head represented by the counters above.
     pub checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::ChallengeRecordV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeRecordV1 {
     challenge_id: [u8; 16],
@@ -1798,12 +1820,16 @@ struct EvidenceViewerErasureIntentV1 {
     request_digest: [u8; 32],
     requested_at_unix_ms: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCompactionArchivePayloadV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCompactionArchivePayloadV1 {
     version: u16,
     challenges: Vec<ChallengeRecordV1>,
     sessions: Vec<EvidenceViewerSessionSecurityRecordV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveArtifactV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCompactionArchiveArtifactV1 {
     version: u16,
@@ -1819,6 +1845,8 @@ struct EvidenceViewerDefaultRetentionFloorV1 {
     basis_session_expires_at_unix_ms: u64,
     retain_until_unix_ms: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCheckpointV1 {
     version: u16,
@@ -1833,6 +1861,8 @@ struct EvidenceViewerCheckpointV1 {
     idempotency: Vec<IdempotencyRecordV1>,
     compaction_archive_head: Option<EvidenceViewerSignedCompactionArchiveHeadV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerCheckpointEnvelopeV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct EvidenceViewerCheckpointEnvelopeV1 {
     version: u16,

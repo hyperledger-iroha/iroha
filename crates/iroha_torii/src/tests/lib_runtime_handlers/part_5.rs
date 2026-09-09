@@ -654,9 +654,9 @@ fn pipeline_fastpq_recovery_artifact_budget_is_cumulative() {
 #[test]
 fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
     let app = mk_app_state_for_tests();
-    let height = 91;
-    let block_hash =
-        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x91; Hash::LENGTH]));
+    let height = 1;
+    let (block, _) = make_signed_block(height, None);
+    let block_hash = block.hash();
     let mut sidecar = iroha_core::kura::PipelineRecoverySidecar::new(
         height,
         block_hash,
@@ -690,6 +690,31 @@ fn pipeline_fastpq_recovery_builder_paginates_and_bounds_encoding() {
             });
     }
     app.kura.write_pipeline_metadata(&sidecar);
+    assert!(
+        app.kura.read_pipeline_metadata(height).is_none(),
+        "a sidecar without its canonical block must remain unavailable"
+    );
+    assert!(matches!(
+        build_pipeline_recovery_fastpq_response(
+            &app.kura,
+            height,
+            PipelineFastpqRecoveryPage {
+                offset: 0,
+                limit: 1
+            },
+        ),
+        Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::NotFound
+        )))
+    ));
+    assert_eq!(store_block(&app, block), block_hash);
+    assert_eq!(
+        app.kura
+            .read_pipeline_metadata(height)
+            .map(|stored| stored.block_hash),
+        Some(block_hash),
+        "the exact persisted block must authenticate its recovery sidecar"
+    );
     let serialized = build_pipeline_recovery_fastpq_response(
         &app.kura,
         height,

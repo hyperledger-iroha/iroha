@@ -28,6 +28,8 @@ pub const CAPACITY_TELEMETRY_VERSION_V1: u8 = 1;
 /// Schema version for [`CapacityDisputeV1`].
 pub const CAPACITY_DISPUTE_VERSION_V1: u8 = 1;
 /// Governance-authored statement of a provider's committed capacity.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::CapacityDeclarationV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityDeclarationV1 {
     /// Schema version (`CAPACITY_DECLARATION_VERSION_V1`).
@@ -170,6 +172,8 @@ impl CapacityDeclarationV1 {
     }
 }
 /// Per-profile capacity allocation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::ChunkerCommitmentV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct ChunkerCommitmentV1 {
     /// Canonical profile handle (`namespace.name@semver`).
@@ -254,6 +258,8 @@ impl ChunkerCommitmentV1 {
     }
 }
 /// Upper-bound commitment for a capacity lane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::LaneCommitmentV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct LaneCommitmentV1 {
     /// Lane identifier (e.g., `hot`, `bridge`, `regulatory`).
@@ -294,6 +300,8 @@ impl LaneCommitmentV1 {
     }
 }
 /// Pricing hints attached to a capacity declaration.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::PricingScheduleV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct PricingScheduleV1 {
     /// Three-to-six character currency code (e.g., `xor`).
@@ -348,6 +356,8 @@ impl<'a> DecodeFromSlice<'a> for PricingScheduleV1 {
     }
 }
 /// Metadata entry attached to capacity artefacts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::CapacityMetadataEntry")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -429,6 +439,8 @@ pub const MAX_CAPACITY_LANE_ID_BYTES: usize = 64;
 /// Maximum pricing-note length.
 pub const MAX_CAPACITY_PRICING_NOTES_BYTES: usize = 1024;
 /// Replication order issued by governance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::ReplicationOrderV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -583,6 +595,8 @@ impl ReplicationOrderV1 {
     }
 }
 /// Signature attached to a governance-issued replication order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::ReplicationOrderSignatureV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -607,6 +621,8 @@ impl ReplicationOrderSignatureV1 {
     }
 }
 /// Signed governance envelope for a replication order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::SignedReplicationOrderV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -618,6 +634,8 @@ pub struct SignedReplicationOrderV1 {
     /// Governance signature over the canonical order signing payload.
     pub signature: ReplicationOrderSignatureV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::ReplicationOrderSigningPayloadV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct ReplicationOrderSigningPayloadV1 {
     domain: String,
@@ -705,6 +723,8 @@ impl SignedReplicationOrderV1 {
     }
 }
 /// Assignment binding a provider to store a manifest slice.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::ReplicationAssignmentV1")]
 #[derive(
     Debug,
     Clone,
@@ -749,6 +769,8 @@ impl ReplicationAssignmentV1 {
     }
 }
 /// SLA constraints attached to a replication order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::ReplicationOrderSlaV1")]
 #[derive(
     Debug,
     Clone,
@@ -788,6 +810,8 @@ impl ReplicationOrderSlaV1 {
     }
 }
 /// Telemetry snapshot emitted for fee distribution.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::CapacityTelemetryV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityTelemetryV1 {
     /// Schema version (`CAPACITY_TELEMETRY_VERSION_V1`).
@@ -865,6 +889,8 @@ const MAX_DISPUTE_EVIDENCE_URI_LEN: usize = 512;
 /// Maximum length permitted for evidence media types.
 const MAX_DISPUTE_EVIDENCE_MEDIA_LEN: usize = 128;
 /// Enumerates dispute categories recognised by governance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::CapacityDisputeKind")]
 #[derive(Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CapacityDisputeKind {
@@ -880,6 +906,8 @@ pub enum CapacityDisputeKind {
     Other = 255,
 }
 /// Evidence bundle describing supporting material for a dispute.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::CapacityDisputeEvidenceV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityDisputeEvidenceV1 {
     /// Deterministic digest (BLAKE3-256) of the evidence bundle.
@@ -938,6 +966,8 @@ impl CapacityDisputeEvidenceV1 {
     }
 }
 /// Governance-authored dispute payload targeting a storage provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::capacity::CapacityDisputeV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct CapacityDisputeV1 {
     /// Schema version (`CAPACITY_DISPUTE_VERSION_V1`).
@@ -2158,3 +2188,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("capacity/captured_owner_identity_tests.rs");

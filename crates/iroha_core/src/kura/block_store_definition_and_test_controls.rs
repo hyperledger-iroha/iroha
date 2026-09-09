@@ -114,7 +114,7 @@ impl Kura {
         }
         let now = Instant::now();
         let mut registry = self.replica_registry.lock();
-        let peers = registry.entry(authority.key).or_default();
+        let mut peers = registry.entry(authority.key).or_default();
         for (keeper_index, keeper) in &authority.selected_keepers {
             peers.insert(
                 keeper.clone(),
@@ -250,8 +250,17 @@ impl Kura {
         }
         let _sidecar_guard = self.sidecar_lock.lock();
         let namespace = self.native_amx_evidence_namespace_for_entry(&entry)?;
-        self.complete_native_amx_evidence_prune_intent_locked(&entry, &namespace)?;
+        let mut accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(3);
+        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+        self.complete_native_amx_evidence_prune_intent_locked(
+            &mut accounting_mutation,
+            &entry,
+            &namespace,
+        )?;
         self.recover_native_amx_evidence_publication_temp_locked(
+            &mut accounting_mutation,
             &entry,
             &namespace,
             NativeAmxEvidenceRecoveryPhase::Startup,
@@ -295,8 +304,8 @@ impl Kura {
                 "Native AMX manifest removal is restricted to the newest record",
             ));
         }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
-        let before_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
+
+        let resource_child = accounting_mutation.resource_child(vec![path.clone()]);
         Self::remove_bound_progress_temp_if_present(&namespace, &path)
             .map_err(|error| Error::IO(error, path.clone()))?;
         self.sync_native_amx_evidence_namespace(
@@ -305,6 +314,7 @@ impl Kura {
         )?;
         let after_bytes = self.native_amx_evidence_tracked_bytes_locked(&namespace)?;
         self.update_disk_usage_delta(before_bytes, after_bytes);
+        resource_child.finish();
         accounting_mutation.finish();
         Ok(())
     }

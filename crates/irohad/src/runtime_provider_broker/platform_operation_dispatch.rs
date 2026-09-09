@@ -661,6 +661,13 @@ fn dispatch_server_operation_with_session(
                 MAX_OPERATION_FRAME_BYTES_V1,
             )
         }
+        (slot, OPERATION_QUALIFY_V1) if slot == stream_token_slot => {
+            requalify()?;
+            encode_canonical(
+                required_binding_ref!(&request.binding, stream_token_hardware_binding),
+                MAX_QUALIFICATION_FRAME_BYTES_V1,
+            )
+        }
         (slot, OPERATION_QUALIFY_V1)
             if slot == governance_signer_slot
                 || slot == privacy_cycle_prf_slot
@@ -669,7 +676,6 @@ fn dispatch_server_operation_with_session(
                 || slot == fenced_privacy_publisher_slot
                 || slot == fenced_privacy_head_reader_slot
                 || slot == governance_checkpoint_slot
-                || slot == stream_token_slot
                 || slot == stream_token_gateway_admission_slot
                 || slot == appeal_signer_slot
                 || slot == appeal_checkpoint_slot
@@ -1636,28 +1642,44 @@ fn dispatch_server_operation_with_session(
                 .map_err(|_| BrokerError::Rejected)?;
             encode_canonical(&proof_wire, MAX_FENCED_PRIVACY_HEAD_FRAME_BYTES_V1)
         }
-        (slot, OPERATION_STREAM_TOKEN_SIGN_V1) if slot == stream_token_slot => {
-            let sign = decode_canonical::<SignRequestWireV1>(
-                &request.payload,
-                MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-            )?;
-            validate_stream_token_signing_payload(&sign.payload)?;
-            let signer = broker_backend!(state, stream_token_signer);
-            let signature = signer.sign(&sign.payload).map_err(|error| match error {
-                iroha_torii::sorafs::StreamTokenSigningError::Unavailable => {
-                    BrokerError::Unavailable
+        (slot, OPERATION_STREAM_TOKEN_SIGN_V1 | OPERATION_STREAM_TOKEN_RECOVER_V1)
+            if slot == stream_token_slot =>
+        {
+            let (body, expected) =
+                prepare_stream_token_broker_request(&request.binding, &request.payload)?;
+            let client = broker_backend!(state, stream_token_hardware_client);
+            let mutating = request.operation == OPERATION_STREAM_TOKEN_SIGN_V1;
+            let receipt = if mutating {
+                client.sign(&expected, &body)
+            } else {
+                client.recover(&expected, &body)
+            }
+            .map_err(|error| stream_token_backend_error(error, mutating))?;
+            validate_stream_token_receipt_result(request, receipt.bytes()).map_err(|_| {
+                if mutating {
+                    BrokerError::Ambiguous
+                } else {
+                    BrokerError::Protocol
                 }
-                iroha_torii::sorafs::StreamTokenSigningError::Refused => BrokerError::Rejected,
             })?;
-            let public_key =
-                required_binding_value!(&request.binding, stream_token_signer_public_key);
-            verify_evidence_viewer_ed25519_signature(public_key, signature, &sign.payload)
-                .map_err(|_| BrokerError::Rejected)?;
+            requalify().map_err(|error| {
+                if mutating {
+                    BrokerError::Ambiguous
+                } else {
+                    error
+                }
+            })?;
+            Ok(receipt.bytes().to_vec())
+        }
+        (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
+            let query = decode_stream_token_observer_request(&request.binding, &request.payload)?;
+            let observer = broker_backend!(state, stream_token_state_observer);
+            let reply = observer
+                .observe(&query)
+                .map_err(|error| stream_token_backend_error(error, false))?;
+            let encoded = encode_stream_token_observer_reply(&query, &reply)?;
             requalify()?;
-            encode_canonical(
-                &SignResultWireV1 { signature },
-                MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-            )
+            Ok(encoded)
         }
         (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
             if slot == stream_token_gateway_admission_slot =>

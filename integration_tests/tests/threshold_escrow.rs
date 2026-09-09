@@ -17,7 +17,7 @@ use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
 };
 use iroha_primitives::json::Json;
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm,
 };
@@ -94,7 +94,7 @@ async fn deploy_threshold_escrow(
         "universal",
     )
     .expect("threshold escrow alias");
-    let (contract_address, _, _, _) = tokio::task::spawn_blocking({
+    let (contract_address, _, _, _) = read_on_dedicated_thread({
         let client = client.clone();
         move || {
             super::contracts::deploy_contract_locally_signed(
@@ -105,8 +105,8 @@ async fn deploy_threshold_escrow(
         }
     })
     .await
-    .expect("deploy threshold escrow task")?;
-    tokio::task::spawn_blocking({
+    .wrap_err("deploy threshold escrow task")?;
+    read_on_dedicated_thread({
         let client = client.clone();
         let address = contract_address.clone();
         move || {
@@ -116,16 +116,16 @@ async fn deploy_threshold_escrow(
                         contract: address,
                         entrypoint: "hajimari".to_owned(),
                     },
-                    client.client().account.clone(),
+                    client.client().account().clone(),
                 )],
                 FeePaymentIntent::authority(Vec::new(), None),
             )
         }
-    }).await.expect("grant exact constructor invocation task")?;
+    }).await.wrap_err("grant exact constructor invocation task")?;
     call_contract_expect_status(
         client,
-        &client.client().account,
-        client.client().key_pair.private_key(),
+        client.client().account(),
+        client.client().key_pair().private_key(),
         &contract_address,
         "hajimari",
         None,
@@ -235,10 +235,10 @@ async fn submit_contract_call_once(
     stage: &str,
 ) -> Result<iroha_crypto::HashOf<SignedTransaction>> {
     let intent = threshold_contract_call_intent(contract_address, entrypoint, payload)?;
-    let mut signing_client = client.client().clone();
+    let mut signing_client = client.client().to_builder();
     signing_client.account = authority.clone();
     signing_client.key_pair = iroha_crypto::KeyPair::from_private_key(private_key.clone())?;
-    let account = signing_client.account_client()?;
+    let account = signing_client.build()?.account_client()?;
     // The SDK authenticates prepare, verifies it against the local artifact, signs the exact
     // QueuePlan payload, and submits once. An ambiguous outcome must never restart preparation.
     let result = account
@@ -295,20 +295,20 @@ fn signed_contract_state_request(
     );
     let context = client.client();
     let message = iroha::client::canonical_network_request_signature_message(
-        &context.network_id,
+        context.network_id(),
         &iroha::http::Method::GET,
         &url,
         &[],
         timestamp,
         &nonce,
     )?;
-    let signature = iroha_crypto::Signature::try_new(context.key_pair.private_key(), &message)?;
+    let signature = iroha_crypto::Signature::try_new(context.key_pair().private_key(), &message)?;
     Ok(http
         .get(url)
         .header("Accept", "application/json")
         .header(
             "x-iroha-account",
-            iroha::client::canonical_request_account_header_value(&context.account)?,
+            iroha::client::canonical_request_account_header_value(context.account())?,
         )
         .header(
             "x-iroha-signature",
@@ -326,7 +326,7 @@ async fn contract_state_values(
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     paths: &[&str],
 ) -> Result<std::collections::BTreeMap<String, norito::json::Value>> {
-    let mut url = client.client().torii_url.join("v1/contracts/state")?;
+    let mut url = client.client().endpoint().join("v1/contracts/state")?;
     let contract_address = contract_address.to_string();
     url.query_pairs_mut()
         .append_pair("contract_address", contract_address.as_str())
@@ -378,7 +378,7 @@ fn decode_contract_state_entry_json(entry: &norito::json::Value) -> Result<norit
 async fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> {
     let client = client.clone();
     let asset_id = asset_id.clone();
-    tokio::task::spawn_blocking(move || {
+    read_on_dedicated_thread(move || {
         match client.client().query_single(FindAssetById::new(asset_id)) {
             Ok(asset) => Ok(Some(asset.value().clone())),
             Err(QueryError::Validation(ValidationFail::QueryFailed(
@@ -388,12 +388,12 @@ async fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quant
         }
     })
     .await
-    .wrap_err("asset query worker failed")?
+    .wrap_err("asset query worker failed")
 }
 async fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
     let client = client.clone();
     let account_id = account_id.clone();
-    tokio::task::spawn_blocking(move || {
+    read_on_dedicated_thread(move || {
         match client
             .client()
             .query_single(FindAccountById::new(account_id))
@@ -406,7 +406,7 @@ async fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool>
         }
     })
     .await
-    .wrap_err("account query worker failed")?
+    .wrap_err("account query worker failed")
 }
 async fn asset_definition_exists(
     client: &Client,
@@ -414,7 +414,7 @@ async fn asset_definition_exists(
 ) -> Result<bool> {
     let client = client.clone();
     let asset_definition_id = asset_definition_id.clone();
-    tokio::task::spawn_blocking(move || {
+    read_on_dedicated_thread(move || {
         match client
             .client()
             .query_single(FindAssetDefinitionById::new(asset_definition_id))
@@ -428,7 +428,7 @@ async fn asset_definition_exists(
         }
     })
     .await
-    .wrap_err("asset definition query worker failed")?
+    .wrap_err("asset definition query worker failed")
 }
 async fn setup_ledger_for_sample(
     client: &Client,
@@ -460,7 +460,7 @@ async fn setup_ledger_for_sample(
         )
         .into(),
     );
-    tokio::task::spawn_blocking({
+    read_on_dedicated_thread({
         let client = client.clone();
         move || {
             client.submit_all(
@@ -470,9 +470,9 @@ async fn setup_ledger_for_sample(
         }
     })
     .await
-    .expect("setup ledger task")?;
+    .wrap_err("setup ledger task")?;
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    tokio::task::spawn_blocking({
+    read_on_dedicated_thread({
         let client = client.clone();
         move || {
             let grant_transfer = Grant::account_permission(
@@ -481,17 +481,17 @@ async fn setup_ledger_for_sample(
                 },
                 ALICE_ID.clone(),
             );
-            let mut bob = client.client().clone();
+            let mut bob = client.client().to_builder();
             bob.account = BOB_ID.clone();
             bob.key_pair = BOB_KEYPAIR.clone();
-            Client::from_client(bob)?.submit_all(
+            Client::from_client(bob.build()?)?.submit_all(
                 [grant_transfer],
                 FeePaymentIntent::authority(Vec::new(), None),
             )
         }
     })
     .await
-    .expect("grant escrow transfer permission task")?;
+    .wrap_err("grant escrow transfer permission task")?;
     Ok(())
 }
 fn threshold_state_paths() -> [&'static str; 9] {

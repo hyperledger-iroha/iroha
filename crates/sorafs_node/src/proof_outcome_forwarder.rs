@@ -319,6 +319,8 @@ struct StoredDeadLetterV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::proof_outcome_forwarder::ProofOutcomeOutboxCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProofOutcomeOutboxCheckpointV1 {
     version: u8,
@@ -1398,6 +1400,8 @@ mod tests {
             iroha_crypto::Hash::new(b"proof-outcome-forwarder-test"),
         ))
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "sorafs_node::proof_outcome_forwarder::tests::NestedSourceDepthBomb")]
     #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
     struct NestedSourceDepthBomb(Option<Box<NestedSourceDepthBomb>>);
     fn external_nested_source_frame(levels: usize) -> Vec<u8> {
@@ -1559,12 +1563,12 @@ mod tests {
         archive.validate().expect("maximum bounded PDP archive");
         archive
     }
-    fn replace_norito_schema<T: norito::NoritoSerialize>(bytes: &mut [u8]) {
+    fn replace_norito_schema<T: norito::NoritoSchema>(bytes: &mut [u8]) {
         const SCHEMA_OFFSET: usize = 4 + 1 + 1;
         const SCHEMA_LEN: usize = 16;
         assert!(bytes.len() >= norito::core::Header::SIZE);
         bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN]
-            .copy_from_slice(&<T as norito::NoritoSerialize>::schema_hash());
+            .copy_from_slice(&norito::schema::identity::frame_hash::<T>());
     }
     fn checkpoint_with_corrupt_potr_source(
         receipt_payload: Vec<u8>,

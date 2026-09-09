@@ -1,19 +1,29 @@
 //! End-point querying logic, including custom public and authenticated routes.
 pub(crate) mod bounded_async_response;
+#[cfg(test)]
+mod capability_test_support;
+pub mod configuration;
+#[cfg(test)]
+mod configuration_http_tests;
+mod dispatch;
 mod moderation;
+mod multisig_validation;
 #[cfg(test)]
 mod operator_auth_tests;
 mod private_settlement;
 mod public_musubi;
+mod queue_plan_error;
 mod repair;
 mod reputation_journal;
 mod reserve;
 mod runtime_governance_client_auth;
+pub mod status;
+#[cfg(test)]
+mod status_http_tests;
 pub(crate) mod subscriptions;
 mod transaction_wait;
 #[cfg(test)]
 mod transaction_wait_tests;
-use self::{blocks_api::AsyncBlockStream, events_api::AsyncEventStream};
 pub use crate::query::QueryError;
 use crate::{
     Error as SdkError, TransactionPreparationError, TransactionSigningError,
@@ -35,9 +45,7 @@ use crate::{
         },
     },
     http::{Method as HttpMethod, RequestBuilder, Response, StatusCode},
-    http_default::{
-        self, DefaultHttpTransport, DefaultRequest, DefaultRequestBuilder, WebSocketMessage,
-    },
+    http_default::{DefaultHttpTransport, DefaultRequest, DefaultRequestBuilder},
     nexus::{CrossLaneTransferProof, verify_lane_relay_envelopes},
 };
 use base64::Engine as _;
@@ -46,7 +54,6 @@ use derive_more::Display;
 use eyre::{Result, WrapErr, eyre};
 #[cfg(test)]
 use futures_util::{Stream, StreamExt};
-use http_default::AsyncWebSocketStream;
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 /// Closed penalty lifecycle returned by the Sumeragi evidence audit API.
 pub use iroha_data_model::block::consensus::EvidencePenaltyStatus as SumeragiEvidencePenaltyStatus;
@@ -86,7 +93,11 @@ use iroha_data_model::{
     sorafs::pin_registry::PinStatusKindV1,
 };
 use iroha_primitives::numeric::{Numeric, Quantity};
-use iroha_torii_shared::configuration::{ConfidentialGas, Configuration};
+use iroha_sccp::api::{
+    SccpCapabilities, SccpRecentMessage, SccpRecentMessages, SccpRegistryLimits, SccpResourceLimits,
+};
+#[cfg(test)]
+use iroha_sccp::api::{SccpRecentCursor, SccpRecentMessageLinks};
 pub use iroha_torii_shared::governance_proposal_api::{
     DeployContractProposalDraftRequestV1, DeployContractProposalDraftResponseV1,
     GovernanceProposalInstructionDraftV1, SccpRouteGovernanceProposalDraftRequestV1,
@@ -116,12 +127,12 @@ pub use iroha_torii_shared::private_settlement_api::{
     PrivateSettlementPhaseCertificateResponseV1, PrivateSettlementPhaseCertificatesResponseV1,
     PrivateSettlementPhaseVoteResponseV1, PrivateSettlementPrepareVoteRequestV1,
 };
+#[cfg(test)]
 use iroha_torii_shared::status::Status;
 #[cfg(test)]
 use iroha_torii_shared::status::{TxGossipSnapshot, Uptime};
 #[cfg(test)]
 use tracing::{debug, warn};
-use tracing::{error, trace};
 
 /// Exact public-map count vector returned by the non-shipping APS evidence route.
 #[cfg(feature = "test-network-private-settlement-evidence")]
@@ -259,7 +270,6 @@ use url::Url;
 const APPLICATION_JSON: &str = "application/json";
 const APPLICATION_JSON_UTF8: &str = "application/json; charset=utf-8";
 const PIPELINE_TRANSACTION_STATUS_RESPONSE_MAX_BYTES: usize = 64 * 1024;
-const NODE_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const NODE_CAPABILITIES_RESPONSE_MAX_BYTES: usize = 256 * 1024;
 const SORACLOUD_STATUS_RESPONSE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const TRANSACTION_SUBMISSION_RESPONSE_MAX_BYTES: usize = 64 * 1024;
@@ -588,6 +598,8 @@ macro_rules! sorafs_reserve_detail_methods {
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::ContractCodeBytesResponse")]
 struct ContractCodeBytesResponse {
     code_b64: String,
 }
@@ -1286,6 +1298,8 @@ pub const ACCOUNT_ONBOARDING_RECEIPT_HASH_DOMAIN_V1: &[u8] =
 /// Secret-free intent accepted by the sponsored account-onboarding planner.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPlanRequestV1")]
 pub struct AccountOnboardingPlanRequestV1 {
     /// Request layout version. The only supported value is `1`.
     pub version: u8,
@@ -1368,6 +1382,8 @@ impl AccountOnboardingPlanRequestV1 {
 /// Canonical body committed by a stateless sponsored-onboarding receipt.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPlanBodyV1")]
 pub struct AccountOnboardingPlanBodyV1 {
     /// Receipt body layout version. The only supported value is `1`.
     pub version: u8,
@@ -1413,6 +1429,8 @@ impl AccountOnboardingPlanBodyV1 {
 /// Stateless signed receipt returned by sponsored account-onboarding planning.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPlanReceiptV1")]
 pub struct AccountOnboardingPlanReceiptV1 {
     /// Canonical receipt body.
     pub body: AccountOnboardingPlanBodyV1,
@@ -1751,6 +1769,8 @@ pub fn decode_and_verify_account_onboarding_plan_for_request(
 /// Public operation identity committed by every prepared transaction.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::PreparedOperationBindingV1")]
 pub struct PreparedOperationBindingV1 {
     /// Exact immutable binding schema.
     pub schema: String,
@@ -1824,6 +1844,8 @@ impl PreparedOperationBindingV1 {
 /// Prepare request consuming one authenticated semantic onboarding receipt.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPrepareRequestV1")]
 pub struct AccountOnboardingPrepareRequestV1 {
     /// Exact immutable request schema.
     pub schema: String,
@@ -1841,6 +1863,8 @@ impl AccountOnboardingPrepareRequestV1 {
 /// Authenticated exact sponsored-onboarding transaction prepared by Torii.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingPreparedTransactionV1")]
 pub struct AccountOnboardingPreparedTransactionV1 {
     /// Exact immutable prepared-transaction schema.
     pub schema: String,
@@ -1878,6 +1902,8 @@ impl AccountOnboardingPreparedTransactionV1 {
 /// Authenticated nonterminal result requiring a fresh account-and-alias state proof.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountOnboardingProofRequiredPrepareResponseV1")]
 pub struct AccountOnboardingProofRequiredPrepareResponseV1 {
     /// Exact immutable result schema.
     pub schema: String,
@@ -1941,13 +1967,25 @@ pub enum AccountOnboardingCurrentStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccountOnboardingPrepareResponseV1 {
     /// An exact signed transaction is ready for explicit submission.
-    Prepared(AccountOnboardingPreparedTransactionV1),
+    Prepared(Box<AccountOnboardingPreparedTransactionV1>),
     /// No transaction exists; one fresh atomic account-and-alias observation is required.
-    ProofRequired(AccountOnboardingProofRequiredPrepareResponseV1),
+    ProofRequired(Box<AccountOnboardingProofRequiredPrepareResponseV1>),
+}
+#[cfg(test)]
+mod onboarding_result_storage_tests {
+    #[test]
+    fn onboarding_result_owns_large_variants_without_inflating_each_slot() {
+        assert!(
+            std::mem::size_of::<super::AccountOnboardingPrepareResponseV1>()
+                <= 2 * std::mem::size_of::<usize>()
+        );
+    }
 }
 /// Solved faucet proof-of-work claim.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountFaucetClaimV1")]
 pub struct AccountFaucetClaimV1 {
     /// Canonical domainless target account.
     pub account_id: String,
@@ -1959,6 +1997,8 @@ pub struct AccountFaucetClaimV1 {
 /// Prepare request consuming one solved faucet claim.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountFaucetPrepareRequestV1")]
 pub struct AccountFaucetPrepareRequestV1 {
     /// Exact immutable request schema.
     pub schema: String,
@@ -1976,6 +2016,8 @@ impl AccountFaucetPrepareRequestV1 {
 /// Authenticated exact faucet transaction prepared by Torii.
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NEnc, NDec)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::AccountFaucetPreparedTransactionV1")]
 pub struct AccountFaucetPreparedTransactionV1 {
     /// Exact immutable prepared-transaction schema.
     pub schema: String,
@@ -2592,7 +2634,7 @@ fn prepared_disposition_text(disposition: AliasPlanDispositionV1) -> &'static st
 
 fn decode_prepared_transcript_wire(wire_hex: &str) -> Result<Vec<u8>> {
     if wire_hex.is_empty()
-        || wire_hex.len() % 2 != 0
+        || !wire_hex.len().is_multiple_of(2)
         || wire_hex
             .bytes()
             .any(|byte| !(byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)))
@@ -2687,6 +2729,8 @@ impl PreparedSignatureTranscriptV1 for AccountFaucetPreparedSignaturePayloadV1 {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig authority-spec API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigSpecRequest")]
 pub struct MultisigSpecRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -2698,155 +2742,15 @@ pub struct MultisigSpecRequest {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Exact active multisig authority spec returned by Torii.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigSpecResponse")]
 pub struct MultisigSpecResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Native multisig authority policy bound to the resolved account.
     pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Fixed SCCP V1 route-registry capacity limits.
-pub struct SccpRegistryLimits {
-    /// Maximum governed lanes retained by the registry.
-    #[norito(rename = "max_governed_lanes")]
-    pub governed_lanes: u32,
-    /// Maximum nonterminal route revisions across all lanes.
-    #[norito(rename = "max_live_governed_routes")]
-    pub live_governed_routes: u32,
-    /// Maximum nonterminal route revisions in one lane.
-    #[norito(rename = "max_live_routes_per_lane")]
-    pub live_routes_per_lane: u32,
-    /// Maximum retained route revisions in one lane, including retired revisions.
-    #[norito(rename = "max_retained_routes_per_lane")]
-    pub retained_routes_per_lane: u32,
-    /// Maximum retained native trust anchors in one lane.
-    #[norito(rename = "max_retained_native_trust_anchors_per_lane")]
-    pub retained_native_trust_anchors_per_lane: u32,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Consensus-critical SCCP proof and verifier-work limits.
-pub struct SccpResourceLimits {
-    /// Maximum successful outbound SCCP messages committed by one block.
-    #[norito(rename = "max_outbound_messages_per_block")]
-    pub outbound_messages_per_block: u32,
-    /// Maximum canonical bytes retained for one outbound SCCP payload.
-    #[norito(rename = "max_outbound_message_payload_bytes")]
-    pub outbound_message_payload_bytes: u64,
-    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-    #[norito(rename = "max_pending_outbound_messages")]
-    pub pending_outbound_messages: u64,
-    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
-    #[norito(rename = "max_pending_outbound_payload_bytes")]
-    pub pending_outbound_payload_bytes: u64,
-    /// Maximum closed SCCP proofs in one transaction.
-    #[norito(rename = "max_proofs_per_transaction")]
-    pub proofs_per_transaction: u32,
-    /// Maximum closed SCCP proofs committed in one block.
-    #[norito(rename = "max_proofs_per_block")]
-    pub proofs_per_block: u32,
-    /// Maximum canonical bytes retained for one closed SCCP proof.
-    #[norito(rename = "max_proof_bytes_per_proof")]
-    pub proof_bytes_per_proof: u64,
-    /// Maximum aggregate SCCP proof bytes in one transaction.
-    #[norito(rename = "max_proof_bytes_per_transaction")]
-    pub proof_bytes_per_transaction: u64,
-    /// Maximum aggregate SCCP proof bytes committed in one block.
-    #[norito(rename = "max_proof_bytes_per_block")]
-    pub proof_bytes_per_block: u64,
-    /// Maximum native-finality continuation headers in one transaction.
-    #[norito(rename = "max_native_headers_per_transaction")]
-    pub native_headers_per_transaction: u32,
-    /// Maximum native-finality continuation headers committed in one block.
-    #[norito(rename = "max_native_headers_per_block")]
-    pub native_headers_per_block: u32,
-    /// Maximum Ethereum light-client updates in one transaction.
-    #[norito(rename = "max_ethereum_light_client_updates_per_transaction")]
-    pub ethereum_light_client_updates_per_transaction: u32,
-    /// Maximum Ethereum light-client updates committed in one block.
-    #[norito(rename = "max_ethereum_light_client_updates_per_block")]
-    pub ethereum_light_client_updates_per_block: u32,
-    /// Maximum framed native-finality header bytes in one transaction.
-    #[norito(rename = "max_native_header_bytes_per_transaction")]
-    pub native_header_bytes_per_transaction: u64,
-    /// Maximum framed native-finality header bytes committed in one block.
-    #[norito(rename = "max_native_header_bytes_per_block")]
-    pub native_header_bytes_per_block: u64,
-    /// Maximum secp256k1 recoveries in one transaction.
-    #[norito(rename = "max_secp256k1_recoveries_per_transaction")]
-    pub secp256k1_recoveries_per_transaction: u32,
-    /// Maximum secp256k1 recoveries committed in one block.
-    #[norito(rename = "max_secp256k1_recoveries_per_block")]
-    pub secp256k1_recoveries_per_block: u32,
-    /// Maximum BLS aggregate-signature checks in one transaction.
-    #[norito(rename = "max_bls_aggregate_checks_per_transaction")]
-    pub bls_aggregate_checks_per_transaction: u32,
-    /// Maximum BLS aggregate-signature checks committed in one block.
-    #[norito(rename = "max_bls_aggregate_checks_per_block")]
-    pub bls_aggregate_checks_per_block: u32,
-    /// Maximum BLS key-validation and signer-contribution work in one transaction.
-    #[norito(rename = "max_bls_signer_contributions_per_transaction")]
-    pub bls_signer_contributions_per_transaction: u32,
-    /// Maximum BLS key-validation and signer-contribution work committed in one block.
-    #[norito(rename = "max_bls_signer_contributions_per_block")]
-    pub bls_signer_contributions_per_block: u32,
-    /// Maximum Ed25519 signature checks in one transaction.
-    #[norito(rename = "max_ed25519_signature_checks_per_transaction")]
-    pub ed25519_signature_checks_per_transaction: u32,
-    /// Maximum Ed25519 signature checks committed in one block.
-    #[norito(rename = "max_ed25519_signature_checks_per_block")]
-    pub ed25519_signature_checks_per_block: u32,
-    /// Maximum TON Ed25519 validator-key checks in one transaction.
-    #[norito(rename = "max_ed25519_validator_key_checks_per_transaction")]
-    pub ed25519_validator_key_checks_per_transaction: u32,
-    /// Maximum TON Ed25519 validator-key checks committed in one block.
-    #[norito(rename = "max_ed25519_validator_key_checks_per_block")]
-    pub ed25519_validator_key_checks_per_block: u32,
-    /// Maximum BN254 pairing-product checks in one transaction.
-    #[norito(rename = "max_bn254_pairing_checks_per_transaction")]
-    pub bn254_pairing_checks_per_transaction: u32,
-    /// Maximum BN254 pairing-product checks committed in one block.
-    #[norito(rename = "max_bn254_pairing_checks_per_block")]
-    pub bn254_pairing_checks_per_block: u32,
-    /// Maximum BLS12-381 pairing-product checks in one transaction.
-    #[norito(rename = "max_bls12_381_pairing_checks_per_transaction")]
-    pub bls12_381_pairing_checks_per_transaction: u32,
-    /// Maximum BLS12-381 pairing-product checks committed in one block.
-    #[norito(rename = "max_bls12_381_pairing_checks_per_block")]
-    pub bls12_381_pairing_checks_per_block: u32,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Public SCCP capability snapshot advertised by the node.
-pub struct SccpCapabilities {
-    /// Capability schema version. First release is exactly `1`.
-    pub version: u8,
-    /// Hex-encoded digest of the authoritative typed route registry.
-    pub registry_revision: String,
-    /// Authoritative typed route-registry endpoint.
-    pub registry_path: String,
-    /// Finalized SORA message-bundle endpoint template.
-    pub message_bundle_path: String,
-    /// Query-free state-derived Groth16 request endpoint template.
-    pub proof_request_path: String,
-    /// Newest-first indexed outbound-message endpoint.
-    pub recent_messages_path: String,
-    /// Route-scoped SORA outbound contract-material endpoint template.
-    pub sora_outbound_material_path: String,
-    /// Fixed SCCP V1 route-registry capacity limits.
-    pub registry_limits: SccpRegistryLimits,
-    /// Consensus-critical proof and deterministic verifier-work limits.
-    pub resource_limits: SccpResourceLimits,
-    /// Closed destination-proof submission endpoint when the application API is enabled.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub proof_submit_path: Option<String>,
-    /// Protocol-native inbound proof endpoint when the application API is enabled.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub native_message_submit_path: Option<String>,
-}
+
 fn expected_sccp_registry_limits() -> SccpRegistryLimits {
     SccpRegistryLimits {
         governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
@@ -3081,6 +2985,8 @@ fn validate_sccp_capabilities(capabilities: &SccpCapabilities) -> Result<()> {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Exact response returned by either SCCP bridge submit endpoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::SccpBridgeSubmitResponse")]
 pub struct SccpBridgeSubmitResponse {
     /// Whether Torii submitted the transaction to the pipeline.
     pub submitted: bool,
@@ -3109,76 +3015,7 @@ pub struct SccpBridgeSubmitResponse {
     /// Exact 32-byte transaction signing prehash, present only during preparation.
     pub signing_message_b64: Option<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Canonical readback and proof-request links for a recent SCCP message.
-pub struct SccpRecentMessageLinks {
-    /// Canonical SCCP bundle lookup path.
-    pub bundle_path: String,
-    /// Query-free canonical Groth16 request lookup path.
-    pub proof_request_path: String,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Compact newest-first SCCP outbound message discovery record.
-pub struct SccpRecentMessage {
-    /// Height of the finalized SORA block that anchored the message.
-    pub height: u64,
-    /// Zero-based position in the finalized SCCP commitment tree.
-    pub commitment_index: u32,
-    /// Hex-encoded canonical lane-bound SCCP message id.
-    pub message_id_hex: String,
-    /// Stable logical SCCP payload kind.
-    pub kind: String,
-    /// Exact SORA source profile committed by the message.
-    pub source_profile: String,
-    /// Exact external destination profile committed by the message.
-    pub target_profile: String,
-    /// Hex-encoded destination binding committed when the message was recorded.
-    pub destination_binding_hash: String,
-    /// Hex-encoded immutable governed route configuration.
-    pub route_configuration_hash: String,
-    /// Numeric SCCP target domain.
-    pub target_domain: u32,
-    /// Decoded asset id when representable as text.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub asset_id: Option<String>,
-    /// Decoded route id when representable as text.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub route_id: Option<String>,
-    /// Decoded recipient when representable as text.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub recipient: Option<String>,
-    /// Exact non-negative transfer quantity projected from the fixed SCCP scalar.
-    pub amount: Quantity,
-    /// Required normalized decoded payload projection.
-    pub payload_projection: iroha_sccp::SccpPayloadProjectionV1,
-    /// Canonical bundle and proof-request links.
-    pub links: SccpRecentMessageLinks,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Compound continuation returned by recent SCCP discovery.
-pub struct SccpRecentCursor {
-    /// Height of the last returned item.
-    pub from: u64,
-    /// Commitment index of the last returned item.
-    pub after_index: u32,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Newest-first committed SCCP message discovery response.
-pub struct SccpRecentMessages {
-    /// Newest-first committed outbound SCCP messages.
-    pub items: Vec<SccpRecentMessage>,
-    /// Continuation for the next page when additional entries exist.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub next: Option<SccpRecentCursor>,
-}
+
 const fn is_final_v1_external_sccp_network(
     network: iroha_data_model::bridge::SccpNetworkV1,
 ) -> bool {
@@ -3628,7 +3465,7 @@ pub(crate) fn validate_validation_fee_draft_response(
         ));
     };
     if draft.payload_hex.is_empty()
-        || draft.payload_hex.len() % 2 != 0
+        || !draft.payload_hex.len().is_multiple_of(2)
         || !draft
             .payload_hex
             .bytes()
@@ -3682,7 +3519,7 @@ fn validate_parliament_attempt_draft_response(
     };
     if draft.wire_id != CreateParliamentGovernanceAttemptV1::WIRE_ID
         || draft.payload_hex.is_empty()
-        || draft.payload_hex.len() % 2 != 0
+        || !draft.payload_hex.len().is_multiple_of(2)
         || !draft
             .payload_hex
             .bytes()
@@ -3739,7 +3576,7 @@ fn validate_parliament_transition_draft_response(
     };
     if draft.wire_id != SubmitParliamentLifecycleTransitionV1::WIRE_ID
         || draft.payload_hex.is_empty()
-        || draft.payload_hex.len() % 2 != 0
+        || !draft.payload_hex.len().is_multiple_of(2)
         || !draft
             .payload_hex
             .bytes()
@@ -3769,7 +3606,7 @@ fn validate_parliament_transition_draft_response(
 
 fn validate_parliament_attempt_state_frame(state_payload_hex: &str) -> Result<()> {
     if state_payload_hex.is_empty()
-        || state_payload_hex.len() % 2 != 0
+        || !state_payload_hex.len().is_multiple_of(2)
         || state_payload_hex.len() / 2 > MAX_PARLIAMENT_ATTEMPT_STATE_BYTES_V1
         || !state_payload_hex
             .bytes()
@@ -3955,7 +3792,6 @@ fn validate_validation_fee_proposal_detail(detail: &ValidationFeeProposalDetailV
     let proposal_id = detail.proposal.kind.fingerprint();
     let certificate = detail.governance_certificate.as_ref();
     match detail.proposal.status {
-        ValidationFeeProposalStatusV1::Proposed => {}
         ValidationFeeProposalStatusV1::Rejected if certificate.is_none() => {}
         ValidationFeeProposalStatusV1::Enacted
         | ValidationFeeProposalStatusV1::Superseded
@@ -3971,7 +3807,8 @@ fn validate_validation_fee_proposal_detail(detail: &ValidationFeeProposalDetailV
                 "rejected validation-fee proposal unexpectedly carries a Parliament certificate"
             ));
         }
-        ValidationFeeProposalStatusV1::Enacted
+        ValidationFeeProposalStatusV1::Proposed
+        | ValidationFeeProposalStatusV1::Enacted
         | ValidationFeeProposalStatusV1::Superseded
         | ValidationFeeProposalStatusV1::ExecutionFailed => {}
     }
@@ -4005,7 +3842,7 @@ fn decode_governance_proposal_instruction_draft(
     label: &str,
 ) -> Result<InstructionBox> {
     if draft.payload_hex.is_empty()
-        || draft.payload_hex.len() % 2 != 0
+        || !draft.payload_hex.len().is_multiple_of(2)
         || !draft
             .payload_hex
             .bytes()
@@ -4985,6 +4822,8 @@ fn decode_sccp_bridge_submit_response(
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for the Torii multisig proposals query API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalsQueryRequest")]
 pub struct MultisigProposalsQueryRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -5005,6 +4844,8 @@ pub struct MultisigProposalsQueryRequest {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Multisig proposal entry returned by the Torii multisig proposals API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalEntry")]
 pub struct MultisigProposalEntry {
     /// Stable proposal identifier.
     pub proposal_id: String,
@@ -5026,6 +4867,8 @@ pub struct MultisigProposalEntry {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposals query API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalsQueryResponse")]
 pub struct MultisigProposalsQueryResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
@@ -5038,6 +4881,8 @@ pub struct MultisigProposalsQueryResponse {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Selector-explicit request for one multisig proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalsResolveRequest")]
 pub struct MultisigProposalsResolveRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -5055,6 +4900,8 @@ pub struct MultisigProposalsResolveRequest {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 #[norito(deny_unknown_fields)]
 /// Response payload returned by the Torii multisig proposal resolve API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposalResolveResponse")]
 pub struct MultisigProposalResolveResponse {
     /// Canonical multisig account id resolved by the server.
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
@@ -5078,6 +4925,8 @@ pub struct MultisigProposalResolveResponse {
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Request payload for proposing a generic multisig instruction batch.
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigProposeRequest")]
 pub struct MultisigProposeRequest {
     /// Active concrete multisig account id.
     #[norito(default)]
@@ -5121,6 +4970,8 @@ pub struct MultisigProposeRequest {
 }
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
 /// Response payload returned by multisig participation endpoints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::client::MultisigResponse")]
 pub struct MultisigResponse {
     /// Whether processing succeeded.
     pub ok: bool,
@@ -5455,7 +5306,7 @@ fn decode_canonical_prepared_transaction(
     if !lower_hex_with_len(transaction_hash_hex, 64)
         || !lower_hex_with_len(wire_sha256, 64)
         || wire_hex.is_empty()
-        || wire_hex.len() % 2 != 0
+        || !wire_hex.len().is_multiple_of(2)
         || !wire_hex
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -5574,7 +5425,7 @@ fn validate_account_faucet_claim(claim: &AccountFaucetClaimV1) -> Result<Account
     let nonce = claim.pow_nonce_hex.as_str();
     if nonce.is_empty()
         || nonce.len() > 64
-        || nonce.len() % 2 != 0
+        || !nonce.len().is_multiple_of(2)
         || !nonce
             .bytes()
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
@@ -7952,322 +7803,6 @@ fn canonicalize_hex32_literal(literal: &str, context: &str) -> Result<String> {
     }
     Ok(trimmed.to_ascii_lowercase())
 }
-fn normalized_multisig_request_string(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-fn canonical_multisig_propose_intent(
-    request: &MultisigProposeRequest,
-) -> Result<(Vec<InstructionBox>, Metadata, HashOf<Vec<InstructionBox>>)> {
-    use iroha_data_model::validation_fee::{
-        VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY,
-        VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-        VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-        VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeMultisigMarkerV1,
-    };
-
-    let mut proposal_instructions = request.instructions.clone();
-    if proposal_instructions.iter().any(|instruction| {
-        !matches!(
-            ValidationFeeMultisigMarkerV1::parse_instruction(instruction),
-            Ok(None)
-        )
-    }) {
-        return Err(eyre!(
-            "multisig propose request instructions must not contain a validation-fee marker"
-        ));
-    }
-
-    let mut metadata = Metadata::default();
-    if let Some(memo) = normalized_multisig_request_string(request.memo.as_deref()) {
-        metadata.insert(
-            "memo".parse().expect("static metadata key `memo`"),
-            iroha_primitives::json::Json::new(memo.to_owned()),
-        );
-    }
-
-    let version =
-        normalized_multisig_request_string(request.validation_fee_policy_version.as_deref());
-    let policy_hash =
-        normalized_multisig_request_string(request.validation_fee_policy_hash.as_deref());
-    let hijiri_hash =
-        normalized_multisig_request_string(request.validation_fee_hijiri_fee_quote_hash.as_deref());
-    let instruction_index =
-        normalized_multisig_request_string(request.validation_fee_instruction_index.as_deref());
-    let transfer_entry_index =
-        normalized_multisig_request_string(request.validation_fee_transfer_entry_index.as_deref());
-    if version.is_some()
-        || policy_hash.is_some()
-        || hijiri_hash.is_some()
-        || instruction_index.is_some()
-        || transfer_entry_index.is_some()
-    {
-        let (Some(version), Some(policy_hash)) = (version, policy_hash) else {
-            return Err(eyre!(
-                "multisig validation-fee metadata requires both policy version and hash"
-            ));
-        };
-        let policy_version = version
-            .parse::<u64>()
-            .wrap_err("multisig validation-fee policy version is not a canonical u64")?;
-        let policy_hash =
-            canonicalize_hex32_literal(policy_hash, "multisig validation-fee policy hash")?;
-        let policy_hash_bytes: [u8; 32] = hex::decode(&policy_hash)
-            .wrap_err("decode multisig validation-fee policy hash")?
-            .try_into()
-            .map_err(|_| eyre!("multisig validation-fee policy hash is not 32 bytes"))?;
-        let hijiri_hash = hijiri_hash
-            .map(|hash| {
-                canonicalize_hex32_literal(hash, "multisig validation-fee Hijiri quote hash")
-            })
-            .transpose()?;
-        let hijiri_hash_bytes = hijiri_hash
-            .as_deref()
-            .map(|hash| {
-                hex::decode(hash)
-                    .wrap_err("decode multisig validation-fee Hijiri quote hash")?
-                    .try_into()
-                    .map_err(|_| eyre!("multisig validation-fee Hijiri quote hash is not 32 bytes"))
-            })
-            .transpose()?;
-        let instruction_index = instruction_index
-            .map(|index| {
-                index
-                    .parse::<u64>()
-                    .wrap_err("multisig validation-fee instruction index is not a canonical u64")
-            })
-            .transpose()?;
-        let transfer_entry_index = transfer_entry_index
-            .map(|index| {
-                index
-                    .parse::<u64>()
-                    .wrap_err("multisig validation-fee transfer entry index is not a canonical u64")
-            })
-            .transpose()?;
-        if transfer_entry_index.is_some() && instruction_index.is_none() {
-            return Err(eyre!(
-                "multisig validation-fee transfer entry index requires an instruction index"
-            ));
-        }
-
-        metadata.insert(
-            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY
-                .parse()
-                .expect("static validation-fee policy-version metadata key"),
-            iroha_primitives::json::Json::new(policy_version),
-        );
-        metadata.insert(
-            VALIDATION_FEE_POLICY_HASH_METADATA_KEY
-                .parse()
-                .expect("static validation-fee policy-hash metadata key"),
-            iroha_primitives::json::Json::new(policy_hash),
-        );
-        if let Some(hijiri_hash) = hijiri_hash {
-            metadata.insert(
-                VALIDATION_FEE_HIJIRI_FEE_QUOTE_HASH_METADATA_KEY
-                    .parse()
-                    .expect("static Hijiri quote-hash metadata key"),
-                iroha_primitives::json::Json::new(hijiri_hash),
-            );
-        }
-        if let Some(instruction_index) = instruction_index {
-            metadata.insert(
-                VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY
-                    .parse()
-                    .expect("static validation-fee instruction-index metadata key"),
-                iroha_primitives::json::Json::new(instruction_index),
-            );
-            proposal_instructions.push(
-                ValidationFeeMultisigMarkerV1::new(
-                    policy_version,
-                    policy_hash_bytes,
-                    hijiri_hash_bytes,
-                    instruction_index,
-                    transfer_entry_index,
-                )
-                .into_instruction(),
-            );
-        }
-        if let Some(transfer_entry_index) = transfer_entry_index {
-            metadata.insert(
-                VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY
-                    .parse()
-                    .expect("static validation-fee transfer-entry-index metadata key"),
-                iroha_primitives::json::Json::new(transfer_entry_index),
-            );
-        }
-    }
-
-    let proposal_hash = HashOf::new(&proposal_instructions);
-    Ok((proposal_instructions, metadata, proposal_hash))
-}
-fn validate_multisig_response(
-    response: &MultisigResponse,
-    request: &MultisigProposeRequest,
-    network_id: NetworkId,
-) -> Result<()> {
-    if !response.ok {
-        return Err(eyre!("multisig response.ok must be true"));
-    }
-    if request
-        .multisig_account_id
-        .as_ref()
-        .is_some_and(|expected| expected != &response.resolved_multisig_account_id)
-    {
-        return Err(eyre!(
-            "multisig response resolved account does not match the requested account"
-        ));
-    }
-    if !request
-        .fee_payment
-        .has_same_payer_and_gas_bound(&response.fee_payment)
-    {
-        return Err(eyre!(
-            "multisig response fee_payment changed the requested payer, sponsor revision, or gas bound"
-        ));
-    }
-    response
-        .fee_payment
-        .validate()
-        .map_err(|error| eyre!("multisig response fee_payment is invalid: {error}"))?;
-    if request
-        .creation_time_ms
-        .is_some_and(|expected| response.creation_time_ms != Some(expected))
-    {
-        return Err(eyre!(
-            "multisig response creation_time_ms is not bound to the request"
-        ));
-    }
-    for (field, value) in [
-        (
-            "multisig response.instructions_hash",
-            &response.instructions_hash,
-        ),
-        ("multisig response.tx_hash_hex", &response.tx_hash_hex),
-        (
-            "multisig response.executed_tx_hash_hex",
-            &response.executed_tx_hash_hex,
-        ),
-    ] {
-        if let Some(value) = value {
-            canonicalize_hex32_literal(value, field)?;
-        }
-    }
-    if response.proposal_id.is_none()
-        || response.proposal_id.as_ref() != response.instructions_hash.as_ref()
-    {
-        return Err(eyre!(
-            "multisig propose response proposal_id and instructions_hash must be the same canonical proposal hash"
-        ));
-    }
-    let (proposal_instructions, expected_metadata, proposal_hash) =
-        canonical_multisig_propose_intent(request)?;
-    let expected_proposal_id = hex::encode(proposal_hash.as_ref());
-    if response.proposal_id.as_deref() != Some(expected_proposal_id.as_str()) {
-        return Err(eyre!(
-            "multisig response proposal hash does not match the exact requested instructions and validation-fee marker"
-        ));
-    }
-    match (
-        response.submitted,
-        response.transaction_payload_b64.as_deref(),
-        response.signing_message_b64.as_deref(),
-    ) {
-        (true, None, None) => {
-            if response.tx_hash_hex.is_none() {
-                return Err(eyre!(
-                    "submitted multisig response must contain tx_hash_hex"
-                ));
-            }
-        }
-        (false, Some(transaction_payload_b64), Some(signing_message_b64)) => {
-            const MAX_TRANSACTION_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
-            validate_canonical_standard_base64(
-                transaction_payload_b64,
-                MAX_TRANSACTION_PAYLOAD_BYTES,
-                "multisig response.transaction_payload_b64",
-            )?;
-            validate_canonical_standard_base64(
-                signing_message_b64,
-                64,
-                "multisig response.signing_message_b64",
-            )?;
-            let transaction_payload = base64::engine::general_purpose::STANDARD
-                .decode(transaction_payload_b64)
-                .wrap_err("decode multisig response transaction payload")?;
-            let builder = TransactionBuilder::decode_payload(&transaction_payload)
-                .wrap_err("decode canonical multisig response transaction payload")?;
-            let signing_message = base64::engine::general_purpose::STANDARD
-                .decode(signing_message_b64)
-                .wrap_err("decode multisig response signing message")?;
-            if signing_message.as_slice() != builder.payload_hash_bytes().as_slice() {
-                return Err(eyre!(
-                    "multisig response signing message does not match the transaction payload"
-                ));
-            }
-            if builder.payload().fee_payment != response.fee_payment {
-                return Err(eyre!(
-                    "multisig response fee_payment does not match the transaction payload"
-                ));
-            }
-            if builder.payload().authority() != &request.signer_account_id {
-                return Err(eyre!(
-                    "multisig response transaction authority does not match the requested signer"
-                ));
-            }
-            if response.creation_time_ms != Some(builder.payload().creation_time_ms) {
-                return Err(eyre!(
-                    "multisig response creation_time_ms does not match the transaction payload"
-                ));
-            }
-            let creation_time_ms = response
-                .creation_time_ms
-                .expect("creation time was matched to the decoded payload above");
-            let propose_instruction = InstructionBox::from(
-                iroha_executor_data_model::isi::multisig::MultisigPropose::new(
-                    response.resolved_multisig_account_id.clone(),
-                    proposal_instructions,
-                    None,
-                ),
-            );
-            let approve_instruction = InstructionBox::from(
-                iroha_executor_data_model::isi::multisig::MultisigApprove::new(
-                    response.resolved_multisig_account_id.clone(),
-                    proposal_hash,
-                ),
-            );
-            let mut expected_builder = TransactionBuilder::new(
-                network_id,
-                request.signer_account_id.clone(),
-                response.fee_payment.clone(),
-            );
-            expected_builder.set_creation_time(Duration::from_millis(creation_time_ms));
-            let expected_builder = expected_builder.with_metadata(expected_metadata);
-            let propose_only = expected_builder
-                .clone()
-                .with_instructions(core::iter::once(propose_instruction.clone()));
-            let propose_and_approve =
-                expected_builder.with_instructions([propose_instruction, approve_instruction]);
-            if builder.payload() != propose_only.payload()
-                && builder.payload() != propose_and_approve.payload()
-            {
-                return Err(eyre!(
-                    "multisig response transaction payload does not match the exact requested executable and metadata"
-                ));
-            }
-            if response.tx_hash_hex.is_some() || response.executed_tx_hash_hex.is_some() {
-                return Err(eyre!(
-                    "unsubmitted multisig response must not contain transaction hashes"
-                ));
-            }
-        }
-        _ => {
-            return Err(eyre!(
-                "multisig response must contain either a submitted transaction hash or an exact transaction-payload/signing-message pair"
-            ));
-        }
-    }
-    Ok(())
-}
 fn validate_multisig_read_selector(
     multisig_account_id: Option<&iroha_data_model::account::AccountId>,
     multisig_account_alias: Option<&str>,
@@ -8418,7 +7953,7 @@ fn parse_optional_string(value: Option<&JsonValue>, context: &str) -> Result<Opt
     }
 }
 fn signed_transaction_schema_hash_hex() -> String {
-    hex::encode(<SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
+    hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
 }
 fn parse_signed_transaction_schema_hash_hex(
     capabilities: &JsonValue,
@@ -9296,7 +8831,7 @@ impl TransactionResponseHandler {
             ));
         }
         if let Some(expected) = expected {
-            match classify_queue_plan_outcome_unknown_response(resp, expected) {
+            match queue_plan_error::classify(resp, expected) {
                 Ok(Some(identity)) => {
                     return Ok(TransactionSubmissionDisposition::QueuePlanOutcomeUnknown(
                         QueuePlanOutcomeUnknownContext::exact(identity),
@@ -9320,45 +8855,6 @@ impl TransactionResponseHandler {
         } else {
             Err(Self::rejection_report(resp))
         }
-    }
-}
-/// Decode one negotiated `/status` response under the requested wire-format policy.
-fn decode_status_response(
-    resp: &Response<Vec<u8>>,
-    preference: WireFormatPreference,
-) -> Result<Status> {
-    if resp.status() != StatusCode::OK {
-        return Err(ResponseReport::with_msg("Unexpected status response", resp)
-            .unwrap_or_else(core::convert::identity)
-            .into());
-    }
-    let body = resp.body();
-    let content_type = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|value| value.split(';').next().unwrap_or(value).trim());
-    let is_json = content_type.is_some_and(|value| value.eq_ignore_ascii_case(APPLICATION_JSON));
-    let is_norito =
-        content_type.is_some_and(|value| value.eq_ignore_ascii_case(APPLICATION_NORITO));
-    match preference {
-        WireFormatPreference::NoritoOnly if !is_norito => {
-            return Err(eyre!(
-                "status response violates NoritoOnly: expected content-type `{APPLICATION_NORITO}`"
-            ));
-        }
-        WireFormatPreference::JsonOnly if !is_json => {
-            return Err(eyre!(
-                "status response violates JsonOnly: expected content-type `{APPLICATION_JSON}`"
-            ));
-        }
-        _ => {}
-    }
-    if is_json {
-        norito::json::from_slice(body).map_err(Into::into)
-    } else {
-        decode_from_bytes::<Status>(body)
-            .map_err(|err| eyre!("failed to decode status Norito payload: {err}"))
     }
 }
 /// Decode and validate a `/v1/nexus/lifecycle` status response.
@@ -10790,7 +10286,7 @@ mod status_tests {
         let body = norito::to_bytes(&s).expect("encode status");
         let resp = mk_response(StatusCode::OK, body, Some("application/x-norito"));
         let got =
-            decode_status_response(&resp, WireFormatPreference::NoritoPreferred).expect("decode");
+            status::decode_response(resp, WireFormatPreference::NoritoPreferred).expect("decode");
         assert_eq!(got.peers, s.peers);
         assert_eq!(got.blocks, s.blocks);
         assert_eq!(got.blocks_non_empty, s.blocks_non_empty);
@@ -10819,7 +10315,7 @@ mod status_tests {
         s.crypto.sm_openssl_preview_enabled = false;
         let body = norito::json::to_vec(&s).unwrap();
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
-        let got = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
+        let got = status::decode_response(resp, WireFormatPreference::NoritoPreferred)
             .expect("json decode");
         assert_eq!(got.blocks, s.blocks);
         assert_eq!(got.queue_size, s.queue_size);
@@ -10834,7 +10330,7 @@ mod status_tests {
         map.remove("build");
         let body = norito::json::to_vec(&value).expect("encode modified json");
         let resp = mk_response(StatusCode::OK, body, Some("application/json"));
-        let error = decode_status_response(&resp, WireFormatPreference::NoritoPreferred)
+        let error = status::decode_response(resp, WireFormatPreference::NoritoPreferred)
             .expect_err("the canonical status contract requires build metadata");
         assert!(error.to_string().contains("missing field `build`"));
     }
@@ -11351,9 +10847,9 @@ mod evidence_http_tests {
             sorafs_anonymity_policy: AnonymityPolicy::GuardPq,
             sorafs_rollout_phase: RolloutPhase::Canary,
         };
-        let mut client = Client::new(config);
-        client.set_operator_key_pair(checked_random_keypair());
-        client
+        let mut builder = Client::builder(config);
+        builder.operator_key_pair = Some(checked_random_keypair());
+        builder.build().expect("valid client configuration")
     }
     pub(super) fn mark_data_model_compatible(client: &Client) {
         *client
@@ -11449,12 +10945,11 @@ mod evidence_http_tests {
     }
     #[test]
     fn client_debug_redacts_runtime_headers_and_torii_url_secrets() {
-        let mut client = client_with_base_url(
-            Url::parse(
-                "https://debug-user:debug-password@example.com/private?auth=debug-query#fragment",
-            )
-            .expect("debug URL fixture"),
-        );
+        let mut client = client_with_base_url(base_url()).to_builder();
+        client.torii_url = Url::parse(
+            "https://debug-user:debug-password@example.com/private?auth=debug-query#fragment",
+        )
+        .expect("debug URL fixture");
         client.headers.insert(
             "Authorization".to_owned(),
             "Bearer debug-header-sentinel".to_owned(),
@@ -11818,8 +11313,12 @@ mod evidence_http_tests {
             request.fee_payment.clone(),
         );
         builder.set_creation_time(Duration::from_millis(creation_time_ms));
-        let (proposal_instructions, metadata, proposal_hash) =
-            canonical_multisig_propose_intent(request).expect("canonical multisig request intent");
+        let multisig_validation::ProposalIntent {
+            instructions: proposal_instructions,
+            metadata,
+            hash: proposal_hash,
+        } = multisig_validation::canonical_propose_intent(request)
+            .expect("canonical multisig request intent");
         let proposal_id = hex::encode(proposal_hash.as_ref());
         let builder = builder
             .with_metadata(metadata)
@@ -12396,13 +11895,13 @@ mod evidence_http_tests {
             .expect("sign with the bound transaction authority");
         assert_eq!(expected_signed.authority(), &authority);
         let expected_wire = PreparedTransactionPayload::from_transaction(&expected_signed);
-        mark_data_model_compatible(&client);
 
         let (foreign_authority, foreign_key) = gen_account_in("external");
         for private_key in [None, Some(foreign_key.private_key())] {
             let (result, snapshots) =
                 capture_requests(prepared_response.clone(), |mock_transport| {
                     let client = client.clone().with_test_http_transport(mock_transport);
+                    mark_data_model_compatible(&client);
                     client.post_contract_call_json_for_test(
                         &foreign_authority,
                         private_key,
@@ -12443,6 +11942,7 @@ mod evidence_http_tests {
                     let client = client
                         .clone()
                         .with_test_http_transport(mock_transport.clone());
+                    mark_data_model_compatible(&client);
                     client.post_contract_call_json_for_test(
                         &authority,
                         private_key,
@@ -13518,9 +13018,11 @@ mod evidence_http_tests {
             requests_per_minute: Some(120),
         };
         with_mock_http(responder, |mock_transport| {
-            let mut client =
+            let client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
-            client.set_operator_key_pair(checked_random_keypair());
+            let mut builder = client.to_builder();
+            builder.operator_key_pair = Some(checked_random_keypair());
+            let client = builder.build().expect("valid operator client");
             client
                 .post_sorafs_storage_token(
                     &manifest_hex,
@@ -14220,8 +13722,8 @@ mod evidence_http_tests {
             items: vec![sample.clone()],
         };
         assert_eq!(
-            <SharedSumeragiEvidenceListWireResponse as norito::NoritoSerialize>::schema_hash(),
-            <SumeragiEvidenceListWireResponse as norito::NoritoSerialize>::schema_hash(),
+            norito::schema::identity::frame_hash::<SharedSumeragiEvidenceListWireResponse>(),
+            norito::schema::identity::frame_hash::<SumeragiEvidenceListWireResponse>(),
             "the server and client must negotiate one named Norito schema",
         );
         let response = with_mock_http(
@@ -14368,6 +13870,7 @@ mod evidence_http_tests {
             let client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
+
             let hash = transaction_hash(seed);
             if confirmation {
                 client.transaction_confirmation_status(hash)
@@ -14494,7 +13997,7 @@ mod evidence_http_tests {
             transaction::{TransactionResult, error::TransactionRejectionReason},
         };
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let message =
             "privacy activation at 306 is too early after height 7; earliest is 307".to_owned();
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
@@ -14532,6 +14035,7 @@ mod evidence_http_tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
@@ -14567,7 +14071,7 @@ mod evidence_http_tests {
             transaction::{TransactionResult, error::TransactionRejectionReason},
         };
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let rejection = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
             InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                 "private rejection".to_owned(),
@@ -14604,6 +14108,7 @@ mod evidence_http_tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
@@ -14631,7 +14136,7 @@ mod evidence_http_tests {
     fn undecodable_rejection_details_error_remains_nonfinal() {
         use iroha_data_model::transaction::{TransactionResult, error::TransactionRejectionReason};
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "private rejection".to_owned(),
         ));
@@ -14654,6 +14159,7 @@ mod evidence_http_tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
@@ -14671,7 +14177,7 @@ mod evidence_http_tests {
         use iroha_data_model::transaction::{TransactionResult, error::TransactionRejectionReason};
         use std::sync::atomic::{AtomicUsize, Ordering};
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let rejection = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
             "private rejection".to_owned(),
         ));
@@ -14712,6 +14218,7 @@ mod evidence_http_tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             let retryable = client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
@@ -14747,7 +14254,7 @@ mod evidence_http_tests {
     fn successful_authenticated_details_for_rejected_status_are_final() {
         use iroha_data_model::transaction::{DataTriggerSequence, TransactionResult};
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let (transaction, details) = committed_transaction_details_fixture(
             &client,
             TransactionResult::new(Ok(DataTriggerSequence::default())),
@@ -14770,6 +14277,7 @@ mod evidence_http_tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client.transaction_confirmation_status_with_rejection_details(
                 signed_hash,
@@ -15353,6 +14861,7 @@ mod evidence_http_tests {
             let client =
                 client_with_base_url(base_url()).with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
+
             client.transaction_confirmation_status(transaction_hash(seed))
         });
         let err = result.expect_err("connection refusal should fail fast");
@@ -15384,168 +14893,6 @@ fn response_has_json_error_content_type(response: &Response<Vec<u8>>) -> bool {
         .get(http::header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .is_some_and(Client::is_json_content_type)
-}
-fn decode_canonical_queue_plan_error_envelope(
-    response: &Response<Vec<u8>>,
-) -> Result<ErrorEnvelope, String> {
-    let content_types = response
-        .headers()
-        .get_all(http::header::CONTENT_TYPE)
-        .iter()
-        .collect::<Vec<_>>();
-    if content_types.len() != 1 {
-        return Err(
-            "QueuePlan outcome-unknown content-type header is missing or duplicated".to_owned(),
-        );
-    }
-    let content_type = content_types[0].to_str().map_err(|_| {
-        "QueuePlan outcome-unknown content-type header is not valid text".to_owned()
-    })?;
-    let envelope = match content_type {
-        APPLICATION_NORITO => decode_from_bytes::<ErrorEnvelope>(response.body())
-            .map_err(|_| "QueuePlan outcome-unknown Norito envelope is invalid".to_owned())?,
-        APPLICATION_JSON => norito::json::from_slice::<ErrorEnvelope>(response.body())
-            .map_err(|_| "QueuePlan outcome-unknown JSON envelope is invalid".to_owned())?,
-        _ => {
-            return Err(
-                "QueuePlan outcome-unknown content type is not canonical Norito or JSON".to_owned(),
-            );
-        }
-    };
-    let canonical = if content_type == APPLICATION_NORITO {
-        to_bytes(&envelope)
-            .map_err(|_| "QueuePlan outcome-unknown Norito envelope cannot be encoded".to_owned())?
-    } else {
-        norito::json::to_vec(&envelope)
-            .map_err(|_| "QueuePlan outcome-unknown JSON envelope cannot be encoded".to_owned())?
-    };
-    if canonical != response.body().as_slice() {
-        return Err("QueuePlan outcome-unknown envelope bytes are not canonical".to_owned());
-    }
-    Ok(envelope)
-}
-fn classify_queue_plan_outcome_unknown_response(
-    response: &Response<Vec<u8>>,
-    expected: &QueuePlanOutcomeUnknownIdentity,
-) -> Result<Option<QueuePlanOutcomeUnknownIdentity>, String> {
-    let envelope = decode_canonical_queue_plan_error_envelope(response);
-    // Claim detection is deliberately more permissive than evidence acceptance. A proxy that
-    // damages the content type, byte canonicality, or one identity field still cannot turn an
-    // indeterminate admission into a definite rejection that callers may safely resubmit.
-    let claimed_envelope = decode_from_bytes::<ErrorEnvelope>(response.body())
-        .ok()
-        .or_else(|| norito::json::from_slice::<ErrorEnvelope>(response.body()).ok());
-    let envelope_claims_outcome_unknown = claimed_envelope.as_ref().is_some_and(|envelope| {
-        envelope.code() == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE
-            || envelope.details.as_ref().is_some_and(|details| {
-                details.reject_code.as_deref() == Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
-            })
-    });
-    let body_claims_outcome_unknown = [
-        QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE,
-        QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE,
-    ]
-    .into_iter()
-    .any(|claim| {
-        response
-            .body()
-            .windows(claim.len())
-            .any(|window| window == claim.as_bytes())
-    });
-    let reject_headers = response
-        .headers()
-        .get_all("x-iroha-reject-code")
-        .iter()
-        .collect::<Vec<_>>();
-    let header_claims_outcome_unknown = reject_headers.iter().any(|value| {
-        value.to_str().is_ok_and(|value| {
-            value == QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE
-                || value == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE
-        })
-    });
-    // Successful QueuePlan responses legitimately carry both identity headers. On a rejection,
-    // those headers are reserved for outcome-unknown, so even damaged code/body evidence must
-    // keep the locally computed identity ambiguous.
-    let rejection_identity_headers_claim_outcome_unknown =
-        !matches!(response.status(), StatusCode::OK | StatusCode::ACCEPTED)
-            && (response
-                .headers()
-                .contains_key(TRANSACTION_ENTRYPOINT_HASH_HEADER)
-                || response
-                    .headers()
-                    .contains_key(SIGNED_TRANSACTION_HASH_HEADER));
-    if !envelope_claims_outcome_unknown
-        && !body_claims_outcome_unknown
-        && !header_claims_outcome_unknown
-        && !rejection_identity_headers_claim_outcome_unknown
-    {
-        return Ok(None);
-    }
-    if response.status() != StatusCode::SERVICE_UNAVAILABLE {
-        return Err(
-            "QueuePlan outcome-unknown evidence did not use 503 Service Unavailable".to_owned(),
-        );
-    }
-    if reject_headers.len() != 1
-        || !reject_headers[0]
-            .to_str()
-            .is_ok_and(|value| value == QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
-    {
-        return Err(
-            "QueuePlan outcome-unknown reject-code header is missing, duplicated, or invalid"
-                .to_owned(),
-        );
-    }
-    let envelope = envelope?;
-    if envelope.code() != QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE {
-        return Err("QueuePlan outcome-unknown envelope code is invalid".to_owned());
-    }
-    let details = envelope
-        .details
-        .as_ref()
-        .ok_or_else(|| "QueuePlan outcome-unknown envelope is missing details".to_owned())?;
-    if details.reject_code.as_deref() != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE) {
-        return Err("QueuePlan outcome-unknown envelope reject code is invalid".to_owned());
-    }
-    let expected_entrypoint_hash = expected.entrypoint_hash.to_string();
-    let entrypoint_hash_header = exact_single_response_header(
-        response,
-        TRANSACTION_ENTRYPOINT_HASH_HEADER,
-    )
-    .map_err(|_| {
-        "QueuePlan outcome-unknown entrypoint header is missing, duplicated, or invalid".to_owned()
-    })?;
-    if entrypoint_hash_header != expected_entrypoint_hash {
-        return Err(
-            "QueuePlan outcome-unknown entrypoint header does not match the submitted transaction"
-                .to_owned(),
-        );
-    }
-    if details.entrypoint_hash.as_deref() != Some(expected_entrypoint_hash.as_str()) {
-        return Err(
-            "QueuePlan outcome-unknown entrypoint identity is missing or does not match the submitted transaction"
-                .to_owned(),
-        );
-    }
-    let expected_signed_transaction_hash = expected.signed_transaction_hash.to_string();
-    let signed_transaction_hash_header =
-        exact_single_response_header(response, SIGNED_TRANSACTION_HASH_HEADER).map_err(|_| {
-            "QueuePlan outcome-unknown signed-transaction header is missing, duplicated, or invalid"
-                .to_owned()
-        })?;
-    if signed_transaction_hash_header != expected_signed_transaction_hash {
-        return Err(
-            "QueuePlan outcome-unknown signed-transaction header does not match the submitted transaction"
-                .to_owned(),
-        );
-    }
-    if details.tx_hash.as_deref() != Some(expected_signed_transaction_hash.as_str()) {
-        return Err(
-            "QueuePlan outcome-unknown signed-transaction identity is missing or does not match the submitted transaction"
-                .to_owned(),
-        );
-    }
-    Ok(Some(expected.clone()))
 }
 fn decode_norito_error_body(response: &Response<Vec<u8>>) -> Option<String> {
     if !response_has_norito_error_content_type(response) {
@@ -16022,55 +15369,87 @@ pub(crate) fn test_network_id() -> NetworkId {
 /// Iroha client.
 ///
 /// Main entry point used by external applications to communicate with an Iroha
-/// peer. The client is lightweight and holds only configuration data needed to
-/// build and sign transactions.
+/// peer. Configuration is fixed at construction. Clones share transport pools
+/// and compatibility state; rebuilding creates a fresh compatibility decision.
+///
+/// TODO: Move the remaining account and operator operations into their explicit
+/// authority contexts as the capability migration completes.
+///
+/// Context configuration cannot be changed in place:
+/// ```compile_fail,E0616
+/// use iroha::client::Client;
+/// fn reroute(client: &mut Client, endpoint: url::Url) {
+///     client.torii_url = endpoint;
+/// }
+/// ```
 #[derive(Clone, Display)]
 #[display("{}@{torii_url}", key_pair.public_key())]
 pub struct Client {
     /// Human-readable business chain label used by APIs that explicitly carry a [`ChainId`].
-    pub chain: ChainId,
+    pub(crate) chain: ChainId,
     /// Exact genesis-lineage identity used for signed transaction and query domain separation.
-    pub network_id: NetworkId,
+    pub(crate) network_id: NetworkId,
     /// Url for accessing Iroha node
-    pub torii_url: Url,
+    pub(crate) torii_url: Url,
+    /// Explicit address-formatting discriminant retained from configuration.
+    pub(crate) account_chain_discriminant: u16,
     /// Accounts keypair
-    pub key_pair: KeyPair,
+    pub(crate) key_pair: KeyPair,
     /// Transaction time to live in milliseconds
-    pub transaction_ttl: Option<Duration>,
+    pub(crate) transaction_ttl: Option<Duration>,
     /// Transaction status timeout
-    pub transaction_status_timeout: Duration,
+    pub(crate) transaction_status_timeout: Duration,
     /// Timeout for Torii HTTP requests.
-    pub torii_request_timeout: Duration,
+    pub(crate) torii_request_timeout: Duration,
     /// Current account
-    pub account: AccountId,
+    pub(crate) account: AccountId,
     /// HTTP headers which will be appended to each request.
     ///
     /// Canonical account-authenticated requests replace any configured authentication headers
     /// with fresh values. Explicitly unsigned alias reads strip those headers entirely.
-    pub headers: HashMap<String, String>,
+    pub(crate) headers: HashMap<String, String>,
     /// Optional key pair used to sign operator-only endpoint requests.
-    pub operator_key_pair: Option<KeyPair>,
+    pub(crate) operator_key_pair: Option<KeyPair>,
     /// If `true` add nonce, which makes different hashes for
     /// transactions which occur repeatedly and/or simultaneously
-    pub add_transaction_nonce: bool,
+    pub(crate) add_transaction_nonce: bool,
     /// Alias cache policy enforced when validating `SoraFS` alias proofs.
-    pub alias_cache_policy: sorafs_manifest::alias_cache::AliasCachePolicy,
+    pub(crate) alias_cache_policy: sorafs_manifest::alias_cache::AliasCachePolicy,
     /// Default `SoraNet` anonymity policy stage applied to gateway fetches.
-    pub default_anonymity_policy: AnonymityPolicy,
+    pub(crate) default_anonymity_policy: AnonymityPolicy,
     /// Rollout phase controlling the default anonymity policy.
-    pub rollout_phase: RolloutPhase,
+    pub(crate) rollout_phase: RolloutPhase,
     /// Cached Torii compatibility state for queries and transaction submissions.
     pub(crate) data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
     /// Serializes capability probes and shares their completion across clones.
     pub(crate) compatibility_probe: Arc<CompatibilityProbeCoordinator>,
     /// HTTP connection pools scoped to this immutable client context.
     pub(crate) http_transport: DefaultHttpTransport,
+    pub(crate) stream_transport: Arc<dyn crate::stream::StreamTransport>,
     /// Default response wire-format preference for negotiated Torii endpoints.
-    pub wire_format_preference: WireFormatPreference,
+    pub(crate) wire_format_preference: WireFormatPreference,
 }
 /// Failure to bind an immutable authority context to a client configuration.
 #[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum AuthorityContextError {
+    /// A default HTTP header name is not syntactically valid.
+    #[error("client configuration contains an invalid HTTP header name")]
+    InvalidHeaderName,
+    /// A default HTTP header value is not syntactically valid.
+    #[error("client configuration contains an invalid value for HTTP header `{name}`")]
+    InvalidHeaderValue {
+        /// Validated header name; values are never included in diagnostics.
+        name: String,
+    },
+    /// Case-equivalent header names would create ambiguous HTTP credentials.
+    #[error("client configuration repeats HTTP header `{name}`")]
+    DuplicateHeader {
+        /// Canonical lowercase header name.
+        name: String,
+    },
+    /// Zero is not a valid address-formatting discriminant.
+    #[error("account address discriminant must be nonzero")]
+    InvalidAddressDiscriminant,
     /// Torii endpoints must use HTTP or HTTPS.
     #[error("Torii endpoint scheme `{scheme}` is not supported")]
     UnsupportedEndpointScheme {
@@ -16315,6 +15694,10 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("chain", &self.chain)
             .field("network_id", &self.network_id)
+            .field(
+                "account_chain_discriminant",
+                &self.account_chain_discriminant,
+            )
             .field("torii_url", &torii_origin)
             .field("public_key", &self.key_pair.public_key())
             .field("transaction_ttl", &self.transaction_ttl)
@@ -16342,91 +15725,53 @@ impl fmt::Debug for Client {
             .field("data_model_compatibility", &"<cached>")
             .field("compatibility_probe", &"<context-local>")
             .field("http_transport", &"<context-owned>")
+            .field("stream_transport", &"<context-owned>")
             .field("wire_format_preference", &self.wire_format_preference)
             .finish()
     }
 }
+mod context;
+#[cfg(test)]
+mod context_tests;
+pub use context::ClientBuilder;
+
 include!("client/canonical_request_auth.rs");
 include!("client/operator_request_auth.rs");
 include!("client/activation_evidence.rs");
 /// Representation of `Iroha` client.
 impl Client {
-    /// Constructor for client from configuration
-    #[inline]
-    pub fn new(configuration: Config) -> Self {
-        Self::with_headers(configuration, HashMap::new())
+    /// Configure a new client before validating its immutable context.
+    #[must_use]
+    pub fn builder(configuration: Config) -> ClientBuilder {
+        ClientBuilder::from_config(configuration)
     }
-    /// Construct a client with an explicitly owned HTTP transport.
+
+    /// Copy configuration into a builder for an independently validated context.
     ///
-    /// Clones of the returned client share `transport`; separately constructed
-    /// clients share nothing unless the caller deliberately supplies the same
-    /// [`crate::http::HttpTransport`] instance.
-    #[inline]
-    pub fn with_transport(
-        configuration: Config,
-        transport: Arc<dyn crate::http::HttpTransport>,
-    ) -> Self {
-        Self::with_headers_and_transport(
-            configuration,
-            HashMap::new(),
-            DefaultHttpTransport::from_shared(transport),
-        )
+    /// The builder retains the explicitly selected transport, but never copies
+    /// compatibility results or in-flight probes. Changing an endpoint does not
+    /// implicitly authorize forwarding credentials: clear or replace headers
+    /// and operator authority when constructing a context for another origin.
+    #[must_use]
+    pub fn to_builder(&self) -> ClientBuilder {
+        ClientBuilder::from_client(self)
     }
+
     #[cfg(test)]
-    pub(crate) fn with_test_http_transport(mut self, transport: DefaultHttpTransport) -> Self {
-        self.http_transport = transport;
-        self
-    }
-    /// Constructor for client from configuration and headers
-    ///
-    /// *Authorization* header will be added if `basic_auth` is presented
-    #[inline]
-    pub fn with_headers(configuration: Config, headers: HashMap<String, String>) -> Self {
-        Self::with_headers_and_transport(configuration, headers, DefaultHttpTransport::new())
+    pub(crate) fn with_test_http_transport(self, transport: DefaultHttpTransport) -> Self {
+        let mut builder = self.to_builder();
+        builder.http_transport = Some(transport);
+        builder.build().expect("valid test context")
     }
 
     fn validate_context_endpoint(&self) -> core::result::Result<(), AuthorityContextError> {
-        if !matches!(self.torii_url.scheme(), "http" | "https") {
-            return Err(AuthorityContextError::UnsupportedEndpointScheme {
-                scheme: self.torii_url.scheme().to_owned(),
-            });
-        }
-        if self.torii_url.host().is_none() {
-            return Err(AuthorityContextError::MissingEndpointHost);
-        }
-        if !self.torii_url.username().is_empty() || self.torii_url.password().is_some() {
-            return Err(AuthorityContextError::EmbeddedEndpointCredentials);
-        }
-        if self.torii_url.query().is_some() || self.torii_url.fragment().is_some() {
-            return Err(AuthorityContextError::EndpointHasQueryOrFragment);
-        }
-        if !self.torii_url.path().ends_with('/') {
-            return Err(AuthorityContextError::EndpointPathMissingTrailingSlash);
-        }
-        Ok(())
+        context::validate_endpoint(&self.torii_url)
     }
 
     fn validate_account_authority(
         &self,
     ) -> core::result::Result<AccountSigningCapability, AuthorityContextError> {
-        match self.account.controller() {
-            AccountController::Single(account_key) => {
-                if account_key != self.key_pair.public_key() {
-                    return Err(AuthorityContextError::AccountSigningKeyMismatch);
-                }
-                Ok(AccountSigningCapability::Direct)
-            }
-            AccountController::Multisig(policy) => {
-                if !policy
-                    .members()
-                    .iter()
-                    .any(|member| member.public_key() == self.key_pair.public_key())
-                {
-                    return Err(AuthorityContextError::AccountSigningKeyNotMultisigMember);
-                }
-                Ok(AccountSigningCapability::MultisigMember)
-            }
-        }
+        context::validate_authority(&self.account, &self.key_pair)
     }
 
     /// Bind this public-read client to its configured account authority.
@@ -16462,73 +15807,6 @@ impl Client {
         })
     }
 
-    fn with_headers_and_transport(
-        Config {
-            chain,
-            network_id,
-            account,
-            account_chain_discriminant: _account_chain_discriminant,
-            torii_api_url,
-            torii_request_timeout,
-            key_pair,
-            basic_auth,
-            transaction_add_nonce,
-            transaction_ttl,
-            transaction_status_timeout,
-            sorafs_alias_cache,
-            sorafs_anonymity_policy,
-            sorafs_rollout_phase,
-        }: Config,
-        mut headers: HashMap<String, String>,
-        http_transport: DefaultHttpTransport,
-    ) -> Self {
-        if let Some(basic_auth) = basic_auth {
-            let credentials = format!(
-                "{}:{}",
-                basic_auth.web_login,
-                basic_auth.password.expose_secret()
-            );
-            let engine = base64::engine::general_purpose::STANDARD;
-            let encoded = base64::engine::Engine::encode(&engine, credentials);
-            headers.insert(String::from("Authorization"), format!("Basic {encoded}"));
-        }
-        let data_model_compatibility = Arc::new(Mutex::new(DataModelCompatibility::Unchecked));
-        let compatibility_probe = Arc::new(CompatibilityProbeCoordinator::new());
-        Self {
-            chain,
-            network_id,
-            torii_url: torii_api_url,
-            key_pair,
-            transaction_ttl: Some(transaction_ttl),
-            transaction_status_timeout,
-            torii_request_timeout,
-            account,
-            headers,
-            operator_key_pair: None,
-            add_transaction_nonce: transaction_add_nonce,
-            alias_cache_policy: sorafs_alias_cache,
-            default_anonymity_policy: sorafs_anonymity_policy,
-            rollout_phase: sorafs_rollout_phase,
-            data_model_compatibility,
-            compatibility_probe,
-            http_transport,
-            wire_format_preference: WireFormatPreference::default(),
-        }
-    }
-    /// Set the default response wire-format preference for negotiated Torii endpoints.
-    pub fn set_wire_format_preference(&mut self, preference: WireFormatPreference) {
-        self.wire_format_preference = preference;
-    }
-    /// Return a clone of this client with a different wire-format preference.
-    #[must_use]
-    pub fn with_wire_format_preference(mut self, preference: WireFormatPreference) -> Self {
-        self.set_wire_format_preference(preference);
-        self
-    }
-    /// Configure the key pair used to sign operator-only endpoint requests.
-    pub fn set_operator_key_pair(&mut self, key_pair: KeyPair) {
-        self.operator_key_pair = Some(key_pair);
-    }
     pub(crate) fn default_request(&self, method: HttpMethod, url: Url) -> DefaultRequestBuilder {
         // Do not set a default `Accept` header here.
         //
@@ -17692,7 +16970,7 @@ impl Client {
             builder
         };
         let resp = self.send_builder(builder)?;
-        Self::decode_transaction_status_response(resp, hash, scope)
+        Self::decode_transaction_status_response(&resp, hash, scope)
     }
 
     async fn fetch_transaction_status_response_with_scope(
@@ -17713,11 +16991,11 @@ impl Client {
             builder
         };
         let resp = builder.build()?.send().await?;
-        Self::decode_transaction_status_response(resp, hash, scope)
+        Self::decode_transaction_status_response(&resp, hash, scope)
     }
 
     fn decode_transaction_status_response(
-        resp: Response<Vec<u8>>,
+        resp: &Response<Vec<u8>>,
         hash: HashOf<SignedTransaction>,
         scope: Option<&str>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
@@ -17725,14 +17003,14 @@ impl Client {
             StatusCode::OK => {
                 let payload: PipelineTransactionStatusResponse =
                     Self::parse_typed_json_ok_response(
-                        &resp,
+                        resp,
                         "Failed to get pipeline transaction status",
                     )?;
                 validate_pipeline_status_response(&payload, hash, scope.unwrap_or("global"))?;
                 Ok(Some(payload))
             }
             StatusCode::NOT_FOUND => Ok(None),
-            StatusCode::TOO_MANY_REQUESTS => Err(transaction_wait::backpressure_response(&resp)),
+            StatusCode::TOO_MANY_REQUESTS => Err(transaction_wait::backpressure_response(resp)),
             status => Err(eyre!(
                 "Failed to get pipeline transaction status: {} {}",
                 status,
@@ -17942,47 +17220,37 @@ impl Client {
         }
         request
     }
-    /// Connect asynchronously (through `WebSocket`) to listen for `Iroha` `pipeline` and `data` events.
-    /// Pipeline events are emitted from the commit worker thread, so ordering with data events
-    /// is not single-threaded.
-    ///
-    /// # Errors
-    /// - Forwards from [`Self::events_handler`]
-    /// - Forwards from `events_api::AsyncEventStream::new`
-    pub async fn listen_for_events(
-        &self,
-        event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>> + Send,
-    ) -> Result<AsyncEventStream> {
-        events_api::AsyncEventStream::new(self.events_handler(event_filters)?).await
-    }
     /// Constructs an account-authenticated Events API handler for the exact WebSocket upgrade.
     /// With it, you can use any WS client you want.
     ///
     /// # Errors
     /// Fails if canonical account signing or handler construction fails.
     #[inline]
-    pub fn events_handler(
+    fn events_handler(
         &self,
         event_filters: impl IntoIterator<Item = impl Into<EventFilterBox>>,
-    ) -> Result<events_api::flow::Init> {
+    ) -> crate::Result<events_api::flow::Init> {
+        let operation = streams::EVENTS_OPERATION;
+        let filters: Vec<_> = event_filters.into_iter().map(Into::into).collect();
+        if filters.is_empty() {
+            return Err(crate::Error::InvalidRequest {
+                operation,
+                details: "event WebSocket requires at least one filter".to_owned(),
+            });
+        }
         let url = join_torii_url(&self.torii_url, torii_uri::SUBSCRIPTION);
-        let headers = self.account_signed_headers(&HttpMethod::GET, &url, &[])?;
-        events_api::flow::Init::new(
-            event_filters.into_iter().map(Into::into).collect(),
-            headers,
-            url,
-        )
-    }
-    /// Connect asynchronously (through `WebSocket`) to listen for full `Iroha` signed blocks.
-    ///
-    /// The configured account must hold `CanReadAllLedgerData`. The WebSocket
-    /// upgrade is authenticated with a fresh canonical account signature.
-    ///
-    /// # Errors
-    /// - Forwards from [`Self::blocks_handler`]
-    /// - Forwards from `blocks_api::AsyncBlockStream::new`
-    pub async fn listen_for_blocks(&self, height: NonZeroU64) -> Result<AsyncBlockStream> {
-        blocks_api::AsyncBlockStream::new(self.blocks_handler(height)?).await
+        let headers = self
+            .account_signed_headers(&HttpMethod::GET, &url, &[])
+            .map_err(|error| crate::Error::RequestSigning {
+                operation,
+                details: error.to_string(),
+            })?;
+        events_api::flow::Init::new(filters, headers, url).map_err(|error| {
+            crate::Error::InvalidRequest {
+                operation,
+                details: error.to_string(),
+            }
+        })
     }
     /// Construct a handler for the global-reader-only Blocks API.
     ///
@@ -17993,68 +17261,21 @@ impl Client {
     /// # Errors
     /// - if canonical account signing or handler construction fails
     #[inline]
-    pub fn blocks_handler(&self, height: NonZeroU64) -> Result<blocks_api::flow::Init> {
+    fn blocks_handler(&self, height: NonZeroU64) -> crate::Result<blocks_api::flow::Init> {
+        let operation = streams::BLOCKS_OPERATION;
         let url = join_torii_url(&self.torii_url, torii_uri::BLOCKS_STREAM);
-        let headers = self.account_signed_headers(&HttpMethod::GET, &url, &[])?;
-        blocks_api::flow::Init::new(height, headers, url)
-    }
-    /// Get value of config on peer
-    ///
-    /// # Errors
-    /// Fails if sending request or decoding fails
-    /// Fetch node configuration via `/v1/config`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
-    pub fn get_config(&self) -> Result<Configuration> {
-        let url = join_torii_url(&self.torii_url, torii_uri::CONFIGURATION);
-        let resp = self.send_builder(
-            self.operator_signed_request(HttpMethod::GET, url, Vec::new())?
-                .header(http::header::CONTENT_TYPE, APPLICATION_JSON),
-        )?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to get configuration with HTTP status",
-            ". ",
-        )?;
-        let s = std::str::from_utf8(resp.body()).wrap_err("Invalid UTF-8")?;
-        norito::json::from_json_fast_smart::<Configuration>(s).map_err(|e| eyre!("{e}"))
-    }
-    /// Convenience helper returning only the confidential gas schedule.
-    ///
-    /// # Errors
-    /// Returns an error if fetching the configuration fails or the payload cannot be decoded.
-    pub fn get_confidential_gas_schedule(&self) -> Result<ConfidentialGas> {
-        self.get_config().map(|cfg| cfg.confidential_gas)
-    }
-    /// Gets network status seen from the peer
-    ///
-    /// Sends one negotiated request and decodes only that response. Strict preferences
-    /// reject a response whose declared representation differs from the requested format.
-    ///
-    /// # Errors
-    /// Fails if sending the request, enforcing the representation policy, or decoding fails.
-    /// Fetch node `/status`.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
-    pub fn get_status(&self) -> Result<Status> {
-        let mut builder = DefaultRequestBuilder::new(
-            HttpMethod::GET,
-            join_torii_url(&self.torii_url, torii_uri::STATUS),
-        )
-        .with_transport(self.http_transport.clone())
-        .headers(self.headers.clone())
-        .max_response_bytes(NODE_STATUS_RESPONSE_MAX_BYTES);
-        if self.torii_request_timeout != Duration::ZERO {
-            builder = builder.timeout(self.torii_request_timeout);
-        }
-        let resp = self.send_builder(builder.header(
-            http::header::ACCEPT,
-            self.wire_format_preference.accept_header(),
-        ))?;
-        decode_status_response(&resp, self.wire_format_preference)
+        let headers = self
+            .account_signed_headers(&HttpMethod::GET, &url, &[])
+            .map_err(|error| crate::Error::RequestSigning {
+                operation,
+                details: error.to_string(),
+            })?;
+        blocks_api::flow::Init::new(height, headers, url).map_err(|error| {
+            crate::Error::InvalidRequest {
+                operation,
+                details: error.to_string(),
+            }
+        })
     }
     /// Fetch the authoritative Soracloud status using canonical account authentication.
     ///
@@ -18071,21 +17292,6 @@ impl Client {
                 .header(http::header::ACCEPT, APPLICATION_JSON)
                 .max_response_bytes(SORACLOUD_STATUS_RESPONSE_MAX_BYTES),
         )
-    }
-    #[cfg(test)]
-    fn decode_status_for_test(resp: &Response<Vec<u8>>) -> Result<Status> {
-        decode_status_response(resp, WireFormatPreference::NoritoPreferred)
-    }
-    /// Prepares http-request to implement [`Self::get_status`] on your own.
-    ///
-    /// # Errors
-    /// Fails if request build fails
-    pub fn prepare_status_request<B: RequestBuilder>(&self) -> B {
-        B::new(
-            HttpMethod::GET,
-            join_torii_url(&self.torii_url, torii_uri::STATUS),
-        )
-        .headers(self.headers.clone())
     }
     /// Fetch and validate the exact current Nexus lane catalog and incarnation commitments.
     ///
@@ -18110,34 +17316,6 @@ impl Client {
         response: &Response<Vec<u8>>,
     ) -> Result<LaneLifecycleStatusV1> {
         decode_lane_lifecycle_status_response(response)
-    }
-    /// Fetch the active Torii API version (block header version string).
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, response is non-OK, or decoding fails.
-    ///
-    pub fn get_server_version(&self) -> Result<String> {
-        let resp = self
-            .default_request(
-                HttpMethod::GET,
-                join_torii_url(&self.torii_url, torii_uri::API_VERSION),
-            )
-            .header(http::header::ACCEPT, "text/plain")
-            .build()?
-            .send_blocking()?;
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to get server version with HTTP status",
-            ". ",
-        )?;
-        let body = std::str::from_utf8(resp.body())
-            .wrap_err("Server version response was not valid UTF-8")?
-            .trim();
-        if body.is_empty() {
-            return Err(eyre!("Server version response was empty"));
-        }
-        Ok(body.to_string())
     }
     /// Convenience: fetch recent shielded roots as JSON from the app API `/v1/zk/roots` endpoint.
     /// This is an operator/testing helper and not consensus‑critical.
@@ -18643,7 +17821,9 @@ impl Client {
                     binding,
                     fee_payment,
                 )?;
-                Ok(AccountOnboardingPrepareResponseV1::Prepared(prepared))
+                Ok(AccountOnboardingPrepareResponseV1::Prepared(Box::new(
+                    prepared,
+                )))
             }
             AccountOnboardingProofRequiredPrepareResponseV1::SCHEMA => {
                 let proof_required: AccountOnboardingProofRequiredPrepareResponseV1 =
@@ -18655,9 +17835,9 @@ impl Client {
                     receipt,
                     binding,
                 )?;
-                Ok(AccountOnboardingPrepareResponseV1::ProofRequired(
+                Ok(AccountOnboardingPrepareResponseV1::ProofRequired(Box::new(
                     proof_required,
-                ))
+                )))
             }
             schema => Err(eyre!(
                 "account onboarding prepare response has unsupported schema `{schema}`"
@@ -19509,7 +18689,7 @@ impl Client {
         }
         let decoded = norito::json::from_slice(response.body())
             .map_err(|err| eyre!("failed to decode multisig propose response: {err}"))?;
-        validate_multisig_response(&decoded, request, self.network_id)
+        multisig_validation::validate_response(&decoded, request, self.network_id)
             .wrap_err("failed to validate multisig propose response")?;
         Ok(decoded)
     }
@@ -19756,13 +18936,20 @@ impl Client {
             .receipt
             .as_ref()
             .ok_or_else(|| eyre!("Torii scoped DA ingest response is missing its receipt"))?;
-        if receipt.client_blob_id != request.client_blob_id
-            || receipt.lane_id != request.lane_id
-            || receipt.epoch != request.epoch
-            || receipt.blob_hash != request.payload_hash
-            || receipt.storage_ticket != expected_scope.storage_ticket
-            || receipt.manifest_hash.as_bytes() != expected_scope.manifest_hash.as_bytes()
-        {
+        let receipt_matches_request = (
+            &receipt.client_blob_id,
+            receipt.lane_id,
+            receipt.epoch,
+            &receipt.blob_hash,
+        ) == (
+            &request.client_blob_id,
+            request.lane_id,
+            request.epoch,
+            &request.payload_hash,
+        );
+        let receipt_matches_scope = receipt.storage_ticket == expected_scope.storage_ticket
+            && receipt.manifest_hash.as_bytes() == expected_scope.manifest_hash.as_bytes();
+        if !receipt_matches_request || !receipt_matches_scope {
             return Err(eyre!(
                 "Torii DA receipt does not match the submitted request and exact pin scope"
             ));
@@ -21813,12 +21000,11 @@ impl Client {
         }
         if let (Some((after_height, after_id)), Some((first_height, first_id))) =
             (after, order_keys.first().copied())
+            && (first_height, first_id) <= (after_height, after_id)
         {
-            if (first_height, first_id) <= (after_height, after_id) {
-                return Err(eyre!(
-                    "validation-fee proposal page did not advance beyond its cursor"
-                ));
-            }
+            return Err(eyre!(
+                "validation-fee proposal page did not advance beyond its cursor"
+            ));
         }
         if let Some(next_cursor) = result.next_cursor.as_deref() {
             if result.proposals.len() != limit_usize {
@@ -22700,13 +21886,8 @@ impl Client {
     }
 
     fn decode_node_capabilities_response(resp: &Response<Vec<u8>>) -> Result<norito::json::Value> {
-        Self::ensure_response_status(
-            &resp,
-            StatusCode::OK,
-            "Failed to get node capabilities",
-            " ",
-        )?;
-        let content_type = exact_single_response_header(&resp, "content-type")?;
+        Self::ensure_response_status(resp, StatusCode::OK, "Failed to get node capabilities", " ")?;
+        let content_type = exact_single_response_header(resp, "content-type")?;
         if !content_type.eq_ignore_ascii_case(APPLICATION_JSON)
             && !content_type.eq_ignore_ascii_case(APPLICATION_JSON_UTF8)
         {
@@ -25546,168 +24727,8 @@ fn join_torii_url_with_path_segments(url: &Url, path: &str, segments: &[&str]) -
 mod url_join_tests {
     include!("client/url_join_tests.rs");
 }
-/// Logic for asynchronous Iroha WebSocket streams.
-pub mod stream_api {
-    use super::*;
-    use crate::{
-        http::ws::conn_flow::{Events, Init, InitData},
-        http_default::DefaultWebSocketRequestBuilder,
-    };
-    use futures_util::{SinkExt, Stream, StreamExt};
-    fn validate_selected_subprotocol(response: &http_default::WebSocketResponse) -> Result<()> {
-        let selected = response
-            .headers()
-            .get(::http::header::SEC_WEBSOCKET_PROTOCOL)
-            .and_then(|value| value.to_str().ok());
-        if selected == Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL) {
-            Ok(())
-        } else {
-            Err(eyre!(
-                "Torii WebSocket did not select required subprotocol `{NORITO_V1_WEBSOCKET_SUBPROTOCOL}`"
-            ))
-        }
-    }
-    /// Async stream for getting messages from the `WebSocket` stream.
-    pub struct AsyncStream<E> {
-        stream: AsyncWebSocketStream,
-        handler: E,
-        terminated: bool,
-    }
-    impl<E> AsyncStream<E> {
-        /// Construct [`AsyncStream`] and send the subscription request.
-        ///
-        /// # Errors
-        /// - Request failed to build
-        /// - the asynchronous WebSocket connection failed
-        /// - Sending failed
-        /// - Message not received in stream during connection or subscription
-        /// - Message is an error
-        #[allow(clippy::future_not_send)]
-        pub async fn new<I: Init<DefaultWebSocketRequestBuilder>>(
-            handler: I,
-        ) -> Result<AsyncStream<I::Next>> {
-            trace!("Creating `AsyncStream`");
-            let InitData {
-                first_message,
-                req,
-                next: next_handler,
-            } = Init::<http_default::DefaultWebSocketRequestBuilder>::init(handler);
-            let (mut stream, response) = req.build()?.connect_with_response().await?;
-            validate_selected_subprotocol(&response)?;
-            stream
-                .send(WebSocketMessage::Binary(first_message.into()))
-                .await?;
-            trace!("`AsyncStream` created successfully");
-            Ok(AsyncStream {
-                stream,
-                handler: next_handler,
-                terminated: false,
-            })
-        }
-    }
-    impl<E: Send> AsyncStream<E> {
-        /// Close websocket
-        /// # Errors
-        /// - Server fails to send `Close` message
-        /// - Closing the websocket connection itself fails.
-        pub async fn close(mut self) {
-            let close = async {
-                <_ as SinkExt<_>>::close(&mut self.stream).await?;
-                Ok(())
-            };
-            trace!("Closing WebSocket connection");
-            let _ = close.await.map_err(|e: eyre::Report| error!(%e));
-            trace!("WebSocket connection closed");
-        }
-    }
-    impl<E: Events + Unpin> Stream for AsyncStream<E> {
-        type Item = Result<E::Event>;
-        fn poll_next(
-            mut self: std::pin::Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
-        ) -> std::task::Poll<Option<Self::Item>> {
-            if self.terminated {
-                return std::task::Poll::Ready(None);
-            }
-            loop {
-                break match futures_util::ready!(self.stream.poll_next_unpin(cx)) {
-                    Some(Ok(WebSocketMessage::Binary(message))) => {
-                        match self.handler.message(message.to_vec()) {
-                            Ok(event) => std::task::Poll::Ready(Some(Ok(event))),
-                            Err(err) => {
-                                self.terminated = true;
-                                std::task::Poll::Ready(Some(Err(eyre!(
-                                    "failed to decode Torii WebSocket binary message: {err}"
-                                ))))
-                            }
-                        }
-                    }
-                    Some(Ok(WebSocketMessage::Close(frame))) => {
-                        self.terminated = true;
-                        let error = match frame {
-                            Some(frame) if u16::from(frame.code) == 1000 => None,
-                            Some(frame) => Some(eyre!(
-                                "Torii WebSocket stream closed with code {}: {}",
-                                u16::from(frame.code),
-                                frame.reason
-                            )),
-                            None => {
-                                Some(eyre!("Torii WebSocket stream closed without a status code"))
-                            }
-                        };
-                        std::task::Poll::Ready(error.map(Err))
-                    }
-                    Some(Ok(WebSocketMessage::Ping(_) | WebSocketMessage::Pong(_))) => continue,
-                    Some(Ok(WebSocketMessage::Text(_))) => {
-                        self.terminated = true;
-                        std::task::Poll::Ready(Some(Err(eyre!(
-                            "Torii WebSocket sent an unexpected text data frame"
-                        ))))
-                    }
-                    Some(Ok(WebSocketMessage::Frame(_))) => {
-                        self.terminated = true;
-                        std::task::Poll::Ready(Some(Err(eyre!(
-                            "Torii WebSocket exposed an unexpected raw frame"
-                        ))))
-                    }
-                    Some(Err(err)) => {
-                        self.terminated = true;
-                        std::task::Poll::Ready(Some(Err(err.into())))
-                    }
-                    None => {
-                        self.terminated = true;
-                        std::task::Poll::Ready(None)
-                    }
-                };
-            }
-        }
-    }
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        fn upgrade_response(protocol: Option<&str>) -> http_default::WebSocketResponse {
-            let mut builder = ::http::Response::builder().status(101);
-            if let Some(protocol) = protocol {
-                builder = builder.header(::http::header::SEC_WEBSOCKET_PROTOCOL, protocol);
-            }
-            builder.body(None).expect("upgrade response")
-        }
-        #[test]
-        fn selected_subprotocol_must_match_exactly() {
-            validate_selected_subprotocol(&upgrade_response(Some(NORITO_V1_WEBSOCKET_SUBPROTOCOL)))
-                .expect("canonical protocol");
-            for protocol in [None, Some("IROHA-NORITO-V1"), Some("other-protocol")] {
-                let error = validate_selected_subprotocol(&upgrade_response(protocol))
-                    .expect_err("missing or different protocol must fail");
-                assert!(
-                    error
-                        .to_string()
-                        .contains("did not select required subprotocol")
-                );
-            }
-        }
-    }
-}
+/// Typed event and block subscription capabilities.
+pub mod streams;
 fn canonical_norito_websocket_headers(
     mut headers: HashMap<String, String>,
 ) -> Result<HashMap<String, String>> {
@@ -25733,7 +24754,7 @@ fn canonical_norito_websocket_headers(
     Ok(headers)
 }
 /// Logic related to Events API client implementation.
-pub mod events_api {
+mod events_api {
     use super::*;
     use crate::http::ws::{
         conn_flow::{Events as FlowEvents, Init as FlowInit, InitData},
@@ -25773,16 +24794,20 @@ pub mod events_api {
             }
         }
         impl<R: RequestBuilder> FlowInit<R> for Init {
-            type Next = Events;
-            fn init(self) -> InitData<R, Self::Next> {
+            fn init(self) -> crate::Result<InitData<R>> {
                 let Self {
                     url,
                     headers,
                     filters,
                 } = self;
-                let msg = norito::to_bytes(&EventSubscriptionRequest::new(filters))
-                    .expect("encode event subscription request");
-                InitData::new(R::new(HttpMethod::GET, url).headers(headers), msg, Events)
+                let msg = streams::encode_subscription(
+                    &EventSubscriptionRequest::new(filters),
+                    streams::EVENTS_OPERATION,
+                )?;
+                Ok(InitData::new(
+                    R::new(HttpMethod::GET, url).headers(headers),
+                    msg,
+                ))
             }
         }
         /// Events handler for Events API flow
@@ -25796,8 +24821,6 @@ pub mod events_api {
             }
         }
     }
-    /// Async stream for getting events from the `WebSocket` stream.
-    pub type AsyncEventStream = stream_api::AsyncStream<flow::Events>;
 }
 mod blocks_api {
     use super::*;
@@ -25838,16 +24861,20 @@ mod blocks_api {
             }
         }
         impl<R: RequestBuilder> FlowInit<R> for Init {
-            type Next = Events;
-            fn init(self) -> InitData<R, Self::Next> {
+            fn init(self) -> crate::Result<InitData<R>> {
                 let Self {
                     height,
                     headers,
                     url,
                 } = self;
-                let msg = norito::to_bytes(&BlockSubscriptionRequest::new(height))
-                    .expect("encode block subscription request");
-                InitData::new(R::new(HttpMethod::GET, url).headers(headers), msg, Events)
+                let msg = streams::encode_subscription(
+                    &BlockSubscriptionRequest::new(height),
+                    streams::BLOCKS_OPERATION,
+                )?;
+                Ok(InitData::new(
+                    R::new(HttpMethod::GET, url).headers(headers),
+                    msg,
+                ))
             }
         }
         /// Events handler for Blocks API flow
@@ -25861,8 +24888,6 @@ mod blocks_api {
             }
         }
     }
-    /// Async stream for getting blocks from the `WebSocket` stream.
-    pub type AsyncBlockStream = stream_api::AsyncStream<flow::Events>;
 }
 #[cfg(test)]
 mod tests {
@@ -25978,9 +25003,13 @@ mod tests {
     #[test]
     fn http_transport_is_shared_by_clones_and_isolated_between_contexts() {
         let config = config_factory();
-        let client = Client::new(config.clone());
+        let client = Client::builder(config.clone())
+            .build()
+            .expect("valid client configuration");
         let cloned = client.clone();
-        let separately_constructed = Client::new(config);
+        let separately_constructed = Client::builder(config)
+            .build()
+            .expect("valid client configuration");
 
         assert!(
             client
@@ -25999,8 +25028,12 @@ mod tests {
     #[test]
     fn immutable_authority_context_clones_share_only_their_originating_context() {
         let config = config_factory();
-        let first_client = Client::new(config.clone());
-        let second_client = Client::new(config);
+        let first_client = Client::builder(config.clone())
+            .build()
+            .expect("valid client configuration");
+        let second_client = Client::builder(config)
+            .build()
+            .expect("valid client configuration");
         let account = first_client
             .account_client()
             .expect("valid account context");
@@ -26030,10 +25063,14 @@ mod tests {
 
     #[test]
     fn transaction_draft_is_bound_to_each_immutable_account_context() {
-        let first_client = Client::new(config_factory());
+        let first_client = Client::builder(config_factory())
+            .build()
+            .expect("valid client configuration");
         let mut second_config = config_factory();
         second_config.network_id = foreign_alias_plan_network_id();
-        let second_client = Client::new(second_config);
+        let second_client = Client::builder(second_config)
+            .build()
+            .expect("valid client configuration");
         let draft = AccountTransactionDraft::new(
             Vec::<InstructionBox>::new(),
             FeePaymentIntent::authority(Vec::new(), None),
@@ -26057,35 +25094,35 @@ mod tests {
 
     #[test]
     fn authority_context_binding_rejects_ambiguous_or_unbound_identity_state() {
-        let mut client = Client::new(config_factory());
+        let mut client = Client::builder(config_factory());
         client.torii_url = "ftp://example.test/".parse().expect("URL fixture");
         assert!(matches!(
-            client.account_client(),
-            Err(AuthorityContextError::UnsupportedEndpointScheme { .. })
+            client.clone().build(),
+            Err(SdkError::Context(
+                AuthorityContextError::UnsupportedEndpointScheme { .. }
+            ))
         ));
 
         client.torii_url = "https://user:secret@example.test/"
             .parse()
             .expect("URL fixture");
         assert_eq!(
-            client.account_client().expect_err("embedded credentials"),
-            AuthorityContextError::EmbeddedEndpointCredentials
+            client.clone().build().expect_err("embedded credentials"),
+            SdkError::Context(AuthorityContextError::EmbeddedEndpointCredentials)
         );
 
         client.torii_url = "https://example.test/api".parse().expect("URL fixture");
         assert_eq!(
-            client
-                .account_client()
-                .expect_err("directory-form base URL"),
-            AuthorityContextError::EndpointPathMissingTrailingSlash
+            client.clone().build().expect_err("directory-form base URL"),
+            SdkError::Context(AuthorityContextError::EndpointPathMissingTrailingSlash)
         );
 
         client.torii_url = base_url();
         client.network_id = test_network_id();
         client.account = AccountId::new(checked_random_keypair().public_key().clone());
         assert_eq!(
-            client.account_client().expect_err("unbound account key"),
-            AuthorityContextError::AccountSigningKeyMismatch
+            client.clone().build().expect_err("unbound account key"),
+            SdkError::Context(AuthorityContextError::AccountSigningKeyMismatch)
         );
 
         let nonmember = checked_random_keypair();
@@ -26100,9 +25137,10 @@ mod tests {
         client.account = AccountId::new_multisig(policy);
         assert_eq!(
             client
-                .account_client()
+                .clone()
+                .build()
                 .expect_err("nonmember account key must not bind"),
-            AuthorityContextError::AccountSigningKeyNotMultisigMember
+            SdkError::Context(AuthorityContextError::AccountSigningKeyNotMultisigMember)
         );
     }
 
@@ -26148,30 +25186,30 @@ mod tests {
         let barrier = Arc::new(Barrier::new(2));
         let sends_a = Arc::new(AtomicUsize::new(0));
         let sends_b = Arc::new(AtomicUsize::new(0));
-        let client_a = Client::with_transport(
-            Config {
-                torii_api_url: base_url(),
-                ..config_factory()
-            },
-            Arc::new(TaggedTransport {
-                barrier: Arc::clone(&barrier),
-                expected_path: "/context-a",
-                response_body: b"transport-a",
-                sends: Arc::clone(&sends_a),
-            }),
-        );
-        let client_b = Client::with_transport(
-            Config {
-                torii_api_url: base_url(),
-                ..config_factory()
-            },
-            Arc::new(TaggedTransport {
-                barrier,
-                expected_path: "/context-b",
-                response_body: b"transport-b",
-                sends: Arc::clone(&sends_b),
-            }),
-        );
+        let client_a = Client::builder(Config {
+            torii_api_url: base_url(),
+            ..config_factory()
+        })
+        .http_transport(Arc::new(TaggedTransport {
+            barrier: Arc::clone(&barrier),
+            expected_path: "/context-a",
+            response_body: b"transport-a",
+            sends: Arc::clone(&sends_a),
+        }))
+        .build()
+        .expect("valid client configuration");
+        let client_b = Client::builder(Config {
+            torii_api_url: base_url(),
+            ..config_factory()
+        })
+        .http_transport(Arc::new(TaggedTransport {
+            barrier,
+            expected_path: "/context-b",
+            response_body: b"transport-b",
+            sends: Arc::clone(&sends_b),
+        }))
+        .build()
+        .expect("valid client configuration");
 
         let (body_a, body_b) = std::thread::scope(|scope| {
             let request_a = scope.spawn(|| {
@@ -26252,16 +25290,16 @@ mod tests {
 
         let sync_sends = Arc::new(AtomicUsize::new(0));
         let async_paths = Arc::new(Mutex::new(Vec::new()));
-        let client = Client::with_transport(
-            Config {
-                torii_api_url: base_url(),
-                ..config_factory()
-            },
-            Arc::new(AsyncTransactionTransport {
-                sync_sends: Arc::clone(&sync_sends),
-                async_paths: Arc::clone(&async_paths),
-            }),
-        );
+        let client = Client::builder(Config {
+            torii_api_url: base_url(),
+            ..config_factory()
+        })
+        .http_transport(Arc::new(AsyncTransactionTransport {
+            sync_sends: Arc::clone(&sync_sends),
+            async_paths: Arc::clone(&async_paths),
+        }))
+        .build()
+        .expect("valid client configuration");
         mark_data_model_compatible(&client);
         let transaction = empty_transaction(&client);
         let expected_hash = transaction.hash();
@@ -28805,8 +27843,9 @@ mod tests {
                 .expect_err(
                     "a correctly signed but noncanonical faucet metadata closure must fail",
                 );
-            assert!(
-                error.to_string().contains("was substituted"),
+            assert_eq!(
+                error.to_string(),
+                "prepared faucet transaction metadata differs from its exact binding and operation",
                 "{variant}: {error:#}"
             );
         }
@@ -28882,6 +27921,10 @@ mod tests {
         let marker_key: Name = FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
             .parse()
             .expect("faucet marker key");
+        assert_eq!(
+            original.metadata().get(&marker_key),
+            Some(&Json::new(FAUCET_CLAIM_MARKER_VERSION_V1))
+        );
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
 
         for (label, marker, extra_field) in [
@@ -28947,11 +27990,24 @@ mod tests {
                 &fee_payment,
             )
             .expect("canonical onboarding metadata must verify");
-        let mut metadata = original.metadata().clone();
-        metadata.insert(
+        let marker_key: Name =
             iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_METADATA_KEY
                 .parse()
-                .expect("faucet marker key"),
+                .expect("faucet marker key");
+        assert!(
+            expected_prepared_transaction_metadata(
+                &onboarding.binding,
+                AccountOnboardingPreparedTransactionV1::OPERATION,
+                &onboarding.semantic_hash_hex,
+            )
+            .expect("canonical onboarding metadata")
+            .get(&marker_key)
+            .is_none(),
+            "the claim marker belongs only to faucet transactions"
+        );
+        let mut metadata = original.metadata().clone();
+        metadata.insert(
+            marker_key,
             Json::new(iroha_data_model::transaction::FAUCET_CLAIM_MARKER_VERSION_V1),
         );
         let signer = KeyPair::try_from_seed(vec![0x51; 32], Algorithm::Ed25519)
@@ -30116,7 +29172,9 @@ mod tests {
         config.torii_api_url = "http://127.0.0.1:8080/"
             .parse()
             .expect("loopback fee-quote URL");
-        let client = Client::new(config);
+        let client = Client::builder(config)
+            .build()
+            .expect("valid client configuration");
         let payload = account_context(&client)
             .prepare_transaction(AccountTransactionDraft::new(
                 Vec::<InstructionBox>::new(),
@@ -30883,10 +29941,12 @@ mod tests {
     }
     #[test]
     fn prepare_transaction_reports_nonce_rng_failure_when_enabled() {
-        let client = Client::new(Config {
+        let client = Client::builder(Config {
             transaction_add_nonce: true,
             ..config_factory()
-        });
+        })
+        .build()
+        .expect("valid client configuration");
         let mut rng = FailingClientRng;
         let error = account_context(&client)
             .prepare_transaction_with_rng(
@@ -30908,10 +29968,12 @@ mod tests {
     }
     #[test]
     fn prepare_transaction_skips_rng_when_nonce_disabled() {
-        let client = Client::new(Config {
+        let client = Client::builder(Config {
             transaction_add_nonce: false,
             ..config_factory()
-        });
+        })
+        .build()
+        .expect("valid client configuration");
         let mut rng = FailingClientRng;
         let transaction = account_context(&client)
             .prepare_transaction_with_rng(
@@ -31210,7 +30272,8 @@ mod tests {
         .expect("init events handler");
         let init_data = <events_api::flow::Init as crate::http::ws::conn_flow::Init<
             crate::http_default::DefaultWebSocketRequestBuilder,
-        >>::init(init);
+        >>::init(init)
+        .expect("encode stream subscription");
         let decoded: EventSubscriptionRequest = norito::decode_from_bytes(&init_data.first_message)
             .expect("decode event subscription request");
         assert_eq!(decoded.filters, filters);
@@ -31291,7 +30354,8 @@ mod tests {
             .expect("construct authenticated events handler");
         let init_data = <events_api::flow::Init as crate::http::ws::conn_flow::Init<
             CapturedWebSocketRequestBuilder,
-        >>::init(init);
+        >>::init(init)
+        .expect("encode stream subscription");
         let request = init_data.req;
         let snapshot = RequestSnapshot {
             method: request.method,
@@ -31328,7 +30392,8 @@ mod tests {
             .expect("construct authenticated blocks handler");
         let init_data = <blocks_api::flow::Init as crate::http::ws::conn_flow::Init<
             CapturedWebSocketRequestBuilder,
-        >>::init(init);
+        >>::init(init)
+        .expect("encode stream subscription");
         let request = init_data.req;
         let snapshot = RequestSnapshot {
             method: request.method,
@@ -31389,7 +30454,8 @@ mod tests {
         .expect("init blocks handler");
         let init_data = <blocks_api::flow::Init as crate::http::ws::conn_flow::Init<
             crate::http_default::DefaultWebSocketRequestBuilder,
-        >>::init(init);
+        >>::init(init)
+        .expect("encode stream subscription");
         let decoded: BlockSubscriptionRequest = norito::decode_from_bytes(&init_data.first_message)
             .expect("decode block subscription request");
         assert_eq!(decoded.0, height);
@@ -32860,10 +31926,12 @@ mod tests {
     }
     #[test]
     fn txs_same_except_for_nonce_have_different_hashes() {
-        let client = Client::new(Config {
+        let client = Client::builder(Config {
             transaction_add_nonce: true,
             ..config_factory()
-        });
+        })
+        .build()
+        .expect("valid client configuration");
         let build_transaction = || {
             build_transaction(
                 &client,
@@ -33203,7 +32271,10 @@ mod tests {
             config.account = AccountId::new_multisig(
                 MultisigPolicy::new(1, vec![member]).expect("valid multisig policy"),
             );
-            let client = Client::new(config).with_test_http_transport(mock_transport.clone());
+            let client = Client::builder(config)
+                .build()
+                .expect("valid client configuration")
+                .with_test_http_transport(mock_transport.clone());
             let account = client
                 .account_client()
                 .expect("a configured multisig member can bind the account context");
@@ -33252,7 +32323,9 @@ mod tests {
         config.account = AccountId::new_multisig(
             MultisigPolicy::new(1, vec![member]).expect("valid multisig policy"),
         );
-        let client = Client::new(config);
+        let client = Client::builder(config)
+            .build()
+            .expect("valid client configuration");
         let account = client
             .account_client()
             .expect("configured multisig member binds an account context");
@@ -33353,15 +32426,15 @@ mod tests {
     #[tokio::test]
     async fn concurrent_capability_refreshes_are_single_flight() {
         let capability_requests = Arc::new(AtomicUsize::new(0));
-        let client = Client::with_transport(
-            Config {
-                torii_api_url: base_url(),
-                ..config_factory()
-            },
-            Arc::new(DelayedCapabilityTransport {
-                capability_requests: Arc::clone(&capability_requests),
-            }),
-        );
+        let client = Client::builder(Config {
+            torii_api_url: base_url(),
+            ..config_factory()
+        })
+        .http_transport(Arc::new(DelayedCapabilityTransport {
+            capability_requests: Arc::clone(&capability_requests),
+        }))
+        .build()
+        .expect("valid client configuration");
         let clone = client.clone();
         let (first, second) =
             tokio::join!(client.refresh_capabilities(), clone.refresh_capabilities());
@@ -33374,16 +32447,16 @@ mod tests {
     async fn async_compatibility_transport_failures_are_not_cached() {
         let capability_requests = Arc::new(AtomicUsize::new(0));
         let transaction_requests = Arc::new(AtomicUsize::new(0));
-        let client = Client::with_transport(
-            Config {
-                torii_api_url: base_url(),
-                ..config_factory()
-            },
-            Arc::new(RetryCapabilityTransport {
-                capability_requests: Arc::clone(&capability_requests),
-                transaction_requests: Arc::clone(&transaction_requests),
-            }),
-        );
+        let client = Client::builder(Config {
+            torii_api_url: base_url(),
+            ..config_factory()
+        })
+        .http_transport(Arc::new(RetryCapabilityTransport {
+            capability_requests: Arc::clone(&capability_requests),
+            transaction_requests: Arc::clone(&transaction_requests),
+        }))
+        .build()
+        .expect("valid client configuration");
         let transaction = empty_transaction(&client);
         let account = client.account_client().expect("valid account context");
         let error = account
@@ -33582,14 +32655,23 @@ mod tests {
             *client
                 .data_model_compatibility
                 .lock()
-                .expect("compatibility cache lock") = stale;
+                .expect("compatibility cache lock") = stale.clone();
             let (result, snapshots) =
                 capture_requests(empty_response(StatusCode::OK), |mock_transport| {
                     let client = client
                         .clone()
                         .with_test_http_transport(mock_transport.clone());
+                    client.store_compatibility_outcome(stale.clone());
 
-                    client.ensure_transaction_submit_compatibility()
+                    let result = client.ensure_transaction_submit_compatibility();
+                    assert!(!matches!(
+                        &*client
+                            .data_model_compatibility
+                            .lock()
+                            .expect("rebuilt compatibility cache"),
+                        DataModelCompatibility::SubmitCompatible
+                    ));
+                    result
                 });
 
             let _ = result.expect_err("cached incompatibility should remain a no-I/O fast failure");
@@ -33938,6 +33020,7 @@ mod tests {
                 client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"))
                     .with_test_http_transport(mock_transport.clone());
             mark_data_model_compatible(&client);
+
             client.torii_request_timeout = configured_timeout;
             client.transaction_status_timeout = Duration::from_millis(50);
             let transaction = empty_transaction(&client);
@@ -33961,7 +33044,7 @@ mod tests {
 
         let mut client =
             client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
-        mark_data_model_compatible(&client);
+
         client.transaction_status_timeout = Duration::from_millis(25);
         client.torii_request_timeout = Duration::from_secs(1);
         let transaction = empty_transaction(&client);
@@ -34004,6 +33087,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             crate::blocking::Client::from_client(client)
                 .expect("blocking client runtime should initialize")
                 .submit_transaction_and_wait(&transaction)
@@ -34023,7 +33107,7 @@ mod tests {
     #[test]
     fn nonblocking_queue_plan_exact_outcome_unknown_is_structured_and_never_retried() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let transaction = empty_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
@@ -34032,6 +33116,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.submit_transaction_for_test(&transaction)
         });
         let error = result.expect_err("nonblocking admission must remain ambiguous");
@@ -34049,7 +33134,7 @@ mod tests {
     #[test]
     fn nonblocking_prepared_queue_plan_exact_outcome_unknown_uses_local_identity() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let transaction = empty_transaction(&client);
         let payload = PreparedTransactionPayload::from_transaction(&transaction);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
@@ -34059,6 +33144,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
 
             client.submit_prepared_transaction_payload_for_test(&payload)
         });
@@ -34076,7 +33162,7 @@ mod tests {
     #[test]
     fn nonblocking_queue_plan_claimed_invalid_evidence_remains_ambiguous() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let transaction = empty_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
@@ -34091,6 +33177,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.submit_transaction_for_test(&transaction)
         });
         let error = result.expect_err("invalid claimed evidence cannot prove non-admission");
@@ -34110,7 +33197,7 @@ mod tests {
     #[test]
     fn nonblocking_queue_plan_post_dispatch_transport_error_remains_ambiguous() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let transaction = empty_transaction(&client);
         let identity = QueuePlanOutcomeUnknownIdentity::for_transaction(&transaction)
             .expect("client transaction must use QueuePlanSynced admission");
@@ -34128,6 +33215,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.submit_transaction_for_test(&transaction)
         })
         .expect_err("post-dispatch transport failure must remain ambiguous");
@@ -34289,7 +33377,7 @@ mod tests {
         let mut client = client_with_base_url(
             Url::parse("http://127.0.0.1:1/").expect("unreachable loopback URL"),
         );
-        mark_data_model_compatible(&client);
+
         client.transaction_status_timeout = Duration::from_secs(1);
         let transaction = empty_transaction(&client);
         let hash = transaction.hash();
@@ -34322,6 +33410,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             crate::blocking::Client::from_client(client)
                 .expect("blocking client runtime should initialize")
                 .submit_transaction_and_wait(&transaction)
@@ -34348,7 +33437,7 @@ mod tests {
     #[test]
     fn nonblocking_queue_plan_definite_http_rejection_stays_terminal() {
         let client = client_with_base_url(base_url());
-        mark_data_model_compatible(&client);
+
         let transaction = empty_transaction(&client);
         let response = json_response(
             StatusCode::BAD_REQUEST,
@@ -34358,6 +33447,7 @@ mod tests {
             let client = client
                 .clone()
                 .with_test_http_transport(mock_transport.clone());
+            mark_data_model_compatible(&client);
             client.submit_transaction_for_test(&transaction)
         });
         let error = result.expect_err("definite rejection must fail immediately");
@@ -34379,7 +33469,10 @@ mod tests {
                 torii_api_url: base_url(),
                 ..config_factory()
             };
-            let client_a = Client::new(config).with_test_http_transport(mock_transport.clone());
+            let client_a = Client::builder(config)
+                .build()
+                .expect("valid client configuration")
+                .with_test_http_transport(mock_transport.clone());
             let client_b = client_a.clone();
             let tx_a = build_transaction(
                 &client_a,
@@ -34428,8 +33521,14 @@ mod tests {
                 ..config_factory()
             };
             let clients = [
-                Client::new(config.clone()).with_test_http_transport(mock_transport.clone()),
-                Client::new(config).with_test_http_transport(mock_transport.clone()),
+                Client::builder(config.clone())
+                    .build()
+                    .expect("valid client configuration")
+                    .with_test_http_transport(mock_transport.clone()),
+                Client::builder(config)
+                    .build()
+                    .expect("valid client configuration")
+                    .with_test_http_transport(mock_transport.clone()),
             ];
             for client in clients {
                 let transaction = build_transaction(
@@ -34467,11 +33566,14 @@ mod tests {
             }),
             ..config_factory()
         };
-        let client = Client::with_headers(config, HashMap::new());
+        let client = Client::builder(config)
+            .headers(HashMap::new())
+            .build()
+            .expect("valid client configuration");
         let value = client
             .headers
-            .get("Authorization")
-            .expect("Expected `Authorization` header");
+            .get("authorization")
+            .expect("Expected canonical `authorization` header");
         let expected_value = format!("Basic {ENCRYPTED_CREDENTIALS}");
         assert_eq!(value, &expected_value);
     }
@@ -34554,16 +33656,24 @@ mod tests {
         }
     }
     #[test]
-    fn get_config_includes_operator_signature_headers_when_key_configured() {
-        let mut client = client_with_base_url(base_url());
-        client.set_operator_key_pair(checked_random_keypair());
+    fn configuration_capability_includes_operator_signature_headers() {
+        let client = client_with_base_url(base_url());
+        let mut builder = client.to_builder();
+        builder.operator_key_pair = Some(checked_random_keypair());
+        let client = builder.build().expect("valid operator client");
         let (result, snapshot) =
             capture_request(empty_response(StatusCode::UNAUTHORIZED), |mock_transport| {
                 let client = client
                     .clone()
                     .with_test_http_transport(mock_transport.clone());
 
-                client.get_config()
+                let key = client.operator_key_pair().unwrap().clone();
+                crate::blocking::Client::from_client(client)
+                    .unwrap()
+                    .operator_client(key)
+                    .unwrap()
+                    .configuration()
+                    .get()
             });
         let _ = result.expect_err("mocked unauthorized response should fail");
         assert_eq!(snapshot.method, HttpMethod::GET);
@@ -34572,8 +33682,10 @@ mod tests {
     }
     #[test]
     fn trigger_completion_history_uses_operator_signature_bound_to_query() {
-        let mut client = client_with_base_url(base_url());
-        client.set_operator_key_pair(checked_random_keypair());
+        let client = client_with_base_url(base_url());
+        let mut builder = client.to_builder();
+        builder.operator_key_pair = Some(checked_random_keypair());
+        let client = builder.build().expect("valid operator client");
         let (result, snapshot) =
             capture_request(empty_response(StatusCode::UNAUTHORIZED), |mock_transport| {
                 let client = client
@@ -34856,7 +33968,8 @@ mod tests {
         })
         .unwrap();
         let response = mk_response(StatusCode::OK, body, Some(APPLICATION_JSON));
-        let decoded = Client::decode_status_for_test(&response).expect("json fallback should work");
+        let decoded = status::decode_response(response, WireFormatPreference::NoritoPreferred)
+            .expect("json fallback should work");
         assert_eq!(decoded.peers, 0);
     }
     #[test]
@@ -34869,7 +33982,8 @@ mod tests {
         };
         let body = norito::to_bytes(&status).expect("serialize status");
         let response = mk_response(StatusCode::OK, body, Some(APPLICATION_NORITO));
-        let decoded = Client::decode_status_for_test(&response).expect("framed decode should work");
+        let decoded = status::decode_response(response, WireFormatPreference::NoritoPreferred)
+            .expect("framed decode should work");
         assert_eq!(decoded.peers, status.peers);
         assert_eq!(decoded.blocks, status.blocks);
     }
@@ -35530,7 +34644,9 @@ mod tests {
     }
     #[test]
     fn sorafs_pin_filter_sets_query_params() {
-        let client = Client::new(config_factory());
+        let client = Client::builder(config_factory())
+            .build()
+            .expect("valid client configuration");
         let mut url = join_torii_url(&client.torii_url, "v1/sorafs/pin");
         let block_hash = "11".repeat(32);
         let after_digest = "22".repeat(32);
@@ -35561,7 +34677,9 @@ mod tests {
         ($name:ident, $path:literal, $filter:expr, $expected:expr $(,)?) => {
             #[test]
             fn $name() {
-                let client = Client::new(config_factory());
+                let client = Client::builder(config_factory())
+                    .build()
+                    .expect("valid client configuration");
                 let mut url = join_torii_url(&client.torii_url, $path);
                 $filter.apply_to_url(&mut url);
                 assert_eq!(url.query(), Some($expected));
@@ -39567,7 +38685,7 @@ mod response_report {
         for content_type in [APPLICATION_NORITO, APPLICATION_JSON] {
             let response = outcome_unknown_response(&identity, &envelope, content_type);
             assert_eq!(
-                classify_queue_plan_outcome_unknown_response(&response, &identity),
+                queue_plan_error::classify(&response, &identity),
                 Ok(Some(identity.clone()))
             );
         }
@@ -39579,7 +38697,7 @@ mod response_report {
         missing_envelope.details.as_mut().expect("details").tx_hash = None;
         let missing = outcome_unknown_response(&identity, &missing_envelope, APPLICATION_NORITO);
         assert!(
-            classify_queue_plan_outcome_unknown_response(&missing, &identity)
+            queue_plan_error::classify(&missing, &identity)
                 .expect_err("missing signed identity must fail closed")
                 .contains("signed-transaction identity")
         );
@@ -39591,7 +38709,7 @@ mod response_report {
             APPLICATION_NORITO,
         );
         assert!(
-            classify_queue_plan_outcome_unknown_response(&mismatched, &identity)
+            queue_plan_error::classify(&mismatched, &identity)
                 .expect_err("mismatched identities must fail closed")
                 .contains("entrypoint header")
         );
@@ -39605,7 +38723,7 @@ mod response_report {
             .headers_mut()
             .remove(SIGNED_TRANSACTION_HASH_HEADER);
         assert!(
-            classify_queue_plan_outcome_unknown_response(&missing_header, &identity)
+            queue_plan_error::classify(&missing_header, &identity)
                 .expect_err("missing signed identity header must fail closed")
                 .contains("signed-transaction header")
         );
@@ -39620,7 +38738,7 @@ mod response_report {
             .headers_mut()
             .remove(http::header::CONTENT_TYPE);
         assert!(
-            classify_queue_plan_outcome_unknown_response(&missing_content_type, &identity)
+            queue_plan_error::classify(&missing_content_type, &identity)
                 .expect_err("missing content type must fail closed")
                 .contains("content-type")
         );
@@ -39632,7 +38750,7 @@ mod response_report {
             .remove(http::header::CONTENT_TYPE);
         body_only_claim.headers_mut().remove("x-iroha-reject-code");
         assert!(
-            classify_queue_plan_outcome_unknown_response(&body_only_claim, &identity)
+            queue_plan_error::classify(&body_only_claim, &identity)
                 .expect_err("a decodable body claim must remain ambiguous without claim headers")
                 .contains("reject-code header")
         );
@@ -39643,7 +38761,7 @@ mod response_report {
             .body(format!(r#"{{"code":"{QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE}""#).into_bytes())
             .expect("malformed body-only claim response");
         assert!(
-            classify_queue_plan_outcome_unknown_response(&malformed_body_claim, &identity)
+            queue_plan_error::classify(&malformed_body_claim, &identity)
                 .expect_err("a malformed body claim must remain ambiguous")
                 .contains("reject-code header")
         );
@@ -39651,7 +38769,7 @@ mod response_report {
         let mut noncanonical = outcome_unknown_response(&identity, &envelope, APPLICATION_JSON);
         noncanonical.body_mut().push(b' ');
         assert!(
-            classify_queue_plan_outcome_unknown_response(&noncanonical, &identity)
+            queue_plan_error::classify(&noncanonical, &identity)
                 .expect_err("noncanonical envelope bytes must fail closed")
                 .contains("not canonical")
         );
@@ -39663,7 +38781,7 @@ mod response_report {
             ::http::HeaderValue::from_static(APPLICATION_NORITO),
         );
         assert!(
-            classify_queue_plan_outcome_unknown_response(&duplicate_content_type, &identity)
+            queue_plan_error::classify(&duplicate_content_type, &identity)
                 .expect_err("duplicate content type must fail closed")
                 .contains("content-type")
         );
@@ -39676,7 +38794,7 @@ mod response_report {
                 .expect("hash header"),
         );
         assert!(
-            classify_queue_plan_outcome_unknown_response(&duplicate_entrypoint_header, &identity)
+            queue_plan_error::classify(&duplicate_entrypoint_header, &identity)
                 .expect_err("duplicate entrypoint identity must fail closed")
                 .contains("entrypoint header")
         );
@@ -39689,7 +38807,7 @@ mod response_report {
                 .expect("hash header"),
         );
         assert!(
-            classify_queue_plan_outcome_unknown_response(&duplicate_signed_header, &identity)
+            queue_plan_error::classify(&duplicate_signed_header, &identity)
                 .expect_err("duplicate signed-transaction identity must fail closed")
                 .contains("signed-transaction header")
         );
@@ -39705,10 +38823,7 @@ mod response_report {
             .header("x-iroha-reject-code", "transaction_rejected")
             .body(body)
             .expect("generic rejection response");
-        assert_eq!(
-            classify_queue_plan_outcome_unknown_response(&response, &identity),
-            Ok(None)
-        );
+        assert_eq!(queue_plan_error::classify(&response, &identity), Ok(None));
     }
     #[test]
     fn json_media_types_are_limited_to_application_types() {
@@ -39897,4 +39012,12 @@ mod response_report {
         assert!(text.contains("fanout attempted: 3"));
         assert!(text.contains("fanout succeeded: 1"));
     }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_contract_code_frame_identity() {
+    crate::frame_identity_tests::assert_bidirectional::<ContractCodeBytesResponse>(
+        "iroha::client::ContractCodeBytesResponse",
+    );
 }

@@ -9,12 +9,23 @@ use norito::{
     from_bytes, to_bytes,
 };
 use std::sync::{Mutex, OnceLock};
-#[derive(Debug, Clone, IntoSchema, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+#[derive(
+    Debug,
+    Clone,
+    IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.frame_payload_ctx.FrameSample")]
 struct FrameSample {
     code: u32,
     message: String,
 }
-#[derive(Debug, Clone, IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, IntoSchema, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.frame_payload_ctx.OtherSample")]
 struct OtherSample(u32);
 fn frame_lock() -> &'static Mutex<()> {
     static FRAME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
@@ -53,8 +64,10 @@ fn frame_current_payload_rejects_schema_mismatch() {
     };
     let bytes = to_bytes(&sample).expect("encode sample");
     let (_, body) = bytes.split_at(norito::core::Header::SIZE);
-    let _ctx =
-        PayloadCtxGuard::enter_with_schema(body, <OtherSample as NoritoSerialize>::schema_hash());
+    let _ctx = PayloadCtxGuard::enter_with_schema(
+        body,
+        norito::schema::identity::frame_hash::<OtherSample>(),
+    );
     let err = frame_current_payload_with_default_header::<FrameSample>()
         .expect_err("schema mismatch should error");
     assert!(matches!(err, CoreError::SchemaMismatch));

@@ -10,9 +10,7 @@ use eyre::{Error, Result, WrapErr, eyre};
 use http::header::{HeaderName, HeaderValue};
 use reqwest::blocking::Client as BlockingClient;
 use std::sync::{Arc, OnceLock};
-pub use tungstenite::Message as WebSocketMessage;
 use tungstenite::client::IntoClientRequest;
-pub use tungstenite::handshake::client::Response as WebSocketResponse;
 use url::Url;
 type Bytes = Vec<u8>;
 const DEFAULT_MAX_RESPONSE_BYTES: usize = 64 * 1024 * 1024;
@@ -44,18 +42,18 @@ struct ReqwestHttpTransport {
 
 impl DefaultHttpTransport {
     /// Construct isolated lazy blocking and eager asynchronous HTTP connection pools.
-    pub(crate) fn new() -> Self {
-        Self {
+    pub(crate) fn new() -> crate::Result<Self> {
+        Ok(Self {
             inner: Arc::new(ReqwestHttpTransport {
                 // Building reqwest's blocking client briefly enters an internal
                 // runtime. Defer that work until a checked blocking send so
                 // constructing an async SDK context inside Tokio stays safe.
                 blocking: OnceLock::new(),
                 blocking_direct_loopback: OnceLock::new(),
-                asynchronous: build_async_http_client(),
-                asynchronous_direct_loopback: build_direct_loopback_async_http_client(),
+                asynchronous: build_async_http_client()?,
+                asynchronous_direct_loopback: build_direct_loopback_async_http_client()?,
             }),
-        }
+        })
     }
 
     pub(crate) fn from_shared(transport: Arc<dyn HttpTransport>) -> Self {
@@ -129,6 +127,21 @@ pub struct DefaultRequestBuilder {
     transport: Option<DefaultHttpTransport>,
 }
 impl DefaultRequestBuilder {
+    /// Select one authoritative value for an operation-owned request header.
+    pub(crate) fn replace_header<K: AsRef<str>, V: ToString + ?Sized>(
+        self,
+        key: K,
+        value: &V,
+    ) -> Self {
+        self.and_then(|mut pending| {
+            let name = header_name_from_str(key.as_ref())?;
+            let value = HeaderValue::from_str(&value.to_string())
+                .wrap_err_with(|| format!("Failed to parse header value for {name}"))?;
+            pending.headers.retain(|(existing, _)| existing != name);
+            pending.headers.push((name, value));
+            Ok(pending)
+        })
+    }
     /// Apply `.and_then()` semantics to the inner `Result` with underlying request state.
     fn and_then<F>(self, fun: F) -> Self
     where
@@ -480,7 +493,7 @@ impl DefaultWebSocketRequestBuilder {
         Self(self.0.and_then(func))
     }
     /// Consumes itself to build request.
-    pub fn build(self) -> Result<DefaultWebSocketStreamRequest> {
+    pub fn build(self) -> Result<http::Request<()>> {
         let builder = self.0?;
         let mut request = builder
             .uri_ref()
@@ -492,20 +505,7 @@ impl DefaultWebSocketRequestBuilder {
         {
             request.headers_mut().entry(header).or_insert(value.clone());
         }
-        Ok(DefaultWebSocketStreamRequest(request))
-    }
-}
-/// `WebSocket` request built by [`DefaultWebSocketRequestBuilder`]
-pub struct DefaultWebSocketStreamRequest(http::Request<()>);
-impl DefaultWebSocketStreamRequest {
-    /// Open [`AsyncWebSocketStream`].
-    pub async fn connect(self) -> Result<AsyncWebSocketStream> {
-        let (stream, _) = self.connect_with_response().await?;
-        Ok(stream)
-    }
-    /// Open [`AsyncWebSocketStream`] and retain the HTTP upgrade response.
-    pub async fn connect_with_response(self) -> Result<(AsyncWebSocketStream, WebSocketResponse)> {
-        Ok(tokio_tungstenite::connect_async(self.0).await?)
+        Ok(request)
     }
 }
 impl RequestBuilder for DefaultWebSocketRequestBuilder {
@@ -530,8 +530,6 @@ impl RequestBuilder for DefaultWebSocketRequestBuilder {
         })
     }
 }
-pub type AsyncWebSocketStream =
-    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 fn blocking_http_client_builder() -> reqwest::blocking::ClientBuilder {
     BlockingClient::builder()
         // This transport carries one-shot signed requests. Following a redirect
@@ -546,10 +544,12 @@ fn build_http_client() -> BlockingClient {
         .build()
         .expect("Failed to build blocking HTTP client")
 }
-fn build_async_http_client() -> reqwest::Client {
+fn build_async_http_client() -> crate::Result<reqwest::Client> {
     async_http_client_builder()
         .build()
-        .expect("Failed to build async HTTP client")
+        .map_err(|error| crate::Error::TransportConstruction {
+            details: error.to_string(),
+        })
 }
 fn async_http_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
@@ -570,7 +570,7 @@ fn build_direct_loopback_http_client() -> BlockingClient {
         .build()
         .expect("Failed to build direct loopback HTTP client")
 }
-fn build_direct_loopback_async_http_client() -> reqwest::Client {
+fn build_direct_loopback_async_http_client() -> crate::Result<reqwest::Client> {
     let addresses = [
         std::net::SocketAddr::from(([127, 0, 0, 1], 0)),
         std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 0)),
@@ -579,7 +579,9 @@ fn build_direct_loopback_async_http_client() -> reqwest::Client {
         .no_proxy()
         .resolve_to_addrs("localhost", &addresses)
         .build()
-        .expect("Failed to build direct loopback async HTTP client")
+        .map_err(|error| crate::Error::TransportConstruction {
+            details: error.to_string(),
+        })
 }
 struct ClientResponse {
     response: reqwest::blocking::Response,
@@ -715,7 +717,8 @@ mod tests {
     };
 
     fn owned_request_builder(method: Method, url: Url) -> DefaultRequestBuilder {
-        DefaultRequestBuilder::new(method, url).with_transport(DefaultHttpTransport::new())
+        DefaultRequestBuilder::new(method, url)
+            .with_transport(DefaultHttpTransport::new().expect("test HTTP transport"))
     }
 
     fn mocked_request_builder(
@@ -729,7 +732,7 @@ mod tests {
 
     #[tokio::test]
     async fn default_transport_construction_is_safe_inside_async_runtime() {
-        let transport = DefaultHttpTransport::new();
+        let transport = DefaultHttpTransport::new().expect("test HTTP transport");
         let clone = transport.clone();
         assert!(transport.shares_pools_with(&clone));
         drop(clone);
@@ -809,6 +812,10 @@ mod tests {
             loop {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Accepted sockets can inherit the listener's nonblocking mode.
+                        stream
+                            .set_nonblocking(false)
+                            .expect("blocking proxy test stream");
                         stream
                             .set_read_timeout(Some(Duration::from_secs(1)))
                             .expect("proxy test stream read timeout");

@@ -5,7 +5,7 @@ use crate::{
     codec::{encode_adaptive, encode_with_header_flags},
 };
 use crc64fast::Digest;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 #[test]
 fn encoder_sink_paths_produce_identical_bytes() {
     let value = 0xA1B2_C3D4_E5F6_0718_u64;
@@ -273,6 +273,8 @@ fn decode_field_prefix_allows_trailing_bytes_and_reports_consumption() {
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[norito(decode_from_slice)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[derive(crate::NoritoSchema)]
+#[norito_schema(name = "norito.test.core.tests.PrefixRecord")]
 struct PrefixRecord {
     label: String,
     count: u32,
@@ -346,14 +348,14 @@ impl Drop for DropAfterLengthMismatch {
         FIELD_SLOT_DROPS.fetch_add(1, Ordering::Relaxed);
     }
 }
-impl NoritoSerialize for DropAfterLengthMismatch {}
+
 impl SerializePayload for DropAfterLengthMismatch {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         writer.write_all(&[0])?;
         Ok(())
     }
 }
-impl NoritoDeserialize<'_> for DropAfterLengthMismatch {}
+
 impl<'de> DeserializePayload<'de> for DropAfterLengthMismatch {
     fn deserialize(_archived: &'de Archived<Self>) -> Self {
         Self
@@ -371,13 +373,13 @@ fn erased_field_slot_drops_value_after_consumption_error() {
 fn erased_field_decoder_preserves_panic_type_name() {
     #[derive(Debug)]
     struct PanicDuringFieldDecode;
-    impl NoritoSerialize for PanicDuringFieldDecode {}
+
     impl SerializePayload for PanicDuringFieldDecode {
         fn serialize(&self, _encoder: &mut Encoder<'_>) -> Result<(), Error> {
             Ok(())
         }
     }
-    impl NoritoDeserialize<'_> for PanicDuringFieldDecode {}
+
     impl<'de> DeserializePayload<'de> for PanicDuringFieldDecode {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             panic!("intentional field decode panic")
@@ -415,7 +417,7 @@ fn decode_archived_field_uses_one_charged_overaligned_copy() {
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     #[repr(C, align(64))]
     struct OveralignedField([u8; 64]);
-    impl NoritoDeserialize<'_> for OveralignedField {}
+
     impl<'de> DeserializePayload<'de> for OveralignedField {
         fn deserialize(archived: &'de Archived<Self>) -> Self {
             DECODED_ADDRESS.store(
@@ -470,7 +472,7 @@ fn decode_archived_field_charges_padding_and_aligned_copy() {
     #[derive(Debug, PartialEq, Eq)]
     #[repr(C, align(64))]
     struct ShortOveralignedField([u8; 64]);
-    impl NoritoDeserialize<'_> for ShortOveralignedField {}
+
     impl<'de> DeserializePayload<'de> for ShortOveralignedField {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             Self([0; 64])
@@ -516,7 +518,7 @@ fn decode_archived_field_charges_padding_and_aligned_copy() {
 fn decode_archived_field_preserves_deserializer_errors() {
     #[derive(Debug)]
     struct Rejected;
-    impl NoritoDeserialize<'_> for Rejected {}
+
     impl<'de> DeserializePayload<'de> for Rejected {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             unreachable!("the fallible implementation is used by the helper")
@@ -533,7 +535,7 @@ fn decode_archived_field_preserves_deserializer_errors() {
 fn decode_archived_field_contains_deserializer_panics() {
     #[derive(Debug)]
     struct PanicDuringArchivedFieldDecode;
-    impl NoritoDeserialize<'_> for PanicDuringArchivedFieldDecode {}
+
     impl<'de> DeserializePayload<'de> for PanicDuringArchivedFieldDecode {
         fn deserialize(_archived: &'de Archived<Self>) -> Self {
             panic!("intentional archived-field panic")
@@ -715,7 +717,29 @@ fn decode_field_canonical_propagates_access_from_misaligned_copy() {
         "outer payload ctx must observe canonical consumption from misaligned decode"
     );
 }
-static PANIC_ON_SERIALIZE: AtomicBool = AtomicBool::new(false);
+thread_local! {
+    // Each libtest thread owns its decode-recomputation sentinel.
+    static PANIC_ON_SERIALIZE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+#[test]
+fn decode_recomputation_sentinels_are_isolated_between_threads() {
+    let barrier = std::sync::Barrier::new(2);
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            PANIC_ON_SERIALIZE.set(true);
+            barrier.wait();
+            barrier.wait();
+            assert!(PANIC_ON_SERIALIZE.get());
+            PANIC_ON_SERIALIZE.set(false);
+        });
+        scope.spawn(|| {
+            barrier.wait();
+            let other_thread_is_clear = !PANIC_ON_SERIALIZE.get();
+            barrier.wait();
+            assert!(other_thread_is_clear);
+        });
+    });
+}
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 struct CanonicalStruct {
@@ -726,10 +750,10 @@ struct CanonicalStruct {
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalStructNoRecompute(CanonicalStruct);
-impl NoritoSerialize for CanonicalStructNoRecompute {}
+
 impl SerializePayload for CanonicalStructNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
+        if PANIC_ON_SERIALIZE.get() {
             panic!("serialize called during canonical decode recompute");
         }
         self.0.serialize(writer)
@@ -741,7 +765,7 @@ impl SerializePayload for CanonicalStructNoRecompute {
         self.0.encoded_len_exact()
     }
 }
-impl NoritoDeserialize<'_> for CanonicalStructNoRecompute {}
+
 impl<'a> DeserializePayload<'a> for CanonicalStructNoRecompute {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CanonicalStructNoRecompute decode")
@@ -753,7 +777,7 @@ impl<'a> DeserializePayload<'a> for CanonicalStructNoRecompute {
 }
 #[test]
 fn decode_field_canonical_does_not_recompute_for_derived_struct() {
-    PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
+    PANIC_ON_SERIALIZE.set(false);
     reset_decode_state();
     let value = CanonicalStructNoRecompute(CanonicalStruct {
         a: 0xAABBCCDD,
@@ -761,12 +785,12 @@ fn decode_field_canonical_does_not_recompute_for_derived_struct() {
         c: Some(vec![9, 8, 7]),
     });
     let encoded = encode_adaptive(&value);
-    PANIC_ON_SERIALIZE.store(true, Ordering::Relaxed);
+    PANIC_ON_SERIALIZE.set(true);
     let (decoded, used) =
         decode_field_canonical::<CanonicalStructNoRecompute>(&encoded).expect("decode struct");
     assert_eq!(used, encoded.len());
     assert_eq!(decoded, value);
-    PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
+    PANIC_ON_SERIALIZE.set(false);
 }
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 #[cfg_attr(feature = "schema-structural", derive(iroha_schema::TypeId))]
@@ -821,10 +845,10 @@ impl iroha_schema::IntoSchema for CanonicalEnum {
 #[repr(transparent)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct CanonicalEnumNoRecompute(CanonicalEnum);
-impl NoritoSerialize for CanonicalEnumNoRecompute {}
+
 impl SerializePayload for CanonicalEnumNoRecompute {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
-        if PANIC_ON_SERIALIZE.load(Ordering::Relaxed) {
+        if PANIC_ON_SERIALIZE.get() {
             panic!("serialize called during canonical decode recompute");
         }
         self.0.serialize(writer)
@@ -836,7 +860,7 @@ impl SerializePayload for CanonicalEnumNoRecompute {
         self.0.encoded_len_exact()
     }
 }
-impl NoritoDeserialize<'_> for CanonicalEnumNoRecompute {}
+
 impl<'a> DeserializePayload<'a> for CanonicalEnumNoRecompute {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("CanonicalEnumNoRecompute decode")
@@ -848,19 +872,19 @@ impl<'a> DeserializePayload<'a> for CanonicalEnumNoRecompute {
 }
 #[test]
 fn decode_field_canonical_does_not_recompute_for_derived_enum() {
-    PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
+    PANIC_ON_SERIALIZE.set(false);
     reset_decode_state();
     let value = CanonicalEnumNoRecompute(CanonicalEnum::Many {
         a: 0x01020304,
         b: vec![0xAA, 0xBB, 0xCC],
     });
     let encoded = encode_adaptive(&value);
-    PANIC_ON_SERIALIZE.store(true, Ordering::Relaxed);
+    PANIC_ON_SERIALIZE.set(true);
     let (decoded, used) =
         decode_field_canonical::<CanonicalEnumNoRecompute>(&encoded).expect("decode enum");
     assert_eq!(used, encoded.len());
     assert_eq!(decoded, value);
-    PANIC_ON_SERIALIZE.store(false, Ordering::Relaxed);
+    PANIC_ON_SERIALIZE.set(false);
 }
 #[test]
 fn decode_field_canonical_handles_misaligned_payload() {
@@ -880,6 +904,9 @@ fn decode_field_canonical_handles_misaligned_payload() {
     assert_eq!(decoded, value);
     assert_eq!(used, encoded.len());
 }
+#[path = "prepared_slice_prefix_tests.rs"]
+mod prepared_slice_prefix_tests;
+
 #[test]
 fn context_field_helpers_decode_framed_fields_and_require_full_consumption() {
     reset_decode_state();
@@ -1037,8 +1064,10 @@ fn byte_sink_with_headroom_from_preserves_capacity() {
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
 #[cfg_attr(feature = "schema-structural", schema(transparent = "u32"))]
+#[derive(crate::NoritoSchema)]
+#[norito_schema(name = "norito.test.core.tests.BadExactLen")]
 struct BadExactLen(u32);
-impl crate::NoritoSerialize for BadExactLen {}
+
 impl crate::SerializePayload for BadExactLen {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         crate::SerializePayload::serialize(&self.0, encoder)
@@ -1047,7 +1076,7 @@ impl crate::SerializePayload for BadExactLen {
         Some(1)
     }
 }
-impl crate::NoritoDeserialize<'_> for BadExactLen {}
+
 impl<'de> crate::DeserializePayload<'de> for BadExactLen {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("BadExactLen decode must succeed")
@@ -1068,7 +1097,7 @@ impl<'a> DecodeFromSlice<'a> for BadExactLen {
 const HOSTILE_GROWTH_CHUNK_BYTES: usize = 4 * 1024;
 const HOSTILE_GROWTH_WRITES: usize = 256;
 struct HostileGrowingSecondPass(std::cell::Cell<usize>);
-impl NoritoSerialize for HostileGrowingSecondPass {}
+
 impl SerializePayload for HostileGrowingSecondPass {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         let pass = self.0.get();
@@ -1119,8 +1148,10 @@ fn bounded_frame_matches_canonical_bytes_at_exact_limit() {
 #[test]
 fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
     use std::cell::Cell;
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.tests.CountCalls")]
     struct CountCalls(Cell<usize>);
-    impl NoritoSerialize for CountCalls {}
+
     impl SerializePayload for CountCalls {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.0.set(self.0.get() + 1);
@@ -1146,8 +1177,10 @@ fn bounded_frame_rejects_one_byte_below_real_count_before_second_pass() {
 #[test]
 fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
     use std::cell::Cell;
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.tests.GrowingSecondPass")]
     struct GrowingSecondPass(Cell<usize>);
-    impl NoritoSerialize for GrowingSecondPass {}
+
     impl SerializePayload for GrowingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
@@ -1167,8 +1200,10 @@ fn bounded_frame_rejects_second_pass_growth_past_counted_capacity() {
 #[test]
 fn bounded_frame_rejects_second_pass_shrinkage() {
     use std::cell::Cell;
+    #[derive(crate::NoritoSchema)]
+    #[norito_schema(name = "norito.test.core.tests.ShrinkingSecondPass")]
     struct ShrinkingSecondPass(Cell<usize>);
-    impl NoritoSerialize for ShrinkingSecondPass {}
+
     impl SerializePayload for ShrinkingSecondPass {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();
@@ -1200,7 +1235,7 @@ fn write_len_prefixed_streams_unhinted_field_without_staging() {
         bytes: &'a [u8],
         visits: std::cell::Cell<usize>,
     }
-    impl NoritoSerialize for UnhintedField<'_> {}
+
     impl SerializePayload for UnhintedField<'_> {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             self.visits.set(self.visits.get() + 1);
@@ -1298,11 +1333,15 @@ fn serialize_to_writer_exact_rejects_growth_before_forwarding_it() {
 }
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[derive(crate::NoritoSchema)]
+#[norito_schema(name = "norito.test.core.tests.BadExactWrapper")]
 struct BadExactWrapper {
     inner: BadExactLen,
 }
 #[derive(Clone, Debug, PartialEq, crate::Encode, crate::Decode)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[derive(crate::NoritoSchema)]
+#[norito_schema(name = "norito.test.core.tests.BadExactEnum")]
 enum BadExactEnum {
     One(BadExactLen),
 }
@@ -1327,6 +1366,8 @@ fn derived_enum_ignores_untrusted_exact_field_length() {
 
 #[derive(crate::Encode)]
 #[cfg_attr(feature = "schema-structural", derive(::iroha_schema::IntoSchema))]
+#[derive(crate::NoritoSchema)]
+#[norito_schema(name = "norito.test.core.tests.RecursiveEncodeNode")]
 struct RecursiveEncodeNode {
     children: Vec<Self>,
 }
@@ -1385,7 +1426,7 @@ fn result_uses_actual_length_prefix() {
 }
 #[derive(Clone, Copy)]
 struct RootAware(u32);
-impl crate::NoritoSerialize for RootAware {}
+
 impl crate::SerializePayload for RootAware {
     fn serialize(&self, encoder: &mut Encoder<'_>) -> Result<(), Error> {
         crate::SerializePayload::serialize(&self.0, encoder)
@@ -1397,7 +1438,7 @@ impl crate::SerializePayload for RootAware {
         crate::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl crate::NoritoDeserialize<'_> for RootAware {}
+
 impl<'de> crate::DeserializePayload<'de> for RootAware {
     fn deserialize(archived: &'de Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("RootAware decode must succeed")
@@ -1932,7 +1973,15 @@ fn decode_flags_guard_overrides_active_payload_context() {
     }
     reset_decode_state();
 }
-#[derive(Debug, PartialEq, iroha_schema::IntoSchema, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Debug,
+    PartialEq,
+    iroha_schema::IntoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+    crate::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.core.tests.StringAndNumber")]
 struct StringAndNumber {
     first: String,
     second: u64,
@@ -2694,7 +2743,7 @@ fn header_driven_compact_len_string_decode() {
     // Compose header with COMPACT_LEN flag set
     let mut bytes = Vec::new();
     let mut header = Header::new(
-        <String as NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<String>(),
         payload.len() as u64,
         crc64(&payload),
     );
@@ -2745,7 +2794,7 @@ fn header_driven_fixed_len_string_decode() {
     // Compose header without COMPACT_LEN flag
     let mut bytes = Vec::new();
     let header = Header::new(
-        <String as NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<String>(),
         payload.len() as u64,
         crc64(&payload),
     );

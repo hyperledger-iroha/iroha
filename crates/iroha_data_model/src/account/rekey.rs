@@ -68,6 +68,8 @@ impl FromStr for AccountAliasDomain {
     }
 }
 /// Stable on-chain account alias that survives signatory rotation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::account::rekey::AccountAlias")]
 #[derive(
     Debug,
     Clone,

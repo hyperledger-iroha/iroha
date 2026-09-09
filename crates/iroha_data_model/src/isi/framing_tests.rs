@@ -4,9 +4,9 @@ use std::{cell::Cell, sync::Arc};
 
 use iroha_primitives::const_vec::ConstVec;
 use norito::core::{
-    Archived, DecodeFlagsGuard, DeserializePayload, Encoder, Error, Header, NoritoDeserialize,
-    NoritoSerialize, SerializePayload, encoded_payload_len, from_bytes, serialize_to_buffer,
-    supported_header_flags, to_bytes, validate_header_flags,
+    Archived, DecodeFlagsGuard, DeserializePayload, Encoder, Error, Header, SerializePayload,
+    encoded_payload_len, from_bytes, serialize_to_buffer, supported_header_flags, to_bytes,
+    validate_header_flags,
 };
 
 use super::{INSTRUCTION_REGISTRY_OVERRIDE, InstructionBox, InstructionRegistry};
@@ -17,16 +17,12 @@ thread_local! {
     static SERIALIZE_VISITS: Cell<usize> = const { Cell::new(0) };
 }
 
-#[derive(Clone, Debug, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, PartialEq, PartialOrd, norito::NoritoSchema)]
+#[norito_schema(name = "test::iroha_data_model::CountedInstruction", frame = "u8")]
 struct CountedInstruction(u8);
 
 impl crate::seal::Instruction for CountedInstruction {}
 
-impl NoritoSerialize for CountedInstruction {
-    fn schema_hash() -> [u8; 16] {
-        <u8 as NoritoSerialize>::schema_hash()
-    }
-}
 impl SerializePayload for CountedInstruction {
     fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
         SERIALIZE_VISITS.with(|visits| visits.set(visits.get() + 1));
@@ -38,11 +34,6 @@ impl SerializePayload for CountedInstruction {
     }
 }
 
-impl NoritoDeserialize<'_> for CountedInstruction {
-    fn schema_hash() -> [u8; 16] {
-        <u8 as NoritoSerialize>::schema_hash()
-    }
-}
 impl<'a> DeserializePayload<'a> for CountedInstruction {
     fn deserialize(archived: &'a Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode counted instruction")
@@ -73,6 +64,58 @@ impl Drop for RegistryGuard {
 
 fn layouts() -> impl Iterator<Item = u8> {
     (0..=supported_header_flags()).filter(|flags| validate_header_flags(*flags).is_ok())
+}
+
+// A field has no frame identity; only its enclosing instruction owns a frame.
+#[derive(Debug, PartialEq, norito::SerializePayload, norito::DeserializePayload)]
+#[norito(decode_from_slice)]
+struct PayloadOnlyField {
+    count: u32,
+    values: Vec<u16>,
+    tag: Option<u8>,
+}
+
+#[test]
+fn canonical_field_decoders_preserve_bounds_and_flags_without_a_frame_identity() {
+    let value = PayloadOnlyField {
+        count: 7,
+        values: vec![3, 5, 11],
+        tag: Some(9),
+    };
+    for flags in layouts() {
+        let _requested = DecodeFlagsGuard::enter(flags);
+        let (payload, actual) = norito::codec::encode_with_header_flags(&value);
+        let outer = if actual == 0 {
+            norito::core::header_flags::COMPACT_LEN
+        } else {
+            0
+        };
+        let _outer = DecodeFlagsGuard::enter(outer);
+        assert_eq!(
+            super::decode_aos_canonical_field::<PayloadOnlyField>(&payload, actual).unwrap(),
+            value
+        );
+        assert_eq!(
+            super::decode_aos_slice_field::<PayloadOnlyField>(&payload, actual).unwrap(),
+            value
+        );
+        assert_eq!(norito::core::effective_decode_flags(), Some(outer));
+        for len in 0..payload.len() {
+            assert!(
+                super::decode_aos_canonical_field::<PayloadOnlyField>(&payload[..len], actual)
+                    .is_err()
+            );
+            assert!(
+                super::decode_aos_slice_field::<PayloadOnlyField>(&payload[..len], actual).is_err()
+            );
+            assert_eq!(norito::core::effective_decode_flags(), Some(outer));
+        }
+        let mut trailing = payload;
+        trailing.push(0);
+        assert!(super::decode_aos_canonical_field::<PayloadOnlyField>(&trailing, actual).is_err());
+        assert!(super::decode_aos_slice_field::<PayloadOnlyField>(&trailing, actual).is_err());
+        assert_eq!(norito::core::effective_decode_flags(), Some(outer));
+    }
 }
 
 #[test]

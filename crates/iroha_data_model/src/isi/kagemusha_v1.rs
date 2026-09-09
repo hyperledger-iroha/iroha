@@ -409,8 +409,12 @@ pub enum KagemushaOperationKindV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.torii.v1.kagemusha.top_up.request")]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpRequestV1",
+    frame = "iroha.torii.v1.kagemusha.top_up.request"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaTopUpRequestV1 {
     /// Chain layout version.
@@ -509,8 +513,11 @@ impl Ord for KagemushaTopUpRequestV1 {
 /// finality proof, and mint lifecycle ciphertext digest subsequently bind the
 /// exact encrypted bytes. `credit_commitment` is a pre-ID randomized value and
 /// must not be derived from the final credit ID.
-#[derive(Debug, Clone, PartialEq, Eq, Encode)]
-#[norito(schema_name = "iroha.kagemusha.v1.top-up-issuance-preimage")]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpIssuancePreimageV1",
+    frame = "iroha.kagemusha.v1.top-up-issuance-preimage"
+)]
 struct KagemushaTopUpIssuancePreimageV1 {
     version: u16,
     operation_id: [u8; 32],
@@ -918,8 +925,12 @@ impl KagemushaTopUpRequestV1 {
     IntoSchema,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[norito(schema_name = "iroha.torii.v1.kagemusha.redeem.request")]
+#[norito_schema(
+    name = "iroha_data_model::isi::kagemusha_v1::KagemushaRedemptionRequestV1",
+    frame = "iroha.torii.v1.kagemusha.redeem.request"
+)]
 #[norito(deny_unknown_fields)]
 pub struct KagemushaRedemptionRequestV1 {
     /// Chain layout version.
@@ -1002,6 +1013,8 @@ impl KagemushaRedemptionRequestV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptV1")]
 pub struct KagemushaReserveReceiptV1 {
     /// Receipt layout version.
     pub version: u16,
@@ -1645,6 +1658,8 @@ impl KagemushaMintFinalitySealBundleV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1")]
 pub struct KagemushaReserveReceiptWitnessV1 {
     /// Exact `0xD6 || operation_id` execution-witness key.
     #[norito(json = "crate::json_helpers::base64_vec")]
@@ -1853,6 +1868,8 @@ impl KagemushaOperationFinalityV1 {
 }
 
 /// Terminal result of one finalized top-up.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpResultV1")]
 #[derive(
     Debug,
     Clone,
@@ -2158,6 +2175,8 @@ pub struct KagemushaOperationRejectionV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1")]
 pub struct KagemushaOperationStatusV1 {
     /// Status layout version.
     pub version: u16,
@@ -2248,6 +2267,8 @@ impl KagemushaOperationStatusV1 {
     DeriveJsonDeserialize,
 )]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaOperationLookupV1")]
 pub struct KagemushaOperationLookupV1 {
     /// Lookup layout version.
     pub version: u16,
@@ -3606,5 +3627,92 @@ mod tests {
                 .expect("registered wire id")
                 .expect("decode instruction");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn captured_top_up_issuance_preimage_identity() {
+    use norito::NoritoSchema as _;
+    assert_eq!(
+        KagemushaTopUpIssuancePreimageV1::nominal_name(),
+        "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpIssuancePreimageV1"
+    );
+    assert_eq!(
+        KagemushaTopUpIssuancePreimageV1::frame_name(),
+        "iroha.kagemusha.v1.top-up-issuance-preimage"
+    );
+    assert_eq!(
+        hex::encode(norito::schema::identity::frame_hash::<
+            KagemushaTopUpIssuancePreimageV1,
+        >()),
+        "551ca6e091b578875c90f33c0ed502c2"
+    );
+}
+
+#[cfg(test)]
+mod captured_cutover_identity_tests {
+    fn check<T>(nominal: &str, frame: &str, hash: &str)
+    where
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    {
+        assert_eq!(T::nominal_name(), nominal);
+        assert_eq!(T::frame_name(), frame);
+        assert_eq!(
+            hex::encode(norito::schema::identity::frame_hash::<T>()),
+            hash
+        );
+    }
+
+    #[test]
+    fn captured_operation_frame_identities() {
+        check::<super::KagemushaOperationLookupV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationLookupV1",
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationLookupV1",
+            "2b9b2dad87534b17bd66dbb4febf83d6",
+        );
+        check::<super::KagemushaOperationStatusV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1",
+            "iroha_data_model::isi::kagemusha_v1::KagemushaOperationStatusV1",
+            "dd66401614634287213b6d4525d3bde3",
+        );
+    }
+
+    #[test]
+    fn captured_owner_identities() {
+        check::<super::KagemushaTopUpRequestV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpRequestV1",
+            "iroha.torii.v1.kagemusha.top_up.request",
+            "367895bac8a67ba552a3adb642aa51a1",
+        );
+        check::<super::KagemushaRedemptionRequestV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaRedemptionRequestV1",
+            "iroha.torii.v1.kagemusha.redeem.request",
+            "22dda3ff6cd8a84f5e8e96222ecc1e52",
+        );
+    }
+}
+
+#[cfg(test)]
+mod frame_owner_identity_tests {
+    //! Frame roots observed in the original codec before the identity cutover.
+
+    #[test]
+    fn captured_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<super::KagemushaReserveReceiptV1>(
+            "iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptV1",
+        );
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1,
+        >("iroha_data_model::isi::kagemusha_v1::KagemushaReserveReceiptWitnessV1");
     }
 }

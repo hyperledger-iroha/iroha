@@ -23,7 +23,6 @@ mod original {
         name = "norito_group_06::schema_identity::original::Leaf",
         frame = "example.status.leaf"
     )]
-    #[norito(schema_name = "example.status.leaf")]
     pub struct Leaf {
         pub value: u32,
     }
@@ -37,7 +36,6 @@ mod relocated {
         name = "norito_group_06::schema_identity::original::Leaf",
         frame = "example.status.leaf"
     )]
-    #[norito(schema_name = "example.status.leaf")]
     pub struct Leaf {
         pub value: u32,
     }
@@ -59,7 +57,11 @@ fn record<T>(name: &str, value: T) -> json::Value
 where
     T: NoritoSchema + NoritoSerialize + NoritoDeserialize<'static>,
 {
-    frame_record(name, value, Some(<T as NoritoDeserialize>::schema_hash()))
+    frame_record(
+        name,
+        value,
+        Some(norito::schema::identity::frame_hash::<T>()),
+    )
 }
 
 fn frame_record<T: NoritoSchema + NoritoSerialize>(
@@ -69,7 +71,7 @@ fn frame_record<T: NoritoSchema + NoritoSerialize>(
 ) -> json::Value {
     let frame = norito::to_bytes(&value).expect("capture current codec frame");
     let nominal = std::any::type_name::<T>();
-    let serialized_hash = <T as NoritoSerialize>::schema_hash();
+    let serialized_hash = norito::schema::identity::frame_hash::<T>();
     assert_eq!(T::nominal_name(), nominal, "nominal identity for {name}");
     assert_eq!(
         frame_hash::<T>(),
@@ -198,10 +200,7 @@ fn relocation_preserves_nominal_composition_and_explicit_root_projection() {
     type Before = Vec<Option<original::Leaf>>;
     type After = Vec<Option<relocated::Leaf>>;
     assert_eq!(Before::nominal_name(), After::nominal_name());
-    assert_eq!(
-        frame_hash::<After>(),
-        <Before as NoritoSerialize>::schema_hash()
-    );
+    assert_eq!(frame_hash::<After>(), frame_hash::<Before>());
     assert_eq!(original::Leaf::frame_name(), "example.status.leaf");
     assert!(!After::nominal_name().contains("example.status.leaf"));
     let old = norito::to_bytes(&vec![Some(original::Leaf { value: 9 })]).unwrap();
@@ -213,9 +212,11 @@ fn relocation_preserves_nominal_composition_and_explicit_root_projection() {
         vec![Some(original::Leaf { value: 9 })]
     );
 
-    // TODO: Switch active framing only after all payload identities are declared.
-    // The current codec still sees the new Rust path in generic root headers.
-    assert_ne!(old[6..22], moved[6..22]);
+    assert_eq!(old, moved);
+    assert_eq!(
+        norito::decode_from_bytes::<After>(&old).unwrap(),
+        vec![Some(relocated::Leaf { value: 9 })]
+    );
     let leaf = original::Leaf { value: 9 };
     let frame = norito::to_bytes(&leaf).unwrap();
     let archived = norito::from_bytes::<relocated::Leaf>(&frame).unwrap();
@@ -266,4 +267,94 @@ fn constructor_without_arguments_is_nominal_name() {
     );
     assert_eq!(<&u32>::nominal_name(), "&u32");
     assert_eq!(str::nominal_name(), "str");
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    NoritoSchema,
+    NoritoSerialize,
+    NoritoDeserialize,
+)]
+#[norito_schema(name = "example.stream.key")]
+struct StreamKey(u32);
+
+#[test]
+fn collection_streams_use_declared_generic_identities() {
+    macro_rules! check {
+        ($owner:ty, $value:expr, $reader:ident) => {{
+            let value: $owner = $value;
+            let frame = norito::encode_canonical(&value).unwrap();
+            let decoded: $owner = norito::$reader(frame.as_slice()).unwrap();
+            assert_eq!(decoded, value);
+            let compiler_hash = norito::core::type_name_schema_hash::<$owner>();
+            assert_ne!(frame[6..22], compiler_hash);
+            let mut wrong = frame;
+            wrong[6..22].copy_from_slice(&compiler_hash);
+            let rejected: Result<$owner, _> = norito::$reader(wrong.as_slice());
+            assert!(matches!(rejected, Err(norito::Error::SchemaMismatch)));
+        }};
+    }
+    let keys = [StreamKey(1), StreamKey(2)];
+    check!(
+        Vec<StreamKey>,
+        Vec::from(keys),
+        stream_vec_collect_from_reader
+    );
+    check!(
+        VecDeque<StreamKey>,
+        VecDeque::from(keys),
+        stream_vecdeque_collect_from_reader
+    );
+    check!(
+        LinkedList<StreamKey>,
+        LinkedList::from(keys),
+        stream_linkedlist_collect_from_reader
+    );
+    check!(
+        BTreeSet<StreamKey>,
+        BTreeSet::from(keys),
+        stream_btreeset_collect_from_reader
+    );
+    check!(
+        HashSet<StreamKey>,
+        HashSet::from(keys),
+        stream_hashset_collect_from_reader
+    );
+    let entries = [(StreamKey(1), 7_u64), (StreamKey(2), 9_u64)];
+    check!(BTreeMap<StreamKey, u64>, BTreeMap::from(entries), stream_btreemap_collect_from_reader);
+    check!(HashMap<StreamKey, u64>, HashMap::from(entries), stream_hashmap_collect_from_reader);
+
+    let frame = norito::encode_canonical(&HashMap::from(entries)).unwrap();
+    let mut hash =
+        norito::StreamMapIter::<StreamKey, u64>::new_hash(std::io::Cursor::new(frame.clone()))
+            .unwrap();
+    assert_eq!(
+        hash.by_ref().collect::<Result<Vec<_>, _>>().unwrap(),
+        entries
+    );
+    hash.finish().unwrap();
+    assert!(matches!(
+        norito::StreamMapIter::<StreamKey, u64>::new_btree(std::io::Cursor::new(frame)),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    let frame = norito::encode_canonical(&BTreeMap::from(entries)).unwrap();
+    let mut tree =
+        norito::StreamMapIter::<StreamKey, u64>::new_btree(std::io::Cursor::new(frame.clone()))
+            .unwrap();
+    assert_eq!(
+        tree.by_ref().collect::<Result<Vec<_>, _>>().unwrap(),
+        entries
+    );
+    tree.finish().unwrap();
+    assert!(matches!(
+        norito::StreamMapIter::<StreamKey, u64>::new_hash(std::io::Cursor::new(frame)),
+        Err(norito::Error::SchemaMismatch)
+    ));
 }

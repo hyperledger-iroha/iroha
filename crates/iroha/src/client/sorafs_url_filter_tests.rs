@@ -3,7 +3,9 @@ macro_rules! sorafs_url_filter_query_test {
     ($name:ident, $path:literal, $filter:expr, $expected:expr $(,)?) => {
         #[test]
         fn $name() {
-            let client = Client::new(config_factory());
+            let client = Client::builder(config_factory())
+                .build()
+                .expect("valid client configuration");
             let mut url = join_torii_url(&client.torii_url, $path);
             $filter
                 .apply_to_url(&mut url)

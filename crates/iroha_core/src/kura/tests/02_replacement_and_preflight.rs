@@ -1165,6 +1165,8 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
         );
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::RetiredKuraRetainedBlockRecordV2Fixture")]
 #[derive(Encode)]
 struct RetiredKuraRetainedBlockRecordV2Fixture {
     format_version: u16,
@@ -2501,7 +2503,9 @@ fn new_block_store(dir: &TempDir) -> BlockStore {
     BlockStore::new(&blocks_dir)
 }
 fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConfig {
-    KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(path.to_path_buf()),
+    KuraConfig {
+        init_mode: iroha_config::kura::InitMode::Strict,
+        store_dir: WithOrigin::inline(path.to_path_buf()),
         max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES,
         blocks_in_memory,
         debug_output_new_blocks: false,
@@ -2509,6 +2513,7 @@ fn kura_config_for_path(path: &Path, blocks_in_memory: NonZeroUsize) -> KuraConf
         fsync_mode: FsyncMode::Batched,
         fsync_interval: FSYNC_INTERVAL,
         lane_history_retention: LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }

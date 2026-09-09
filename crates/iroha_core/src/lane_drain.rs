@@ -26,6 +26,8 @@ const RECORD_KEY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record:v1\0";
 const RECORD_INTEGRITY_DOMAIN: &[u8] = b"iroha:lane-drain:signing-record-integrity:v1\0";
 const MAX_RECORD_BYTES: usize = 32 * 1024;
 const MAX_RECORDS: usize = 65_536;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_drain::LaneDrainSigningKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneDrainSigningKeyV1 {
     lane_id: LaneId,
@@ -52,6 +54,8 @@ impl LaneDrainSigningKeyV1 {
         Hash::new_from_chunks(&[RECORD_KEY_DOMAIN, encoded.as_slice()])
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_drain::LaneCommitVoteLockV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneCommitVoteLockV1 {
     proposal_height: u64,
@@ -71,6 +75,8 @@ impl LaneCommitVoteLockV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_drain::LaneDrainSigningRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneDrainSigningRecordV1 {
     version: u8,

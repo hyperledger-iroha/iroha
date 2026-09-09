@@ -327,6 +327,8 @@ const SNAPSHOT_GENERATION_GC_MAX_ENTRIES: usize = 4096;
 static SNAPSHOT_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// Constant-size authority needed by emergency Fast startup.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::snapshot::EmergencyFastSnapshotManifestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct EmergencyFastSnapshotManifestV1 {
     version: u8,
@@ -4865,6 +4867,36 @@ fn merkle_err_to_try_read(err: SnapshotMerkleError, _path: PathBuf) -> TryReadEr
             reason,
         },
     }
+}
+/// Publish an untrusted bootstrap envelope through the actual signed byte writer.
+///
+/// This test bridge returns bytes only. The normal reader and startup verifier
+/// must authenticate them before any finalization authority exists.
+#[cfg(test)]
+pub(crate) fn publish_signed_snapshot_payload_for_physical_test(
+    store_dir: &Path,
+    state: &State,
+    record: &SnapshotV2BootstrapRecord,
+    signing_key: &KeyPair,
+) -> Vec<u8> {
+    assert!(state.authenticated_snapshot_v2_bootstrap().is_none());
+    record
+        .validate()
+        .expect("well-formed untrusted bootstrap record");
+    let mut ordinary = String::new();
+    // Keep the complete production snapshot shape, including consensus topology.
+    // Canonical WSV hash bytes deliberately omit those sidecars and are not a snapshot.
+    serialize_state_snapshot(state, &mut ordinary);
+    let lineage = json::to_json(record).expect("encode untrusted bootstrap envelope");
+    // The signed reader requires the same top-level field order as the typed
+    // serializer: chain_id, network_id, bootstrap lineage, then world.
+    let (identity, world) = ordinary
+        .split_once(",\"world\":")
+        .expect("typed snapshot identity precedes its world field");
+    let payload =
+        format!("{identity},\"sumeragi_v2_bootstrap\":{lineage},\"world\":{world}").into_bytes();
+    tests::write_snapshot_bundle_from_bytes(store_dir, &payload, signing_key);
+    payload
 }
 #[cfg(test)]
 mod tests {

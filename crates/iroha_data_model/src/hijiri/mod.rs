@@ -273,11 +273,7 @@ impl TryFrom<PositiveAttestationIncentiveWire> for PositiveAttestationIncentive 
         )
     }
 }
-impl norito::core::NoritoDeserialize<'_> for PositiveAttestationIncentive {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for PositiveAttestationIncentive {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("positive attestation incentive must be valid")
@@ -409,11 +405,7 @@ impl TryFrom<EvidenceFieldCommitmentWire> for EvidenceFieldCommitment {
         )
     }
 }
-impl norito::core::NoritoDeserialize<'_> for EvidenceFieldCommitment {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for EvidenceFieldCommitment {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("evidence field commitment path must be valid")
@@ -484,11 +476,7 @@ impl TryFrom<EvidenceHashBundleWire> for EvidenceHashBundle {
         })
     }
 }
-impl norito::core::NoritoDeserialize<'_> for EvidenceHashBundle {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for EvidenceHashBundle {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("evidence hash bundle must be valid")
@@ -635,11 +623,7 @@ impl TryFrom<FeeMultiplierBandWire> for FeeMultiplierBand {
         Self::new(wire.max_risk, wire.multiplier)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for FeeMultiplierBand {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for FeeMultiplierBand {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("fee multiplier band must be valid")
@@ -710,11 +694,7 @@ impl TryFrom<HijiriFeePolicyWire> for HijiriFeePolicy {
         Self::new(wire.bands, wire.penalty_cap)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for HijiriFeePolicy {
-    fn schema_hash() -> [u8; 16] {
-        <Self as norito::core::NoritoSerialize>::schema_hash()
-    }
-}
+
 impl<'de> norito::core::DeserializePayload<'de> for HijiriFeePolicy {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("Hijiri fee policy must be valid")

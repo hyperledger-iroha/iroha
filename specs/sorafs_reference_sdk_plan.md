@@ -21,7 +21,7 @@ Remaining SF-11 work is native qualification, release evidence, and SDK
 distribution: clean five-target ABI-23 rebuilds, skip-free parity replay,
 published archives and bindings, signed manifests, and live operator smokes.
 The checked-in, test-only signed and sealed cross-domain fixture inventory binds
-85 payload artifacts, 35 `ValidationOutcomeV1` outcomes, and 40 negative
+85 payload artifacts, 35 `ValidationOutcomeV1` outcomes, and 41 negative
 payload vectors across twelve exact parity profiles. All eight generated
 `CancelAssetLock` positive/negative files are checked in under
 `fixtures/sorafs_manifest/appeal_finance/`, are mandatory inputs to the
@@ -78,7 +78,7 @@ share the deterministic
 schema-closed release-wide inventory for appeal finance, routing/provider
 admission, orderbook, PDP, PoR, PoTR, repair, Governance DAG, and moderation. It binds the exact
 sorted path set, byte lengths, SHA-256 digests, and canonical JSON/Norito bytes
-for 85 payload artifacts, including 40 negative payload vectors, and 32
+for 85 payload artifacts, including 41 negative payload vectors, and 35
 `ValidationOutcomeV1` files. Its offline checker verifies the trusted
 fingerprint and signature and rejects duplicate or nonfinite JSON, path
 traversal, missing/extra/substituted files, symlinks, hardlinks, and parent
@@ -445,7 +445,7 @@ convert decoded or raw Norito payloads into the shared validation functions.
   `generate_pdp_fixtures`, and `generate_por_fixtures` pipeline deterministically
   regenerates the closed fixture tree and signed inventory under
   `fixtures/sorafs_manifest/`. The checked-in inventory binds 85 payload
-  artifacts, 32 exact outcome files, and 40 negative payload vectors. The
+  artifacts, 35 exact outcome files, and 41 negative payload vectors. The
   typed `cancel_asset_lock_fixtures` generator and SDK tests freeze the
   appeal-finance
   `CancelAssetLock { escrow_id, expected_remaining_amount }` hard cut and its
@@ -773,7 +773,7 @@ Implemented locally:
   and `ci/check_sorafs_reference_ffi_header.sh` providing the local binding
   contract guard.
 - The test-only signed, schema-closed reference SDK inventory with 85 payload
-  artifacts, 35 outcomes, 40 negative payload vectors, and twelve exact profiles,
+  artifacts, 35 outcomes, 41 negative payload vectors, and twelve exact profiles,
   including the dedicated moderation governance-log-node validator and
   source-level coverage across JavaScript/TypeScript, Python, Swift,
   Kotlin/JVM, mirrored Java Android, and C#.

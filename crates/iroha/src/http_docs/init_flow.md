@@ -1,7 +1,5 @@
-Consumes itself to produce initial data to:
+Consume the validated subscription to produce its exact upgrade request and first Norito message.
 
-- Open WS connection;
-- Send first message into it;
-- Handle first message from Iroha with the next handler.
+# Errors
 
-It doesn't return a `Result` because it doesn't accept any parameters except of itself.
+Returns a typed invalid-request error when encoding fails or the complete subscription exceeds its byte limit.

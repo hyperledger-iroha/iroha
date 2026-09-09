@@ -7722,7 +7722,7 @@ mod executor_model {
                     fail: Some(phase.to_owned()),
                     ..MockTransport::default()
                 };
-                execute_plan(&inventory, &mut transport, &mut journal)
+                let _ = execute_plan(&inventory, &mut transport, &mut journal)
                     .expect_err("candidate fails");
                 assert!(!journal.state.edge_touched, "{phase}");
                 assert!(
@@ -7743,7 +7743,7 @@ mod executor_model {
                 fail: Some("edge_verify".to_owned()),
                 ..MockTransport::default()
             };
-            execute_plan(&inventory, &mut transport, &mut journal)
+            let _ = execute_plan(&inventory, &mut transport, &mut journal)
                 .expect_err("public verification fails");
             assert_eq!(
                 transport

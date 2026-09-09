@@ -75,11 +75,20 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(contents, encoding="utf-8")
+        self.write_graph_owner((self.root / "Cargo.lock").read_bytes())
         self.git("init", "-q")
         self.git("config", "user.name", "Source Seal Test")
         self.git("config", "user.email", "source-seal@example.invalid")
         self.git("add", "-A")
         self.git("commit", "-q", "-m", "fixture")
+
+    def write_graph_owner(self, graph: bytes) -> None:
+        owner = self.root / seal.CANONICAL_CARGO_LOCK_OWNER
+        owner.parent.mkdir(parents=True, exist_ok=True)
+        owner.write_text(
+            "readonly PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256=\\\n"
+            + '"' + seal.hashlib.sha256(graph).hexdigest() + '"\n', encoding="utf-8",
+        )
 
     def tearDown(self) -> None:
         self.environment_patch.stop()
@@ -99,7 +108,7 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
 
     def inputs(self, platform: str) -> list[str]:
         with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
-            return seal.seal_inputs(self.root, platform)
+            return seal.seal_inputs(self.root, platform, lockfile_path=self.root / "Cargo.lock")
 
     def test_apple_seal_includes_package_lock_and_mobile_transports(self) -> None:
         apple = self.inputs("apple")
@@ -147,28 +156,28 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
 
     def test_apple_fingerprint_normalizes_only_native_bridge_hash_pins(self) -> None:
         inputs = self.inputs("apple")
-        original = seal.fingerprint(self.root, inputs)
+        original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
         loader = self.root / "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift"
         contents = loader.read_text(encoding="utf-8")
         loader.write_text(contents.replace("1" * 64, "a" * 64), encoding="utf-8")
-        self.assertEqual(original, seal.fingerprint(self.root, inputs))
+        self.assertEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
 
         loader.write_text(
             loader.read_text(encoding="utf-8") + "let changedLogic = true\n",
             encoding="utf-8",
         )
-        self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
 
     def test_apple_fingerprint_authenticates_a_tracked_source_deletion(self) -> None:
         inputs = self.inputs("apple")
         relative = "IrohaSwift/Sources/IrohaSwift/Core.swift"
-        original = seal.fingerprint(self.root, inputs)
+        original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
 
         (self.root / relative).unlink()
 
-        self.assertNotIn(relative, seal.listed_files(self.root, inputs))
-        self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
-        self.assertIn(f" D {relative}", seal.status(self.root, inputs))
+        self.assertNotIn(relative, seal.listed_files(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
+        self.assertIn(f" D {relative}", seal.status(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
 
     def test_apple_fingerprint_authenticates_archive_normalizer_logic(self) -> None:
         inputs = self.inputs("apple")
@@ -209,31 +218,166 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
             str(root_lock),
         )
 
-    def test_selected_lock_must_be_exact_root_regular_and_non_symbolic(self) -> None:
+    def test_selected_lock_must_be_explicit_canonical_regular_and_non_symbolic(self) -> None:
         root_lock = self.root / "Cargo.lock"
-        self.assertEqual(seal.selected_lockfile_path(self.root), root_lock)
+        with self.assertRaisesRegex(RuntimeError, "explicit --lockfile-path"):
+            seal.selected_lockfile_path(self.root)
         self.assertEqual(seal.selected_lockfile_path(self.root, root_lock), root_lock)
 
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
+        with self.assertRaisesRegex(RuntimeError, "absolute and canonical"):
             seal.selected_lockfile_path(self.root, Path("Cargo.lock"))
 
         alternate = self.root / "alternate-Cargo.lock"
         alternate.write_text("# alternate lock\n", encoding="utf-8")
-        with self.assertRaisesRegex(RuntimeError, "explicit root Cargo lock"):
+        with self.assertRaisesRegex(RuntimeError, "outside the source root"):
             seal.selected_lockfile_path(self.root, alternate)
 
         root_lock.unlink()
         with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
-            seal.selected_lockfile_path(self.root)
+            seal.selected_lockfile_path(self.root, root_lock)
 
         root_lock.mkdir()
         with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
-            seal.selected_lockfile_path(self.root)
+            seal.selected_lockfile_path(self.root, root_lock)
         root_lock.rmdir()
 
         root_lock.symlink_to(alternate)
         with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
-            seal.selected_lockfile_path(self.root)
+            seal.selected_lockfile_path(self.root, root_lock)
+
+    def test_reviewed_external_lock_binds_root_source_and_selected_graph_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as external_directory:
+            external = Path(external_directory).resolve() / "Cargo.lock"
+            root_lock = self.root / "Cargo.lock"
+            original = root_lock.read_bytes()
+            external.write_bytes(original)
+            digest = seal.hashlib.sha256(original).hexdigest()
+            self.assertEqual(seal.selected_lockfile_path(self.root, external), external)
+            self.assertNotEqual(root_lock.stat().st_ino, external.stat().st_ino)
+            with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+                inputs = seal.seal_inputs(self.root, "apple", external)
+            baseline = seal.fingerprint(self.root, inputs, external)
+            root_lock.write_bytes(original + b"# root source change\n")
+            with self.assertRaisesRegex(RuntimeError, "root source Cargo lock"):
+                seal.fingerprint(self.root, inputs, external)
+            # Ordinary explicit-root source inspection still observes its changed
+            # source; it does not authorize an external privacy artifact build.
+            changed_root = seal.fingerprint(self.root, inputs, root_lock)
+            self.assertNotEqual(baseline, changed_root)
+            self.assertIn("Cargo.lock", seal.status(self.root, inputs, root_lock))
+            self.assertEqual(seal.lockfile_identity(external)[-1], digest)
+            root_lock.write_bytes(original)
+            external.write_bytes(b"unreviewed graph\n")
+            with self.assertRaisesRegex(RuntimeError, "canonical reviewed graph"):
+                seal.fingerprint(self.root, inputs, external)
+            # A separately reviewed fixture graph updates the sole fixture owner
+            # and both physical locks coherently; no production pin is relaxed.
+            root_lock.write_bytes(external.read_bytes())
+            self.write_graph_owner(external.read_bytes())
+            self.assertNotEqual(changed_root, seal.fingerprint(self.root, inputs, external))
+
+    def test_external_lock_rejects_unreviewed_graph_and_symbolic_ancestors(self) -> None:
+        with tempfile.TemporaryDirectory() as external_directory:
+            directory = Path(external_directory).resolve()
+            external = directory / "Cargo.lock"
+            external.write_bytes(b"unreviewed unit-test graph\n")
+            with self.assertRaisesRegex(RuntimeError, "canonical reviewed graph"):
+                seal.selected_lockfile_path(self.root, external)
+            alias = self.root / "lock-alias"
+            alias.symlink_to(directory, target_is_directory=True)
+            with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+                seal.selected_lockfile_path(self.root, alias / "Cargo.lock")
+
+    def test_external_metadata_receives_exact_selected_path_and_retains_locked_offline(self) -> None:
+        with tempfile.TemporaryDirectory() as external_directory:
+            external = Path(external_directory).resolve() / "Cargo.lock"
+            external.write_bytes((self.root / "Cargo.lock").read_bytes())
+            with (
+                mock.patch.object(seal, "source_seal_tools", return_value=(mock.Mock(), mock.Mock(), mock.Mock(), Path("/usr/bin/git"))),
+                mock.patch.object(seal, "source_seal_environment", return_value={}),
+                mock.patch.object(seal, "run", return_value=b"{}") as run,
+            ):
+                seal.metadata(self.root, "aarch64-apple-darwin", external)
+            arguments = run.call_args.args[2]
+            self.assertEqual(arguments[arguments.index("--lockfile-path") + 1], str(external))
+            self.assertIn("--locked", arguments)
+            self.assertIn("--offline", arguments)
+            self.assertIn("-Z", arguments)
+            self.assertIn("unstable-options", arguments)
+
+    def test_canonical_graph_owner_is_unique_strict_and_part_of_both_platform_seals(self) -> None:
+        owner = self.root / seal.CANONICAL_CARGO_LOCK_OWNER
+        original = owner.read_text()
+        digest = seal.hashlib.sha256((self.root / "Cargo.lock").read_bytes()).hexdigest()
+        self.assertEqual(seal.canonical_cargo_lock_sha256(self.root), digest)
+        self.assertIn(seal.CANONICAL_CARGO_LOCK_OWNER, seal.COMMON_ROOT_INPUTS)
+        for source in (
+            original + original,
+            original + original.replace("readonly ", "readonly\t"),
+            original.replace(digest, digest.upper()),
+            original.replace(digest, "0" * 63),
+            original.replace("PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256", "OLD_GRAPH_OWNER"),
+        ):
+            with self.subTest(source=source):
+                owner.write_text(source)
+                with self.assertRaisesRegex(RuntimeError, "canonical Cargo graph declaration"):
+                    seal.canonical_cargo_lock_sha256(self.root)
+        owner.write_bytes(b"")
+        with self.assertRaisesRegex(RuntimeError, "between 1 byte and 16 MiB"):
+            seal.canonical_cargo_lock_sha256(self.root)
+        owner.write_text(original)
+        with mock.patch.object(seal, "local_dependency_roots", return_value=set()):
+            inputs = seal.seal_inputs(self.root, "apple", self.root / "Cargo.lock")
+        before = seal.fingerprint(self.root, inputs, self.root / "Cargo.lock")
+        owner.write_text(original + "# source owner edit\n")
+        self.assertNotEqual(before, seal.fingerprint(self.root, inputs, self.root / "Cargo.lock"))
+        replacement = owner.with_suffix(".replacement")
+        owner.rename(replacement)
+        owner.symlink_to(replacement)
+        with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+            seal.canonical_cargo_lock_sha256(self.root)
+
+    def test_external_graph_snapshot_rejects_hardlinks_and_executable_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            external = Path(directory).resolve() / "Cargo.lock"
+            os.link(self.root / "Cargo.lock", external)
+            with self.assertRaisesRegex(RuntimeError, "singly linked"):
+                seal.selected_lockfile_path(self.root, external)
+            external.unlink()
+            external.write_bytes((self.root / "Cargo.lock").read_bytes())
+            external.chmod(0o700)
+            with self.assertRaisesRegex(RuntimeError, "non-executable"):
+                seal.selected_lockfile_path(self.root, external)
+
+    def test_lock_reader_rejects_fifo_before_open_and_fifo_substitution(self) -> None:
+        fifo = self.root / "nonregular-Cargo.lock"
+        os.mkfifo(fifo, 0o600)
+        with mock.patch.object(seal.os, "open", side_effect=AssertionError("must not open a known FIFO")) as opened:
+            with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+                seal.lockfile_identity(fifo)
+        opened.assert_not_called()
+        root_lock = self.root / "Cargo.lock"
+        real_open = os.open
+        def substitute_fifo(candidate, flags):
+            self.assertEqual(candidate, root_lock)
+            self.assertTrue(flags & os.O_NONBLOCK)
+            return real_open(fifo, flags)
+        with mock.patch.object(seal.os, "open", side_effect=substitute_fifo):
+            with self.assertRaisesRegex(RuntimeError, "non-symbolic regular file"):
+                seal.lockfile_identity(root_lock)
+
+    def test_canonical_graph_owner_rejects_a_descriptor_from_another_inode(self) -> None:
+        owner = self.root / seal.CANONICAL_CARGO_LOCK_OWNER
+        replacement = self.root / "same-byte-owner-copy.sh"
+        replacement.write_bytes(owner.read_bytes())
+        real_open = os.open
+        def substituted_open(candidate, flags):
+            self.assertEqual(candidate, owner)
+            self.assertTrue(flags & getattr(os, "O_NOFOLLOW", 0))
+            return real_open(replacement, flags)
+        with mock.patch.object(seal.os, "open", side_effect=substituted_open):
+            with self.assertRaisesRegex(RuntimeError, "changed while being authenticated"):
+                seal.canonical_cargo_lock_sha256(self.root)
 
     def test_source_seal_cargo_environment_binds_jobs_rustdoc_and_fixed_target(
         self,
@@ -289,25 +433,25 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
 
     def test_apple_fingerprint_and_dirty_state_bind_mobile_transport_bytes(self) -> None:
         inputs = self.inputs("apple")
-        original = seal.fingerprint(self.root, inputs)
+        original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
         transport = self.root / "IrohaSwift/Sources/IrohaSwiftMobileTransports/Nfc.swift"
         transport.write_text("public struct MutatedNfc {}\n", encoding="utf-8")
 
-        self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
-        self.assertIn("Nfc.swift", seal.status(self.root, inputs))
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
+        self.assertIn("Nfc.swift", seal.status(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
 
     def test_apple_fingerprint_binds_package_resolution_and_untracked_transport(self) -> None:
         inputs = self.inputs("apple")
-        original = seal.fingerprint(self.root, inputs)
+        original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
         resolved = self.root / "IrohaSwift/Package.resolved"
         resolved.write_text('{"pins":[{"identity":"changed"}],"version":3}\n', encoding="utf-8")
-        changed_lock = seal.fingerprint(self.root, inputs)
+        changed_lock = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
         self.assertNotEqual(original, changed_lock)
 
         extra = self.root / "IrohaSwift/Sources/IrohaSwiftMobileTransports/Extra.swift"
         extra.write_text("public struct Extra {}\n", encoding="utf-8")
-        self.assertNotEqual(changed_lock, seal.fingerprint(self.root, inputs))
-        dirty = seal.status(self.root, inputs)
+        self.assertNotEqual(changed_lock, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
+        dirty = seal.status(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
         self.assertIn("Package.resolved", dirty)
         self.assertIn("Extra.swift", dirty)
 

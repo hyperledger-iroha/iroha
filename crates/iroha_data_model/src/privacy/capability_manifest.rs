@@ -558,9 +558,17 @@ pub enum PrivacyExact12CapabilityRowValidationErrorV1 {
 /// exact committed activation state without treating a local catalog as
 /// network authority. The digest detects content drift but is not a signature
 /// or proof that an untrusted producer read committed state.
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
-#[norito(schema_name = "iroha.privacy.exact12-capability-manifest.v1")]
-#[derive(DeriveJsonSerialize, DeriveJsonDeserialize)]
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(

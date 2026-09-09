@@ -15,13 +15,15 @@ generic frame writers require `NoritoSerialize` explicitly. This separation
 does not change the V1 header, payload layout, checksum or signed bytes.
 
 `DeserializePayload<'a>` owns `deserialize` and `try_deserialize` within the
-active bounded payload context. `NoritoDeserialize<'a>` adds the typed frame
-contract and currently retains its independent `schema_hash`; it has no second
-reconstruction implementation. `NoritoDeserialize`/`Decode` derives emit both
-contracts. `#[derive(DeserializePayload)]` emits only payload reconstruction and
-rejects frame-schema attributes. The planned `NoritoSchema` cutover remains
-separate: it will bind both typed directions to the declared identity and remove
-their independent hash methods together.
+active bounded payload context. Both typed frame directions are blanket
+implementations over the corresponding payload trait and `NoritoSchema`.
+`NoritoSchema` declares one nominal identity and one root-frame projection;
+`schema::identity::frame_hash` computes the fixed digest used by every typed
+reader and writer. Neither direction has an independent hash method.
+Codec derives emit payload implementations; use `#[derive(NoritoSchema)]` with
+`#[norito_schema(name = "...")]` for a framed owner. A field-only payload
+needs no frame identity. The retired `#[norito(schema_name = "...")]`
+attribute is rejected.
 
 Bare `Decode` requires `for<'de> DeserializePayload<'de> + SerializePayload`.
 Canonical field/container decoders use those payload contracts for
@@ -895,25 +897,25 @@ chosen algorithm is recorded in the header; there is no on-wire negotiation.
 
 ## Schema Hash Details
 
-The 16-byte schema hash is computed as the first 16 bytes of SHA-256 over a
-domain prefix followed by canonical schema bytes:
+The 16-byte frame hash is the first 16 bytes of
+`SHA-256("norito:v1:type-name\0" || NoritoSchema::frame_name())`.
+The historical domain separator remains part of V1; the name bytes now come
+only from an explicit protocol declaration. Rust source paths and compiler
+`type_name` output do not select the active frame identity.
 
-- Default: `SHA-256("norito:v1:type-name\0" || fully-qualified type name)`.
-  Rust uses `core::any::type_name::<T>()` for the type-name bytes.
-- With `schema-structural`: `SHA-256("norito:v1:structural-schema\0" ||
-  canonical JSON schema)`, where the schema is produced by
-  `iroha_schema::IntoSchema` and serialized with Norito’s JSON writer.
-- A struct or enum derived with
-  `#[norito(schema_name = "stable.public.schema.id")]` uses
-  `SHA-256("norito:v1:type-name\0" || "stable.public.schema.id")` instead.
-  The explicit name takes precedence over both defaults for Encode and Decode,
-  including builds with `schema-structural`, so Rust module paths and private
-  implementation type names do not leak into a public wire header.
+`#[derive(NoritoSchema)]` requires `#[norito_schema(name = "protocol.name")]`.
+An optional `frame = "protocol.root"` declares a root projection, such as a
+borrowed signing view sharing its owned record's frame. Generic constructors
+compose their arguments' nominal identities in declared order; they never
+substitute a child's root projection. Payload field types do not need identities
+unless they participate in a nominal generic argument or are independently framed.
+A name must not be reused for different layouts. Moving a Rust owner between
+modules leaves its declared identity and encoded bytes unchanged.
 
-An explicit schema name is a wire-compatibility promise. The same name must not
-be reused for different layouts or for generic instantiations whose layouts can
-differ. Renaming the Rust type or moving it between modules does not change a
-named schema hash; changing the explicit name does.
+The `schema-structural` feature exposes schema-inspection hashes using
+`SHA-256("norito:v1:structural-schema\0" || canonical JSON schema)`.
+It does not change frame headers or typed decoder selection. The type-name
+hash helper likewise serves inspection and source-capture tooling only.
 
 Typed decoders must reject payloads whose header schema hash does not match the
 expected type. `ArchiveView::decode` enforces this check; `decode_unchecked`

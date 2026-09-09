@@ -4,6 +4,8 @@ use iroha_schema::IntoSchema;
 use norito::core::*;
 #[derive(IntoSchema, NoritoSerialize, NoritoDeserialize)]
 #[repr(C)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.compression.Data")]
 struct Data {
     a: u32,
     b: u32,

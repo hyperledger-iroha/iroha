@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 const PUZZLE_CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p_puzzle::EmptyMsg")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct EmptyMsg;
 impl ClassifyTopic for EmptyMsg {

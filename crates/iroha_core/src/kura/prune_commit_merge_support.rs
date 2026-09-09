@@ -269,7 +269,7 @@ struct BlockReplicaKey {
     executed_block_wire_len: u64,
     executed_block_wire_hash: Hash,
 }
-type BlockReplicaRegistry = BTreeMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
+type BlockReplicaRegistry = NestedMap<BlockReplicaKey, BTreeMap<PeerId, BlockReplicaAdvert>>;
 #[derive(Debug, Default)]
 struct MergeCarrierIndex {
     initialized: bool,
@@ -282,6 +282,8 @@ struct MergeCarrierIndex {
     full_inventory_clones: usize,
 }
 /// Exact retained output for one indexed-sidecar rewrite in a canonical prune.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraPruneSidecarPairProjectionV3")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct KuraPruneSidecarPairProjectionV3 {
     /// Whether this pair must be rewritten or removed.
@@ -298,6 +300,8 @@ impl KuraPruneSidecarPairProjectionV3 {
     }
 }
 /// Authenticated rewrite projection for the canonical pipeline sidecar pair.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraPruneSidecarRewriteProjectionV3")]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Encode, Decode)]
 struct KuraPruneSidecarRewriteProjectionV3 {
     /// Retained pipeline recovery data/index output.
@@ -338,6 +342,8 @@ impl KuraPruneSidecarRewriteProjectionV3 {
     }
 }
 /// Exact live capacity admission retained as forward-recovery authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraPruneCapacityAdmissionV3")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct KuraPruneCapacityAdmissionV3 {
@@ -397,6 +403,8 @@ impl KuraPruneCapacityAdmissionV3 {
     }
 }
 /// Durable forward-recovery record for a canonical Kura prune transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraPruneIntentV3")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct KuraPruneIntentV3 {
@@ -591,6 +599,8 @@ impl FastpqProofSidecarTelemetry {
 /// heights are older, merge execution precedes ordinary execution in one
 /// carrier, and lower indexes are earlier within either execution phase. The
 /// hashes bind a cursor to the exact canonical carrier and entrypoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KaigiSignalCandidatePosition")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct KaigiSignalCandidatePosition {
     block_height: u64,
@@ -685,6 +695,8 @@ pub(crate) struct KaigiSignalCandidateLocatorPage {
 
 #[derive(Debug)]
 struct TransactionEntrypointIndex {
+    /// All nested memberships; outer height-marker maps are counted separately.
+    nested_associations: AssociationCount,
     complete: bool,
     indexed_heights: BTreeSet<NonZeroUsize>,
     incomplete_merge_heights: BTreeSet<NonZeroUsize>,
@@ -699,6 +711,7 @@ struct TransactionEntrypointIndex {
 impl TransactionEntrypointIndex {
     fn complete_empty() -> Self {
         Self {
+            nested_associations: AssociationCount::default(),
             complete: true,
             indexed_heights: BTreeSet::new(),
             incomplete_merge_heights: BTreeSet::new(),
@@ -712,6 +725,8 @@ impl TransactionEntrypointIndex {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::WsvCheckpoint")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct WsvCheckpoint {
     height: u64,
@@ -739,6 +754,8 @@ impl WsvCheckpoint {
 /// has an exact checkpoint-bound manifest written after the block body and WSV are durable. Only
 /// the sole interrupted pending tip may temporarily lack this join record; authenticated hash-only
 /// snapshot prefixes are exempt because their bodies cannot be replayed locally.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::CommitManifest")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct CommitManifest {
     height: u64,
@@ -763,6 +780,8 @@ pub(crate) enum CommitManifestBindingState {
     /// The checkpoint names a different manifest digest and must fail closed.
     Mismatched,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::V2CommitAuthoritySeal")]
 #[derive(Encode)]
 struct V2CommitAuthoritySeal {
     domain: String,
@@ -779,6 +798,8 @@ fn v2_commit_authority_hash(artifact: &V2FinalityArtifact) -> Hash {
 }
 /// Immutable Kura proofs for one block's Kagemusha, validation-fee, and
 /// Parliament casting writes, authenticated by its exact finality artifact.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KagemushaFinalitySidecarV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct KagemushaFinalitySidecarV1 {
     /// Sidecar version.
@@ -806,6 +827,8 @@ impl KagemushaFinalitySidecarV1 {
     /// Current sidecar version.
     pub const VERSION: u16 = 1;
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::StagedKagemushaFinalitySidecarV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct StagedKagemushaFinalitySidecarV1 {
     version: u16,
@@ -818,6 +841,8 @@ struct StagedKagemushaFinalitySidecarV1 {
     parliament_timed_ovn_casting_bindings: Vec<ParliamentTimedOvnCastingContextBindingV1>,
     kagemusha_reserve_receipts: Vec<KagemushaReserveReceiptWitnessV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KagemushaMintOutboxEntryV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct KagemushaMintOutboxEntryV1 {
     version: u16,
@@ -826,6 +851,8 @@ struct KagemushaMintOutboxEntryV1 {
     result_wire_hash: Hash,
     finality_artifact_hash: HashOf<V2FinalityArtifact>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KagemushaMintAuthorityCheckpointEntryV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct KagemushaMintAuthorityCheckpointEntryV1 {
     version: u16,
@@ -900,6 +927,8 @@ struct VerifiedKuraReplicaAuthority {
     network_id: NetworkId,
     selected_keepers: Vec<(u32, PeerId)>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraReplicaKeeperScoreV1")]
 #[derive(Encode)]
 struct KuraReplicaKeeperScoreV1 {
     domain: Vec<u8>,
@@ -1115,6 +1144,8 @@ struct CommitManifestReconciliation {
 }
 #[derive(Debug)]
 struct MergeLedgerLog {
+    /// Cleared after a failed mutation until a validated whole-owner reload.
+    resident_inventory_valid: bool,
     /// Fast mode deliberately leaves the durable log opaque until a Strict restart.
     history_deferred: bool,
     file: Option<FileWrap>,
@@ -1162,6 +1193,8 @@ enum MergeLedgerAppendFailurePoint {
 }
 /// Durable sparse association between one committed merge entry and the exact
 /// global block whose compact reference ordered its application.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::MergeLedgerCarrierRecord")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct MergeLedgerCarrierRecord {
     /// Carrier-record schema version. Only version one is accepted.

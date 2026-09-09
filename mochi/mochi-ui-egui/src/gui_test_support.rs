@@ -8,17 +8,19 @@ use iroha_data_model::{
 };
 use norito::json::{self, Map, Value};
 use std::{
-    env, fs,
+    env,
+    ffi::{OsStr, OsString},
+    fs,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
 pub(super) struct TestEnvGuard {
     key: &'static str,
-    prev: Option<String>,
+    prev: Option<OsString>,
 }
 impl TestEnvGuard {
-    pub(super) fn set(key: &'static str, value: &Path) -> Self {
-        let prev = env::var(key).ok();
+    pub(super) fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        let prev = env::var_os(key);
         // SAFETY: Callers serialize these tests with `env_lock`.
         unsafe { env::set_var(key, value) };
         Self { key, prev }
@@ -36,6 +38,15 @@ impl Drop for TestEnvGuard {
 pub(super) fn env_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
+}
+/// Construct an app from this fixture's explicit configuration while its environment lock is held.
+pub(super) fn test_app(overrides: super::CliOverrides) -> super::MochiApp {
+    super::MochiApp::with_persisted_ui(
+        overrides,
+        super::EventFilterState::default(),
+        super::ActiveView::Dashboard,
+        false,
+    )
 }
 pub(super) fn genesis_invocation_count(path: &Path) -> usize {
     invocation_count(path, "genesis")
@@ -218,3 +229,19 @@ fn make_executable(path: &Path) {
 }
 #[cfg(not(unix))]
 fn make_executable(_path: &Path) {}
+
+#[cfg(unix)]
+#[test]
+fn environment_guard_restores_exact_non_utf8_value() {
+    use std::os::unix::ffi::OsStringExt as _;
+
+    let _lock = env_lock().lock().expect("env lock");
+    let key = "MOCHI_TEST_ENV_GUARD_VALUE";
+    let original = OsString::from_vec(vec![0xff, b'a']);
+    let _original_guard = TestEnvGuard::set(key, &original);
+    {
+        let _replacement_guard = TestEnvGuard::set(key, "replacement");
+        assert_eq!(env::var_os(key), Some(OsString::from("replacement")));
+    }
+    assert_eq!(env::var_os(key), Some(original));
+}

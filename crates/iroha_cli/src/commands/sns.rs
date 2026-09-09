@@ -57,7 +57,7 @@ impl Run for GetRegistrationArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         validate_literal(&self.literal)?;
         let record = context
-            .client_from_config()
+            .client_from_config()?
             .sns()
             .get_name(self.namespace.into(), &self.literal)?;
         context.print_data(&record)
@@ -73,7 +73,7 @@ pub struct GetPolicyArgs {
 impl Run for GetPolicyArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let policy = context
-            .client_from_config()
+            .client_from_config()?
             .sns()
             .get_policy(self.suffix_id)?;
         context.print_data(&policy)

@@ -5,7 +5,7 @@ use eyre::Result;
 use iroha::client::{SumeragiEvidenceAuditRecord, SumeragiEvidencePenaltyStatus};
 
 pub(crate) fn list<C: RunContext>(context: &mut C, args: EvidenceListArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let filter = iroha::client::SumeragiEvidenceListFilter {
         limit: args.limit,
         offset: args.offset,
@@ -24,7 +24,7 @@ pub(crate) fn list<C: RunContext>(context: &mut C, args: EvidenceListArgs) -> Re
 }
 
 pub(crate) fn count<C: RunContext>(context: &mut C, _args: EvidenceCountArgs) -> Result<()> {
-    let client = context.client_from_config();
+    let client = context.client_from_config()?;
     let response = client.get_sumeragi_evidence_count()?;
     if matches!(context.output_format(), CliOutputFormat::Text) {
         context.println(format!("count={}", response.count))?;

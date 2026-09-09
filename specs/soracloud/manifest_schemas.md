@@ -40,10 +40,12 @@ remain fixed for one economic lease. An upgrade or rollback that retains that
 lease must reject unit-price drift; a reporting rollover never renews or
 reprices the lease and never changes a leased volume's start or expiry.
 
-Every lease-usage report must compare-and-swap against both the exact economic
-lease incarnation (`lease_started_height`) and the current
-`reporting_epoch`. A report from any prior lease incarnation is rejected even
-if its epoch, revision, replica slot, and validator otherwise match. Every newly
+Every lease-usage report must bind the exact economic lease incarnation
+(`lease_started_height`), `reporting_epoch`, and `placement_incarnation`.
+Checkpoint lookup, finalization, rollover, and serving authorization use that
+full identity, so a delayed report cannot target a replacement placement. A report
+from any prior lease incarnation is rejected even if its epoch, revision, replica
+slot, and validator otherwise match. Every newly
 assigned Inrou reporter must first submit an accepted zero/open checkpoint for
 that exact lease-and-epoch pair before its replica may be marked as serving.
 Reporter counters are monotonic and terminal delivery is explicit. At exactly

@@ -2446,6 +2446,10 @@ mod tests {
         // This test-only encoder preserves the retired field shape solely to
         // prove that the first-release decoder does not accept it. Variant
         // order intentionally matches the canonical enum's discriminants.
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::return_value::tests::retired_recursive_list_record_encoding_is_rejected::LegacyEntrypointValueAtomV1"
+        )]
         #[derive(Encode)]
         enum LegacyEntrypointValueAtomV1 {
             Tag(bool),
@@ -2454,6 +2458,10 @@ mod tests {
             Pointer(Vec<u8>),
             List(Vec<Vec<Self>>),
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::return_value::tests::retired_recursive_list_record_encoding_is_rejected::LegacyEntrypointReturnRecordV1"
+        )]
         #[derive(Encode)]
         struct LegacyEntrypointReturnRecordV1 {
             schema_hash: [u8; 32],

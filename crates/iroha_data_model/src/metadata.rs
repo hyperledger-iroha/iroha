@@ -22,7 +22,7 @@ mod model {
     #[norito_schema(name = "iroha_data_model::metadata::model::Metadata")]
     pub struct Metadata(pub(super) BTreeMap<Name, Json>);
 }
-impl ncore::NoritoSerialize for Metadata {}
+
 impl ncore::SerializePayload for Metadata {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         // Metadata retains sequence-of-tuples bytes, including in packed mode.
@@ -74,20 +74,16 @@ impl ncore::SerializePayload for MetadataEntryRef<'_> {
     }
 }
 
-impl ncore::NoritoDeserialize<'_> for Metadata {}
 impl<'de> ncore::DeserializePayload<'de> for Metadata {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
-        let entries: Vec<(Name, Json)> =
-            <Vec<(Name, Json)> as ncore::DeserializePayload>::deserialize(archived.cast());
-        let mut map = BTreeMap::new();
-        for (name, json) in entries {
-            map.insert(name, json);
-        }
-        Metadata(map)
+        Self::try_deserialize(archived).expect("Metadata decode")
     }
     fn try_deserialize(archived: &'de ncore::Archived<Self>) -> Result<Self, ncore::Error> {
         let entries =
             <Vec<(Name, Json)> as ncore::DeserializePayload>::try_deserialize(archived.cast())?;
+        // The staged vector's charge does not cover the destination tree. Charge the shared
+        // conservative node estimate before insertion; this is codec accounting, not exact RSS.
+        ncore::reserve_decode_btree_allocation::<Name, Json>(entries.len())?;
         let mut map = BTreeMap::new();
         for (name, json) in entries {
             if map.insert(name, json).is_some() {
@@ -101,6 +97,8 @@ impl<'de> ncore::DeserializePayload<'de> for Metadata {
 mod tests {
     use super::*;
     use norito::codec::{decode_adaptive, encode_adaptive};
+    include!("metadata/allocation_tests.rs");
+    include!("metadata/wire_contract_tests.rs");
     #[test]
     fn metadata_serialization_matches_vec_layout() {
         let mut metadata = Metadata::default();

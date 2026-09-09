@@ -27,7 +27,8 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_repository_inventory_is_exact(self) -> None:
         result = GUARD.audit_source(SOURCE)
-        self.assertEqual(38, result.pair_count)
+        self.assertEqual(29, result.pair_count)
+        self.assertEqual(9, result.sdk_only_count)
         self.assertEqual(GUARD.EXPECTED_ABI_DIGEST, result.abi_digest)
         self.assertEqual(GUARD.EXPECTED_ATTRIBUTE_DIGEST, result.attribute_digest)
 
@@ -53,8 +54,8 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_rejects_platform_documentation_drift(self) -> None:
         mutated = SOURCE.replace(
-            "Validate a Torii Exact12 capability manifest for the Java Android SDK.",
-            "Validate a Torii Exact12 capability manifest for Android.",
+            "Validate a Torii Exact12 capability manifest for the Kotlin/JVM SDK.",
+            "Validate a Torii Exact12 capability manifest for SDK.",
             1,
         )
         self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
@@ -90,6 +91,23 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
         self.assertNotEqual(SOURCE, mutated)
         with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
             GUARD.audit_source(mutated)
+
+    def test_rejects_every_retired_android_privacy_export(self) -> None:
+        for suffix in GUARD.EXPECTED_SDK_ONLY_SUFFIXES:
+            with self.subTest(suffix=suffix):
+                with self.assertRaisesRegex(GUARD.AuditError, "retired Android"):
+                    GUARD.audit_source(SOURCE + "\n" + GUARD.ANDROID_PREFIX + suffix)
+
+    def test_confidential_exports_have_one_kotlin_owner(self) -> None:
+        source = (REPO_ROOT / "crates/connect_norito_bridge/src/confidential_note_ffi.rs").read_text()
+        GUARD.audit_confidential_source(source)
+        for method in GUARD.CONFIDENTIAL_PRIVACY_METHODS:
+            with self.subTest(method=method):
+                symbol = "Java_org_hyperledger_iroha_sdk_privacy_PrivacyNativeBridge_" + method
+                with self.assertRaisesRegex(GUARD.AuditError, "inventory changed"):
+                    GUARD.audit_confidential_source(source.replace(symbol, "removed", 1))
+                with self.assertRaisesRegex(GUARD.AuditError, "retired Android"):
+                    GUARD.audit_confidential_source(source + "\n" + symbol.replace("iroha_sdk_", "iroha_android_"))
 
 
 if __name__ == "__main__":

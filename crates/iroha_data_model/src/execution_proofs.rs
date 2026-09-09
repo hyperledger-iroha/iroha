@@ -99,6 +99,8 @@ pub struct RaceInputFrameV1 {
 }
 
 /// Consensus-authorized removals applied before one exact simulation tick.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceDnfEventV1")]
 #[derive(
     Clone,
     Debug,
@@ -132,7 +134,9 @@ pub struct RaceDnfEventV1 {
     IntoSchema,
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceReplayV1")]
 pub struct RaceReplayV1 {
     /// Immutable track selection.
     pub track: RaceTrackV1,
@@ -189,7 +193,9 @@ pub struct RaceCarStateV1 {
     IntoSchema,
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceStateV1")]
 pub struct RaceStateV1 {
     /// Number of completed ticks.
     pub tick: u32,
@@ -238,7 +244,9 @@ pub struct RaceStandingV1 {
     IntoSchema,
     DeriveJsonDeserialize,
     DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceResultV1")]
 pub struct RaceResultV1 {
     /// Exact number of simulated ticks.
     pub ticks: u32,
@@ -315,6 +323,8 @@ pub struct ExecutionPublicInputsV1 {
 }
 
 /// Exact first-release application-neutral native execution proof envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::ExecutionProofEnvelopeV1")]
 #[derive(
     Clone,
     Debug,
@@ -341,6 +351,8 @@ pub struct ExecutionProofEnvelopeV1 {
 
 /// Public replay availability and the exact native cryptographic execution proof.
 /// Replay data is intentionally public, allowing any replaceable worker to prove the race.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceProofPayloadV1")]
 #[derive(
     Clone,
     Debug,
@@ -374,6 +386,8 @@ pub struct RaceProofPayloadV1 {
 }
 
 /// Portable input to a local native prover or an untrusted proof worker.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceProverRequestV1")]
 #[derive(
     Clone,
     Debug,
@@ -455,6 +469,8 @@ pub struct ExecutionProofProfileV1 {
 }
 
 /// Compact receipt for mathematical execution validity; it does not authorize a race payout.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::ExecutionProofVerificationV1")]
 #[derive(
     Clone,
     Copy,
@@ -567,5 +583,23 @@ mod tests {
                 result
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceReplayV1,
+        >("iroha_data_model::execution_proofs::RaceReplayV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceResultV1,
+        >("iroha_data_model::execution_proofs::RaceResultV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::execution_proofs::RaceStateV1,
+        >("iroha_data_model::execution_proofs::RaceStateV1");
     }
 }

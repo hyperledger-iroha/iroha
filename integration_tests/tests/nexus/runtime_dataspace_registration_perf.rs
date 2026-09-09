@@ -596,7 +596,7 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
     let required_permission = Permission::from(CanPublishSpaceDirectoryManifest { dataspace });
     let grant_instruction = InstructionBox::from(Grant::account_permission(
         required_permission.clone(),
-        client.client().account.clone(),
+        client.client().account().clone(),
     ));
     let grant_tx = {
         let account = client.account_client();
@@ -618,7 +618,7 @@ async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpac
     .wrap_err("grant CanPublishSpaceDirectoryManifest permission transaction did not reach Approved state")?;
     wait_for_account_permissions(
         client,
-        &client.client().account,
+        client.client().account(),
         &[required_permission],
         "wait for CanPublishSpaceDirectoryManifest permission visibility",
     )
@@ -632,8 +632,9 @@ async fn submit_and_wait_for_tx_approval(
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
         submitter
-            .client()
-            .listen_for_events([TransactionEventFilter::default().for_hash(tx_hash)]),
+            .account_client()
+            .events()
+            .subscribe([TransactionEventFilter::default().for_hash(tx_hash)]),
     )
     .await
     .map_err(|_| eyre!("{context}: timed out opening transaction event stream"))??;
@@ -669,7 +670,7 @@ async fn submit_and_wait_for_tx_approval(
     })
     .await
     .map_err(|_| eyre!("{context}: timed out waiting for transaction approval"))??;
-    events.close().await;
+    events.close().await?;
     Ok((submit_latency, commit_apply_started.elapsed()))
 }
 fn benchmark_manifest(uaid: UniversalAccountId, issued_ms: u64) -> AssetPermissionManifest {

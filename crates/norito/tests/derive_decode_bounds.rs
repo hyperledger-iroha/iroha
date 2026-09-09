@@ -13,14 +13,17 @@ struct Dual {
 struct TupleDual(String, String);
 #[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
 struct EnumField(u32);
-#[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.derive_decode_bounds.DerivedTupleEnum")]
 enum DerivedTupleEnum {
     Pair(EnumField, u32),
     Boundary(EnumField, #[norito(skip)] ()),
 }
 #[derive(Debug, PartialEq, Eq)]
 struct LooseScalar(u32);
-impl norito::NoritoSerialize for LooseScalar {}
+
 impl norito::SerializePayload for LooseScalar {
     fn serialize(&self, encoder: &mut norito::core::Encoder<'_>) -> Result<(), Error> {
         norito::SerializePayload::serialize(&self.0, encoder)
@@ -32,7 +35,7 @@ impl norito::SerializePayload for LooseScalar {
         norito::SerializePayload::encoded_len_exact(&self.0)
     }
 }
-impl norito::NoritoDeserialize<'_> for LooseScalar {}
+
 impl<'a> norito::DeserializePayload<'a> for LooseScalar {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         Self(<u32 as norito::DeserializePayload>::deserialize(
@@ -43,7 +46,10 @@ impl<'a> norito::DeserializePayload<'a> for LooseScalar {
         <u32 as norito::DeserializePayload>::try_deserialize(archived.cast::<u32>()).map(Self)
     }
 }
-#[derive(Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode)]
+#[derive(
+    Debug, PartialEq, Eq, norito::derive::Encode, norito::derive::Decode, norito::NoritoSchema,
+)]
+#[norito_schema(name = "norito.test.derive_decode_bounds.LooseTupleEnum")]
 enum LooseTupleEnum {
     Value(LooseScalar),
 }

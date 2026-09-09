@@ -173,6 +173,10 @@ pub(super) enum ReservationJournalCompactionFault {
     AfterSyncBeforeReplayPublication,
 }
 /// One append-only reservation journal operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::queue::reservation_journal::LaneQueueReservationJournalFrameV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 enum LaneQueueReservationJournalFrameV1 {
     /// Typed file marker. Every initialized V1 journal begins with exactly this frame.

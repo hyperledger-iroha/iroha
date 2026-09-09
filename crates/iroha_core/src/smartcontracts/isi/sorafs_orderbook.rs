@@ -92,6 +92,10 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     64,
 );
 type OrderbookQueryCurrent = crate::smartcontracts::isi::query::SingularQueryCurrentAllocation;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_orderbook::OrderbookPersistedEventV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct OrderbookPersistedEventV1 {
     sequence: u64,
@@ -99,6 +103,10 @@ struct OrderbookPersistedEventV1 {
     event_index: u32,
     event: SorafsOrderbookLedgerEvent,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_orderbook::OrderbookEventJournalHeadV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct OrderbookEventJournalHeadV1 {
     last_sequence: u64,

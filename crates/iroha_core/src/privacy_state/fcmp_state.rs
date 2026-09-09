@@ -37,6 +37,8 @@ fn fcmp_root_from_native_v1(
 /// The complete typed root, active `(O, I, C)` branch, and every mixed-radix
 /// level are durable. Restore validates the native frontier and independently
 /// rebuilds it from the complete position-bound output registry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyFcmpAccumulatorStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyFcmpAccumulatorStateV1 {

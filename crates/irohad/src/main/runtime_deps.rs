@@ -47,7 +47,9 @@ pub struct IrohaRuntimeDeps {
         Option<Arc<dyn sorafs_node::GovernanceDagRequestAuthenticator>>,
     sorafs_governance_dag_checkpoint_store:
         Option<Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>>,
-    sorafs_stream_token_signer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>>,
+    sorafs_stream_token_hardware_client: Option<Arc<dyn iroha_torii::sorafs::StreamTokenHardwareClientV1>>,
+    sorafs_stream_token_state_observer: Option<Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1>>,
+    sorafs_stream_token_approved_anchor: Option<iroha_torii::sorafs::StreamTokenApprovedCustodyAnchorV1>,
     sorafs_stream_token_gateway_admission:
         Option<Arc<dyn iroha_torii::sorafs::StreamTokenGatewayAdmissionProviderV1>>,
     sorafs_appeal_finance_runtime_signers:
@@ -374,7 +376,9 @@ impl IrohaRuntimeDeps {
             && self.sorafs_governance_dag_ipfs_authenticator.is_none()
             && self.sorafs_governance_dag_head_authenticator.is_none()
             && self.sorafs_governance_dag_checkpoint_store.is_none()
-            && self.sorafs_stream_token_signer.is_none()
+            && self.sorafs_stream_token_hardware_client.is_none()
+            && self.sorafs_stream_token_state_observer.is_none()
+            && self.sorafs_stream_token_approved_anchor.is_none()
             && self.sorafs_stream_token_gateway_admission.is_none()
             && self.sorafs_appeal_finance_runtime_signers.is_none()
             && self.sorafs_appeal_finance_checkpoint_runtime.is_none()
@@ -523,10 +527,21 @@ impl IrohaRuntimeDeps {
         with_sorafs_governance_dag_checkpoint_store(
             checkpoint_store: Arc<dyn sorafs_node::GovernanceDagSealedCheckpointStore>,
         ) => sorafs_governance_dag_checkpoint_store;
-        /// Attach the production external signer for `SoraFS` stream-token issuance.
-        with_sorafs_stream_token_signer(
-            signer: Arc<dyn iroha_torii::sorafs::StreamTokenRuntimeSigner>,
-        ) => sorafs_stream_token_signer;
+        /// Attach the opaque hardware client for exact prepared stream-token operations.
+        /// Raw replies require independent challenged evidence before token release.
+        with_sorafs_stream_token_hardware_client(
+            client: Arc<dyn iroha_torii::sorafs::StreamTokenHardwareClientV1>,
+        ) => sorafs_stream_token_hardware_client;
+        /// Attach the separately routed state observer; its replies confer no authority alone.
+        with_sorafs_stream_token_state_observer(
+            observer: Arc<dyn iroha_torii::sorafs::StreamTokenStateObserverClientV1>,
+        ) => sorafs_stream_token_state_observer;
+        /// Attach an independently approved custody floor bound to the complete public pins.
+        /// The deployment obtains this separately from both untrusted transport clients.
+        /// Torii requires and validates it against its own finalized history at startup.
+        with_sorafs_stream_token_approved_anchor(
+            anchor: iroha_torii::sorafs::StreamTokenApprovedCustodyAnchorV1,
+        ) => sorafs_stream_token_approved_anchor;
         /// Attach the deployment-owned atomic stream-token quota, sealed sequence,
         /// and ordered callback-outbox provider.
         with_sorafs_stream_token_gateway_admission(

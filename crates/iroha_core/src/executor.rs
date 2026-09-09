@@ -7926,11 +7926,15 @@ where
     }
     Ok(ExecutorValidationReport { verdict, gas_used })
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::executor::MigrationResultPayload")]
 #[derive(Debug, Decode, Encode)]
 enum MigrationResultPayload {
     Ok(ExecutorDataModel),
     Err(ValidationFail),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::executor::MigrationUnitPayload")]
 #[derive(Debug, Decode, Encode)]
 enum MigrationUnitPayload {
     Ok(()),
@@ -11283,6 +11287,8 @@ impl LoadedExecutor {
 pub mod executor_norito {
     use super::*;
     /// Local DTO used for Norito encoding of `Executor`.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::executor::executor_norito::ExecutorDto")]
     #[derive(Encode, Decode)]
     enum ExecutorDto {
         Initial,

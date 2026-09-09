@@ -18,15 +18,27 @@ Package-level `package_binaries` requirements split each selected lane into
 binary-free and network package sets. The first set starts immediately after
 classification; only the second waits for release artifacts. The network
 packages are `iroha_test_network`, `izanami`, and `integration_tests`, which
-receive `iroha3d` and `iroha`. Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries
-for other package tests. Authenticated message-control and Parliament signer
-test daemons retain their separate feature-isolated build and provenance flow.
+receive `iroha3d` and `iroha`. The first and third also receive
+`iroha3d_message_control` through `TEST_NETWORK_BIN_IROHAD_MESSAGE_CONTROL`.
+Its `irohad/test-network-message-control` feature is compiled separately under
+`target/ci-binaries/message-control`; shipping artifacts use
+`target/ci-binaries/shipping`. Staging preserves both distinct daemon files.
+Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries for other package tests.
+
+Foundation-only source changes retain the affected library and local CLI
+checks, while deferring node-launching packages and the manifest's
+`daemon_packages` owners. This includes changes to `iroha_crypto` and `norito`:
+their reverse dependencies remain visible in classification evidence, but
+`irohad` is excluded from the selected Cargo commands. Package-triggered
+external consumers are also deferred. Direct consumer inputs, mixed source
+changes, unknown inputs and explicit full runs retain conservative selection.
+The JSON report records the tier and every deferred package and consumer.
 
 The same manifest routes the consistency checks (`iroha`, `kagami`), Kotodama
 documentation checks (`koto`), and Python network suites (`iroha3d`, `iroha`,
-`kagami`) by their affected packages or explicit paths. One release build
-produces only the union required by selected consumers. Prose-only changes
-under `docs/` and `specs/` request no release binaries. The Kotodama consumer
+`kagami`) by their affected packages or explicit paths. Binary production
+builds only the required union, grouped by feature isolation. Prose-only
+changes, including package READMEs, request no release binaries. The Kotodama consumer
 uses the canonical `specs/kotodama_v1_docs.json` inventory and the checker's exact fence/heredoc
 parser: it compares source bytes and `zk` modes against the PR merge base
 (`HEAD` for explicit local paths). Added, changed, deleted, or malformed
@@ -34,6 +46,13 @@ executable examples request `koto`; prose edits around unchanged examples do
 not. Inventory changes and missing Git/read evidence select the check
 conservatively. `docs/history` is excluded from executable qualification and
 cannot supply required or normative examples.
+
+The Parliament lifecycle, Nexus cross-dataspace and Nexus cross-lane proof
+corridors are separately selected consumers. Each declares its existing
+`qualified_runner` and retains that runner's owned binary construction and
+provenance checks. They do not download the PR shipping bundle. Ordinary prose
+and foundation-only changes do not run these corridors; direct corridor inputs,
+affected non-foundation owners and full selection do.
 The required result checks both Rust matrices, binary production,
 and every selected consumer, accepting a skipped job only when classification
 explicitly did not select it. Classifier failure never becomes a passing skip.
@@ -334,3 +353,17 @@ To keep CI deterministic, **do not** set `[build] build-dir` in
 need a custom build directory for local experimentation, export
 `CARGO_TARGET_DIR` in your shell session but reset it before running any
 `ci/check_*` script.
+
+## Privacy SDK dependency graph
+
+`ci/privacy_sdk_cargo_lockfile.sh` owns the one reviewed Cargo graph digest for
+both the workspace and native SDKs. `provision-ci` authenticates the tracked
+root lock, creates a separate read-only external snapshot from those exact
+bytes, and requires full `cargo metadata --locked` compatibility with the
+pinned toolchain before exporting build inputs. It never resolves a new graph
+or retries without `--locked`. Every privacy release selection must name the external
+file explicitly; root paths, internal paths, symlinks, hardlinks and fallback
+selectors are rejected. Root and external file identities remain independently
+sealed even though their bytes match. Changed manifests or dependencies require
+an explicit graph review, a coherent owner update, and fresh native artifacts;
+source, wheel, ABI, hardware and clean-release gates still apply.

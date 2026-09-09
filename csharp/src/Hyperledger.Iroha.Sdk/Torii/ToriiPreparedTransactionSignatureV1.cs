@@ -9,10 +9,10 @@ namespace Hyperledger.Iroha.Torii;
 /// <summary>Builds and verifies the fixed V1 prepared-transaction signature transcript.</summary>
 internal static class ToriiPreparedTransactionSignatureV1
 {
-    internal const string TranscriptSchema = "iroha.taira.prepared-signature-transcript.v1";
+    internal const string TranscriptSchema = "iroha.prepared-signature-transcript.v1";
 
     private static readonly byte[] SignatureDomain =
-        "iroha:taira:prepared-transaction:v1\0"u8.ToArray();
+        "iroha:prepared-transaction:v1\0"u8.ToArray();
 
     internal static byte[] OnboardingPreparedTranscript(
         ToriiAccountOnboardingPreparedTransactionV1 prepared,
@@ -111,7 +111,7 @@ internal static class ToriiPreparedTransactionSignatureV1
     private static List<byte> BaseTranscript(
         string envelopeSchema,
         string operation,
-        ToriiTairaPublicResetMutationBindingV1 binding)
+        ToriiPreparedOperationBindingV1 binding)
     {
         ArgumentNullException.ThrowIfNull(binding);
         var transcript = new List<byte>();
@@ -120,17 +120,9 @@ internal static class ToriiPreparedTransactionSignatureV1
         AppendField(transcript, "envelope_schema", envelopeSchema);
         AppendField(transcript, "operation", operation);
         AppendField(transcript, "binding.schema", binding.Schema);
-        AppendField(
-            transcript,
-            "binding.authorization_sha256",
-            binding.AuthorizationSha256);
-        AppendField(
-            transcript,
-            "binding.authorization_nonce",
-            binding.AuthorizationNonce);
+        AppendField(transcript, "binding.semantic_hash_hex", binding.SemanticHashHex);
         AppendField(transcript, "binding.kind", binding.Kind);
-        AppendField(transcript, "binding.phase", binding.Phase);
-        AppendField(transcript, "binding.idempotency_key", binding.IdempotencyKey);
+        AppendField(transcript, "binding.request_id", binding.RequestId);
         AppendField(
             transcript,
             "binding.execution_expires_at_unix_ms",

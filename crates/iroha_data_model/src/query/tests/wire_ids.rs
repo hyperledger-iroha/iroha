@@ -191,11 +191,6 @@ impl norito::core::SerializePayload for PayloadOnlyQuery {
     }
 }
 
-impl norito::core::NoritoDeserialize<'_> for PayloadOnlyQuery {
-    fn schema_hash() -> [u8; 16] {
-        panic!("bare query decoding must not request a frame schema")
-    }
-}
 impl<'de> norito::core::DeserializePayload<'de> for PayloadOnlyQuery {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("validated query payload")

@@ -9,8 +9,16 @@ pub const EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
 /// logs. Full cryptographic proof systems can use these commitments as stable
 /// public material while preserving identical output across hardware.
 #[derive(
-    Debug, Clone, Default, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize,
+    Debug,
+    Clone,
+    Default,
+    PartialEq,
+    Eq,
+    norito::NoritoSerialize,
+    norito::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "ivm::execution_summary::ExecutionSummary")]
 pub struct ExecutionSummary {
     /// Summary format version.
     pub version: u16,

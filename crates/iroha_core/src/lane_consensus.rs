@@ -115,6 +115,8 @@ pub(crate) const MAX_LANE_NEW_VIEW_CERTIFICATES: usize = 256;
 /// advances the synthetic retransmission cursor. The producer signature also
 /// excludes only the advisory hint while separately binding the payload hash
 /// to the immutable certification proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneExecutablePayloadV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneExecutablePayloadV1 {
     /// Artifact schema version. Only version two is accepted.
@@ -147,6 +149,8 @@ pub struct LaneExecutablePayloadV1 {
     /// BLS-normal signature over the producer-bound payload preimage.
     pub producer_signature: Vec<u8>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneExecutablePayloadPreimage")]
 #[derive(Clone, Debug, Encode)]
 struct LaneExecutablePayloadPreimage {
     purpose: String,
@@ -173,6 +177,8 @@ struct LaneExecutablePayloadPreimage {
     routing_plans: Vec<RoutingPlan>,
     native_amx_receipts: Vec<Option<NativeAmxReceipt>>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneExecutablePayloadSignaturePreimage")]
 #[derive(Clone, Debug, Encode)]
 struct LaneExecutablePayloadSignaturePreimage {
     purpose: String,
@@ -187,6 +193,8 @@ struct LaneExecutablePayloadSignaturePreimage {
 }
 /// Authenticated request to advance one lane height to the next view while
 /// retaining the exact executable payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneBlockNewViewBodyV1")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct LaneBlockNewViewBodyV1 {
     /// Certificate schema version. Only version one is accepted.
@@ -243,6 +251,8 @@ impl LaneBlockNewViewBodyV1 {
     }
 }
 /// Individual committee vote for a lane-local view transition.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneBlockNewViewVoteV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockNewViewVoteV1 {
     /// Common body signed by the committee member.
@@ -254,6 +264,8 @@ pub struct LaneBlockNewViewVoteV1 {
 }
 /// Individual authoritative-lane-committee vote closing an incarnation at an
 /// exact globally merged frontier.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneDrainVoteV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneDrainVoteV1 {
     /// Common drain body signed by the committee member.
@@ -447,6 +459,8 @@ impl LaneDrainVoteState {
     }
 }
 /// Individual READY vote for one exact autonomous lane executable payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LanePayloadAvailabilityVoteV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct LanePayloadAvailabilityVoteV1 {
     /// Exact payload/session body signed by the committee member.
@@ -459,6 +473,8 @@ pub struct LanePayloadAvailabilityVoteV1 {
     pub bls_signature: Vec<u8>,
 }
 /// Quorum certificate authorizing one lane-local view transition.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneBlockNewViewCertificateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneBlockNewViewCertificateV1 {
     /// Body certified by the aggregate signature.
@@ -472,6 +488,8 @@ pub struct LaneBlockNewViewCertificateV1 {
 }
 /// Persistable NewView certificate plus the exact PoPs needed to verify it
 /// after restart without trusting current mutable topology state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::DurableLaneBlockNewViewCertificateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct DurableLaneBlockNewViewCertificateV1 {
     /// Authenticated lane-local NewView certificate.
@@ -489,6 +507,8 @@ pub(crate) struct DurableLaneBlockNewViewCertificateV1 {
 /// [`LaneExecutablePayloadV1::origin_proposal`]: NewView certificates may move
 /// a synthetic lane-local cursor, but must never create a second availability
 /// or certification subject for the immutable payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::DurableLanePayloadAvailabilityCertificateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct DurableLanePayloadAvailabilityCertificateV1 {
     /// Prepare QC containing the exact aggregate READY certificate.
@@ -500,6 +520,8 @@ pub(crate) struct DurableLanePayloadAvailabilityCertificateV1 {
 /// exact next-view `target_proposal`. Both proposals are retained so restart
 /// validation never has to trust a mutable topology, an implicit view number,
 /// or certificates that were deliberately compacted away.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::DurableLaneBlockViewCheckpointV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct DurableLaneBlockViewCheckpointV1 {
     /// Synthetic cursor proposal locked by the compacting NewView quorum.
@@ -2625,6 +2647,8 @@ impl LaneBlockNewViewCertificateCache {
     }
 }
 /// Individual lane-local block vote before committee aggregation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::lane_consensus::LaneBlockVoteV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize)]
 pub struct LaneBlockVoteV1 {
     /// Body signed by the lane validator.
@@ -7701,6 +7725,10 @@ mod tests {
     }
     #[test]
     fn lane_block_vote_explicit_none_roundtrips_and_omission_fails_closed() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::lane_consensus::tests::lane_block_vote_explicit_none_roundtrips_and_omission_fails_closed::LegacyLaneBlockVoteV1"
+        )]
         #[derive(Encode)]
         struct LegacyLaneBlockVoteV1 {
             body: LaneBlockVoteBodyV1,

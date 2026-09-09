@@ -769,11 +769,12 @@ fn replica_adverts_expiring_during_compaction_block_stage_publication() {
             !registry.is_empty(),
             "the fixture must install exact selected-keeper adverts"
         );
-        for adverts in registry.values_mut() {
+        registry.retain(|_, adverts| {
             for advert in adverts.values_mut() {
                 advert.observed_at = expired_at;
             }
-        }
+            true
+        });
     }
     kura.resume_eviction_before_stage_publication_for_tests();
     let freed = handle.join().expect("eviction thread");
@@ -1078,6 +1079,7 @@ fn eviction_flushes_pending_fsync_before_rewrite() {
         fsync_mode: FsyncMode::Batched,
         fsync_interval: Duration::from_secs(3600),
         lane_history_retention: LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) =
@@ -1186,6 +1188,7 @@ fn evicted_block_caches_after_remote_rehydrate() {
             fsync_mode: FsyncMode::Batched,
             fsync_interval: FSYNC_INTERVAL,
             lane_history_retention: LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         &RuntimeLaneConfig::default(),

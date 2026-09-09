@@ -1,13 +1,13 @@
-//! Canonical SoraNet transport, anonymity, and rollout policies.
+//! Canonical `SoraNet` transport, anonymity, and rollout policies.
 
 /// Transport policy applied when selecting providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TransportPolicy {
-    /// Prefer relays that advertise SoraNet support while keeping direct transports as a fallback.
+    /// Prefer relays that advertise `SoraNet` support while keeping direct transports as a fallback.
     /// Multi-source adopters now use this policy by default.
     #[default]
     SoranetPreferred,
-    /// Require SoraNet transport and fail instead of falling back to direct providers.
+    /// Require `SoraNet` transport and fail instead of falling back to direct providers.
     SoranetStrict,
     /// Enforce direct mode by restricting selection to providers that expose Torii/QUIC transports.
     /// Use this explicit downgrade when relays are unhealthy or compliance mandates direct fetches.
@@ -37,12 +37,12 @@ impl TransportPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[allow(clippy::enum_variant_names)]
 pub enum AnonymityPolicy {
-    /// Stage A (default): require that at least one SoraNet hop (guard) advertises PQ capability.
+    /// Stage A (default): require that at least one `SoraNet` hop (guard) advertises PQ capability.
     #[default]
     GuardPq,
-    /// Stage B: prefer PQ-capable relays for a majority of SoraNet hops (≥ two thirds).
+    /// Stage B: prefer PQ-capable relays for a majority of `SoraNet` hops (≥ two thirds).
     MajorityPq,
-    /// Stage C: enforce PQ-only SoraNet paths, falling back to direct transports otherwise.
+    /// Stage C: enforce PQ-only `SoraNet` paths, falling back to direct transports otherwise.
     StrictPq,
 }
 impl AnonymityPolicy {
@@ -74,7 +74,7 @@ impl AnonymityPolicy {
         }
     }
 }
-/// Rollout phase controlling the default anonymity stage applied to SoraNet paths.
+/// Rollout phase controlling the default anonymity stage applied to `SoraNet` paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum RolloutPhase {
     /// Canary wave — require at least one PQ-capable guard (Stage A).
@@ -82,7 +82,7 @@ pub enum RolloutPhase {
     Canary,
     /// Ramp wave — prefer PQ-capable relays for ≥ two thirds of hops (Stage B).
     Ramp,
-    /// Default GA posture — enforce PQ-only SoraNet paths (Stage C).
+    /// Default GA posture — enforce PQ-only `SoraNet` paths (Stage C).
     Default,
 }
 impl RolloutPhase {

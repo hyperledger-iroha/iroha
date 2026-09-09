@@ -273,6 +273,10 @@ impl test_evidence_transparency::EvidenceViewerTransparencyPublisherV1
         )
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::NestedDecodeBudgetProbeV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct NestedDecodeBudgetProbeV1 {
     first: Vec<u8>,
@@ -1345,17 +1349,28 @@ struct ServerTestPorReplayArchive {
     later_binding: Option<node::PorFinalizedReplayArchiveBindingV1>,
     binding_calls: AtomicU64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::PorReplayArchiveChallengeStateFixtureV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PorReplayArchiveChallengeStateFixtureV1 {
     challenge: sorafs_manifest::por::PorChallengeV1,
     proof_digest: Option<[u8; 32]>,
     proof_submitted_at: Option<u64>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "sorafs_node::por::PorFinalizedReplayArchiveRecordV1")]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::PorReplayArchiveRecordFixtureV1",
+    frame = "sorafs_node::por::PorFinalizedReplayArchiveRecordV1"
+)]
 struct PorReplayArchiveRecordFixtureV1 {
     finalized: PorReplayArchiveFinalizedStateFixtureV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::PorReplayArchiveFinalizedStateFixtureV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PorReplayArchiveFinalizedStateFixtureV1 {
     state: PorReplayArchiveChallengeStateFixtureV1,

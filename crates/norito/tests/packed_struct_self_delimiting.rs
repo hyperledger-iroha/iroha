@@ -13,7 +13,8 @@ struct NamedPackedSelfDelimiting {
 }
 #[derive(Debug, PartialEq, Eq, Encode, Decode)]
 struct TuplePackedSelfDelimiting(BTreeSet<String>, Option<String>, Vec<String>);
-#[derive(Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(name = "norito.test.packed_struct_self_delimiting.PackedSelfDelimitingEnum")]
 enum PackedSelfDelimitingEnum {
     Named {
         domains: BTreeSet<String>,

@@ -1663,27 +1663,8 @@ impl IVMHost for CoreHost {
                 let input_len = v_tlv.payload.len();
                 if let Some(bytes) = self.schema.encode_json(&schema, json.get().as_bytes()) {
                     if crate::dev_env::decode_trace_enabled() {
-                        // Try immediate roundtrip for known schemas to validate encoding
-                        let roundtrip_ok = match schema.as_str() {
-                            "Order" => {
-                                #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                                struct Order {
-                                    qty: i64,
-                                    side: String,
-                                }
-                                norito::decode_from_bytes::<Order>(&bytes).is_ok()
-                            }
-                            "OrderByTime" => {
-                                #[derive(norito::Decode, norito::Encode, Clone, Debug)]
-                                struct OrderByTime {
-                                    qty: i64,
-                                    side: String,
-                                    tif: u32,
-                                }
-                                norito::decode_from_bytes::<OrderByTime>(&bytes).is_ok()
-                            }
-                            _ => true,
-                        };
+                        // Trace through the same registered owner that produced this frame.
+                        let roundtrip_ok = self.schema.decode_to_json(&schema, &bytes).is_some();
                         eprintln!(
                             "[CoreHost] SCHEMA_ENCODE immediate_roundtrip schema={schema} ok={roundtrip_ok} len={len}",
                             len = bytes.len()

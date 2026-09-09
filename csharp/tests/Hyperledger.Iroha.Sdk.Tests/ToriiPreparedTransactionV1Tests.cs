@@ -88,9 +88,9 @@ public sealed partial class ToriiClientTests
         var vector = PreparedTransactionSignatureVector("onboarding_proof_required");
         var proofRequired = DeserializePreparedFixture<ToriiAccountOnboardingProofRequiredPrepareResponseV1>(
             vector.GetProperty("response"));
-        var signer = AccountAddress.Parse(
-            vector.GetProperty("signer_account_id").GetString()
-            ?? throw new InvalidOperationException("Prepared fixture signer account is missing."));
+        // Exercise transcript authentication with the shared fixture's exact public key.
+        // The golden and complete-envelope cases separately verify its canonical account binding.
+        var signerPublicKey = PreparedFixturePublicKey(vector);
         var mutations = new ToriiAccountOnboardingProofRequiredPrepareResponseV1[]
         {
             proofRequired with { Schema = $"{proofRequired.Schema}.tampered" },
@@ -115,14 +115,14 @@ public sealed partial class ToriiClientTests
             {
                 Binding = proofRequired.Binding with
                 {
-                    AuthorizationSha256 = new string('a', 64),
+                    SemanticHashHex = new string('a', 64),
                 },
             },
             proofRequired with
             {
                 Binding = proofRequired.Binding with
                 {
-                    AuthorizationNonce = new string('z', 32),
+                    RequestId = new string('a', 64),
                 },
             },
             proofRequired with
@@ -131,13 +131,9 @@ public sealed partial class ToriiClientTests
             },
             proofRequired with
             {
-                Binding = proofRequired.Binding with { Phase = "tampered" },
-            },
-            proofRequired with
-            {
                 Binding = proofRequired.Binding with
                 {
-                    IdempotencyKey = new string('b', 64),
+                    RequestId = new string('b', 64),
                 },
             },
             proofRequired with
@@ -157,7 +153,7 @@ public sealed partial class ToriiClientTests
             Assert.Throws<JsonException>(() => ToriiPreparedTransactionSignatureV1.Verify(
                 transcript,
                 proofRequired.ServerSignature,
-                signer.PublicKey,
+                signerPublicKey,
                 "tampered proof-required fixture"));
         }
 
@@ -166,7 +162,7 @@ public sealed partial class ToriiClientTests
         Assert.Throws<JsonException>(() => ToriiPreparedTransactionSignatureV1.Verify(
             originalTranscript,
             proofRequired.ServerSignature.ToLowerInvariant(),
-            signer.PublicKey,
+            signerPublicKey,
             "lowercase signature fixture"));
     }
 
@@ -193,7 +189,7 @@ public sealed partial class ToriiClientTests
         node["disposition"]!["value"] = "substituted";
         var proofRequired = DeserializePreparedFixture<ToriiAccountOnboardingProofRequiredPrepareResponseV1>(
             response);
-        var receipt = SharedOnboardingReceipt();
+        var receipt = PreparedOnboardingReceipt();
         using var handler = new RecordingHandler(_ =>
             JsonResponse(node.ToJsonString(), HttpStatusCode.OK));
         using var client = new ToriiClient(
@@ -208,14 +204,14 @@ public sealed partial class ToriiClientTests
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public void ReceiptTrustPinUsesAccountPayloadIdentityAcrossI105Displays()
     {
-        var receipt = SharedOnboardingReceipt();
+        var receipt = PreparedOnboardingReceipt();
         var authority = AccountAddress.Parse(receipt.Body.Authority);
         var alternate = authority.ToI105(AccountAddress.DevChainDiscriminant);
         if (string.Equals(alternate, receipt.Body.Authority, StringComparison.Ordinal))
@@ -228,7 +224,7 @@ public sealed partial class ToriiClientTests
             receipt,
             alternate,
             SharedOnboardingReceiptNetworkId,
-            SharedOnboardingBodyEncoder));
+            PreparedOnboardingBodyEncoder));
     }
 
     [Fact]
@@ -252,7 +248,7 @@ public sealed partial class ToriiClientTests
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken);
 
         Assert.Null(result.ProofRequired);
@@ -267,7 +263,7 @@ public sealed partial class ToriiClientTests
         var response = vector.GetProperty("response");
         var expected = DeserializePreparedFixture<ToriiAccountOnboardingProofRequiredPrepareResponseV1>(
             response);
-        var receipt = SharedOnboardingReceipt();
+        var receipt = PreparedOnboardingReceipt();
         using var handler = new RecordingHandler(_ =>
             JsonResponse(response.GetRawText(), HttpStatusCode.OK));
         using var client = new ToriiClient(
@@ -282,7 +278,7 @@ public sealed partial class ToriiClientTests
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken);
 
         Assert.Null(result.Prepared);
@@ -410,13 +406,13 @@ public sealed partial class ToriiClientTests
             TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         var proof = await client.ProveAccountOnboardingCurrentStateAsync(
-            SharedOnboardingReceipt().Body.Request,
+            PreparedOnboardingReceipt().Body.Request,
             proofRequired,
-            SharedOnboardingReceipt(),
+            PreparedOnboardingReceipt(),
             proofRequired.Binding,
             vector.GetProperty("signer_account_id").GetString()!,
             expectedNetworkId,
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ToriiAccountOnboardingCurrentStateKindV1.Applied, proof.Kind);
@@ -501,13 +497,13 @@ public sealed partial class ToriiClientTests
                 new HttpClient(handler));
 
             var proof = await client.ProveAccountOnboardingCurrentStateAsync(
-                SharedOnboardingReceipt().Body.Request,
+                PreparedOnboardingReceipt().Body.Request,
                 proofRequired,
-                SharedOnboardingReceipt(),
+                PreparedOnboardingReceipt(),
                 proofRequired.Binding,
                 vector.GetProperty("signer_account_id").GetString()!,
                 expectedNetworkId,
-                SharedOnboardingBodyEncoder,
+                PreparedOnboardingBodyEncoder,
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(expectedKind, proof.Kind);
@@ -576,13 +572,13 @@ public sealed partial class ToriiClientTests
                 new HttpClient(handler));
 
             await Assert.ThrowsAsync<JsonException>(() => client.ProveAccountOnboardingCurrentStateAsync(
-                SharedOnboardingReceipt().Body.Request,
+                PreparedOnboardingReceipt().Body.Request,
                 proofRequired,
-                SharedOnboardingReceipt(),
+                PreparedOnboardingReceipt(),
                 proofRequired.Binding,
                 vector.GetProperty("signer_account_id").GetString()!,
                 PreparedTransactionSignatureNetworkId(vector),
-                SharedOnboardingBodyEncoder,
+                PreparedOnboardingBodyEncoder,
                 TestContext.Current.CancellationToken));
             Assert.Equal(1, calls);
         }
@@ -610,13 +606,13 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ProveAccountOnboardingCurrentStateAsync(
-            SharedOnboardingReceipt().Body.Request,
+            PreparedOnboardingReceipt().Body.Request,
             proofRequired,
-            SharedOnboardingReceipt(),
+            PreparedOnboardingReceipt(),
             proofRequired.Binding,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken));
 
         Assert.Contains("4096-byte limit", error.Message, StringComparison.Ordinal);
@@ -645,13 +641,13 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() => client.ProveAccountOnboardingCurrentStateAsync(
-            SharedOnboardingReceipt().Body.Request,
+            PreparedOnboardingReceipt().Body.Request,
             proofRequired,
-            SharedOnboardingReceipt(),
+            PreparedOnboardingReceipt(),
             proofRequired.Binding,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken));
 
         Assert.Contains("account_exists must not appear more than once", error.Message, StringComparison.Ordinal);
@@ -763,7 +759,7 @@ public sealed partial class ToriiClientTests
             AccountOnboardingToken,
             vector.GetProperty("signer_account_id").GetString()!,
             PreparedTransactionSignatureNetworkId(vector),
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken);
 
         Assert.Equal("Pending", outcome.Outcome);
@@ -789,7 +785,7 @@ public sealed partial class ToriiClientTests
                 AccountOnboardingToken,
                 onboardingVector.GetProperty("signer_account_id").GetString()!,
                 PreparedTransactionSignatureNetworkId(onboardingVector),
-                SharedOnboardingBodyEncoder,
+                PreparedOnboardingBodyEncoder,
                 TestContext.Current.CancellationToken));
         Assert.Null(onboardingHandler.LastRequest);
 
@@ -938,7 +934,7 @@ public sealed partial class ToriiClientTests
             },
             prepared with
             {
-                Binding = prepared.Binding with { Phase = "tampered" },
+                Binding = prepared.Binding with { RequestId = new string('a', 64) },
             },
         };
 
@@ -963,7 +959,7 @@ public sealed partial class ToriiClientTests
     [Fact]
     public async Task PrepareAccountOnboardingAsyncPostsOnlyClosedPrepareRequest()
     {
-        var receipt = SharedOnboardingReceipt();
+        var receipt = PreparedOnboardingReceipt();
         var binding = ValidPreparedMutationBinding(
             ToriiAccountOnboardingPreparedTransactionV1.OperationV1);
         using var handler = new RecordingHandler(request =>
@@ -978,8 +974,8 @@ public sealed partial class ToriiClientTests
                 ToriiAccountOnboardingPrepareRequestV1.SchemaV1,
                 payload.RootElement.GetProperty("schema").GetString());
             Assert.Equal(
-                binding.IdempotencyKey,
-                payload.RootElement.GetProperty("binding").GetProperty("idempotency_key").GetString());
+                binding.RequestId,
+                payload.RootElement.GetProperty("binding").GetProperty("request_id").GetString());
             Assert.Equal(
                 receipt.PlanHash,
                 payload.RootElement.GetProperty("receipt").GetProperty("plan_hash").GetString());
@@ -1002,7 +998,7 @@ public sealed partial class ToriiClientTests
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             SharedOnboardingReceiptNetworkId,
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             cancellationToken: TestContext.Current.CancellationToken));
     }
 
@@ -1021,8 +1017,8 @@ public sealed partial class ToriiClientTests
             new HttpClient(handler));
 
         await Assert.ThrowsAsync<JsonException>(() => client.PrepareAccountOnboardingAsync(
-            SharedOnboardingReceipt().Body.Request,
-            SharedOnboardingReceipt(),
+            PreparedOnboardingReceipt().Body.Request,
+            PreparedOnboardingReceipt(),
             DeserializePreparedFixture<ToriiAccountOnboardingProofRequiredPrepareResponseV1>(
                 response).Binding,
             PreparedAccountFeePayment,
@@ -1032,14 +1028,14 @@ public sealed partial class ToriiClientTests
                 .GetString()!,
             PreparedTransactionSignatureNetworkId(
                 PreparedTransactionSignatureVector("onboarding_proof_required")),
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken));
     }
 
     [Fact]
     public async Task PrepareAccountOnboardingAsyncRejectsPermissionSubstitutionBeforeDispatch()
     {
-        var receipt = SharedOnboardingReceipt();
+        var receipt = PreparedOnboardingReceipt();
         var substituted = receipt with
         {
             Body = receipt.Body with
@@ -1059,7 +1055,7 @@ public sealed partial class ToriiClientTests
             new Uri("https://torii.example"),
             new HttpClient(handler));
 
-        await Assert.ThrowsAsync<JsonException>(() => client.PrepareAccountOnboardingAsync(
+        var error = await Assert.ThrowsAsync<ArgumentException>(() => client.PrepareAccountOnboardingAsync(
             receipt.Body.Request,
             substituted,
             ValidPreparedMutationBinding(ToriiAccountOnboardingPreparedTransactionV1.OperationV1),
@@ -1067,15 +1063,16 @@ public sealed partial class ToriiClientTests
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             SharedOnboardingReceiptNetworkId,
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken));
+        Assert.Contains("plan hash", error.Message, StringComparison.Ordinal);
         Assert.Null(handler.LastRequest);
     }
 
     [Fact]
     public async Task PrepareAccountOnboardingAsyncRejectsAccountDisplaySubstitutionBeforeDispatch()
     {
-        var receipt = SharedOnboardingReceipt();
+        var receipt = PreparedOnboardingReceipt();
         var account = AccountAddress.Parse(receipt.Body.Request.AccountId);
         var alternateAccountId = account.ToI105(AccountAddress.DevChainDiscriminant);
         if (string.Equals(alternateAccountId, receipt.Body.Request.AccountId, StringComparison.Ordinal))
@@ -1097,7 +1094,7 @@ public sealed partial class ToriiClientTests
             AccountOnboardingToken,
             OnboardingFixtureAuthority,
             SharedOnboardingReceiptNetworkId,
-            SharedOnboardingBodyEncoder,
+            PreparedOnboardingBodyEncoder,
             TestContext.Current.CancellationToken));
 
         Assert.Null(handler.LastRequest);
@@ -1146,16 +1143,16 @@ public sealed partial class ToriiClientTests
     {
         var valid = ValidPreparedMutationBinding(
             ToriiAccountFaucetPreparedTransactionV1.OperationV1);
-        yield return [valid with { Schema = "iroha.taira.public-reset.mutation-binding.v2" }];
-        yield return [valid with { AuthorizationSha256 = new string('A', 64) }];
-        yield return [valid with { AuthorizationSha256 = new string('a', 63) }];
-        yield return [valid with { AuthorizationNonce = new string('N', 32) }];
-        yield return [valid with { AuthorizationNonce = new string('n', 31) }];
+        yield return [valid with { Schema = "iroha.prepared-operation.binding.v2" }];
+        yield return [valid with { SemanticHashHex = new string('A', 64) }];
+        yield return [valid with { SemanticHashHex = new string('a', 63) }];
+        yield return [valid with { RequestId = new string('B', 64) }];
+        yield return [valid with { RequestId = new string('b', 63) }];
         yield return [valid with { Kind = "onboarding" }];
-        yield return [valid with { Phase = "pre edge" }];
-        yield return [valid with { Phase = string.Empty }];
-        yield return [valid with { IdempotencyKey = new string('B', 64) }];
-        yield return [valid with { IdempotencyKey = new string('b', 65) }];
+        yield return [valid with { Kind = "faucet " }];
+        yield return [valid with { Kind = string.Empty }];
+        yield return [valid with { Schema = "iroha.taira.public-reset.mutation-binding.v1" }];
+        yield return [valid with { RequestId = new string('b', 65) }];
         yield return [valid with { ExecutionExpiresAtUnixMilliseconds = 0 }];
         yield return
         [
@@ -1170,7 +1167,7 @@ public sealed partial class ToriiClientTests
     [Theory]
     [MemberData(nameof(InvalidPreparedMutationBindings))]
     public async Task PrepareAccountFaucetAsyncRejectsNoncanonicalBindingBeforeDispatch(
-        ToriiTairaPublicResetMutationBindingV1 binding)
+        ToriiPreparedOperationBindingV1 binding)
     {
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("noncanonical binding reached HTTP dispatch"));
@@ -1215,7 +1212,7 @@ public sealed partial class ToriiClientTests
             new ToriiAccountOnboardingPrepareRequestV1(
                 ValidPreparedMutationBinding(
                     ToriiAccountOnboardingPreparedTransactionV1.OperationV1),
-                SharedOnboardingReceipt(),
+                PreparedOnboardingReceipt(),
                 PreparedAccountFeePayment))!.AsObject();
         Assert.True(onboardingPrepare.Remove("fee_payment"));
         Assert.Throws<JsonException>(() =>
@@ -1299,10 +1296,10 @@ public sealed partial class ToriiClientTests
             "Fixtures",
             "prepared_transaction_signature_v1.json")));
         Assert.Equal(
-            "iroha.taira.prepared-transaction-signature-fixture.v1",
+            "iroha.prepared-transaction-signature-fixture.v1",
             fixture.RootElement.GetProperty("schema").GetString());
         Assert.Equal(
-            "69726f68613a74616972613a70726570617265642d7472616e73616374696f6e3a763100",
+            "69726f68613a70726570617265642d7472616e73616374696f6e3a763100",
             fixture.RootElement.GetProperty("signature_domain_hex").GetString());
         Assert.Equal(
             ToriiPreparedTransactionSignatureV1.TranscriptSchema,

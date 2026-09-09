@@ -16,9 +16,31 @@ mod handle_update_tests {
     fn random_node_peer_id() -> PeerId {
         PeerId::from(random_node_key_pair().public_key().clone())
     }
+    #[test]
+    fn captured_original_test_payload_identities() {
+        crate::frame_identity_tests::manual_test_payload_identity::<FailingSerializerPayload>(
+            "iroha_p2p::network::handle_update_tests::FailingSerializerPayload",
+        );
+        crate::frame_identity_tests::manual_test_payload_identity::<BadLengthHintPayload>(
+            "iroha_p2p::network::handle_update_tests::BadLengthHintPayload",
+        );
+        crate::frame_identity_tests::test_payload_identity::<Dummy>(
+            "iroha_p2p::network::handle_update_tests::Dummy",
+        );
+        crate::frame_identity_tests::test_payload_identity::<CloneCountingPayload>(
+            "iroha_p2p::network::handle_update_tests::CloneCountingPayload",
+        );
+        crate::frame_identity_tests::test_payload_identity::<RoutedActorDummy>(
+            "iroha_p2p::network::handle_update_tests::RoutedActorDummy",
+        );
+    }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::handle_update_tests::Dummy")]
     #[derive(Clone, Debug, Decode, Encode)]
     struct Dummy;
     impl message::ClassifyTopic for Dummy {}
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::handle_update_tests::CloneCountingPayload")]
     #[derive(Debug, Decode, Encode)]
     struct CloneCountingPayload(Vec<u8>);
     static ACTOR_SIZE_CLONES: AtomicUsize = AtomicUsize::new(0);
@@ -38,9 +60,10 @@ mod handle_update_tests {
             Ok((value, bytes.len() - slice.len()))
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::handle_update_tests::BadLengthHintPayload")]
     #[derive(Clone, Debug)]
     struct BadLengthHintPayload;
-    impl ncore::NoritoSerialize for BadLengthHintPayload {}
     impl ncore::SerializePayload for BadLengthHintPayload {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             writer.write_all(&[1, 2, 3, 4])?;
@@ -50,7 +73,6 @@ mod handle_update_tests {
             Some(1)
         }
     }
-    impl ncore::NoritoDeserialize<'_> for BadLengthHintPayload {}
     impl<'a> ncore::DeserializePayload<'a> for BadLengthHintPayload {
         fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
             Self
@@ -65,9 +87,10 @@ mod handle_update_tests {
         }
     }
     impl message::ClassifyTopic for BadLengthHintPayload {}
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::handle_update_tests::FailingSerializerPayload")]
     #[derive(Clone, Debug)]
     struct FailingSerializerPayload;
-    impl ncore::NoritoSerialize for FailingSerializerPayload {}
     impl ncore::SerializePayload for FailingSerializerPayload {
         fn serialize(&self, _writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
             Err(ncore::Error::Message(
@@ -75,7 +98,6 @@ mod handle_update_tests {
             ))
         }
     }
-    impl ncore::NoritoDeserialize<'_> for FailingSerializerPayload {}
     impl<'a> ncore::DeserializePayload<'a> for FailingSerializerPayload {
         fn deserialize(_archived: &'a ncore::Archived<Self>) -> Self {
             Self
@@ -98,6 +120,8 @@ mod handle_update_tests {
             Ok((value, bytes.len() - slice.len()))
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_p2p::network::handle_update_tests::RoutedActorDummy")]
     #[derive(Clone, Debug, Decode, Encode, PartialEq, Eq)]
     enum RoutedActorDummy {
         Safety,

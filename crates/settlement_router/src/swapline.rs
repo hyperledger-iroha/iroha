@@ -23,6 +23,8 @@ use norito::{
     From,
 )]
 #[display("{_0}")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::swapline::SwapLineId")]
 pub struct SwapLineId(pub u32);
 /// Asset class eligible for posting as collateral against a swap line.
 #[derive(
@@ -38,6 +40,8 @@ pub struct SwapLineId(pub u32);
     JsonDeserialize,
 )]
 #[norito(tag = "collateral", content = "value")]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "settlement_router::swapline::CollateralKind")]
 pub enum CollateralKind {
     /// The dataspace's native CBDC.
     #[display("cbdc")]
@@ -64,8 +68,17 @@ pub enum SwapLineError {
 }
 /// Static configuration for a swap line.
 #[derive(
-    Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "settlement_router::swapline::SwapLineConfig")]
 pub struct SwapLineConfig {
     /// Identifier referenced in manifests and telemetry.
     pub id: SwapLineId,
@@ -121,8 +134,17 @@ impl SwapLineConfig {
 }
 /// Runtime view of a swap line, tracking outstanding notional and collateral.
 #[derive(
-    Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
+    Clone,
+    Debug,
+    Eq,
+    PartialEq,
+    NoritoSerialize,
+    NoritoDeserialize,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "settlement_router::swapline::SwapLineExposure")]
 pub struct SwapLineExposure {
     /// Current XOR borrowed via the swap line.
     pub outstanding_xor: XorQuantity,

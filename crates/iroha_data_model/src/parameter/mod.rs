@@ -12,3 +12,6 @@ pub mod prelude {
     //! Prelude: re-export of most commonly used traits, structs and macros in this crate.
     pub use super::{Parameter, Parameters, SmartContractParameters, TransactionParameters};
 }
+
+#[cfg(test)]
+mod captured_parameter_identity_tests;

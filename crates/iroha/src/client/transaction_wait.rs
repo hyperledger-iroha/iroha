@@ -144,9 +144,10 @@ impl PollState {
             self.options.timeout.as_millis(),
             self.attempts
         );
-        let report = match self.last_backpressure.take() {
-            Some(error) => error.wrap_err(message),
-            None => eyre!(message),
+        let report = if let Some(error) = self.last_backpressure.take() {
+            error.wrap_err(message)
+        } else {
+            eyre!(message)
         };
         tx_confirmation_unresolved_final_report(report)
     }

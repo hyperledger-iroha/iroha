@@ -27,7 +27,6 @@ pub(crate) fn encoded_record<T: NoritoSchema + NoritoSerialize>(value: &T) -> Va
     let bare = norito::codec::encode_adaptive(value);
     let frame = norito::encode_canonical(value).expect("encode complete identity capture frame");
     let expected_hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), expected_hash);
     assert_eq!(
         norito::core::Header::read(frame.as_slice()).unwrap().schema,
         expected_hash
@@ -35,7 +34,7 @@ pub(crate) fn encoded_record<T: NoritoSchema + NoritoSerialize>(value: &T) -> Va
     assert_eq!(T::frame_name(), T::nominal_name());
     norito::json!({
         "actual_type_name": (T::nominal_name()),
-        "serialize_hash": (hex::encode(<T as NoritoSerialize>::schema_hash())),
+        "serialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "bare_hex": (hex::encode(bare)),
         "frame_hex": (hex::encode(frame)),
     })
@@ -51,10 +50,6 @@ where
         norito::encode_canonical(&decoded).expect("re-encode generic identity frame"),
         frame,
     );
-    assert_eq!(
-        <T as NoritoDeserialize>::schema_hash(),
-        norito::schema::identity::frame_hash::<T>(),
-    );
     let mut wrong_schema = frame.clone();
     wrong_schema[6] ^= 1;
     assert!(matches!(
@@ -66,7 +61,7 @@ where
     }
     norito::json!({
         "encoding": (encoded_record(&value)),
-        "deserialize_hash": (hex::encode(<T as NoritoDeserialize>::schema_hash())),
+        "deserialize_hash": (hex::encode(norito::schema::identity::frame_hash::<T>())),
         "decode_reencode_exact": true,
     })
 }
@@ -250,11 +245,11 @@ fn generic_identity_arguments_preserve_root_projections() {
     assert_ne!(InstructionBox::frame_name(), InstructionBox::nominal_name());
     let expected_hash = norito::schema::identity::frame_hash::<InstructionBox>();
     assert_eq!(
-        <InstructionBox as NoritoSerialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<InstructionBox>(),
         expected_hash
     );
     assert_eq!(
-        <InstructionBox as NoritoDeserialize>::schema_hash(),
+        norito::schema::identity::frame_hash::<InstructionBox>(),
         expected_hash
     );
     let frame = norito::encode_canonical(&instruction()).unwrap();

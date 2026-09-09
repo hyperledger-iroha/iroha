@@ -318,12 +318,20 @@ async fn prove_readiness(
             .default_readiness_smoke_plan()
             .map_err(|err| format!("failed while preparing readiness smoke for {stage}: {err}"))?;
         plan.status_options = readiness_options;
-        client.wait_for_readiness_smoke(plan).await.map_err(|err| {
-            format!(
-                "failed while waiting for readiness smoke in {stage}: {err} ({:?})",
-                err.summarize()
-            )
-        })?;
+        let reader = supervisor
+            .stream_reader(&session.peer_alias)
+            .map_err(|err| {
+                format!("failed while binding readiness stream authority for {stage}: {err}")
+            })?;
+        client
+            .wait_for_readiness_smoke(&reader, plan)
+            .await
+            .map_err(|err| {
+                format!(
+                    "failed while waiting for readiness smoke in {stage}: {err} ({:?})",
+                    err.summarize()
+                )
+            })?;
     } else {
         client
             .wait_for_ready(readiness_options)
@@ -840,8 +848,10 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let empty = temp.path().join("empty");
         fs::create_dir(&empty).expect("create empty root");
-        let mut overrides = CliOverrides::default();
-        overrides.data_root = Some(empty.clone());
+        let overrides = CliOverrides {
+            data_root: Some(empty.clone()),
+            ..CliOverrides::default()
+        };
         assert_eq!(
             require_disposable_data_root(&overrides).expect("empty root accepted"),
             empty
@@ -862,8 +872,10 @@ mod tests {
         let link = temp.path().join("link");
         fs::create_dir(&target).expect("create target");
         symlink(&target, &link).expect("create symlink");
-        let mut overrides = CliOverrides::default();
-        overrides.data_root = Some(link);
+        let overrides = CliOverrides {
+            data_root: Some(link),
+            ..CliOverrides::default()
+        };
         assert!(
             require_disposable_data_root(&overrides)
                 .expect_err("symlink root must fail")

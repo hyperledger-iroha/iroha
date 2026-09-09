@@ -19,12 +19,16 @@ use thiserror::Error;
 /// Envelope schema version.
 pub const HYBRID_PAYLOAD_ENVELOPE_VERSION_V1: u8 = 1;
 /// Norito-serialisable KEM bundle containing the sender's ephemeral keys.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hybrid_envelope::HybridKemBundleV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct HybridKemBundleV1 {
     pub ephemeral_public: Vec<u8>,
     pub kyber_ciphertext: Vec<u8>,
 }
 /// Norito-serialisable payload envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::hybrid_envelope::HybridPayloadEnvelopeV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct HybridPayloadEnvelopeV1 {
     pub version: u8,
@@ -289,3 +293,6 @@ mod tests {
         ));
     }
 }
+
+#[cfg(test)]
+include!("hybrid_envelope/captured_owner_identity_tests.rs");

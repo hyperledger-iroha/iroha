@@ -697,7 +697,7 @@ impl BlockSignature {
         Self { index, signature }
     }
 }
-impl ncore::NoritoSerialize for BlockSignature {}
+
 impl ncore::SerializePayload for BlockSignature {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ncore::SerializePayload::serialize(
@@ -718,7 +718,7 @@ impl ncore::SerializePayload for BlockSignature {
         ))
     }
 }
-impl ncore::NoritoDeserialize<'_> for BlockSignature {}
+
 impl<'de> ncore::DeserializePayload<'de> for BlockSignature {
     fn deserialize(archived: &'de ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("BlockSignature decode")

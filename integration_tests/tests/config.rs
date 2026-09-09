@@ -41,11 +41,23 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
     };
     runtime.block_on(network.ensure_blocks(1))?;
     assert_eq!(network.peers().len(), 4);
-    let baseline = network
+    let operators = network
         .peers()
         .iter()
-        .map(|peer| peer.client().client().get_config())
+        .map(|peer| {
+            let client = peer.client();
+            let key_pair = client
+                .client()
+                .operator_key_pair()
+                .cloned()
+                .ok_or_else(|| eyre!("test-network client is missing its operator key"))?;
+            client.operator_client(key_pair)
+        })
         .collect::<eyre::Result<Vec<_>>>()?;
+    let baseline = operators
+        .iter()
+        .map(|operator| operator.configuration().get())
+        .collect::<iroha::Result<Vec<_>>>()?;
     for config in &baseline {
         assert_shared_settings(config);
         assert_eq!(config.logger.level, Level::INFO);
@@ -83,7 +95,7 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         Ok::<_, eyre::Report>(())
     })?;
 
-    let restarted = restarted_peer.client().client().get_config()?;
+    let restarted = operators[0].configuration().get()?;
     assert_shared_settings(&restarted);
     assert_eq!(restarted.logger.level, Level::DEBUG);
     assert_eq!(restarted.logger.filter.as_deref(), Some("iroha_p2p=trace"));
@@ -94,14 +106,14 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         "local proof-of-work policy must preserve the handshake identity and negotiated suite",
     );
 
-    let height = network.peers()[1].client().client().get_status()?.blocks;
+    let height = network.peers()[1].client().status().get()?.blocks;
     network.peers()[1].client().submit(
         iroha_data_model::isi::Log::new(Level::INFO, "node-local configuration isolation".into()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     runtime.block_on(network.ensure_blocks(height + 1))?;
-    for (index, peer) in network.peers().iter().enumerate().skip(1) {
-        let config = peer.client().client().get_config()?;
+    for (index, operator) in operators.iter().enumerate().skip(1) {
+        let config = operator.configuration().get()?;
         assert_shared_settings(&config);
         assert_eq!(config.logger.level, baseline[index].logger.level);
         assert_eq!(config.logger.filter, baseline[index].logger.filter);
@@ -111,7 +123,7 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
             handshake_identity(&baseline[index].network.soranet_handshake),
         );
     }
-    let restarted = restarted_peer.client().client().get_config()?;
+    let restarted = operators[0].configuration().get()?;
     assert_pow(&restarted, (7, 720, 180, 360, 12288, 3, 3));
     assert_eq!(restarted.logger.level, Level::DEBUG);
     runtime.block_on(network.shutdown());
@@ -243,18 +255,17 @@ fn startup_configuration_is_read_only_on_four_validators() -> Result<()> {
         for peer in network.peers() {
             let blocking_client = peer.client();
             let client = blocking_client.client();
-            let url = client.torii_url.join("/v1/configuration")?;
+            let url = client.endpoint().join("/v1/configuration")?;
             let uri: iroha_torii::Uri = url.path().parse()?;
             let operator = client
-                .operator_key_pair
-                .as_ref()
+                .operator_key_pair()
                 .ok_or_else(|| eyre!("test-network client is missing its operator key"))?;
             // Retain the exact signed GET carrier before exercising the native client's
             // decoder. A malformed server response must remain inspectable even when
-            // Client::get_config correctly fails; this is never a fallback decoder.
+            // configuration().get() correctly fails; this is never a fallback decoder.
             let read_headers = iroha_torii::operator_signed_request_headers(
                 operator,
-                &client.network_id,
+                client.network_id(),
                 &iroha_torii::Method::GET,
                 &uri,
                 &[],
@@ -284,7 +295,8 @@ fn startup_configuration_is_read_only_on_four_validators() -> Result<()> {
                 .join("configuration-response.json");
             std::fs::write(evidence, &carrier)?;
             // Native clients sign GET with the explicitly configured peer operator key.
-            let before = client.get_config()?;
+            let operator_client = blocking_client.operator_client(operator.clone())?;
+            let before = operator_client.configuration().get()?;
             assert_startup_configuration(&before);
             let body = norito::json::to_vec(&norito::json!({
                 "logger": {"level": "ERROR"},
@@ -292,7 +304,7 @@ fn startup_configuration_is_read_only_on_four_validators() -> Result<()> {
             }))?;
             let headers = iroha_torii::operator_signed_request_headers(
                 operator,
-                &client.network_id,
+                client.network_id(),
                 &iroha_torii::Method::POST,
                 &uri,
                 &body,
@@ -320,7 +332,7 @@ fn startup_configuration_is_read_only_on_four_validators() -> Result<()> {
                 error["code"].as_str() == Some("method_not_allowed"),
                 "configuration POST returned the wrong rejection"
             );
-            let after = client.get_config()?;
+            let after = operator_client.configuration().get()?;
             assert_startup_configuration(&after);
             assert_eq!(
                 norito::json::to_vec(&before)?,

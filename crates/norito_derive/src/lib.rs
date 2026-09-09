@@ -1,13 +1,15 @@
 //! Derive macros for the `norito` serialization framework.
 //!
-//! These macros implement [`NoritoSerialize`] and [`NoritoDeserialize`] for
-//! user defined structs. The derive generates an `Archived` type alias and
-//! forwards serialization of each field to the corresponding implementation.
+//! Binary derives implement payload serialization and reconstruction for structs
+//! and enums. `NoritoSerialize` also generates an `Archived` type alias. Typed
+//! framing requires a separate [`NoritoSchema`] declaration; field codecs do not
+//! require frame identities.
 //!
 //! ```ignore
 //! use norito::core::*;
 //!
-//! #[derive(NoritoSerialize, NoritoDeserialize)]
+//! #[derive(norito::NoritoSerialize, norito::NoritoDeserialize, norito::NoritoSchema)]
+//! #[norito_schema(name = "example::Point")]
 //! struct Point { x: u32, y: bool }
 //!
 //! let bytes = to_bytes(&Point { x: 1, y: false }).unwrap();
@@ -686,7 +688,6 @@ fn words(ident: &str) -> Vec<String> {
 #[derive(Default)]
 struct ContainerAttr {
     rename_all: Option<RenameRule>,
-    schema_name: Option<String>,
     validate: Option<syn::Path>,
     deny_unknown_fields: bool,
     decode_from_slice: bool,
@@ -711,13 +712,9 @@ impl ContainerAttr {
                         return Err(meta.error("duplicate rename_all attribute"));
                     }
                 } else if meta.path.is_ident("schema_name") {
-                    let lit: syn::LitStr = meta.value()?.parse()?;
-                    if lit.value().is_empty() {
-                        return Err(meta.error("schema_name must not be empty"));
-                    }
-                    if out.schema_name.replace(lit.value()).is_some() {
-                        return Err(meta.error("duplicate schema_name attribute"));
-                    }
+                    return Err(meta.error(
+                        "schema_name is unsupported; declare identity once with NoritoSchema and #[norito_schema(name = \"...\")] (with frame = \"...\" for an explicit projection)",
+                    ));
                 } else if meta.path.is_ident("validate") {
                     if out.validate.replace(parse_helper_path(&meta)?).is_some() {
                         return Err(meta.error("duplicate `validate` attribute"));
@@ -800,19 +797,6 @@ impl ContainerAttr {
     }
 }
 
-fn schema_hash_body(schema_name: Option<&str>) -> TokenStream2 {
-    if let Some(schema_name) = schema_name {
-        quote! { norito::core::schema_hash_for_name(#schema_name) }
-    } else {
-        quote! {
-            #[cfg(feature = "schema-structural")]
-            { norito::core::schema_hash_structural::<Self>() }
-            #[cfg(not(feature = "schema-structural"))]
-            { norito::core::type_name_schema_hash::<Self>() }
-        }
-    }
-}
-
 #[cfg(test)]
 mod container_attr_tests {
     use super::*;
@@ -848,7 +832,7 @@ mod container_attr_tests {
     }
 
     #[test]
-    fn schema_name_and_deny_unknown_fields_are_combined() {
+    fn schema_name_is_rejected_with_canonical_identity_guidance() {
         let input: DeriveInput = syn::parse_quote! {
             #[norito(schema_name = "stable", deny_unknown_fields)]
             struct Demo {
@@ -856,9 +840,13 @@ mod container_attr_tests {
             }
         };
 
-        let attrs = ContainerAttr::parse(&input.attrs).expect("valid combined attributes");
-        assert_eq!(attrs.schema_name.as_deref(), Some("stable"));
-        assert!(attrs.deny_unknown_fields);
+        let Err(error) = ContainerAttr::parse(&input.attrs) else {
+            panic!("framing attributes must not define a second identity owner");
+        };
+        assert_eq!(
+            error.to_string(),
+            "schema_name is unsupported; declare identity once with NoritoSchema and #[norito_schema(name = \"...\")] (with frame = \"...\" for an explicit projection)",
+        );
     }
 
     #[test]
@@ -1314,19 +1302,17 @@ fn packed_size_headers(fields: &[StructField<'_>]) -> (TokenStream2, bool) {
     (bitset, all_needs_false)
 }
 
-/// Generate `NoritoSerialize` implementation for a struct.
+/// Generate payload serialization and, when requested, an archived alias.
 ///
 /// Each field is serialized in definition order and the resulting
-/// implementation is bounded by that field's own `NoritoSerialize` trait.
+/// implementation is bounded by that field's own `SerializePayload` trait.
 fn derive_struct_serialize(
     ident: &syn::Ident,
     generics: &Generics,
     fields: &Fields,
     container_attrs: &[Attribute],
-    schema_name: Option<&str>,
-    framed: bool,
+    generate_archived: bool,
 ) -> TokenStream2 {
-    let schema_hash_body = schema_hash_body(schema_name);
     let parsed_fields = struct_fields(fields);
     let has_flatten_fields = struct_has_flatten(&parsed_fields);
     let mut r#gen = generics.clone();
@@ -1364,7 +1350,7 @@ fn derive_struct_serialize(
     let alias_generics = generic_arguments(generics);
     let (impl_generics, ty_generics, where_clause) = r#gen.split_for_impl();
     let (bitset_bytes, all_needs_false) = packed_size_headers(&parsed_fields);
-    let alias_decl = if !framed || reuse_archived_alias(container_attrs) {
+    let alias_decl = if !generate_archived || reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
         let archived_doc = format!(
@@ -1376,21 +1362,8 @@ fn derive_struct_serialize(
             pub type #archived #alias_generics = norito::core::Archived<#ident #ty_generics>;
         }
     };
-    let frame_impl = if framed {
-        quote! {
-            impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
-                #[inline]
-                fn schema_hash() -> [u8; 16] {
-                    #schema_hash_body
-                }
-            }
-        }
-    } else {
-        quote! {}
-    };
     quote! {
         #alias_decl
-        #frame_impl
         impl #impl_generics norito::core::SerializePayload for #ident #ty_generics #where_clause {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
@@ -1441,7 +1414,7 @@ fn derive_struct_serialize(
     }
 }
 
-/// Generate `NoritoSerialize` implementation for an enum.
+/// Generate enum payload serialization and, when requested, an archived alias.
 ///
 /// Each variant is preceded by a `u32` discriminant followed by its fields.
 fn derive_enum_serialize(
@@ -1449,10 +1422,8 @@ fn derive_enum_serialize(
     generics: &Generics,
     data: &DataEnum,
     container_attrs: &[Attribute],
-    schema_name: Option<&str>,
-    framed: bool,
+    generate_archived: bool,
 ) -> TokenStream2 {
-    let schema_hash_body = schema_hash_body(schema_name);
     let mut r#gen = generics.clone();
     let mut arms = Vec::new();
     let mut hint_arms = Vec::new();
@@ -1672,7 +1643,7 @@ fn derive_enum_serialize(
         quote! { < #( #params ),* > }
     };
     let archived = format_ident!("Archived{}", ident);
-    let alias_decl = if !framed || reuse_archived_alias(container_attrs) {
+    let alias_decl = if !generate_archived || reuse_archived_alias(container_attrs) {
         quote! {}
     } else {
         let archived_doc = format!(
@@ -1684,21 +1655,8 @@ fn derive_enum_serialize(
             pub type #archived #alias_generics = norito::core::Archived<#ident #ty_generics>;
         }
     };
-    let frame_impl = if framed {
-        quote! {
-            impl #impl_generics norito::core::NoritoSerialize for #ident #ty_generics #where_clause {
-                #[inline]
-                fn schema_hash() -> [u8; 16] {
-                    #schema_hash_body
-                }
-            }
-        }
-    } else {
-        quote! {}
-    };
     quote! {
         #alias_decl
-        #frame_impl
         impl #impl_generics norito::core::SerializePayload for #ident #ty_generics #where_clause {
             fn encoded_len_hint(&self) -> Option<usize> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter().ok()?;
@@ -1730,7 +1688,17 @@ mod deserialize_codegen_tests {
 }
 
 #[proc_macro_derive(NoritoSerialize, attributes(codec, norito))]
-/// Entry point for the `#[derive(NoritoSerialize)]` macro.
+/// Derive payload serialization and an archived alias.
+///
+/// Typed framing is supplied by the blanket `NoritoSerialize` implementation
+/// when this type also has a separate `NoritoSchema` declaration.
+/// A payload implementation alone does not grant typed frame ownership.
+///
+/// ```compile_fail
+/// #[derive(norito::NoritoSerialize)]
+/// struct Field(u32);
+/// let _ = norito::to_bytes(&Field(7));
+/// ```
 pub fn derive_norito_serialize(input: TokenStream) -> TokenStream {
     expand_serialize(parse_macro_input!(input as DeriveInput), true)
 }
@@ -1741,19 +1709,12 @@ pub fn derive_serialize_payload(input: TokenStream) -> TokenStream {
     expand_serialize(parse_macro_input!(input as DeriveInput), false)
 }
 
-fn expand_serialize(input: DeriveInput, framed: bool) -> TokenStream {
+fn expand_serialize(input: DeriveInput, generate_archived: bool) -> TokenStream {
     if let Err(error) = validate_data_field_attrs(&input.data) {
         return error.to_compile_error().into();
     }
-    let container_attrs = match ContainerAttr::parse(&input.attrs) {
-        Ok(attrs) => attrs,
-        Err(error) => return error.to_compile_error().into(),
-    };
-    let schema_name = container_attrs.schema_name.as_deref();
-    if !framed && schema_name.is_some() {
-        return syn::Error::new_spanned(&input.ident, "SerializePayload has no frame schema")
-            .to_compile_error()
-            .into();
+    if let Err(error) = ContainerAttr::parse(&input.attrs) {
+        return error.to_compile_error().into();
     }
     match &input.data {
         Data::Struct(data) => derive_struct_serialize(
@@ -1761,8 +1722,7 @@ fn expand_serialize(input: DeriveInput, framed: bool) -> TokenStream {
             &input.generics,
             &data.fields,
             &input.attrs,
-            schema_name,
-            framed,
+            generate_archived,
         )
         .into(),
         Data::Enum(data) => derive_enum_serialize(
@@ -1770,13 +1730,12 @@ fn expand_serialize(input: DeriveInput, framed: bool) -> TokenStream {
             &input.generics,
             data,
             &input.attrs,
-            schema_name,
-            framed,
+            generate_archived,
         )
         .into(),
         _ => syn::Error::new_spanned(
             &input.ident,
-            if framed {
+            if generate_archived {
                 "NoritoSerialize only supports structs and enums"
             } else {
                 "SerializePayload only supports structs and enums"
@@ -1788,7 +1747,10 @@ fn expand_serialize(input: DeriveInput, framed: bool) -> TokenStream {
 }
 
 #[proc_macro_derive(NoritoDeserialize, attributes(codec, norito))]
-/// Entry point for the `#[derive(NoritoDeserialize)]` macro.
+/// Derive payload reconstruction.
+///
+/// Typed framing is supplied by the blanket `NoritoDeserialize` implementation
+/// when this type also has a separate `NoritoSchema` declaration.
 ///
 /// `#[norito(validate = "Self::validate_decoded")]` calls the supplied function
 /// once after successful binary reconstruction. The function consumes `Self`
@@ -1796,14 +1758,24 @@ fn expand_serialize(input: DeriveInput, framed: bool) -> TokenStream {
 /// preserve the decoded canonical fields rather than normalize external input.
 /// The hook also runs for generated slice decoders. It does not run during
 /// serialization or JSON decoding.
+/// A payload implementation alone does not grant typed frame ownership.
+///
+/// ```compile_fail
+/// #[derive(norito::NoritoSerialize, norito::NoritoDeserialize)]
+/// struct Field(u32);
+/// let _ = norito::from_bytes::<Field>(&[]);
+/// ```
 pub fn derive_norito_deserialize(input: TokenStream) -> TokenStream {
-    expand_deserialize(parse_macro_input!(input as DeriveInput), true)
+    expand_deserialize(
+        parse_macro_input!(input as DeriveInput),
+        "NoritoDeserialize",
+    )
 }
 
 /// Derive payload reconstruction without a typed frame identity.
 ///
 /// Validation and exact field-consumption checks are shared with the typed
-/// decoder. Frame schema attributes are rejected for payload-only derives.
+/// decoder. Frame identities belong exclusively to `NoritoSchema`.
 ///
 /// ```compile_fail
 /// #[derive(norito::DeserializePayload)]
@@ -1812,49 +1784,30 @@ pub fn derive_norito_deserialize(input: TokenStream) -> TokenStream {
 /// ```
 #[proc_macro_derive(DeserializePayload, attributes(codec, norito))]
 pub fn derive_deserialize_payload(input: TokenStream) -> TokenStream {
-    expand_deserialize(parse_macro_input!(input as DeriveInput), false)
+    expand_deserialize(
+        parse_macro_input!(input as DeriveInput),
+        "DeserializePayload",
+    )
 }
 
-fn expand_deserialize(input: DeriveInput, framed: bool) -> TokenStream {
+fn expand_deserialize(input: DeriveInput, derive_name: &str) -> TokenStream {
     if let Err(error) = validate_data_field_attrs(&input.data) {
         return error.to_compile_error().into();
     }
-    let container_attrs = match ContainerAttr::parse(&input.attrs) {
-        Ok(attrs) => attrs,
-        Err(error) => return error.to_compile_error().into(),
-    };
-    let schema_name = container_attrs.schema_name.as_deref();
-    if !framed && schema_name.is_some() {
-        return syn::Error::new_spanned(&input.ident, "DeserializePayload has no frame schema")
-            .to_compile_error()
-            .into();
+    if let Err(error) = ContainerAttr::parse(&input.attrs) {
+        return error.to_compile_error().into();
     }
     match &input.data {
-        Data::Struct(data) => derive_struct_deserialize(
-            &input.ident,
-            &input.generics,
-            &data.fields,
-            &input.attrs,
-            schema_name,
-            framed,
-        )
-        .into(),
-        Data::Enum(data) => derive_enum_deserialize(
-            &input.ident,
-            &input.generics,
-            data,
-            &input.attrs,
-            schema_name,
-            framed,
-        )
-        .into(),
+        Data::Struct(data) => {
+            derive_struct_deserialize(&input.ident, &input.generics, &data.fields, &input.attrs)
+                .into()
+        }
+        Data::Enum(data) => {
+            derive_enum_deserialize(&input.ident, &input.generics, data, &input.attrs).into()
+        }
         _ => syn::Error::new_spanned(
             &input.ident,
-            if framed {
-                "NoritoDeserialize only supports structs and enums"
-            } else {
-                "DeserializePayload only supports structs and enums"
-            },
+            format!("{derive_name} only supports structs and enums"),
         )
         .to_compile_error()
         .into(),

@@ -95,6 +95,8 @@ pub struct ModerationCorpusRegistryRecord {
     pub variant_count: u32,
 }
 /// Snapshot of the local SoraFS moderation model registry.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationModelRegistrySnapshot")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationModelRegistrySnapshot {
     /// Admitted reproducibility manifests sorted by manifest id.
@@ -318,6 +320,8 @@ pub enum ModerationAuthenticatedScreeningAdmissionError {
 ///
 /// The deployment configuration separately pins the BLAKE3 digest of the exact canonical Norito
 /// bytes, so replacing this local file cannot silently change the active screening authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationScreeningAuthorityBundleV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningAuthorityBundleV1 {
     /// Schema version.
@@ -800,6 +804,8 @@ pub struct ModerationQuarantineObjectRangePayload {
     pub payload: Vec<u8>,
 }
 /// Snapshot of local encrypted quarantine object index records.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineObjectSnapshot")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationQuarantineObjectSnapshot {
     /// Object records sorted by quarantine id.
@@ -973,6 +979,8 @@ pub struct ModerationEvidenceViewerAccessEventRecord {
     pub event_digest: [u8; 32],
 }
 /// Snapshot of local payload-free evidence viewer session and access-log state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationEvidenceViewerSnapshot")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerSnapshot {
     /// Session records sorted by session id.
@@ -1015,6 +1023,8 @@ pub struct ModerationEvidenceViewerAuditKindCount {
     pub count: u64,
 }
 /// Payload-free local evidence-viewer access report for transparency export.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationEvidenceViewerAuditReport")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerAuditReport {
     /// Schema version; currently [`MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1`].
@@ -1086,6 +1096,8 @@ pub struct ModerationScreeningOutcome {
     pub quarantine: Option<ModerationQuarantineRecord>,
 }
 /// Snapshot of local SFM-4a screening and quarantine state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationScreeningSnapshot")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningSnapshot {
     /// Screening records sorted by record id.
@@ -3189,6 +3201,8 @@ pub(crate) struct ModerationQuarantineCiphertextChunkV1 {
     pub ciphertext: Vec<u8>,
 }
 /// Canonical V1 chunked ChaCha20-Poly1305 quarantine object envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineObjectEnvelopeV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
     pub version: u16,
@@ -3211,6 +3225,8 @@ pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
     pub chunk_plaintext_bytes: u32,
     pub chunks: Vec<ModerationQuarantineCiphertextChunkV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineImmutableMetadataV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineImmutableMetadataV1 {
     version: u16,
@@ -3226,11 +3242,15 @@ struct ModerationQuarantineImmutableMetadataV1 {
     chunk_plaintext_bytes: u32,
     chunk_count: u32,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineAadHeaderV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineAadHeaderV1 {
     metadata: ModerationQuarantineImmutableMetadataV1,
     object_id: [u8; 16],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineChunkAadV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineChunkAadV1 {
     header_digest: [u8; 32],

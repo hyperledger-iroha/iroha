@@ -640,35 +640,6 @@ fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
         },
     ]
 }
-fn sample_initial_hosted_http_service_bundle(
-    service_name: &str,
-    service_version: &str,
-) -> SoraDeploymentBundleV1 {
-    let mut bundle = sample_bundle(service_name, service_version, 0);
-    bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-    bundle.container.inrou = Some(sample_inrou_manifest());
-    bundle.container.entrypoint = "/app/main".to_owned();
-    bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
-    bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
-    bundle.service.economics = iroha_data_model::soracloud::SoraHttpServiceEconomicsV1 {
-        schema_version: iroha_data_model::soracloud::SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
-        quota_class: "taira-open".to_owned(),
-        deployment_deposit: "1".parse().expect("deployment deposit"),
-        prepaid_runtime_balance: "1".parse().expect("runtime balance"),
-        runtime_price_per_block: "0.000000001".parse().expect("runtime price"),
-        storage_price_per_gib_block: "0.000000001".parse().expect("storage price"),
-        egress_price_per_mib: "0.000005".parse().expect("egress price"),
-        lease_duration_blocks: NonZeroU64::new(100).expect("nonzero lease duration"),
-    };
-    bundle.service.state_bindings.clear();
-    bundle.service.lease_volumes = sample_inrou_lease_volumes();
-    bundle.service.handlers.clear();
-    for artifact in &mut bundle.service.artifacts {
-        artifact.handler_name = None;
-    }
-    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    bundle
-}
 fn sample_inrou_replica_runtime_state_for(
     service_name: iroha_data_model::name::Name,
     service_version: &str,
@@ -757,7 +728,8 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     .execute(&ALICE_ID, &mut stx)?;
     let victim_name = bundle.service.service_name.clone();
     let victim_version = bundle.service.service_version.as_str();
-    let other_bundle = sample_initial_hosted_http_service_bundle("assigned_elsewhere", "2.0.0");
+    let mut other_bundle = sample_hosted_http_service_bundle("assigned_elsewhere", "2.0.0", 0);
+    other_bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
     isi::DeploySoracloudService {
         bundle: other_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
@@ -768,8 +740,9 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     .execute(&ALICE_ID, &mut stx)?;
     let other_name = other_bundle.service.service_name.clone();
     let other_version = other_bundle.service.service_version.as_str();
-    let lease_victim_bundle =
-        sample_initial_hosted_http_service_bundle("unassigned_hosted", "1.0.0");
+    let mut lease_victim_bundle =
+        sample_hosted_http_service_bundle("unassigned_hosted", "1.0.0", 0);
+    lease_victim_bundle.service.replicas = NonZeroU16::new(1).expect("nonzero replicas");
     isi::DeploySoracloudService {
         bundle: lease_victim_bundle.clone(),
         initial_service_configs: BTreeMap::new(),
@@ -1332,7 +1305,7 @@ fn sample_bfv_evaluation_key_bundle() -> BfvEvaluationKeyBundle {
                 &params,
                 &public_key,
                 "bootstrap-test-key",
-                2,
+                1,
                 b"soracloud-fhe-bootstrap-key",
             )
             .expect("bootstrap key"),

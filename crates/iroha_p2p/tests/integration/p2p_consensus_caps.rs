@@ -15,6 +15,8 @@ use iroha_p2p::{
 use norito::codec::{Decode, Encode};
 use std::{collections::HashSet, num::NonZeroUsize};
 use tokio::time::Duration;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p_consensus_caps::Dummy")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct Dummy;
 impl iroha_p2p::network::message::ClassifyTopic for Dummy {}

@@ -248,7 +248,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let quantity = Quantity::from(321_u32);
     let client = network.client();
-    let setup_domain = domain_setup_instruction(&domain_id, &client.client().account)?;
+    let setup_domain = domain_setup_instruction(&domain_id, client.client().account())?;
     let setup_alias = account_alias_setup_instruction(
         "merchant@universal",
         &account_id,

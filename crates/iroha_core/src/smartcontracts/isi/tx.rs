@@ -759,6 +759,8 @@ fn block_committed_transactions_with_merge(
 }
 
 /// Immutable canonical prefix bound to a Kaigi signal-history cursor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::tx::KaigiSignalHistoryAnchor")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct KaigiSignalHistoryAnchor {
     height: u64,

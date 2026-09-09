@@ -846,15 +846,7 @@ fn framed_instruction_payload_len_for<T>(payload_len: usize) -> Option<usize> {
         .checked_add(padding)?
         .checked_add(payload_len)
 }
-impl norito::core::NoritoSerialize for InstructionBox {
-    fn schema_hash() -> [u8; 16]
-    where
-        Self: Sized,
-    {
-        // Match the archived layout used in `serialize`: `(wire_id, payload_with_header)`.
-        norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
-    }
-}
+
 impl norito::core::SerializePayload for InstructionBox {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let inner = &**self;
@@ -875,13 +867,7 @@ impl norito::core::SerializePayload for InstructionBox {
         encoded_instruction_pair_len(self)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for InstructionBox {
-    fn schema_hash() -> [u8; 16] {
-        // Must match the schema used by `NoritoSerialize` for `InstructionBox`
-        // which serializes as a `(String, Vec<u8>)` pair.
-        norito::core::type_name_schema_hash::<(String, Vec<u8>)>()
-    }
-}
+
 impl<'a> norito::core::DeserializePayload<'a> for InstructionBox {
     fn deserialize(archived: &'a norito::core::Archived<InstructionBox>) -> Self {
         const MAX_MESSAGE_LEN: usize = 256;
@@ -1591,7 +1577,7 @@ pub(crate) fn decode_aos_canonical_field<T>(
     flags: u8,
 ) -> Result<T, norito::core::Error>
 where
-    T: for<'de> norito::core::NoritoDeserialize<'de> + norito::core::SerializePayload,
+    T: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
 {
     let _guard = norito::core::DecodeFlagsGuard::enter(flags);
     let (value, used) = norito::core::decode_field_canonical::<T>(field)?;
@@ -1602,7 +1588,7 @@ where
 }
 pub(crate) fn decode_aos_slice_field<T>(field: &[u8], flags: u8) -> Result<T, norito::core::Error>
 where
-    T: for<'de> norito::core::NoritoDeserialize<'de> + for<'de> norito::core::DecodeFromSlice<'de>,
+    T: for<'de> norito::core::DeserializePayload<'de> + for<'de> norito::core::DecodeFromSlice<'de>,
 {
     let _guard = norito::core::DecodeFlagsGuard::enter(flags);
     let (value, used) = norito::core::decode_field_canonical_from_slice::<T>(field)?;

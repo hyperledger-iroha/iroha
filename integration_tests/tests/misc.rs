@@ -18,7 +18,7 @@ fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
 async fn check(client: &blocking::Client, min_blocks_non_empty: u64) -> Result<()> {
     let http = integration_tests::http::client();
     let body = http
-        .get(client.client().torii_url.join("/status").unwrap())
+        .get(client.client().endpoint().join("/status").unwrap())
         .header("Accept", "application/json")
         .send()
         .await?
@@ -26,10 +26,7 @@ async fn check(client: &blocking::Client, min_blocks_non_empty: u64) -> Result<(
         .await?;
     let status_json: Status = norito::json::from_str(&body)
         .map_err(|err| eyre::Report::msg(format!("decode status JSON: {err}")))?;
-    let status_norito = {
-        let client = client.clone();
-        spawn_blocking(move || client.client().get_status()).await??
-    };
+    let status_norito = client.client().status().get().await?;
     assert!(status_eq_excluding_uptime_and_queue(
         &status_json,
         &status_norito
@@ -61,7 +58,7 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         spawn_blocking(move || {
             let domain: DomainId = DomainId::try_new("lookingglass", "universal")?;
             client.submit(
-                domain_setup_instruction(&domain, &client.client().account)?,
+                domain_setup_instruction(&domain, client.client().account())?,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
         })
@@ -76,16 +73,20 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
         return Ok(());
     }
     check(&client, 2).await?;
-    // get_server_version
-    let response =
-        tokio::task::spawn_blocking(move || client.client().get_server_version().unwrap()).await?;
+    // server API version
+    let response = client.client().status().version().await?;
     let version: u64 = response
         .parse()
         .expect("server API version should be a positive integer");
     assert!(version >= 1);
     // status_with_norito_accept_header
     let http = integration_tests::http::client();
-    let url = network.client().client().torii_url.join("/status").unwrap();
+    let url = network
+        .client()
+        .client()
+        .endpoint()
+        .join("/status")
+        .unwrap();
     let resp = http
         .get(url)
         .header("Accept", "application/x-norito")

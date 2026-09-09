@@ -330,8 +330,23 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     assert!(!bootstrap_path.exists());
     kura.bind_local_peer_id(local_peer.clone())
         .expect("bind bootstrap local peer after crash recovery");
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize disk caches before signed bootstrap publication");
     let authority = persist_bootstrap(&kura, &generation_one, bootstrap_signature)
         .expect("persist signed lifecycle bootstrap before payload mutation");
+
+    {
+        // Inspect the raw caches before any refresh can hide a repeated delta.
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read exact accounting after signed bootstrap publication");
+        assert!(accounting.enforced_initialized && accounting.total_initialized);
+        assert_eq!(
+            accounting.cached_enforced_bytes,
+            accounting.exact_enforced_bytes
+        );
+        assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+    }
     assert_eq!(
         authority.stage(),
         AutonomousLifecycleBootstrapRecoveryStage::BootstrapOnly,
@@ -621,6 +636,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .is_err(),
         "payload durability alone must not authorize bootstrap deletion",
     );
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize disk caches before prepared bootstrap cursor creation");
     assert_eq!(
         kura.publish_autonomous_lifecycle_bootstrap_cursor_stage(
             &authority,
@@ -629,6 +646,19 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .expect("publish exact signed Prepared ActivateKura cursor"),
         LaneBlockAuxiliaryPersistenceOutcome::Persisted,
     );
+
+    {
+        // Inspect the raw caches before any refresh can hide a repeated delta.
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read exact accounting after prepared bootstrap cursor creation");
+        assert!(accounting.enforced_initialized && accounting.total_initialized);
+        assert_eq!(
+            accounting.cached_enforced_bytes,
+            accounting.exact_enforced_bytes
+        );
+        assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+    }
     drop(kura);
     reopen_single_lifecycle_bootstrap!(
         "Prepared-durable crash boundary";
@@ -640,6 +670,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             .is_err(),
         "Prepared durability alone must not authorize bootstrap deletion",
     );
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize disk caches before live bootstrap cursor replacement");
     assert_eq!(
         kura.publish_autonomous_lifecycle_bootstrap_cursor_stage(
             &authority,
@@ -648,6 +680,19 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .expect("publish exact signed Live successor"),
         LaneBlockAuxiliaryPersistenceOutcome::Persisted,
     );
+
+    {
+        // Inspect the raw caches before any refresh can hide a repeated delta.
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read exact accounting after live bootstrap cursor replacement");
+        assert!(accounting.enforced_initialized && accounting.total_initialized);
+        assert_eq!(
+            accounting.cached_enforced_bytes,
+            accounting.exact_enforced_bytes
+        );
+        assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+    }
     drop(kura);
     reopen_single_lifecycle_bootstrap!(
         "Live-durable crash boundary";
@@ -675,9 +720,24 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
             authentication_facts,
         )
         .expect("authenticate Live-durable bootstrap under fresh Queue facts");
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize disk caches before completed bootstrap deletion");
     let completion = kura
         .complete_autonomous_lifecycle_bootstrap(permit)
         .expect("complete exact bootstrap and synced deletion");
+
+    {
+        // Inspect the raw caches before any refresh can hide a repeated delta.
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read exact accounting after completed bootstrap deletion");
+        assert!(accounting.enforced_initialized && accounting.total_initialized);
+        assert_eq!(
+            accounting.cached_enforced_bytes,
+            accounting.exact_enforced_bytes
+        );
+        assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+    }
     let AutonomousLifecycleBootstrapCompletionOutcome::Completed(completion) = completion else {
         panic!("non-terminal bootstrap completion must return its exact Live cursor");
     };
@@ -742,9 +802,24 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         .read_autonomous_lifecycle_cursor(&payload, &binding, &generation_five)
         .expect("read crashed takeover")
         .into_parts();
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize disk caches before prepared recovery cursor replacement");
     let prepared_read = kura
         .compare_and_swap_autonomous_lifecycle_cursor(recover_lease, prepared_recover.clone())
         .expect("publish current-generation Prepared Recover");
+
+    {
+        // Inspect the raw caches before any refresh can hide a repeated delta.
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read exact accounting after prepared recovery cursor replacement");
+        assert!(accounting.enforced_initialized && accounting.total_initialized);
+        assert_eq!(
+            accounting.cached_enforced_bytes,
+            accounting.exact_enforced_bytes
+        );
+        assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+    }
     let (_, prepared_lease) = prepared_read.into_parts();
     let live_recovered = sign_cursor(
         5,
@@ -752,6 +827,8 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         AutonomousLifecycleCursorPhaseV1::live(5, recovered)
             .expect("construct current-generation recovered Live"),
     );
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize disk caches before live recovery cursor replacement");
     assert_eq!(
         kura.compare_and_swap_autonomous_lifecycle_cursor(prepared_lease, live_recovered.clone())
             .expect("publish current-generation Live only after Crash and Recover")
@@ -759,6 +836,19 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         Some(&live_recovered),
         "successful current-generation recovery must return its exact durable cursor",
     );
+
+    {
+        // Inspect the raw caches before any refresh can hide a repeated delta.
+        let accounting = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("read exact accounting after live recovery cursor replacement");
+        assert!(accounting.enforced_initialized && accounting.total_initialized);
+        assert_eq!(
+            accounting.cached_enforced_bytes,
+            accounting.exact_enforced_bytes
+        );
+        assert_eq!(accounting.cached_total_bytes, accounting.exact_total_bytes);
+    }
     // Build the canonical merge source in a separate Kura so none of the
     // target crash-stage fixtures gain payload, READY, or certified-session
     // durability before their signed bootstrap reaches that boundary.
@@ -766,8 +856,13 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
     let terminal_source_config = kura_config_for_dir(&terminal_source_temp_dir, BLOCKS_IN_MEMORY);
     let (terminal_source_kura, _) =
         open_authenticated_temp_recovery_kura(&terminal_source_config, &lane_config, &catalog)
-            .expect("open terminal source before publishing its exact signed lane identity");
+            .expect("open unbound terminal source root");
     install_autonomous_lane_marker_for_kura(&terminal_source_kura, &lane_config, &payload);
+    publish_temp_recovery_catalog_baseline(&terminal_source_kura, &catalog);
+    drop(terminal_source_kura);
+    let (terminal_source_kura, _) =
+        open_authenticated_temp_recovery_kura(&terminal_source_config, &lane_config, &catalog)
+            .expect("reopen terminal source with its final payload incarnation");
     let terminal_execution =
         canonical_terminal_merge_execution_for_test(&terminal_source_kura, &payload, &signer);
     let (terminal_parent, terminal_carrier, terminal_merge_entry) =
@@ -785,14 +880,21 @@ fn autonomous_lifecycle_bootstrap_recovers_every_signed_crash_boundary() {
         let terminal_config = kura_config_for_dir(&terminal_temp_dir, BLOCKS_IN_MEMORY);
         let (terminal_kura, _) =
             open_authenticated_temp_recovery_kura(&terminal_config, &lane_config, &catalog)
-                .expect("open terminal target before publishing its exact signed lane identity");
+                .expect("open unbound terminal bootstrap root");
+        // Bind the journal to the signed payload's final incarnation before
+        // opening any lifecycle attempt under the reopened canonical root.
+        install_autonomous_lane_marker_for_kura(&terminal_kura, &lane_config, &payload);
+        publish_temp_recovery_catalog_baseline(&terminal_kura, &catalog);
+        drop(terminal_kura);
+        let (terminal_kura, _) =
+            open_authenticated_temp_recovery_kura(&terminal_config, &lane_config, &catalog)
+                .expect("reopen terminal bootstrap with its final payload incarnation");
         terminal_kura
             .bind_local_peer_id(local_peer.clone())
             .expect("bind terminal-bootstrap local peer");
         let terminal_generation = terminal_kura
             .claim_autonomous_lifecycle_process_generation(network_id, &local_peer)
             .expect("claim terminal-bootstrap generation");
-        install_autonomous_lane_marker_for_kura(&terminal_kura, &lane_config, &payload);
         let (_, terminal_bootstrap_signature) =
             sign_bootstrap(&terminal_kura, &terminal_generation);
         let mut terminal_authority = persist_bootstrap(

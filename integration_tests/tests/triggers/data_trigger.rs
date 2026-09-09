@@ -194,7 +194,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
         let neverland: DomainId = DomainId::try_new("neverland", "universal")?;
-        let setup_neverland = domain_setup_instruction(&neverland, &test_client.client().account)?;
+        let setup_neverland = domain_setup_instruction(&neverland, test_client.client().account())?;
         spawn_blocking({
             let client = test_client.clone();
             move || {

@@ -1,4 +1,3 @@
-#![allow(unexpected_cfgs)]
 //! pass: fields that exercise hybrid packed-struct classification hints
 //! - fixed-size: u32, [u8; 16]
 //! - self-delimiting: String

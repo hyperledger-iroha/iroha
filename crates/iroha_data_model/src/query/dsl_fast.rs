@@ -589,7 +589,7 @@ impl norito::core::SerializePayload for CompoundPredicateWireRef<'_> {
         }
     }
 }
-impl<T> norito::core::NoritoSerialize for CompoundPredicate<T> {}
+
 impl<T> norito::core::SerializePayload for CompoundPredicate<T> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         norito::core::SerializePayload::serialize(&self.wire_ref(), writer)
@@ -601,7 +601,7 @@ impl<T> norito::core::SerializePayload for CompoundPredicate<T> {
         norito::core::SerializePayload::encoded_len_exact(&self.wire_ref())
     }
 }
-impl<T: 'static> norito::core::NoritoDeserialize<'_> for CompoundPredicate<T> {}
+
 impl<'de, T: 'static> norito::core::DeserializePayload<'de> for CompoundPredicate<T> {
     fn deserialize(archived: &'de norito::core::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("compound predicate wire should deserialize")

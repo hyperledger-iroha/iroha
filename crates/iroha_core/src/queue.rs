@@ -172,6 +172,7 @@ use reservation_journal::{
 };
 #[cfg(test)]
 use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
+#[cfg(test)]
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
@@ -410,6 +411,8 @@ pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1: u16 = 1;
 /// This identity is persisted inside the exact journal record. Together with the record's
 /// canonical enqueue timestamp and claim digest it lets restart recovery reconstruct the same
 /// global admission binding that every authority attested.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanGlobalAdmissionIdentityV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanGlobalAdmissionIdentityV1 {
     /// Identity layout version.
@@ -420,6 +423,8 @@ pub struct QueuePlanGlobalAdmissionIdentityV1 {
     pub request_id: Hash,
 }
 /// One routing leg paired with the exact active lane incarnation that admitted it.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanRouteIncarnationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanRouteIncarnationV1 {
     /// Coordinator or participant route in canonical routing-plan order.
@@ -438,6 +443,8 @@ pub struct QueuePlanRouteIncarnationV1 {
     pub durability_threshold: u16,
 }
 /// Generation-stable lifecycle context for one queue-plan admission attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanAdmissionContextV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionContextV1 {
     /// Context layout version.
@@ -617,6 +624,8 @@ impl QueuePlanAdmissionContextV1 {
     }
 }
 /// Exact evidence returned only after the pending-plan journal Put is durably synchronized.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanDurableAdmissionV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanDurableAdmissionV1 {
     /// Claim layout version.
@@ -664,6 +673,10 @@ pub fn queue_plan_journal_record_claim_digest(
 pub enum QueuePlanAdmissionContextDisposition {
     /// The supplied context is the exact current admission generation.
     Current,
+    /// The supplied context names an exact canonical predecessor behind the
+    /// local frontier, while every bound route incarnation and validator set
+    /// remains identical at the source and current proposal heights.
+    Historical,
     /// The supplied context is structurally valid but its canonical frontier
     /// has not arrived locally yet, and its embedded authority matches the
     /// exact current source authority.
@@ -733,6 +746,8 @@ pub enum QueuePlanAdmissionContextError {
 /// The two identity hashes are supplied by lane consensus: `reservation_owner_hash` identifies
 /// the leader/session taking ownership, while `proposal_identity_hash` identifies the provisional
 /// proposal slot before its transaction-dependent final descriptor is assembled.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationScopeV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneQueueReservationScopeV1 {
     /// Lane allowed to coordinate execution of selected transactions.
@@ -812,6 +827,8 @@ impl LaneQueueReservationRoutingMode {
     }
 }
 /// Complete exact identity of one durable lane queue reservation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneQueueReservationKeyV1 {
@@ -884,6 +901,8 @@ impl LaneQueueReservationKeyV1 {
 /// Ordinals start at one and are never reused while a transaction remains
 /// tracked. The reservation journal retains this identity while the hash is
 /// absent from the ordinary FIFO so later admissions cannot overtake it.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueFifoOrderV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct LaneQueueFifoOrderV1 {
@@ -919,6 +938,8 @@ impl LaneQueueFifoOrderV1 {
 /// The first-release V1 layout binds every reservation to an exact globally
 /// committed QueuePlan admission identity and persists atomic ordered release
 /// batches.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationRecordV1 {
@@ -945,6 +966,8 @@ impl LaneQueueReservationRecordV1 {
 /// The retirement digest alone is not sufficient here: retaining the
 /// consensus/lifecycle coordinates in the journal lets replay reject an ABA
 /// attempt before it can touch a live reservation from a recreated lane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReleaseBarrierV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReleaseBarrierV1 {
@@ -1383,6 +1406,8 @@ impl LaneQueueReleaseFinalizationGate {
 /// A completion frame moves the exact live records here atomically. Keeping
 /// the original durable ordinals makes a crash between that frame and FIFO
 /// reinsertion restartable without changing global queue order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReleaseCompletionV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReleaseCompletionV1 {
@@ -1492,6 +1517,8 @@ pub struct LaneQueueReservationReplaySummary {
 /// carrying these exact lifecycle and proposal coordinates belongs to the same immutable group
 /// for restart classification, including when journal compaction has flattened the original
 /// atomic `PutBatch` frame.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationGroupIdentityV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationGroupIdentityV1 {
@@ -2119,6 +2146,8 @@ pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
     pub(crate) durable_admission: QueuePlanDurableAdmissionV1,
 }
 /// Complete FIFO-ordered membership of one exact autonomous proposal slot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReconciliationGroupV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReconciliationGroupV1 {
@@ -15542,12 +15571,7 @@ impl Queue {
             });
         }
         let future = admission_context.authority_height > current_authority_height;
-        if admission_context.authority_height < current_authority_height {
-            return Err(QueuePlanAdmissionContextError::NonCanonical {
-                reason: "first-time historical admission requires rebinding at the current canonical frontier"
-                    .to_owned(),
-            });
-        }
+        let historical = admission_context.authority_height < current_authority_height;
         let current_proposal_height = current_authority_height.checked_add(1).ok_or_else(|| {
             QueuePlanAdmissionContextError::NonCanonical {
                 reason: "current authority height overflows its proposal height".to_owned(),
@@ -15634,9 +15658,33 @@ impl Queue {
                     ),
                 });
             }
+            if historical {
+                let current_validator_set = queue_plan_authoritative_peers_in_view_at_height(
+                    state_view,
+                    bound.leg.route,
+                    current_proposal_height,
+                )
+                .map_err(|_| QueuePlanAdmissionContextError::MissingAuthority {
+                    lane_id: bound.leg.route.lane_id,
+                    dataspace_id: bound.leg.route.dataspace_id,
+                    proposal_height: current_proposal_height,
+                })?;
+                if current_validator_set != bound.validator_set {
+                    return Err(QueuePlanAdmissionContextError::NonCanonical {
+                        reason: format!(
+                            "lane {} dataspace {} validator set changed after source proposal height {}",
+                            bound.leg.route.lane_id,
+                            bound.leg.route.dataspace_id,
+                            source_proposal_height
+                        ),
+                    });
+                }
+            }
         }
         Ok(if future {
             QueuePlanAdmissionContextDisposition::Future
+        } else if historical {
+            QueuePlanAdmissionContextDisposition::Historical
         } else {
             QueuePlanAdmissionContextDisposition::Current
         })
@@ -15667,16 +15715,17 @@ impl Queue {
     }
     /// Classify an ingress-supplied context against one coherent local state view.
     ///
-    /// A first-time historical context is rejected because current WSV cannot
-    /// reconstruct an immutable old committee after authority churn. Exact
-    /// already-owned durable retries are handled before this classifier. A
-    /// future context is reported only when its embedded roster and incarnation
+    /// A historical context is accepted only when its canonical predecessor is
+    /// retained and every embedded roster and incarnation resolves identically
+    /// at both its source proposal height and the current proposal height. This
+    /// permits a height-only admission race without accepting authority churn.
+    /// A future context is reported only when its embedded roster and incarnation
     /// match the exact current authority source, without mutating queue ownership.
     ///
     /// # Errors
     /// Returns an error when the routing plan is inactive, the context is
-    /// historical, or any authority, roster, or incarnation binding is not
-    /// canonical at the current source frontier.
+    /// unavailable from retained history, or any authority, roster, or
+    /// incarnation binding is not canonical at both required frontiers.
     pub fn classify_plan_admission_context_with_state(
         &self,
         state: &State,
@@ -16559,7 +16608,10 @@ impl Queue {
                         &routing_plan,
                         expected_context,
                     ) {
-                        Ok(QueuePlanAdmissionContextDisposition::Current) => {}
+                        Ok(
+                            QueuePlanAdmissionContextDisposition::Current
+                            | QueuePlanAdmissionContextDisposition::Historical,
+                        ) => {}
                         Ok(QueuePlanAdmissionContextDisposition::Future) => {
                             return Err(Failure {
                                 tx: tx.into(),
@@ -22255,15 +22307,10 @@ pub mod tests {
             &RoutingPlan::single(previous.coordinator_route())
         ));
     }
-    fn exact_lane_authority_for_queue_test(
+    fn lane_authority_for_queue_test(
         state: &mut State,
         validator_keys: &[iroha_crypto::KeyPair],
     ) -> Arc<LaneManifestRegistry> {
-        assert_eq!(
-            validator_keys.len(),
-            4,
-            "the default queue dataspace has f=1 and therefore requires exactly four validators"
-        );
         let validator_peers = validator_keys
             .iter()
             .map(|key| PeerId::new(key.public_key().clone()))
@@ -22328,6 +22375,17 @@ pub mod tests {
             })
             .collect();
         Arc::new(LaneManifestRegistry::from_statuses(statuses))
+    }
+    fn exact_lane_authority_for_queue_test(
+        state: &mut State,
+        validator_keys: &[iroha_crypto::KeyPair],
+    ) -> Arc<LaneManifestRegistry> {
+        assert_eq!(
+            validator_keys.len(),
+            4,
+            "the default queue dataspace has f=1 and therefore requires exactly four validators"
+        );
+        lane_authority_for_queue_test(state, validator_keys)
     }
     fn exact_f1_lane_authority_for_queue_test(
         state: &mut State,
@@ -22665,6 +22723,7 @@ pub mod tests {
             fsync_mode: iroha_config::kura::FsyncMode::Batched,
             fsync_interval: kura_defaults::FSYNC_INTERVAL,
             lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         };
         let kura = Kura::new_temporary_with_configured_lane_catalog(
@@ -26082,7 +26141,7 @@ pub mod tests {
         );
     }
     #[test]
-    fn strict_durable_claim_rejects_unowned_history_and_defers_authenticated_future() {
+    fn strict_durable_claim_admits_stable_history_rejects_forgery_and_defers_future() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("strict-claim-frontier-v1.norito");
         let mut state = State::new(
@@ -26124,29 +26183,25 @@ pub mod tests {
         );
 
         seed_committed_height_for_queue_test(&state, 3);
-        assert!(
+        assert_eq!(
             queue
                 .classify_plan_admission_context_with_state(&state, &plan, &historical_context,)
-                .is_err(),
-            "current WSV cannot authenticate a first-time historical authority roster"
+                .expect("classify exact stable historical context"),
+            QueuePlanAdmissionContextDisposition::Historical,
+            "height advancement alone must not invalidate an otherwise identical authority binding"
         );
-        let historical_error = queue
+        queue
             .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
                 historical_tx,
                 &state,
                 plan.clone(),
                 &historical_context,
             )
-            .expect_err("an unowned historical context must be rebound at the current frontier");
-        assert!(matches!(
-            historical_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("historical admission requires rebinding")
-        ));
-        assert_eq!(queue.active_len(), 0);
+            .expect("an exact stable historical context must acquire durable ownership");
+        assert_eq!(queue.active_len(), 1);
 
-        let journal_len_after_historical_rejection = std::fs::metadata(&journal_path)
-            .expect("frontier journal metadata after historical rejection")
+        let journal_len_after_historical_admission = std::fs::metadata(&journal_path)
+            .expect("frontier journal metadata after historical admission")
             .len();
         let (_invalid_time_handle, invalid_time_source) =
             TimeSource::new_mock(Duration::from_millis(732));
@@ -26169,6 +26224,14 @@ pub mod tests {
                 &invalid_history,
             )
             .expect_err("noncanonical history must fail before durable ownership");
+        assert_eq!(queue.active_len(), 1);
+        assert_eq!(
+            std::fs::metadata(&journal_path)
+                .expect("frontier journal metadata after forged historical context")
+                .len(),
+            journal_len_after_historical_admission,
+            "forged history must not append a durable claim"
+        );
 
         let (_future_time_handle, future_time_source) =
             TimeSource::new_mock(Duration::from_millis(733));
@@ -26230,14 +26293,99 @@ pub mod tests {
             Error::UnresolvedRoute { ref reason }
                 if reason.contains("ahead of the local canonical frontier")
         ));
-        assert_eq!(queue.active_len(), 0);
+        assert_eq!(queue.active_len(), 1);
         assert_eq!(
             std::fs::metadata(&journal_path)
                 .expect("frontier journal metadata after rejected contexts")
                 .len(),
-            journal_len_after_historical_rejection,
+            journal_len_after_historical_admission,
             "invalid and future contexts must not append queue ownership"
         );
+    }
+    #[test]
+    fn historical_admission_rejects_height_bound_committee_rotation() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let validator_keys = (0_u8..5)
+            .map(|offset| {
+                iroha_crypto::KeyPair::from_seed(
+                    vec![0xA0_u8.saturating_add(offset); 32],
+                    iroha_crypto::Algorithm::BlsNormal,
+                )
+            })
+            .collect::<Vec<_>>();
+        let manifests = lane_authority_for_queue_test(&mut state, &validator_keys);
+        state.install_lane_manifests(&manifests);
+        {
+            let mut world_block = state.world.block();
+            let first_id = crate::state::derive_validator_key_id(validator_keys[0].public_key());
+            let mut first = world_block
+                .consensus_keys
+                .get(&first_id)
+                .cloned()
+                .expect("first height-bound validator key");
+            first.expiry_height = Some(4);
+            world_block.consensus_keys.insert(first_id, first);
+            let fifth_id = crate::state::derive_validator_key_id(validator_keys[4].public_key());
+            let mut fifth = world_block
+                .consensus_keys
+                .get(&fifth_id)
+                .cloned()
+                .expect("fifth height-bound validator key");
+            fifth.activation_height = 4;
+            world_block.consensus_keys.insert(fifth_id, fifth);
+            world_block.commit();
+        }
+        seed_committed_height_for_queue_test(&state, 1);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::from_millis(934));
+        let queue = Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            Arc::new(StaticRouter {
+                lane: LaneId::SINGLE,
+                dataspace: DataSpaceId::UNIVERSAL,
+            }),
+            &[],
+        );
+        let tx = accepted_tx_by_someone(&time_source);
+        register_accepted_tx_authority_for_queue_test(&mut state, &tx);
+        let plan = queue
+            .route_plan_with_state(&tx, &state)
+            .expect("resolve height-bound committee route");
+        let historical_context = queue
+            .plan_admission_context_with_state(&state, &plan)
+            .expect("capture source-height committee");
+        let embedded = &historical_context.route_incarnations[0].validator_set;
+        assert_eq!(
+            queue_plan_authoritative_peers_in_view_at_height(
+                &state.view(),
+                plan.coordinator_route(),
+                2,
+            )
+            .expect("resolve retained source-height projection"),
+            *embedded
+        );
+        seed_committed_height_for_queue_test(&state, 3);
+        assert_ne!(
+            queue_plan_authoritative_peers_in_view_at_height(
+                &state.view(),
+                plan.coordinator_route(),
+                4,
+            )
+            .expect("resolve rotated current committee"),
+            *embedded
+        );
+        let error = queue
+            .classify_plan_admission_context_with_state(&state, &plan, &historical_context)
+            .expect_err("current committee rotation must reject a historical admission");
+        assert!(matches!(
+            error,
+            QueuePlanAdmissionContextError::NonCanonical { ref reason }
+                if reason.contains("validator set changed after source proposal height")
+        ));
     }
     #[test]
     fn strict_durable_claim_retry_survives_height_advance_before_and_after_restart_replay() {
@@ -26540,6 +26688,12 @@ pub mod tests {
             .len();
         seed_committed_height_for_queue_test(&state, 3);
         install_exact_lane_authority_for_queue_test(&mut state, &validator_keys[1..]);
+        assert!(
+            queue
+                .classify_plan_admission_context_with_state(&state, &plan, &original_context)
+                .is_err(),
+            "a historical context must fail closed after validator authority changes"
+        );
         let current_context = queue
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture exact current rollover context");

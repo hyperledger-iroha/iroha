@@ -1,0 +1,95 @@
+{
+  "identities": [
+    {
+      "frame": "settlement_router::DurationSeconds",
+      "nominal": "settlement_router::DurationSeconds",
+      "path": "crates/settlement_router/src/lib.rs",
+      "schema_hash": "84fc913c48f2ee4816bcddb09370e057"
+    },
+    {
+      "frame": "settlement_router::TimestampMs",
+      "nominal": "settlement_router::TimestampMs",
+      "path": "crates/settlement_router/src/lib.rs",
+      "schema_hash": "5be3205a4adc662725c5340b6f636f24"
+    },
+    {
+      "frame": "settlement_router::config::EpsilonBps",
+      "nominal": "settlement_router::config::EpsilonBps",
+      "path": "crates/settlement_router/src/config.rs",
+      "schema_hash": "00311eccd5f3bc673aa08f61b63d9829"
+    },
+    {
+      "frame": "settlement_router::config::SettlementConfig",
+      "nominal": "settlement_router::config::SettlementConfig",
+      "path": "crates/settlement_router/src/config.rs",
+      "schema_hash": "1031a4926c680525e2b88e3cc9045a2d"
+    },
+    {
+      "frame": "settlement_router::haircut::HaircutTier",
+      "nominal": "settlement_router::haircut::HaircutTier",
+      "path": "crates/settlement_router/src/haircut.rs",
+      "schema_hash": "e31ba9032cd0da188b4ad2caff927f7a"
+    },
+    {
+      "frame": "settlement_router::haircut::LiquidityProfile",
+      "nominal": "settlement_router::haircut::LiquidityProfile",
+      "path": "crates/settlement_router/src/haircut.rs",
+      "schema_hash": "0bb4e705669cbb56b697abb4c2394220"
+    },
+    {
+      "frame": "settlement_router::policy::BufferCapacity",
+      "nominal": "settlement_router::policy::BufferCapacity",
+      "path": "crates/settlement_router/src/policy.rs",
+      "schema_hash": "f2b4efe211570fee616f6bd76c146226"
+    },
+    {
+      "frame": "settlement_router::policy::BufferPolicy",
+      "nominal": "settlement_router::policy::BufferPolicy",
+      "path": "crates/settlement_router/src/policy.rs",
+      "schema_hash": "ad37ec475cd54726866d2688b94bb129"
+    },
+    {
+      "frame": "settlement_router::price::ShadowPrice",
+      "nominal": "settlement_router::price::ShadowPrice",
+      "path": "crates/settlement_router/src/price.rs",
+      "schema_hash": "b268bcc432bf7045b5794b022fedb97a"
+    },
+    {
+      "frame": "settlement_router::receipt::SettlementReceipt",
+      "nominal": "settlement_router::receipt::SettlementReceipt",
+      "path": "crates/settlement_router/src/receipt.rs",
+      "schema_hash": "177045432c10cfb202548d333e4f5726"
+    },
+    {
+      "frame": "settlement_router::swapline::CollateralKind",
+      "nominal": "settlement_router::swapline::CollateralKind",
+      "path": "crates/settlement_router/src/swapline.rs",
+      "schema_hash": "a4fd3f5032bc25886d5f356940b63711"
+    },
+    {
+      "frame": "settlement_router::swapline::SwapLineConfig",
+      "nominal": "settlement_router::swapline::SwapLineConfig",
+      "path": "crates/settlement_router/src/swapline.rs",
+      "schema_hash": "fcb6d146275504bbee8a46f9279cd6c8"
+    },
+    {
+      "frame": "settlement_router::swapline::SwapLineExposure",
+      "nominal": "settlement_router::swapline::SwapLineExposure",
+      "path": "crates/settlement_router/src/swapline.rs",
+      "schema_hash": "08a4866b47e1ceed8f48e08a4f70db8b"
+    },
+    {
+      "frame": "settlement_router::swapline::SwapLineId",
+      "nominal": "settlement_router::swapline::SwapLineId",
+      "path": "crates/settlement_router/src/swapline.rs",
+      "schema_hash": "1fa85731ef476b2aa16e36c3edae8ce0"
+    },
+    {
+      "frame": "settlement_router::volatility::VolatilityBucket",
+      "nominal": "settlement_router::volatility::VolatilityBucket",
+      "path": "crates/settlement_router/src/volatility.rs",
+      "schema_hash": "e37bb20d8844f21e531ca2561a8c80ce"
+    }
+  ],
+  "schema": "iroha.settlement.schema-identities.v1"
+}

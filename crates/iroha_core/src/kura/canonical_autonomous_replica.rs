@@ -18,6 +18,8 @@ const MAX_CANONICAL_AUTONOMOUS_LANE_REPLICA_MATCH_SCAN: usize = 1_032;
 /// autonomous attempt. The certified bundle embeds the exact historical
 /// committee roster, the READY certificate's complete PoP vector, and the
 /// Prepare/Commit signer PoPs needed for aggregate verification after restart.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::CanonicalAutonomousLaneReplicaV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct CanonicalAutonomousLaneReplicaV1 {
@@ -796,7 +798,9 @@ impl Kura {
             &data_path,
         )?;
         let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(
+            Self::sidecar_physical_resource_paths(&data_path, &index_path),
+        );
         if !Self::append_indexed_progress_sidecar(
             &data_path,
             &index_path,

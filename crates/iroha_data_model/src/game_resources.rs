@@ -33,6 +33,8 @@ macro_rules! record {
 }
 
 /// Closed custody policy. Wins, ties and forfeits never change the recipient.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::game_resources::GameResourceReturnPolicyV1")]
 #[derive(
     Debug,
     Clone,
@@ -61,6 +63,8 @@ pub enum GameResourceReturnPolicyV1 {
 
 record! {
     /// An explicit wallet-signed temporary NFT reservation, separate from a wager.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::game_resources::GameResourceReservationClauseV1")]
     pub struct GameResourceReservationClauseV1 {
         /// Exact NFT whose current ownership must be authenticated by Core.
         pub nft_id: NftId,
@@ -74,6 +78,8 @@ record! {
 }
 record! {
     /// A compiled adapter's requirement; it never itself authorizes custody.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::game_resources::GameResourceRequirementV1")]
     pub struct GameResourceRequirementV1 {
         /// Exact NFT declared by the compiled application input.
         pub nft_id: NftId,
@@ -87,6 +93,8 @@ record! {
 }
 record! {
     /// Permanent audit record; it contains no configurable release recipient.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::game_resources::GameResourceReservationRecordV1")]
     pub struct GameResourceReservationRecordV1 {
         /// Permanent participant slot.
         pub slot: u8,
@@ -110,6 +118,8 @@ record! {
 }
 record! {
     /// Bounded consensus set kept separate from existing game-session/wager shapes.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::game_resources::GameResourceReservationSetV1")]
     pub struct GameResourceReservationSetV1 {
         /// Exactly one for this independent schema.
         pub version: u16,
@@ -491,5 +501,23 @@ mod tests {
         ] {
             assert!(norito::json::from_str::<GameResourceReturnPolicyV1>(wrong).is_err());
         }
+    }
+}
+
+#[cfg(test)]
+mod additional_frame_owner_identity_tests {
+    //! Typed frame contracts observed with the original codec.
+
+    #[test]
+    fn captured_additional_frame_owner_identities() {
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::game_resources::GameResourceRequirementV1,
+        >("iroha_data_model::game_resources::GameResourceRequirementV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::game_resources::GameResourceReservationClauseV1,
+        >("iroha_data_model::game_resources::GameResourceReservationClauseV1");
+        crate::frame_owner_identity_tests::assert_bidirectional::<
+            crate::game_resources::GameResourceReservationSetV1,
+        >("iroha_data_model::game_resources::GameResourceReservationSetV1");
     }
 }

@@ -30,6 +30,8 @@ pub(crate) const DA_PIN_INTENT_REQUEST_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_PIN_INTENT_PAGE_SIZE: usize = 100;
 const MAX_PIN_INTENT_PAGE_SIZE: usize = 1_000;
 /// Forward-only cursor for canonically ordered DA pin intents.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentListCursor")]
 #[derive(
     Debug,
     Clone,
@@ -48,6 +50,8 @@ pub struct DaPinIntentListCursor {
     pub after: iroha_data_model::da::commitment::DaCommitmentLocation,
 }
 /// Request payload for bounded DA pin-intent traversal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentListRequest")]
 #[derive(
     Debug,
     Default,
@@ -66,6 +70,8 @@ pub struct DaPinIntentListRequest {
     pub cursor: Option<DaPinIntentListCursor>,
 }
 /// Exact selector used to generate one DA pin-intent proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentQueryRequest")]
 #[derive(
     Debug,
     Default,
@@ -90,6 +96,8 @@ pub struct DaPinIntentQueryRequest {
     pub sequence: Option<u64>,
 }
 /// Response surface for bounded DA pin-intent traversal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentListResponse")]
 #[derive(
     Debug,
     Clone,
@@ -106,6 +114,8 @@ pub struct DaPinIntentListResponse {
     pub next_cursor: Option<DaPinIntentListCursor>,
 }
 /// Verification response for indexed DA pin intent location data.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::pin_intents::DaPinIntentVerifyResponse")]
 #[derive(
     Debug,
     Clone,

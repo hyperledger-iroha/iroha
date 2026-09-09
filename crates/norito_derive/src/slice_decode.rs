@@ -8,6 +8,11 @@ use syn::{Attribute, Generics, Ident, Lifetime};
 
 use super::has_decode_from_slice_attr;
 
+pub(super) enum DecodeBody {
+    Archived(TokenStream2),
+    Prefix,
+}
+
 fn collect_lifetimes(tokens: TokenStream2, names: &mut BTreeSet<String>) {
     let mut tokens = tokens.into_iter();
     while let Some(token) = tokens.next() {
@@ -42,7 +47,7 @@ pub(super) fn derive(
     ident: &Ident,
     generics: &Generics,
     container_attrs: &[Attribute],
-    decode_body: TokenStream2,
+    decode_body: DecodeBody,
 ) -> TokenStream2 {
     if !has_decode_from_slice_attr(container_attrs) {
         return TokenStream2::new();
@@ -55,6 +60,21 @@ pub(super) fn derive(
     );
     let (impl_generics, _, where_clause) = implementation.split_for_impl();
     let (_, ty_generics, _) = generics.split_for_impl();
+    let decode_body = match decode_body {
+        DecodeBody::Archived(body) => quote! {
+            let __logical_len = __prepared.logical_len();
+            let __archived_bytes = __prepared.bytes();
+            let _pg = norito::core::PayloadCtxGuard::enter_with_len(
+                __archived_bytes,
+                __logical_len,
+            );
+            let __archived = __prepared.archived::<Self>();
+            #body
+        },
+        DecodeBody::Prefix => quote! {
+            norito::core::decode_prepared_slice_prefix::<Self>(&__prepared)
+        },
+    };
     quote! {
         impl #impl_generics norito::core::DecodeFromSlice<#slice_lifetime> for #ident #ty_generics #where_clause {
             #[inline]
@@ -64,13 +84,6 @@ pub(super) fn derive(
                     norito::core::archived_payload_size::<Self>(),
                     norito::core::archived_payload_align::<Self>(),
                 )?;
-                let __logical_len = __prepared.logical_len();
-                let __archived_bytes = __prepared.bytes();
-                let _pg = norito::core::PayloadCtxGuard::enter_with_len(
-                    __archived_bytes,
-                    __logical_len,
-                );
-                let __archived = __prepared.archived::<Self>();
                 #decode_body
             }
         }
@@ -143,7 +156,12 @@ mod tests {
             { value: &'original [T; N] }
         };
         let body = quote! { Ok((Self::default(), __logical_len)) };
-        let tokens = derive(&input.ident, &input.generics, &input.attrs, body.clone());
+        let tokens = derive(
+            &input.ident,
+            &input.generics,
+            &input.attrs,
+            DecodeBody::Archived(body.clone()),
+        );
         let emitted: ItemImpl = syn::parse2(tokens.clone()).expect("one valid impl parameter list");
         assert_eq!(emitted.generics.params.len(), 4);
         assert_eq!(
@@ -183,7 +201,15 @@ mod tests {
     #[test]
     fn slice_generation_remains_opt_in_and_does_not_inject_validation() {
         let input: DeriveInput = syn::parse_quote! { struct Record<T>(T); };
-        assert!(derive(&input.ident, &input.generics, &input.attrs, quote!()).is_empty());
+        assert!(
+            derive(
+                &input.ident,
+                &input.generics,
+                &input.attrs,
+                DecodeBody::Archived(quote!())
+            )
+            .is_empty()
+        );
         let input: DeriveInput = syn::parse_quote! {
             #[norito(decode_from_slice)]
             struct Record<T>(T);
@@ -192,13 +218,34 @@ mod tests {
             &input.ident,
             &input.generics,
             &input.attrs,
-            quote! {
+            DecodeBody::Archived(quote! {
                 Ok((Self::checked(), 7))
-            },
+            }),
         );
         let source = tokens.to_string();
         assert_eq!(source.matches("Self :: checked ()").count(), 1);
         assert!(!source.contains("validate"));
         syn::parse2::<ItemImpl>(tokens).expect("nonguarded body remains valid");
+    }
+
+    #[test]
+    fn prefix_slice_delegates_to_one_payload_decoder_without_frame_or_encode_bounds() {
+        let input: DeriveInput = syn::parse_quote! {
+            #[norito(decode_from_slice)]
+            struct Record<T> { value: T }
+        };
+        let tokens = derive(
+            &input.ident,
+            &input.generics,
+            &input.attrs,
+            DecodeBody::Prefix,
+        );
+        let source = tokens.to_string();
+        assert_eq!(source.matches("decode_prepared_slice_prefix").count(), 1);
+        assert!(!source.contains("SerializePayload"));
+        assert!(!source.contains("NoritoSchema"));
+        assert!(!source.contains("PayloadCtxGuard"));
+        assert!(!source.contains("__logical_len"));
+        syn::parse2::<ItemImpl>(tokens).expect("prefix-only slice implementation");
     }
 }

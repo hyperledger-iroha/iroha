@@ -6,7 +6,16 @@
 //! now encoded as fixed-size payloads, the packed-struct bitset should remain
 //! zero for both positions.
 use iroha_crypto::{Algorithm, HashOf, KeyPair, Signature, SignatureOf};
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.USig")]
 struct USig {
     a: u64,
     b: SignatureOf<()>,
@@ -55,7 +64,16 @@ fn packed_bitset_alignment_for_u64_signatureof() {
     let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.USignature")]
 struct USignature {
     a: u64,
     b: Signature,
@@ -70,7 +88,16 @@ fn packed_bitset_alignment_for_u64_signature() {
     let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.TupSigOf")]
 struct TupSigOf(u64, SignatureOf<()>);
 #[test]
 fn packed_bitset_alignment_for_tuple_u64_signatureof() {
@@ -82,7 +109,16 @@ fn packed_bitset_alignment_for_tuple_u64_signatureof() {
     let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.TupSig")]
 struct TupSig(Signature, u64);
 #[test]
 fn packed_bitset_alignment_for_tuple_signature_u64() {
@@ -94,7 +130,16 @@ fn packed_bitset_alignment_for_tuple_signature_u64() {
     let got = norito::core::DeserializePayload::deserialize(archived);
     assert_eq!(got, value);
 }
-#[derive(norito::derive::Encode, norito::derive::Decode, Debug, Clone, PartialEq, Eq)]
+#[derive(
+    norito::derive::Encode,
+    norito::derive::Decode,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_crypto.test.packed_signature.SigOfUNamed")]
 struct SigOfUNamed {
     b: SignatureOf<()>,
     a: u64,

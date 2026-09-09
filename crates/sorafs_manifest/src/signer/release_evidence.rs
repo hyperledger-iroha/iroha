@@ -16,21 +16,27 @@ use super::{
         VerifiedReleaseManifestSignerReceiptV1, signer_release_manifest_digest_v1,
         verify_release_manifest_signer_receipt_v1,
     },
+    state_observation::{
+        SIGNER_STATE_OBSERVATION_MAX_AGE_MS_V1, SignerStateObservationViewV1,
+        SignerStateObserverTrustV1,
+    },
 };
-use iroha_crypto::{Algorithm, PublicKey, Signature, sha256};
+#[cfg(test)]
+use iroha_crypto::Signature;
+use iroha_crypto::{Algorithm, PublicKey, sha256};
 use norito::codec::{Decode, Encode};
 use std::fmt;
 
 /// Maximum canonical public policy, trust or signed observation frame.
 pub const SIGNER_RELEASE_EVIDENCE_DOCUMENT_MAX_BYTES_V1: usize = 64 * 1024;
-/// Maximum age and lifetime of an independently signed current-state observation: five minutes.
-pub const SIGNER_RELEASE_STATE_MAX_AGE_MS_V1: u64 = 300_000;
 const POLICY_MAGIC: [u8; 8] = *b"IRSREP01";
 const TRUST_MAGIC: [u8; 8] = *b"IRSRET01";
 const STATE_MAGIC: [u8; 8] = *b"IRSRES01";
 const STATE_DOMAIN: &[u8] = b"iroha.sorafs.release-manifest.finalized-state.v1\0";
 
 /// Independently reviewed request and exact public signer identity.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::release_evidence::SignerReleaseEvidencePolicyV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseEvidencePolicyV1 {
     /// Sole V1 marker; obtain it with [`Self::magic`].
@@ -54,6 +60,8 @@ impl SignerReleaseEvidencePolicyV1 {
 }
 
 /// Independently pinned observer and attestation trust; contains no runtime credentials.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_manifest::signer::release_evidence::SignerReleaseEvidenceTrustV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseEvidenceTrustV1 {
     /// Sole V1 marker; obtain it with [`Self::magic`].
@@ -87,6 +95,10 @@ impl SignerReleaseEvidenceTrustV1 {
 }
 
 /// Exact current finalized state signed by the independently trusted observer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::release_evidence::SignerReleaseStateObservationBodyV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseStateObservationBodyV1 {
     /// Sole V1 marker; obtain it with [`Self::magic`].
@@ -139,7 +151,7 @@ impl SignerReleaseStateObservationBodyV1 {
             || self.network_id == [0; 32]
             || self.expires_at_unix_ms <= self.observed_at_unix_ms
             || self.expires_at_unix_ms - self.observed_at_unix_ms
-                > SIGNER_RELEASE_STATE_MAX_AGE_MS_V1
+                > SIGNER_STATE_OBSERVATION_MAX_AGE_MS_V1
         {
             return Err(SignerReleaseEvidenceErrorV1::InvalidState);
         }
@@ -167,6 +179,10 @@ impl SignerReleaseStateObservationBodyV1 {
 }
 
 /// Canonical signed finalized-state observation; its signing key is never selected from this file.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_manifest::signer::release_evidence::SignerReleaseStateObservationV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SignerReleaseStateObservationV1 {
     /// Exact signed observation.
@@ -292,37 +308,18 @@ pub fn verify_release_manifest_evidence_v1(
     {
         return Err(SignerReleaseEvidenceErrorV1::SourceMismatch);
     }
-    validate_trust(&trust, &policy.binding, expected.now_unix_ms)?;
-    let body = &observation.body;
-    let anchor = body.current_anchor;
-    if body.reviewed_policy_sha256 != expected.policy_sha256
-        || body.authority != trust.state_authority
-        || body.chain_id != policy.binding.chain_id
-        || body.network_id != policy.binding.network_id
-        || &body.deployment_id != deployment_id
-        || body.observed_at_unix_ms > expected.now_unix_ms
-        || expected.now_unix_ms >= body.expires_at_unix_ms
-        || expected.now_unix_ms - body.observed_at_unix_ms > trust.max_state_age_ms
-        || body.expires_at_unix_ms <= body.observed_at_unix_ms
-        || body.expires_at_unix_ms - body.observed_at_unix_ms > trust.max_state_age_ms
-        || body.observed_at_unix_ms < trust.state_active_from_unix_ms
-        || body.completed_operation.completed_at_unix_ms > body.observed_at_unix_ms
-        || body.expires_at_unix_ms > trust.state_active_until_unix_ms
-        || body.signer_revoked
-        || body.attester_revoked
-        || anchor.height < policy.minimum_anchor.height
-        || (anchor.height == policy.minimum_anchor.height && anchor != policy.minimum_anchor)
-        || anchor.block_hash == [0; 32]
-        || anchor.state_digest == [0; 32]
-    {
-        return Err(SignerReleaseEvidenceErrorV1::InvalidState);
+    // The release wire marker remains purpose-owned. Shared observer trust is constructed only
+    // after the exact source-pinned trust frame and reviewed signer policy have been admitted.
+    if trust.magic != TRUST_MAGIC {
+        return Err(SignerReleaseEvidenceErrorV1::InvalidTrust);
     }
-    let state_message = body.signing_payload()?;
-    let state_signature = Signature::try_from_bytes(&observation.signature)
-        .map_err(|_| SignerReleaseEvidenceErrorV1::InvalidState)?;
-    state_signature
-        .verify(&trust.state_public_key, &state_message)
-        .map_err(|_| SignerReleaseEvidenceErrorV1::InvalidState)?;
+    let observer_trust = SignerStateObserverTrustV1 {
+        authority: trust.state_authority,
+        public_key: trust.state_public_key,
+        active_from_unix_ms: trust.state_active_from_unix_ms,
+        active_until_unix_ms: trust.state_active_until_unix_ms,
+        max_state_age_ms: trust.max_state_age_ms,
+    };
     let custody_trust = SignerCustodyTrustV1 {
         authority: trust.custody_authority,
         public_key: trust.custody_public_key,
@@ -331,6 +328,42 @@ pub fn verify_release_manifest_evidence_v1(
         max_validity_ms: trust.custody_max_validity_ms,
         max_anchor_age_ms: trust.max_state_age_ms,
     };
+    observer_trust
+        .validate(&policy.binding, &custody_trust, expected.now_unix_ms)
+        .map_err(|_| SignerReleaseEvidenceErrorV1::InvalidTrust)?;
+    let body = &observation.body;
+    let anchor = body.current_anchor;
+    let state = SignerStateObservationViewV1 {
+        authority: &body.authority,
+        chain_id: &body.chain_id,
+        network_id: &body.network_id,
+        observed_at_unix_ms: body.observed_at_unix_ms,
+        expires_at_unix_ms: body.expires_at_unix_ms,
+        current_anchor: anchor,
+        signer_revoked: body.signer_revoked,
+        attester_revoked: body.attester_revoked,
+    };
+    if body.reviewed_policy_sha256 != expected.policy_sha256
+        || !state.matches_identity(&observer_trust, &policy.binding)
+        || &body.deployment_id != deployment_id
+    {
+        return Err(SignerReleaseEvidenceErrorV1::InvalidState);
+    }
+    state
+        .validate_freshness(&observer_trust, expected.now_unix_ms)
+        .map_err(|_| SignerReleaseEvidenceErrorV1::InvalidState)?;
+    // Keep the purpose-specific completed-row check between freshness and finality, as in the
+    // original release verifier. A shared current-state view does not manufacture completion.
+    if body.completed_operation.completed_at_unix_ms > body.observed_at_unix_ms {
+        return Err(SignerReleaseEvidenceErrorV1::InvalidState);
+    }
+    state
+        .validate_finality(&observer_trust, &policy.minimum_anchor)
+        .map_err(|_| SignerReleaseEvidenceErrorV1::InvalidState)?;
+    let state_message = body.signing_payload()?;
+    observer_trust
+        .verify_signature(&state_message, &observation.signature)
+        .map_err(|_| SignerReleaseEvidenceErrorV1::InvalidState)?;
     let current = SignerCustodyUseContextV1 {
         now_unix_ms: expected.now_unix_ms,
         anchor_observed_at_unix_ms: body.observed_at_unix_ms,
@@ -360,43 +393,8 @@ pub fn verify_release_manifest_evidence_v1(
     Ok(verified)
 }
 
-fn validate_trust(
-    trust: &SignerReleaseEvidenceTrustV1,
-    binding: &SignerCustodyBindingV1,
-    now: u64,
-) -> Result<(), SignerReleaseEvidenceErrorV1> {
-    let authority = &trust.state_authority;
-    let other_identities = [
-        binding.service_id.as_str(),
-        binding.administrator_id.as_str(),
-        trust.custody_authority.service_id.as_str(),
-        trust.custody_authority.administrator_id.as_str(),
-    ];
-    if trust.magic != TRUST_MAGIC
-        || !valid_identity(&authority.service_id)
-        || !valid_identity(&authority.administrator_id)
-        || authority.key_revision == 0
-        || authority.policy_revision == 0
-        || authority.policy_digest == [0; 32]
-        || authority.service_id == authority.administrator_id
-        || [
-            authority.service_id.as_str(),
-            authority.administrator_id.as_str(),
-        ]
-        .iter()
-        .any(|identity| other_identities.contains(identity))
-        || trust.state_public_key.algorithm() != Algorithm::Ed25519
-        || trust.state_public_key == binding.public_key
-        || trust.state_public_key == trust.custody_public_key
-        || trust.max_state_age_ms == 0
-        || trust.max_state_age_ms > SIGNER_RELEASE_STATE_MAX_AGE_MS_V1
-        || now < trust.state_active_from_unix_ms
-        || now >= trust.state_active_until_unix_ms
-    {
-        return Err(SignerReleaseEvidenceErrorV1::InvalidTrust);
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+include!("release_evidence/captured_owner_identity_tests.rs");
