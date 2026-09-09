@@ -43,7 +43,7 @@ use norito::codec::{Decode, DecodeAll as _, Encode};
 #[cfg(test)]
 use std::fs::OpenOptions;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     ffi::{OsStr, OsString},
     fs::{self, File},
     io::{Read, Write},
@@ -927,6 +927,14 @@ pub(super) struct RecoveredTerminalValidateOutcomeCatalogCut<'store> {
     selected_validated: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), ValidatedBodyReceipt>,
     selected_rejected:
         BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
+    /// Claims and executable reports may share one immutable rejection, but
+    /// a second report cannot acquire that same selected outcome.
+    selected_terminal_rejections: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
+    selected_report_outcomes: BTreeSet<(wire::ConsensusRound, wire::BlockSubject)>,
+    retained_terminal: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+    >,
 }
 /// Closed reason the terminal Validate outcome catalog cannot be detached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -984,6 +992,7 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
                     .expect("an exact catalog match remains unselected");
                 let displaced = self.selected_rejected.insert(key, rejected);
                 debug_assert!(displaced.is_none());
+                assert!(self.selected_terminal_rejections.insert(key));
             }
             None => return false,
         }
@@ -1020,9 +1029,9 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
     /// Select the sole revalidated rejection marker named by one cold report row.
     ///
     /// The output carrier retains the private manifest/frame/rejection binding;
-    /// this catalog exposes no marker parts.  Selection is rollback-safe under
-    /// `Drop` and shares the same selected map as terminal Validate recovery, so
-    /// one durable rejection can never authorize two logical restart owners.
+    /// this catalog exposes no marker parts. Selection is rollback-safe under
+    /// `Drop`. An authenticated inert terminal may retain the same immutable
+    /// result, but only one report may claim executable output ownership.
     pub(super) fn select_exact_invalid_body_report(
         &mut self,
         report: &AuthenticatedRecoveredLifecycleOutputV1,
@@ -1031,26 +1040,81 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
             return false;
         }
         let mut exact_key = None;
-        for (key, rejected) in &self.rejected {
-            if report.exactly_matches_rejected_body_outcome(&rejected.sealed_outcome())
-                && exact_key.replace(*key).is_some()
+        for (key, rejected) in self.rejected.iter().chain(self.selected_rejected.iter()) {
+            if report.exactly_matches_rejected_body_outcome(&rejected.sealed_outcome()) {
+                let already_selected = self.selected_rejected.contains_key(key);
+                if self.selected_report_outcomes.contains(key)
+                    || (already_selected && !self.selected_terminal_rejections.contains(key))
+                    || exact_key.replace((*key, already_selected)).is_some()
+                {
+                    return false;
+                }
+            }
+        }
+        let Some((key, already_selected)) = exact_key else {
+            return false;
+        };
+        if !already_selected {
+            let rejected = self
+                .rejected
+                .remove(&key)
+                .expect("an exact report marker remains unselected");
+            assert!(self.selected_rejected.insert(key, rejected).is_none());
+        }
+        // Both the report's closed replay source and the prior terminal claim
+        // authenticated this same deterministic outcome. Only the report owns
+        // execution; the terminal keeps its inert immutable recovery result.
+        assert!(self.selected_report_outcomes.insert(key));
+        true
+    }
+    /// Preserve only ledger-selected terminal results, without granting any
+    /// historical runtime owner. Commit publishes this private same-store map;
+    /// dropping an incomplete cut still restores every original marker.
+    pub(super) fn retain_selected_terminal_retries(
+        &mut self,
+        claims: impl IntoIterator<Item = TerminalValidateNoSuccessorClaim>,
+    ) -> bool {
+        if !self.retained_terminal.is_empty() || !self.store.recovered_terminal_results.is_empty() {
+            return false;
+        }
+        let mut retained = BTreeMap::new();
+        for claim in claims {
+            let mut selected = None;
+            for validated in self.selected_validated.values() {
+                let outcome = DurableBodyValidationOutcome(
+                    DurableBodyValidationOutcomeBody::Validated(validated.clone()),
+                );
+                if claim.matches_outcome(&outcome) && selected.replace(outcome).is_some() {
+                    return false;
+                }
+            }
+            for rejected in self.selected_rejected.values() {
+                let outcome = rejected.sealed_outcome();
+                if claim.matches_outcome(&outcome) && selected.replace(outcome).is_some() {
+                    return false;
+                }
+            }
+            let Some(outcome) = selected else {
+                return false;
+            };
+            let Some(authority) = super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1::from_cold_claim(claim, outcome) else { return false; };
+            if retained
+                .insert(authority.key(), Arc::new(authority))
+                .is_some()
             {
                 return false;
             }
         }
-        let Some(key) = exact_key else {
-            return false;
-        };
-        let rejected = self
-            .rejected
-            .remove(&key)
-            .expect("an exact invalid-body marker remains unselected");
-        let displaced = self.selected_rejected.insert(key, rejected);
-        debug_assert!(displaced.is_none());
+        self.retained_terminal = retained;
         true
+    }
+    fn publish_retained_terminal(&mut self) {
+        assert!(self.store.recovered_terminal_results.is_empty());
+        self.store.recovered_terminal_results = std::mem::take(&mut self.retained_terminal);
     }
     /// Consume selected outcomes and restore every unselected catalog entry.
     pub(super) fn commit_selected(mut self) {
+        self.publish_retained_terminal();
         self.restore_unselected();
         self.selected_validated.clear();
         self.selected_rejected.clear();
@@ -1079,6 +1143,7 @@ impl RecoveredTerminalValidateOutcomeCatalogCut<'_> {
                 claim, validated,
             )?;
         self.selected_validated.remove(&key);
+        self.publish_retained_terminal();
         self.restore_unselected();
         self.selected_validated.clear();
         self.selected_rejected.clear();
@@ -2144,6 +2209,11 @@ pub(crate) struct V2BodyStore {
     /// body-store-instance-bound terminal Validate recovery join. The raw
     /// diagnostic string remains non-authoritative.
     rejected: BTreeMap<(wire::ConsensusRound, wire::BlockSubject), RevalidatedRejectedBody>,
+    /// Ledger-selected completed results carried intact into executor startup.
+    recovered_terminal_results: BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+    >,
 }
 /// Move-only same-store input accepted by unified production lifecycle startup.
 ///
@@ -2197,6 +2267,40 @@ impl QuarantinedV2BodyStore {
     }
 }
 impl RevalidatedV2BodyStore {
+    /// Retain only an inert copy of the same-store successful outcome; the
+    /// ledger owns all row/class/unique-parent selection and linked precedence.
+    pub(in crate::sumeragi) fn resolved_phase_vote_outcome(
+        &self,
+        ledger: &super::v2_lifecycle_coordinator::LifecycleLedgerV1,
+        recovered: &RecoveredWalVoteSign,
+    ) -> Result<
+        Option<Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>>,
+        &'static str,
+    > {
+        let vote = recovered.vote();
+        if self.0.context.id() != vote.round.context_id {
+            return Err("recovered phase vote has a foreign terminal-result context");
+        }
+        let body_key = (vote.proposal_round, vote.subject);
+        let validated = self.0.validated.get(&body_key);
+        let claim = ledger.resolved_phase_vote_terminal_claim(recovered, validated)?;
+        let Some(claim) = claim else {
+            return Ok(None);
+        };
+        let validated = validated.ok_or("terminal phase vote lacks its revalidated success")?;
+        if self.0.entries.get(&body_key) != Some(validated.durable()) {
+            return Err("terminal phase vote changed its exact durable body");
+        }
+        let outcome = DurableBodyValidationOutcome(DurableBodyValidationOutcomeBody::Validated(
+            validated.clone(),
+        ));
+        let resolved =
+            super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1::from_cold_claim(
+                claim, outcome,
+            )
+            .ok_or("terminal phase vote does not match its successful outcome")?;
+        Ok(Some(Arc::new(resolved)))
+    }
     /// Compare the complete immutable context without releasing the store.
     pub(in crate::sumeragi) fn matches_context(&self, context: &wire::HeightContext) -> bool {
         &self.0.context == context
@@ -2482,6 +2586,16 @@ impl V2BodyRetirementJob {
     }
 }
 impl V2BodyStore {
+    /// Move the complete selected terminal result census into its one executor.
+    /// The enclosing authenticated body-store instance remains the custody link.
+    pub(in crate::sumeragi) fn take_recovered_terminal_results(
+        &mut self,
+    ) -> BTreeMap<
+        (wire::ConsensusRound, wire::BlockSubject),
+        Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+    > {
+        std::mem::take(&mut self.recovered_terminal_results)
+    }
     fn ensure_mutable(&self) -> Result<(), V2BodyStoreError> {
         if self.emergency_read_only {
             return Err(V2BodyStoreError::EmergencyFastReadOnly);
@@ -2778,6 +2892,7 @@ impl V2BodyStore {
             retired_revalidation: BTreeMap::new(),
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
+            recovered_terminal_results: BTreeMap::new(),
         };
         let mut body_frame_bytes = 0_u64;
         let mut body_leaves = Vec::new();
@@ -2974,6 +3089,7 @@ impl V2BodyStore {
             retired_revalidation: BTreeMap::new(),
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
+            recovered_terminal_results: BTreeMap::new(),
         })
     }
     /// Open an empty, context-addressed store for non-cryptographic lifecycle fixtures.
@@ -3008,6 +3124,7 @@ impl V2BodyStore {
             retired_revalidation: BTreeMap::new(),
             validated: BTreeMap::new(),
             rejected: BTreeMap::new(),
+            recovered_terminal_results: BTreeMap::new(),
         })
     }
     /// Recover the durable receipt indexed by an exact round and subject.
@@ -3419,6 +3536,9 @@ impl V2BodyStore {
             rejected,
             selected_validated: BTreeMap::new(),
             selected_rejected: BTreeMap::new(),
+            retained_terminal: BTreeMap::new(),
+            selected_terminal_rejections: BTreeSet::new(),
+            selected_report_outcomes: BTreeSet::new(),
         })
     }
     /// Detach the exact revalidated proposal marker named by one recovered WAL vote.

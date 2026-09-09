@@ -334,6 +334,19 @@ impl LifecycleLedgerV1 {
                 DurableContinuationEdge::SignPrepareToBroadcast,
                 LifecyclePhase::BroadcastPrepareVote,
                 LifecycleStageKind::BroadcastPrepareVote,
+            ) if parent_record_count == 2
+                && parent_owner.first_admission_ordinal() == parent.ordinal()
+                && !index.has_incoming_edge(parent.ordinal()) =>
+            {
+                RecoveredLifecycleSignedBroadcastAndSignParentV1::StandalonePrepare
+            }
+            (
+                LifecyclePhase::Prepare,
+                LifecycleWorkClass::SignVote,
+                LifecycleStageKind::SignPrepareVote,
+                DurableContinuationEdge::SignPrepareToBroadcast,
+                LifecyclePhase::BroadcastPrepareVote,
+                LifecycleStageKind::BroadcastPrepareVote,
             ) if parent_record_count == 3 => {
                 let validate = self
                     .records
@@ -1113,7 +1126,7 @@ impl LifecycleLedgerV1 {
     fn reconcile_superseded_timeout_broadcast(
         &self,
         verified: &VerifiedHeightContext,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> Result<(Self, Option<StagedRecoveredTimeoutSupersessionSuccessorV1>), LifecycleLedgerError>
     {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
@@ -1233,6 +1246,70 @@ impl LifecycleLedgerV1 {
         Ok((reconciled, Some(staged)))
     }
 
+    /// Select the unique immutable NoSuccessor source for a current WAL vote.
+    /// Any matching linked Validate remains owned by the original linked
+    /// recovery corridor, including malformed links which must fail there.
+    pub(in crate::sumeragi) fn resolved_phase_vote_terminal_claim(
+        &self,
+        recovered: &RecoveredWalVoteSign,
+        validated: Option<&crate::sumeragi::v2_body_store::ValidatedBodyReceipt>,
+    ) -> Result<Option<super::TerminalValidateNoSuccessorClaim>, &'static str> {
+        let vote = recovered.vote();
+        let context = LifecycleContext::new(
+            LifecycleDigest::new(*vote.round.context_id.0.as_ref()),
+            vote.round.height,
+        );
+        if self.context() != context {
+            return Err("recovered phase vote has a foreign terminal-result ledger");
+        }
+        let candidates: Vec<_> = self
+            .records()
+            .iter()
+            .filter(|record| {
+                record.work_class() == Some(LifecycleWorkClass::Validate)
+                    && record.key().is_some_and(|key| {
+                        key.round() == LifecycleRound::new(vote.round.height, vote.round.view)
+                            && key.proposal_round()
+                                == Some(LifecycleRound::new(
+                                    vote.proposal_round.height,
+                                    vote.proposal_round.view,
+                                ))
+                            && key.subject() == Some(projection::block_subject(vote.subject))
+                    })
+            })
+            .collect();
+        if candidates
+            .iter()
+            .any(|record| record.continuation() != Some(DurableContinuation::AdvancedNoSuccessor))
+        {
+            return Ok(None);
+        }
+        if candidates.is_empty() {
+            return Ok(None);
+        }
+        let validated =
+            validated.ok_or("terminal phase vote lacks its semantically revalidated success")?;
+        if validated.durable().context_id() != vote.round.context_id
+            || validated.durable().round() != vote.proposal_round
+            || validated.durable().subject() != vote.subject
+            || validated.execution_commitment() != vote.execution_commitment
+        {
+            return Err("terminal phase vote changed its exact successful body");
+        }
+        let mut selected = None;
+        for record in candidates {
+            let claim =
+                super::TerminalValidateNoSuccessorClaim::from_ledger_record(context, record)
+                    .ok_or("terminal phase vote has an invalid immutable claim")?;
+            if !claim.matches_validated_receipt(validated) {
+                return Err("terminal phase vote does not match its successful outcome");
+            }
+            if selected.replace(claim).is_some() {
+                return Err("terminal phase vote has multiple immutable result sources");
+            }
+        }
+        Ok(selected)
+    }
     /// Stage exactly one standalone Proposal/Timeout control Sign row.
     ///
     /// An exact existing row stutters without rewriting it. Absence appends
@@ -1241,10 +1318,11 @@ impl LifecycleLedgerV1 {
     /// shape is a hard error and is never repaired in place.
     pub(super) fn stage_authenticated_wal_control_sign(
         &self,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !projection.belongs_to_context(self.context()) {
+        if !projection.belongs_to_context(self.context()) || !projection.source_matches_ledger(self)
+        {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "recovered control Sign belongs to another lifecycle context".to_owned(),
             ));
@@ -1289,7 +1367,7 @@ impl LifecycleLedgerV1 {
     pub(super) fn authenticate_recovered_control_signed_broadcast(
         &self,
         verified: &VerifiedHeightContext,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> Result<
         (
             super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
@@ -1299,7 +1377,10 @@ impl LifecycleLedgerV1 {
         LifecycleLedgerError,
     > {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !projection.is_exact(verified) || !projection.belongs_to_context(self.context()) {
+        if !projection.is_exact(verified)
+            || !projection.belongs_to_context(self.context())
+            || !projection.source_matches_ledger(self)
+        {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "recovered control Sign changed its verified context".to_owned(),
             ));
@@ -1382,12 +1463,15 @@ impl LifecycleLedgerV1 {
     pub(super) fn authenticate_recovered_control_signed_broadcast_and_sign(
         &self,
         verified: &VerifiedHeightContext,
-        control: &AuthenticatedRecoveredWalControlProjection,
+        control: &AuthenticatedRecoveredWalStandaloneSignProjection,
         combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     ) -> Result<RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1, LifecycleLedgerError>
     {
         self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
-        if !control.is_exact(verified) || !control.belongs_to_context(self.context()) {
+        if !control.is_exact(verified)
+            || !control.belongs_to_context(self.context())
+            || !control.source_matches_ledger(self)
+        {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "recovered control Broadcast-and-Sign changed its verified context".to_owned(),
             ));
@@ -1396,7 +1480,7 @@ impl LifecycleLedgerV1 {
             .recovered_lifecycle_signed_broadcast_and_sign_pairs()?
             .into_iter()
             .filter(|pair| {
-                pair.parent() == RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+                pair.parent().is_standalone()
                     && self
                         .records
                         .binary_search_by_key(&pair.parent_ordinal(), |record| record.ordinal())

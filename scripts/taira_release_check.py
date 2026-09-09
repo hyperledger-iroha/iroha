@@ -239,6 +239,17 @@ CRYPTO_STAGES = (("puzzle cancellation and exact solution predicate", (
     "soranet::puzzle::tests::mint_discards_valid_candidate_that_completed_below_ttl_floor",
 )),)
 
+CRYPTO_STAGES += (("optimized BLS arithmetic preserves verification boundaries", (
+    "signature::bls::tests::normal::signature_verification",
+    "signature::bls::tests::normal::aggregate_same_message_roundtrip",
+    "signature::bls::tests::normal::parse_public_key_rejects_non_subgroup_point",
+    "signature::bls::tests::normal::verify_cache_rejects_variable_length_tuple_splice",
+    "signature::bls::tests::small::signature_verification",
+    "signature::bls::tests::small::signature_verification_different_keys",
+    "signature::bls::tests::small::parse_public_key_rejects_non_subgroup_point",
+    "signature::bls::tests::small::verify_cache_rejects_variable_length_tuple_splice",
+)),)
+
 P2P_STAGES = (("bounded peer authentication and validator retry ownership", (
     "peer::run::tests::peer_run_authentication_deadline_precedes_long_idle_and_retires_exact_connection",
     "peer::handshake_config_tests::puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellation",
@@ -259,7 +270,18 @@ P2P_STAGES = (("bounded peer authentication and validator retry ownership", (
     "network::tests::authenticated_session_cancels_obsolete_standby_attempt_without_reschedule_loop",
 )),)
 
+P2P_STAGES += (("immutable reply identity and exact dynamic history", (
+    "network::tests::dependent_test_fixture_mints_opaque_tenures_and_delivery_ordinals",
+    "network::tests::reply_route_pruning_retains_equal_ordinal_tenure_tombstone",
+    "network::tests::reply_route_binding_rejects_evicted_tombstone_collision",
+    "network::tests::reply_route_set_isolates_sources_preserves_cursors_and_prunes_retired_capacity",
+    "network::tests::reply_route_history_projection_tracks_live_and_retired_transitions",
+)),)
+
 CORE_STAGES = (("consensus scheduling and multi-route progress", (
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_canonical_wire_seals_only_complete_classified_messages",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
+    "sumeragi::v2::tests::adapter_hot_context_projections_retain_the_verified_registry_identity",
     "sumeragi::v2_runner::tests::finalized_rollover_drains_source_effects_after_handoff_reopens_capacity",
     "sumeragi::v2_runner::tests::terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain",
     "sumeragi::v2_lifecycle_coordinator::launch::tests::pending_kura_actor_backpressure_reaches_durable_rollover_after_closed_prefix",
@@ -315,15 +337,28 @@ CORE_STAGES += (("durable output capacity and strict handoff", (
 )),)
 
 CORE_STAGES += (("resolved validation and exact application ownership", (
-    "sumeragi::v2_effects::tests::resolved_validate_retry_readmits_current_authority_once",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_live_validate_retained_terminal_publishes_one_current_commit_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_recovered_validate_retained_terminal_publishes_one_current_commit_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_retained_terminal_rejects_changed_outcome_digest_before_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_historical_prepare_repair_then_same_tag_commit_publishes_once",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::physical_validate_busy_retains_exact_result_until_timeout_quorum_then_commit",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_rejected_validate_replays_report_once_without_revalidation_or_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_published_validate_retained_terminal_publishes_one_current_commit_apply",
+    "sumeragi::v2_runtime::tests::historical_prepare_rejection_retains_exact_report_authority",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::already_terminal_validate_cold_reopen_preserves_success_and_rejection",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::rejected_terminal_and_published_report_cold_reopen_preserves_one_output_owner",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_recovery_accepts_standalone_report_with_exact_terminal_rejection",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_recovery_rejects_standalone_report_without_exact_terminal_authority",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::committed_standalone_prepare_pair_preserves_inert_validate_without_a_link",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_owner",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_survives_unprotected_view_until_current_commit",
+    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks",
     "sumeragi::v2_effects::tests::active_validate_retry_owners_preserve_single_admission",
-    "sumeragi::v2_effects::tests::resolved_validate_retry_rejects_stale_and_conflicting_authority",
+    "sumeragi::v2_effects::tests::bound_validate_retry_rejects_stale_and_conflicting_authority",
     "sumeragi::v2_effects::tests::validate_retry_lifecycle_transitions_require_exact_owner",
-    "sumeragi::v2_effects::tests::terminal_published_validate_same_tag_commit_upgrade_after_prepare_retry_is_admitted",
-    "sumeragi::v2_effects::tests::terminal_published_validate_retry_requires_live_wal_apply_admission",
+    "sumeragi::v2_effects::tests::later_decision_apply_uses_its_runtime_owner_after_validate_successor_release",
     "sumeragi::v2_effects::tests::protected_prepare_validate_reseeds_missing_replay_from_exact_recovered_body",
-    "sumeragi::v2_effects::tests::protected_prepare_readmission_replaces_terminal_live_validate_tombstone",
-    "sumeragi::v2_effects::tests::protected_prepare_readmission_rolls_back_with_a_malformed_later_effect",
+    "sumeragi::v2_effects::tests::protected_prepare_bound_retry_rolls_back_with_a_malformed_later_effect",
     "sumeragi::v2_effects::tests::admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay_reuse",
     "sumeragi::v2_effects::tests::cold_active_rejection_denies_local_adoption_without_live_pipeline_owner",
     "sumeragi::v2_effects::tests::recovered_apply_releases_only_its_authenticated_validate_retry_predecessor",

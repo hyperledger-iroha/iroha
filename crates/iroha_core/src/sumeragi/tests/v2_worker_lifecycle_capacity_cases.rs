@@ -642,6 +642,16 @@ impl LifecycleValidateIoSnapshotV1 {
 }
 
 impl LifecyclePlannerIoFixture {
+    /// Execute the executor's genuine ordinary Store task against the owner-held store.
+    pub(in crate::sumeragi) fn execute_ordinary_body_store_for_test(
+        &mut self,
+        task: &crate::sumeragi::v2_effects::BodyStoreTask,
+    ) -> crate::sumeragi::v2_body_store::BodyStoreCompletion {
+        self.body_store
+            .execute_store_task(task)
+            .expect("persist the exact ordinary body before lifecycle Validate admission")
+    }
+
     /// Execute one locked-candidate lookup through the real durable store and
     /// settle its service-side acquisition state synchronously.
     pub(in crate::sumeragi) fn execute_one_locked_candidate_load(
@@ -731,6 +741,25 @@ impl LifecyclePlannerIoFixture {
         commitment: wire::ExecutionCommitment,
         output_guard: Arc<ConsensusOutputGuard>,
     ) -> usize {
+        self.execute_held_lifecycle_validate_result_fixture(Ok(commitment), output_guard)
+    }
+
+    /// Execute a genuine deterministic rejection through the durable body worker.
+    pub(in crate::sumeragi) fn execute_held_lifecycle_validate_rejection_fixture(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> usize {
+        self.execute_held_lifecycle_validate_result_fixture(
+            Err("deterministic terminal Validate regression rejection".to_owned()),
+            output_guard,
+        )
+    }
+
+    fn execute_held_lifecycle_validate_result_fixture(
+        &mut self,
+        result: Result<wire::ExecutionCommitment, String>,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) -> usize {
         let task = self
             .held_validate
             .take()
@@ -742,7 +771,7 @@ impl LifecyclePlannerIoFixture {
             .dispatch
             .execute(&mut self.body_store, |_| {
                 callbacks = callbacks.saturating_add(1);
-                Ok::<_, String>(commitment)
+                result.clone()
             })
             .unwrap_or_else(|(error, _)| panic!("execute held lifecycle Validate: {error}"));
         self.command_rx

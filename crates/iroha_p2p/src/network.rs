@@ -1897,6 +1897,10 @@ pub struct NetworkReplyRoute {
     tenure: Arc<ReliableReplyRouteTenure>,
     delivery_ordinal: u128,
     delivery_binding: Arc<ReliableReplyDeliveryBinding>,
+    /// Sealed from the immutable delivery tuple when this private capability is minted.
+    process_local_identity: Hash,
+    /// Same-source projection shared across this actor's connection tenures.
+    process_local_source_identity: Hash,
 }
 /// Test-only authority for minting opaque authenticated reply-route tenures.
 ///
@@ -2046,12 +2050,11 @@ impl NetworkReplyRouteTestFixture {
             delivery_drain: InboundDeliveryDrain::completed_for_test(),
             termination_seen: AtomicBool::new(false),
         });
-        Some(NetworkReplyRoute {
-            semantic_target,
-            tenure,
-            delivery_ordinal: prior.delivery_ordinal,
-            delivery_binding: Arc::clone(&prior.delivery_binding),
-        })
+        let mut forged = NetworkReplyRoute::new(semantic_target, tenure, prior.delivery_ordinal);
+        // Keep projections bound to the forged tuple; only the intrinsic
+        // delivery binding is substituted so ordinary validation rejects it.
+        forged.delivery_binding = Arc::clone(&prior.delivery_binding);
+        Some(forged)
     }
     /// Forge an adversarial capability which reuses `prior`'s actor-global
     /// connection ordinal under a distinct, otherwise valid tenure.
@@ -2134,6 +2137,7 @@ impl NetworkReplyRouteTestFixture {
 pub struct NetworkReplySourceKey {
     owner: Arc<()>,
     authenticated_via: PeerId,
+    process_local_identity: Hash,
 }
 impl NetworkReplySourceKey {
     fn owner_address(&self) -> usize {
@@ -2158,10 +2162,7 @@ impl NetworkReplySourceKey {
     /// changes owned by the same actor.
     #[must_use]
     pub fn process_local_identity_hash(&self) -> Hash {
-        const DOMAIN: &[u8] = b"iroha:p2p:reply-source-process-local-identity:v1\n";
-        let actor = (self.owner_address() as u128).to_le_bytes();
-        let authenticated_source = self.authenticated_via.encode();
-        Hash::new_from_chunks(&[DOMAIN, &actor, &authenticated_source])
+        self.process_local_identity
     }
 }
 impl PartialEq for NetworkReplySourceKey {
@@ -2209,6 +2210,8 @@ impl NetworkReplyRoute {
         tenure: Arc<ReliableReplyRouteTenure>,
         delivery_ordinal: u128,
     ) -> Self {
+        let (process_local_identity, process_local_source_identity) =
+            Self::seal_process_local_identities(&semantic_target, &tenure, delivery_ordinal);
         let delivery_binding = Arc::new(ReliableReplyDeliveryBinding {
             owner: Arc::clone(&tenure.owner),
             minting_tenure: Arc::downgrade(&tenure),
@@ -2220,6 +2223,8 @@ impl NetworkReplyRoute {
             tenure,
             delivery_ordinal,
             delivery_binding,
+            process_local_identity,
+            process_local_source_identity,
         }
     }
     fn validate_delivery_binding(&self) -> Result<(), NetworkReplyRouteError> {
@@ -2249,6 +2254,7 @@ impl NetworkReplyRoute {
         NetworkReplySourceKey {
             owner: Arc::clone(&self.tenure.owner),
             authenticated_via: self.tenure.delivery_peer.clone(),
+            process_local_identity: self.process_local_source_identity,
         }
     }
     /// Whether this capability was minted for the supplied authenticated delivery peer.
@@ -2445,26 +2451,38 @@ impl NetworkReplyRoute {
     /// projections from substitution.
     #[must_use]
     pub fn process_local_identity_hash(&self) -> Hash {
-        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-process-local-identity:v1\n";
-        let actor = (Arc::as_ptr(&self.tenure.owner) as usize as u128).to_le_bytes();
-        let tenure = (Arc::as_ptr(&self.tenure) as usize as u128).to_le_bytes();
-        let connection_ordinal = self.tenure.connection_ordinal.to_le_bytes();
-        let delivery_ordinal = self.delivery_ordinal.to_le_bytes();
-        let source_capacity = u64::try_from(self.tenure.source_capacity)
+        self.process_local_identity
+    }
+    /// Encode each immutable peer identity once when minting a delivery.
+    /// Liveness remains checked independently by the capability predicates.
+    fn seal_process_local_identities(
+        semantic_target: &PeerId,
+        tenure: &Arc<ReliableReplyRouteTenure>,
+        delivery_ordinal: u128,
+    ) -> (Hash, Hash) {
+        const ROUTE_DOMAIN: &[u8] = b"iroha:p2p:reply-route-process-local-identity:v1\n";
+        const SOURCE_DOMAIN: &[u8] = b"iroha:p2p:reply-source-process-local-identity:v1\n";
+        let actor = (Arc::as_ptr(&tenure.owner) as usize as u128).to_le_bytes();
+        let tenure_identity = (Arc::as_ptr(tenure) as usize as u128).to_le_bytes();
+        let connection_ordinal = tenure.connection_ordinal.to_le_bytes();
+        let delivery_ordinal = delivery_ordinal.to_le_bytes();
+        let source_capacity = u64::try_from(tenure.source_capacity)
             .expect("bounded reply-source capacity fits u64")
             .to_le_bytes();
-        let authenticated_source = self.tenure.delivery_peer.encode();
-        let semantic_target = self.semantic_target.encode();
-        Hash::new_from_chunks(&[
-            DOMAIN,
+        let authenticated_source = tenure.delivery_peer.encode();
+        let semantic_target = semantic_target.encode();
+        let route = Hash::new_from_chunks(&[
+            ROUTE_DOMAIN,
             &actor,
-            &tenure,
+            &tenure_identity,
             &connection_ordinal,
             &delivery_ordinal,
             &source_capacity,
             &authenticated_source,
             &semantic_target,
-        ])
+        ]);
+        let source = Hash::new_from_chunks(&[SOURCE_DOMAIN, &actor, &authenticated_source]);
+        (route, source)
     }
 }
 /// Valid update of one authenticated reply-source attempt.
@@ -2522,6 +2540,8 @@ pub struct NetworkReplyRoutes {
     semantic_target: PeerId,
     owner: Arc<()>,
     source_capacity: usize,
+    /// Immutable history preimage prefix; active and retired maps stay dynamic.
+    process_local_identity_prefix: Arc<[u8]>,
     attempts: BTreeMap<NetworkReplySourceKey, NetworkReplyRoute>,
     /// Latest delivery which left the live attempt set for each source.
     ///
@@ -2670,11 +2690,14 @@ impl NetworkReplyRoutes {
         }
         let semantic_target = route.semantic_target.clone();
         let owner = Arc::clone(&route.tenure.owner);
+        let process_local_identity_prefix =
+            Self::seal_process_local_identity_prefix(&semantic_target, &owner, source_capacity);
         let attempts = BTreeMap::from([(route.source_key(), route)]);
         Ok(Self {
             semantic_target,
             owner,
             source_capacity,
+            process_local_identity_prefix,
             attempts,
             retired_attempts: BTreeMap::new(),
         })
@@ -2721,17 +2744,7 @@ impl NetworkReplyRoutes {
     /// representation.
     #[must_use]
     pub fn process_local_exact_history_hash(&self) -> Hash {
-        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-history-process-local:v1\n";
-        let actor = (Arc::as_ptr(&self.owner) as usize as u128).to_le_bytes();
-        let source_capacity = u64::try_from(self.source_capacity)
-            .expect("bounded reply-source capacity fits u64")
-            .to_le_bytes();
-        let semantic_target = self.semantic_target.encode();
-        let mut projection = Vec::new();
-        projection.extend_from_slice(DOMAIN);
-        projection.extend_from_slice(&actor);
-        projection.extend_from_slice(&source_capacity);
-        projection.extend_from_slice(&semantic_target);
+        let mut projection = self.process_local_identity_prefix.to_vec();
         projection.extend_from_slice(
             &u64::try_from(self.attempts.len())
                 .expect("bounded active route count fits u64")
@@ -2751,6 +2764,25 @@ impl NetworkReplyRoutes {
             projection.extend_from_slice(route.process_local_identity_hash().as_ref());
         }
         Hash::new(projection)
+    }
+    /// Seal only immutable container geometry, never mutable route membership.
+    fn seal_process_local_identity_prefix(
+        semantic_target: &PeerId,
+        owner: &Arc<()>,
+        source_capacity: usize,
+    ) -> Arc<[u8]> {
+        const DOMAIN: &[u8] = b"iroha:p2p:reply-route-history-process-local:v1\n";
+        let actor = (Arc::as_ptr(owner) as usize as u128).to_le_bytes();
+        let source_capacity = u64::try_from(source_capacity)
+            .expect("bounded reply-source capacity fits u64")
+            .to_le_bytes();
+        let semantic_target = semantic_target.encode();
+        let mut prefix = Vec::new();
+        prefix.extend_from_slice(DOMAIN);
+        prefix.extend_from_slice(&actor);
+        prefix.extend_from_slice(&source_capacity);
+        prefix.extend_from_slice(&semantic_target);
+        prefix.into()
     }
     /// Consume the set into independent source attempts in stable local order.
     pub fn into_routes(self) -> impl Iterator<Item = NetworkReplyRoute> {
@@ -17356,6 +17388,149 @@ mod tests {
         );
     }
     #[test]
+    fn reply_route_history_projection_tracks_live_and_retired_transitions() {
+        // Reconstruct the full documented preimage independently of the sealed
+        // projections, so cached identity cannot hide a substituted tuple.
+        fn fresh_route_hash(route: &NetworkReplyRoute) -> Hash {
+            let actor = (Arc::as_ptr(&route.tenure.owner) as usize as u128).to_le_bytes();
+            let tenure = (Arc::as_ptr(&route.tenure) as usize as u128).to_le_bytes();
+            let connection = route.tenure.connection_ordinal.to_le_bytes();
+            let delivery = route.delivery_ordinal.to_le_bytes();
+            let capacity = u64::try_from(route.tenure.source_capacity)
+                .unwrap()
+                .to_le_bytes();
+            let source = route.tenure.delivery_peer.encode();
+            let target = route.semantic_target.encode();
+            let source_hash = Hash::new_from_chunks(&[
+                b"iroha:p2p:reply-source-process-local-identity:v1\n",
+                &actor,
+                &source,
+            ]);
+            assert_eq!(
+                route.source_key().process_local_identity_hash(),
+                source_hash
+            );
+            let hash = Hash::new_from_chunks(&[
+                b"iroha:p2p:reply-route-process-local-identity:v1\n",
+                &actor,
+                &tenure,
+                &connection,
+                &delivery,
+                &capacity,
+                &source,
+                &target,
+            ]);
+            assert_eq!(route.process_local_identity_hash(), hash);
+            hash
+        }
+        fn exact_history(routes: &NetworkReplyRoutes) -> Hash {
+            let mut bytes = b"iroha:p2p:reply-route-history-process-local:v1\n".to_vec();
+            bytes.extend_from_slice(&(Arc::as_ptr(&routes.owner) as usize as u128).to_le_bytes());
+            bytes.extend_from_slice(&u64::try_from(routes.source_capacity).unwrap().to_le_bytes());
+            bytes.extend_from_slice(&routes.semantic_target.encode());
+            for (marker, members) in [(0, &routes.attempts), (1, &routes.retired_attempts)] {
+                bytes.extend_from_slice(&u64::try_from(members.len()).unwrap().to_le_bytes());
+                for route in members.values() {
+                    bytes.push(marker);
+                    bytes.extend_from_slice(fresh_route_hash(route).as_ref());
+                }
+            }
+            let hash = Hash::new(bytes);
+            assert_eq!(routes.process_local_exact_history_hash(), hash);
+            assert_eq!(routes.clone().process_local_exact_history_hash(), hash);
+            hash
+        }
+
+        let hub_a = random_peer_id();
+        let hub_b = random_peer_id();
+        let target = random_peer_id();
+        let mut fixture = NetworkReplyRouteTestFixture::with_source_capacity(hub_a.clone(), 2);
+        let first = fixture.mint(target.clone());
+        let first_set = NetworkReplyRoutes::try_from_route(first.clone()).expect("source A");
+        let mut routes = first_set.clone();
+        let initial = exact_history(&routes);
+        let later = fixture
+            .redeliver(&first)
+            .expect("same-tenure later delivery");
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(later.clone()).unwrap())
+            .unwrap();
+        let redelivered = exact_history(&routes);
+        assert_ne!(
+            redelivered, initial,
+            "the later delivery and its tombstone both enter history"
+        );
+        let second = fixture.mint_via(target.clone(), hub_b.clone());
+        routes
+            .merge(&NetworkReplyRoutes::try_from_route(second.clone()).unwrap())
+            .unwrap();
+        let two_sources = exact_history(&routes);
+        assert_ne!(two_sources, redelivered);
+        assert!(fixture.mark_reply_unwritable_while_delivery_active(&second));
+        assert_eq!(
+            exact_history(&routes),
+            two_sources,
+            "writer liveness is not identity"
+        );
+        assert!(fixture.retire(&second));
+        assert_eq!(
+            exact_history(&routes),
+            two_sources,
+            "retirement awaits the owned pruning snapshot"
+        );
+        let before_prune = routes.clone();
+        let (_, receipt) = routes.retain_active_with_receipt();
+        routes = receipt
+            .into_output(&before_prune)
+            .expect("exact pruning receipt");
+        let pruned = exact_history(&routes);
+        assert_ne!(
+            pruned, two_sources,
+            "active-to-retired placement changes the preimage"
+        );
+        routes
+            .merge_observed(&first_set)
+            .expect("a stale same-source observation is inert");
+        assert_eq!(exact_history(&routes), pruned);
+        let reconnected = fixture.mint_via(target.clone(), hub_b);
+        routes
+            .merge_observed(&NetworkReplyRoutes::try_from_route(reconnected).unwrap())
+            .unwrap();
+        let rejoined = exact_history(&routes);
+        assert_ne!(rejoined, pruned);
+        assert!(routes.remove_completed_source(&first.source_key()));
+        let completed = exact_history(&routes);
+        assert_ne!(
+            completed, rejoined,
+            "completion removes active and retired source history"
+        );
+
+        let mut foreign_fixture = NetworkReplyRouteTestFixture::new(hub_a.clone());
+        let foreign =
+            NetworkReplyRoutes::try_from_route(foreign_fixture.mint(target.clone())).unwrap();
+        assert_eq!(
+            routes.merge(&foreign),
+            Err(NetworkReplyRouteError::ForeignOwner)
+        );
+        assert_eq!(
+            exact_history(&routes),
+            completed,
+            "failed merges retain the exact preimage"
+        );
+        let forged = fixture
+            .forge_equal_ordinal_different_tenure(&later, target, hub_a)
+            .unwrap();
+        assert_ne!(fresh_route_hash(&forged), fresh_route_hash(&later));
+        assert!(
+            !forged.is_active(),
+            "sealed projections cannot authenticate a substituted binding"
+        );
+        assert!(matches!(
+            NetworkReplyRoutes::try_from_route(forged),
+            Err(NetworkReplyRouteError::EqualOrdinalDifferentTenure)
+        ));
+    }
+    #[test]
     fn cancelled_newer_hub_cannot_erase_older_independent_route_attempt() {
         let owner = Arc::new(());
         let older_hub = random_peer_id();
@@ -17579,6 +17754,7 @@ mod tests {
             semantic_target: history.semantic_target.clone(),
             owner: Arc::clone(&history.owner),
             source_capacity: history.source_capacity,
+            process_local_identity_prefix: Arc::clone(&history.process_local_identity_prefix),
             attempts: BTreeMap::from([(collision_source, collision)]),
             retired_attempts: BTreeMap::new(),
         };

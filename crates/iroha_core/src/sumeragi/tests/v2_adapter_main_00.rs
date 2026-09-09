@@ -1482,6 +1482,38 @@ fn open_test(directory: &TempDir) -> Result<(SumeragiV2Adapter, Vec<AdapterEffec
     )
 }
 #[test]
+fn adapter_hot_context_projections_retain_the_verified_registry_identity() {
+    let directory = TempDir::new().expect("context projection directory");
+    let (adapter, startup) = open_test(&directory).expect("verified adapter");
+    assert!(startup.is_empty());
+    let expected = adapter.wire_context().id();
+    assert_eq!(adapter.frozen_wire_context_id(), expected);
+    assert_eq!(
+        adapter.status().expect("exact status").height_context_id,
+        expected
+    );
+    let mut independent_context = adapter.wire_context().clone();
+    independent_context.leader_seed[0] ^= 1;
+    assert_ne!(independent_context.id(), expected);
+    assert_eq!(
+        adapter.frozen_wire_context_id(),
+        expected,
+        "changing an external wire-context copy cannot alter the verified owner"
+    );
+    drop(adapter);
+    let restarted = open_test(&directory)
+        .expect("reopen the same frozen context")
+        .0;
+    assert_eq!(restarted.frozen_wire_context_id(), expected);
+    assert_eq!(
+        restarted
+            .status()
+            .expect("reopened status")
+            .height_context_id,
+        expected
+    );
+}
+#[test]
 fn production_leader_wire_launch_authority_requires_exact_wal_and_opens_gate() {
     let directory = TempDir::new().expect("temporary leader-wire launch directory");
     let wal_path = directory.path().join("safety.wal");

@@ -141,7 +141,7 @@ pub(in crate::sumeragi) use ledger::{
     CompleteTipPayloadStoreOpenTargetV1, CompleteTipPredecessorStorageErrorV1,
     LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerError, LifecycleLedgerV1,
     PublishedFinalizedLifecycleRetainedFloorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
-    open_complete_tip_predecessor_storage,
+    open_complete_tip_predecessor_storage, resolved_phase_vote_outcome_from_storage,
 };
 pub(in crate::sumeragi) use work_registry::{
     CancelledCertifiedBodyWorkV1, CertifiedBodyRetirementMaterialV1,
@@ -312,10 +312,10 @@ pub(in crate::sumeragi) use validate_sidecar::{
     allow(unused_imports, reason = "reviewed recovered-WAL projection namespace")
 )]
 pub(in crate::sumeragi) use wal_recovery::{
-    AuthenticatedRecoveredWalControlProjection, AuthenticatedRecoveredWalDecisionFetchProjection,
-    AuthenticatedRecoveredWalVoteProjection, RecoveredDecisionApplyPendingLineageV1,
-    RecoveredDecisionFetchStoreAdapterAuthorityV1, RecoveredDecisionFetchStoreProjectionV1,
-    RecoveredDecisionValidateProjectionV1,
+    AuthenticatedRecoveredWalDecisionFetchProjection,
+    AuthenticatedRecoveredWalStandaloneSignProjection, AuthenticatedRecoveredWalVoteProjection,
+    RecoveredDecisionApplyPendingLineageV1, RecoveredDecisionFetchStoreAdapterAuthorityV1,
+    RecoveredDecisionFetchStoreProjectionV1, RecoveredDecisionValidateProjectionV1,
 };
 #[allow(unused_imports, reason = "reviewed recovered-WAL successor namespace")]
 pub(in crate::sumeragi) use wal_recovery::{
@@ -331,13 +331,14 @@ pub(in crate::sumeragi) use work_registry::{
     AttemptedProducerTurnV1, ClaimedProducerTurnV1, ConcreteWorkAddress,
     LifecycleDecisionApplyCompletionProjectionPermitV1, LifecycleDecisionApplyDispatchIdentityV1,
     LifecycleDecisionApplyDispatchKeyV1, LifecycleDecisionApplyLineageV1,
-    LiveLifecycleDecisionApplyReconciliationAuthorityV1, PreparedLifecycleDecisionApplyDispatchV1,
+    LiveLifecycleDecisionApplyReconciliationAuthorityV1, PendingResolvedValidateReplayV1,
+    PreparedLifecycleAdmissionV1, PreparedLifecycleDecisionApplyDispatchV1,
     PreparedRecoveredDecisionFetchDispatchV1, PreparedRecoveredLifecycleSignDispatch,
     ReadyValidateApplyPredecessorAuthority, ReadyValidateSignPredecessorAuthority,
     RecoveredDecisionApplyRegistryProjectionPermit, RecoveredDecisionFetchDispatchIdentityV1,
     RecoveredDecisionFetchDispatchKeyV1, RecoveredDurableValidateRetryCensusV1,
     RecoveredDurableValidateRetryOwnerV1, RecoveredLifecycleSignDispatchIdentityV1,
-    RecoveredLifecycleSignDispatchKeyV1,
+    RecoveredLifecycleSignDispatchKeyV1, ResolvedLifecycleValidateOutcomeV1,
 };
 pub(in crate::sumeragi) use work_registry::{
     AttestedLifecycleDecisionApplySuccessorOutputsV1, DurableStoreTerminalRetrySealV1,

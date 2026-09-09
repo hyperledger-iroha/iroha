@@ -33,8 +33,8 @@ use super::{
         serve_and_producer_keys_match,
     },
     wal_recovery::{
-        AuthenticatedRecoveredWalControlProjection,
-        AuthenticatedRecoveredWalDecisionFetchProjection, RecoveredDecisionFetchStoreProjectionV1,
+        AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalStandaloneSignProjection, RecoveredDecisionFetchStoreProjectionV1,
         RecoveredDecisionValidateInstalledSealV1, RecoveredDecisionValidateProjectionV1,
         RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     },
@@ -58,13 +58,13 @@ enum RecoveredWalStartupProjectionV1<'authority> {
         &'authority super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
         &'authority RecoveredLifecycleNextWalVoteCandidateProjectionV1,
     ),
-    ControlSign(&'authority AuthenticatedRecoveredWalControlProjection),
+    ControlSign(&'authority AuthenticatedRecoveredWalStandaloneSignProjection),
     ControlBroadcast(
-        &'authority AuthenticatedRecoveredWalControlProjection,
+        &'authority AuthenticatedRecoveredWalStandaloneSignProjection,
         &'authority super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
     ),
     ControlBroadcastAndSign(
-        &'authority AuthenticatedRecoveredWalControlProjection,
+        &'authority AuthenticatedRecoveredWalStandaloneSignProjection,
         &'authority RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
         &'authority RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     ),
@@ -130,6 +130,30 @@ pub(in crate::sumeragi) struct TerminalValidateNoSuccessorClaim {
     row_identity: LifecycleDigest,
 }
 impl TerminalValidateNoSuccessorClaim {
+    /// Decode only the existing exact terminal-row claim; semantic authority
+    /// still requires the same-store revalidated body outcome.
+    pub(in crate::sumeragi) fn from_ledger_record(
+        context: LifecycleContext,
+        record: &LifecycleLedgerRecordV1,
+    ) -> Option<Self> {
+        terminal_validate_no_successor_claim(context, record)
+            .ok()
+            .flatten()
+    }
+
+    /// Return the immutable coordinates of this checksummed terminal claim.
+    pub(in crate::sumeragi) const fn context(&self) -> LifecycleContext {
+        self.context
+    }
+    pub(in crate::sumeragi) const fn ordinal(&self) -> u128 {
+        self.ordinal
+    }
+    pub(in crate::sumeragi) const fn key(&self) -> LifecycleKey {
+        self.key
+    }
+    pub(in crate::sumeragi) const fn causal_root(&self) -> CausalRoot {
+        self.owner.causal_root()
+    }
     /// Compare one sealed body-store outcome with the complete ledger identity.
     pub(in crate::sumeragi) fn matches_outcome(
         &self,
@@ -144,6 +168,27 @@ impl TerminalValidateNoSuccessorClaim {
             self.payload,
             outcome,
         )
+    }
+    /// Match a report's canonical body frame without minting outcome authority.
+    /// The catalog must still join the actual deterministic rejection to this claim.
+    pub(super) fn matches_reported_body_frame(
+        &self,
+        context: LifecycleContext,
+        round: iroha_data_model::block::consensus_v2::ConsensusRound,
+        subject: iroha_data_model::block::consensus_v2::BlockSubject,
+        payload: DurablePayloadReference,
+    ) -> bool {
+        self.context == context
+            && self.key.context() == context.id()
+            && self.key.round().height() == context.height()
+            && self.key.proposal_round()
+                == Some(super::LifecycleRound::new(round.height, round.view))
+            && self.key.subject() == Some(super::projection::block_subject(subject))
+            && self.key.phase() == super::LifecyclePhase::Validate
+            && self.reconstruction_source == self.owner.causal_root().digest()
+            && self.stage.kind() == LifecycleStageKind::ValidateBody
+            && self.stage.predecessor_scope() == PredecessorScope::Independent
+            && self.payload == payload
     }
     /// Compare one successful body-store marker with the complete ledger identity.
     pub(in crate::sumeragi) fn matches_validated_receipt(
@@ -160,7 +205,7 @@ impl TerminalValidateNoSuccessorClaim {
             receipt,
         )
     }
-    fn exactly_matches_ledger_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
+    pub(super) fn exactly_matches_ledger_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
         record.ordinal() == self.ordinal
             && record.owner() == self.owner
             && record.key() == Some(self.key)
@@ -172,7 +217,7 @@ impl TerminalValidateNoSuccessorClaim {
             && record.continuation() == Some(DurableContinuation::AdvancedNoSuccessor)
             && record.exact_row_identity() == self.row_identity
     }
-    fn exactly_matches_coordinator_tombstone(
+    pub(super) fn exactly_matches_coordinator_tombstone(
         &self,
         context: LifecycleContext,
         coordinator: &LifecycleCoordinator,
@@ -496,7 +541,7 @@ impl AuthenticatedLifecycleRecoveryCut {
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
         mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
     ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
     {
@@ -515,7 +560,7 @@ impl AuthenticatedLifecycleRecoveryCut {
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
-        control: &AuthenticatedRecoveredWalControlProjection,
+        control: &AuthenticatedRecoveredWalStandaloneSignProjection,
         broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
         mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
     ) -> Result<(Self, PreparedDurableCertifiedBodyPipelineStartupV1), LifecycleRecoveryAssemblyError>
@@ -542,7 +587,7 @@ impl AuthenticatedLifecycleRecoveryCut {
         ledger: LifecycleLedgerV1,
         serve_payloads: AuthenticatedCertifiedServePayloadRecoveryCut,
         body_store: &mut V2BodyStore,
-        control: &AuthenticatedRecoveredWalControlProjection,
+        control: &AuthenticatedRecoveredWalStandaloneSignProjection,
         pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
         combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
         mut body_pipeline: PreparedDurableCertifiedBodyPipelineStartupV1,
@@ -808,6 +853,22 @@ impl AuthenticatedLifecycleRecoveryCut {
             .copied()
             .map(|claim| (claim.key, claim.into_authenticated()))
             .collect();
+        // Keep real terminal outcomes for later current-view certified retries.
+        // The already-recovered Apply owns its separate selected success.
+        if !catalog.retain_selected_terminal_retries(
+            claims
+                .values()
+                .copied()
+                .filter(|claim| Some(*claim) != released_claim),
+        ) {
+            return Err(LifecycleRecoveryAssemblyError {
+                kind: LifecycleRecoveryAssemblyErrorKind::TerminalValidateOutcomeCatalog(
+                    "terminal retry custody changed its selected semantic outcome",
+                ),
+                _authenticated_ledger: ledger,
+                _serve_payloads: serve_payloads,
+            });
+        }
         let released_validate = if let Some(claim) = released_claim {
             let Some(released) = catalog.commit_selected_with_released_validate(claim) else {
                 return Err(LifecycleRecoveryAssemblyError {
@@ -938,7 +999,7 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// Revalidate the exact standalone control Sign retained by recovery.
     pub(super) fn owns_recovered_wal_control_sign(
         &self,
-        projection: &AuthenticatedRecoveredWalControlProjection,
+        projection: &AuthenticatedRecoveredWalStandaloneSignProjection,
     ) -> bool {
         projection.belongs_to_context(self.context)
             && projection.owns_spliced_candidate(&self.candidates)
@@ -946,7 +1007,7 @@ impl AuthenticatedLifecycleRecoveryCut {
     /// Revalidate the exact live Broadcast retained beneath its control WAL parent.
     pub(super) fn owns_recovered_control_broadcast(
         &self,
-        control: &AuthenticatedRecoveredWalControlProjection,
+        control: &AuthenticatedRecoveredWalStandaloneSignProjection,
         broadcast: &super::wal_recovery::RecoveredLifecycleSignedBroadcastProjectionV1,
     ) -> bool {
         control.belongs_to_context(self.context)
@@ -3187,7 +3248,7 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn reconcile_complete_tip_serv
         _authenticated_payloads: recovered,
     })
 }
-fn terminal_validate_no_successor_claim(
+pub(super) fn terminal_validate_no_successor_claim(
     context: LifecycleContext,
     record: &LifecycleLedgerRecordV1,
 ) -> Result<Option<TerminalValidateNoSuccessorClaim>, LifecycleRecoveryAssemblyErrorKind> {
@@ -3250,13 +3311,13 @@ fn terminal_validate_no_successor_claim(
 }
 fn recovered_control_broadcast_and_sign_records<'ledger>(
     ledger: &'ledger LifecycleLedgerV1,
-    control: &AuthenticatedRecoveredWalControlProjection,
+    control: &AuthenticatedRecoveredWalStandaloneSignProjection,
     pair: &RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1,
     combined: &RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
 ) -> Option<[&'ledger LifecycleLedgerRecordV1; 3]> {
-    if pair.parent()
-        != super::ledger::RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+    if !pair.parent().is_standalone()
         || !pair.exactly_matches_ledger(ledger)
+        || !control.source_matches_ledger(ledger)
     {
         return None;
     }

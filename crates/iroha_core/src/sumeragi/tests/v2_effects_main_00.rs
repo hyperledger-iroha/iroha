@@ -1584,6 +1584,14 @@ impl ProductionTransportFixture {
         local_role: Option<crate::sumeragi::v2_core::CommitteeRole>,
         queue_config: RuntimeQueueConfig,
     ) -> Self {
+        Self::new_with_local_role_at_view(local_role, queue_config, 0, true)
+    }
+    fn new_with_local_role_at_view(
+        local_role: Option<crate::sumeragi::v2_core::CommitteeRole>,
+        queue_config: RuntimeQueueConfig,
+        body_view: u64,
+        recover_initial_body: bool,
+    ) -> Self {
         let mut validator_keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -1631,9 +1639,9 @@ impl ProductionTransportFixture {
         let local_validator = local_role.map(|role| {
             let committee = crate::sumeragi::v2_core::Committee::project_indices(
                 context.height,
-                0,
+                body_view,
                 context.roster.len(),
-                context.leader(0),
+                context.leader(body_view),
             )
             .expect("production transport committee geometry");
             (0..context.roster.len())
@@ -1641,14 +1649,14 @@ impl ProductionTransportFixture {
                 .find(|index| committee.role(*index) == Ok(role))
                 .expect("the requested fixture role exists in the frozen committee")
         });
-        let round = round(&context, 0);
+        let round = round(&context, body_view);
         let header = BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
             None,
             None,
             None,
             3_000,
-            0,
+            body_view,
         );
         let leader = context.leader(round.view);
         let leader_index = usize::try_from(leader).expect("production leader fits usize");
@@ -1719,14 +1727,20 @@ impl ProductionTransportFixture {
         )
         .expect("serialized production runtime");
         assert!(startup_effects.is_empty());
-        runtime
-            .recover_validated_body(&manifest, &validated)
-            .expect("bind locally validated execution commitment");
+        if recover_initial_body {
+            runtime
+                .recover_validated_body(&manifest, &validated)
+                .expect("bind locally validated execution commitment");
+        }
         let requester_key = KeyPair::try_from_seed(vec![90; 32], Algorithm::BlsNormal)
             .expect("deterministic requester key");
         let responder_key = KeyPair::try_from_seed(vec![91; 32], Algorithm::BlsNormal)
             .expect("deterministic responder key");
-        let recovered_bodies = BTreeMap::from([((round, subject), (manifest.clone(), durable))]);
+        let recovered_bodies = if recover_initial_body {
+            BTreeMap::from([((round, subject), (manifest.clone(), durable))])
+        } else {
+            BTreeMap::new()
+        };
         let executor = V2EffectExecutor::with_runtime(
             runtime,
             recovered_bodies,

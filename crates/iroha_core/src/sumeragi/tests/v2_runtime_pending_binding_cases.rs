@@ -1838,3 +1838,109 @@ fn pending_validate_successor_projection_rejects_forged_coordinates_and_authorit
         "Prepare-authorized Validate cannot regress to the ordinary Prepare-sign branch"
     );
 }
+
+#[test]
+fn historical_prepare_rejection_retains_exact_report_authority() {
+    let (context, keys) = authenticated_runtime_context();
+    let prepare = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0x7B,
+        wire::GlobalPhase::Prepare,
+        3,
+    );
+    let report = AdapterEffect::ReportInvalidCertifiedBody {
+        subject: prepare.subject,
+        certificate: prepare.clone(),
+    };
+    for view in [3, 4] {
+        let tag = EventTag::new(context.height, view, Generation::new(7));
+        let (validate, pending) = pending_validate_binding_for_test(
+            tag,
+            prepare.proposal_round,
+            prepare.subject,
+            Some(prepare.clone()),
+            79,
+        );
+        let projected = pending
+            .project_validate_report_invalid_certified_body_successor(&validate, &report)
+            .expect("the exact historical Prepare retains one current rejection report");
+        assert!(projected.exactly_binds_adapter_effect(&report));
+        assert_eq!(
+            projected.causal_lifecycle_key(),
+            pending.causal_lifecycle_key()
+        );
+        assert_eq!(projected.candidate_statement(), None);
+        assert_ne!(
+            projected.exact_effect_identity(),
+            pending.exact_effect_identity()
+        );
+        let changed = AdapterEffect::ValidateBody {
+            tag: EventTag::new(context.height, view, Generation::new(8)),
+            round: prepare.proposal_round,
+            subject: prepare.subject,
+        };
+        assert!(
+            pending
+                .project_validate_report_invalid_certified_body_successor(&changed, &report)
+                .is_none(),
+            "a historical report still requires its exactly bound current tag"
+        );
+    }
+    let before_certificate = EventTag::new(context.height, 2, Generation::new(7));
+    let (validate, pending) = pending_validate_binding_for_test(
+        before_certificate,
+        prepare.proposal_round,
+        prepare.subject,
+        Some(prepare.clone()),
+        80,
+    );
+    assert!(
+        pending
+            .project_validate_report_invalid_certified_body_successor(&validate, &report)
+            .is_none(),
+        "a future Prepare round cannot authorize current rejection work"
+    );
+    let current = EventTag::new(context.height, 4, Generation::new(7));
+    let (validate, pending) = pending_validate_binding_for_test(
+        current,
+        prepare.proposal_round,
+        prepare.subject,
+        Some(prepare.clone()),
+        81,
+    );
+    let foreign = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0x7C,
+        wire::GlobalPhase::Prepare,
+        3,
+    );
+    let foreign_report = AdapterEffect::ReportInvalidCertifiedBody {
+        subject: foreign.subject,
+        certificate: foreign,
+    };
+    assert!(
+        pending
+            .project_validate_report_invalid_certified_body_successor(&validate, &foreign_report)
+            .is_none(),
+        "monotonic execution tags cannot replace the exact certified body"
+    );
+    let commit = signed_runtime_quorum_certificate_for_phase_at_view(
+        &context,
+        &keys,
+        0x7B,
+        wire::GlobalPhase::Commit,
+        3,
+    );
+    let commit_report = AdapterEffect::ReportInvalidCertifiedBody {
+        subject: commit.subject,
+        certificate: commit,
+    };
+    assert!(
+        pending
+            .project_validate_report_invalid_certified_body_successor(&validate, &commit_report)
+            .is_none(),
+        "historical rejection reporting still requires Prepare authority"
+    );
+}

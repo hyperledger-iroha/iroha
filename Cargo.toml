@@ -400,6 +400,52 @@ opt-level = 3
 [profile.test.package.blake2]
 opt-level = 3
 
+# Four-peer native consensus profiling found BLS signing and verification in
+# unoptimized field arithmetic. Optimize the concrete crypto instantiations and
+# their arithmetic dependencies in both runnable profiles, retaining assertions
+# and overflow checks and sharing artifacts between the node and test harnesses.
+[profile.dev.package.iroha_crypto]
+opt-level = 3
+
+[profile.test.package.iroha_crypto]
+opt-level = 3
+
+[profile.dev.package.w3f-bls]
+opt-level = 3
+
+[profile.test.package.w3f-bls]
+opt-level = 3
+
+[profile.dev.package.ark-bls12-381]
+opt-level = 3
+
+[profile.test.package.ark-bls12-381]
+opt-level = 3
+
+[profile.dev.package.ark-ec]
+opt-level = 3
+
+[profile.test.package.ark-ec]
+opt-level = 3
+
+[profile.dev.package.ark-ff]
+opt-level = 3
+
+[profile.test.package.ark-ff]
+opt-level = 3
+
+[profile.dev.package.ark-poly]
+opt-level = 3
+
+[profile.test.package.ark-poly]
+opt-level = 3
+
+[profile.dev.package.ark-serialize]
+opt-level = 3
+
+[profile.test.package.ark-serialize]
+opt-level = 3
+
 # Eight, 16, and 64 CGUs all measured about 12.1 GiB before decoder de-duplication;
 # one CGU reached 19.32 GiB. Eight was the lowest measured partition count, and
 # the shared decoder engine reduced its exact no-run reproducer to 11.466 GiB.
