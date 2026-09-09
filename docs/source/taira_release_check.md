@@ -153,7 +153,9 @@ Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test
 must exist and execute exactly once. Missing,
-ignored, failed or empty selections fail the command. Fix the named failure and
+ignored, failed or empty selections fail the command. All independent cases in
+a harness run before reporting their combined failures, so one bad fixture cannot
+hide another defect until the next build. Fix the named failures and
 rerun the same command to reuse compiled dependencies.
 
 The selected toolchain's Cargo executes this command from `/` with the isolated

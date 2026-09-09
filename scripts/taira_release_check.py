@@ -234,6 +234,7 @@ CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts",
     "sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure",
     "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover",
     "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete",
     "sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification",
     "sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers",
@@ -367,7 +368,9 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
     if listing.returncode:
         raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
     require_tests(listing.stdout, stages)
+    failures = []
     for label, names in stages:
+        failed_before = len(failures)
         stage_start = time.monotonic()
         print(f"[taira-check] start {label} ({len(names)} tests)", flush=True)
         for name in names:
@@ -376,9 +379,17 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
             result = subprocess.run([harness, name, "--exact", "--color", "never"],
                                     cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
                                     text=True, capture_output=True, check=False, pass_fds=lock_fds)
-            require_one_pass(name, result)
-            print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
-        print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
+            try:
+                require_one_pass(name, result)
+            except CheckError as error:
+                failures.append(str(error))
+                print(f"[taira-check] failed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
+            else:
+                print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
+        outcome = "passed" if len(failures) == failed_before else "failed"
+        print(f"[taira-check] {outcome} {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
+    if failures:
+        raise CheckError(f"{len(failures)} selected regressions failed: " + "; ".join(failures))
 
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> dict[str, str]:

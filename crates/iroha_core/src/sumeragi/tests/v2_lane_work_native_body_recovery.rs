@@ -11,7 +11,7 @@ struct NativeBodyRecoveryPayload {
 fn native_coordinator_successor_waits_for_missing_applied_half_without_losing_owner() {
     for missing_half in ["receipt", "manifest"] {
         let (mut adapter, _, lane_id, dataspace_id, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let request =
             native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
         let previous_hash = request
@@ -253,7 +253,7 @@ fn assert_shared_lane_predecessor_is_applied(
 fn shared_lane_predecessor_rejects_corrupt_native_application_evidence() {
     for corrupt_half in ["receipt", "manifest"] {
         let (adapter, _, lane_id, dataspace_id, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let request =
             native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
         assert_shared_lane_predecessor_is_applied(
@@ -347,12 +347,14 @@ struct NativeBodyRecoveryFixture {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
 fn native_body_recovery_adapter() -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
-    native_body_recovery_adapter_with_kura(locked_lane_work_test_kura(
-        NonZeroUsize::new(1).expect("retain one carrier body"),
-    ))
+    native_body_recovery_adapter_with_kura(
+        locked_lane_work_test_kura(NonZeroUsize::new(1).expect("retain one carrier body")),
+        None,
+    )
 }
 fn native_body_recovery_adapter_with_kura(
     kura: Arc<Kura>,
+    local_validator_index: Option<usize>,
 ) -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
     let capacity = NonZeroUsize::new(8).expect("non-zero fixture capacity");
     let limits = V2LaneWorkLimits::new(
@@ -393,7 +395,7 @@ fn native_body_recovery_adapter_with_kura(
         true,
         limits,
         kura,
-        None,
+        local_validator_index,
         true,
         wire::recommended_data_availability_layout(),
     );
@@ -721,7 +723,7 @@ fn grouped_native_candidate_fixture_with_adapter(
             .set_pending_control_sidecar_validation_bytes_for_testing(aggregate_bytes);
     }
     let (mut adapter, keys, participant_lane, participant_dataspace) =
-        native_body_recovery_adapter_with_kura(kura);
+        native_body_recovery_adapter_with_kura(kura, None);
     let mut finality_manifest_root = [0_u8; Hash::LENGTH];
     finality_manifest_root
         .copy_from_slice(Hash::new(b"grouped Native coordinator finality manifest").as_ref());
@@ -2748,7 +2750,7 @@ fn shared_lane_first_slot_authenticates_native_publication_before_empty_predeces
         "corrupt manifest",
     ] {
         let (adapter, _, lane_id, _, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let first = &previous.request.participant_proposal;
         assert_eq!(first.descriptor.lane_block_height, 1);
         assert_eq!(first.descriptor.previous_lane_block_height, 0);
@@ -2803,7 +2805,7 @@ fn shared_lane_first_slot_authenticates_native_publication_before_empty_predeces
 #[test]
 fn native_applied_first_slot_cannot_be_reused_at_lane_signing_or_progress() {
     let (mut adapter, _, lane_id, dataspace_id, previous) =
-        native_coordinator_after_applied_participant_fixture();
+        native_coordinator_after_applied_participant_fixture(None);
     let request = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
     let successor = request.participant_proposal;
     assert!(
@@ -2886,7 +2888,7 @@ struct IndependentlyEncodedSharedLaneFrontierForTest {
 fn native_application_rejects_valid_but_contradictory_shared_frontier() {
     for fault in ["different descriptor", "missing shared marker"] {
         let (mut adapter, _, lane_id, dataspace_id, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let request =
             native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
         let native = &previous.request.participant_proposal.descriptor;
@@ -3147,7 +3149,7 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
     }
 
     let (mut previous_adapter, keys, participant_lane, participant_dataspace, previous) =
-        native_coordinator_after_applied_participant_fixture();
+        native_coordinator_after_applied_participant_fixture(Some(1));
     let parent_height = NonZeroUsize::new(previous_adapter.state.committed_height()).unwrap();
     let parent = previous_adapter.kura.get_block(parent_height).unwrap();
     complete_applied_ordinary_lane_sessions(&mut previous_adapter, &keys, &parent);
@@ -3160,29 +3162,27 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
         route.dataspace_id,
     )
     .expect("coordinator predecessor is fully applied before participant interruption");
-    let key = keys
-        .iter()
-        .find(|key| key.public_key() == slot.author.public_key())
-        .unwrap()
-        .clone();
-    let state = Arc::clone(&previous_adapter.state);
-    let kura = Arc::clone(&previous_adapter.kura);
-    let context = previous_adapter.context.clone();
-    let limits = previous_adapter.limits;
-    drop(previous_adapter);
-    let mut adapter = V2LaneWorkAdapter::new_with_output_guard(
-        context,
-        slot.author.clone(),
-        key,
-        true,
-        state,
-        kura,
-        limits,
-        None,
-        None,
-        ConsensusOutputGuard::isolated(),
-    )
-    .expect("open the exact autonomous producer after predecessor application");
+    assert_eq!(
+        slot.lane_block_height, 2,
+        "fixture reserves the second lane slot"
+    );
+    assert_eq!(
+        slot.author, previous_adapter.local_peer,
+        "the storage owner must be the deterministic second-slot author from initial construction"
+    );
+    let mut adapter = previous_adapter;
+    let active_view = (0..2 * adapter
+        .state
+        .consensus_lane_routes_at_height(adapter.context.height)
+        .len() as u64)
+        .find(|view| {
+            adapter.autonomous_native_coordinator_for_view(*view)
+                == Some((route.lane_id, route.dataspace_id))
+        })
+        .expect("the deterministic Native coordinator rotation selects this route");
+    adapter
+        .retain_merge_sidecars_for_global_view(active_view, None, None)
+        .expect("install the selected global view before owning a production batch");
     let queue = Arc::new(Queue::test_with_router_for_routes(
         iroha_config::parameters::actual::Queue::default(),
         &iroha_primitives::time::TimeSource::new_system(),
@@ -3234,15 +3234,6 @@ fn autonomous_producer_retains_reservations_until_participant_predecessor_repair
             envelope_byte_limit: 4 * 1024 * 1024,
         },
     );
-    let active_view = (0..2 * adapter
-        .state
-        .consensus_lane_routes_at_height(adapter.context.height)
-        .len() as u64)
-        .find(|view| {
-            adapter.autonomous_native_coordinator_for_view(*view)
-                == Some((route.lane_id, route.dataspace_id))
-        })
-        .expect("the deterministic Native coordinator rotation selects this route");
     let receipt_path = adapter
         .state
         .nexus_snapshot()

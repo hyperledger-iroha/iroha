@@ -442,7 +442,7 @@ fn global_body_lock_retires_and_fences_native_request_ownership() {
 #[test]
 fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash() {
     let (mut adapter, _, lane_id, dataspace_id, previous) =
-        native_coordinator_after_applied_participant_fixture();
+        native_coordinator_after_applied_participant_fixture(None);
     let exact = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
     assert!(adapter.native_request_matches_context(&exact, 0));
     let mut forged = exact.clone();
@@ -682,14 +682,19 @@ fn lane_signing_boundary_requires_exact_descriptor_membership() {
     );
 }
 
-fn native_coordinator_after_applied_participant_fixture() -> (
+fn native_coordinator_after_applied_participant_fixture(
+    local_validator_index: Option<usize>,
+) -> (
     V2LaneWorkAdapter,
     Vec<KeyPair>,
     LaneId,
     DataSpaceId,
     NativeBodyRecoveryPayload,
 ) {
-    let (adapter, keys, lane_id, dataspace_id) = native_body_recovery_adapter();
+    let (adapter, keys, lane_id, dataspace_id) = native_body_recovery_adapter_with_kura(
+        locked_lane_work_test_kura(NonZeroUsize::new(1).unwrap()),
+        local_validator_index,
+    );
     assert!(
         adapter
             .state
@@ -874,7 +879,7 @@ fn native_coordinator_successor_request(
 #[test]
 fn applied_native_participant_becomes_coordinator_at_shared_successor_height() {
     let (mut adapter, _, lane_id, dataspace_id, previous) =
-        native_coordinator_after_applied_participant_fixture();
+        native_coordinator_after_applied_participant_fixture(None);
     assert!(
         adapter
             .kura
@@ -952,7 +957,7 @@ fn applied_native_participant_becomes_coordinator_at_shared_successor_height() {
 #[test]
 fn native_coordinator_successor_rejects_wrong_signed_native_history_link() {
     let (mut adapter, _, lane_id, dataspace_id, previous) =
-        native_coordinator_after_applied_participant_fixture();
+        native_coordinator_after_applied_participant_fixture(None);
     let mut request =
         native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
     let wrong = HashOf::from_untyped_unchecked(Hash::new(b"wrong prior Native settlement"));
@@ -991,7 +996,7 @@ fn native_coordinator_successor_rejects_wrong_signed_native_history_link() {
 #[test]
 fn native_coordinator_successor_fails_closed_on_corrupt_applied_native_receipt() {
     let (mut adapter, _, lane_id, dataspace_id, previous) =
-        native_coordinator_after_applied_participant_fixture();
+        native_coordinator_after_applied_participant_fixture(None);
     let request = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
     let receipt_path = adapter
         .state

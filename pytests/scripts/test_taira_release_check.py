@@ -4,6 +4,8 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
+import sys
 from pathlib import Path
 import subprocess
 import tempfile
@@ -25,6 +27,23 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         mock = patch.object(gate, "run_pure_fsm_checks")
         self.pure_fsm = mock.start()
         self.addCleanup(mock.stop)
+
+    def test_failed_regression_does_not_hide_later_independent_failures(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = root / "harness"
+            harness.write_text(f"#!{sys.executable}\n" + "import sys\nfrom pathlib import Path\n"
+                "if '--list' in sys.argv:\n print('first: test\\nsecond: test\\nthird: test');sys.exit(0)\n"
+                "name=sys.argv[1]\n"
+                "with Path('executed').open('a') as f:f.write(name+'\\n')\n"
+                "print('test '+name+(' ... ok' if name=='second' else ' ... FAILED'))\n"
+                "print('test result: ok. 1 passed; 0 failed; 0 ignored;' if name=='second' else 'fixture failure')\n"
+                "sys.exit(0 if name=='second' else 101)\n")
+            harness.chmod(0o700)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                with self.assertRaisesRegex(gate.CheckError, '2 selected regressions failed:.*first.*third'):
+                    gate.run_stages(str(harness), root, dict(os.environ), (("independent fixtures", ("first", "second", "third")),), ())
+            self.assertEqual((root / "executed").read_text().splitlines(), ['first', 'second', 'third'])
 
     def test_command_reuses_native_cargo_lane_and_does_not_run_full_suite(self):
         self.assertEqual(gate.compile_command(Path("/repo"), {"CARGO": "/fixed/cargo"}), [
