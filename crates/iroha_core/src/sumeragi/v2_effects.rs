@@ -7378,8 +7378,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 && retained_validate_retry_seals
                     .get(&(*round, *subject))
                     .is_some_and(|seal| {
-                        seal.lifecycle_state()
-                            == DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor
+                        matches!(
+                            seal.lifecycle_state(),
+                            DurableValidateRetryLifecycleStateV1::ResolvedNoSuccessor(_)
+                        )
                     })
             {
                 // A resolved row has no active physical stage. Reject overlap
@@ -11787,8 +11789,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 round,
                 subject,
             } => {
-                validated_apply_successor =
-                    self.validate_body(tag, round, subject, ownership, services)?;
+                validated_apply_successor = self.validate_body(tag, round, subject, ownership)?;
                 Ok(())
             }
             AdapterEffect::Apply {

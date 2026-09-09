@@ -1484,7 +1484,7 @@ fn open_test(directory: &TempDir) -> Result<(SumeragiV2Adapter, Vec<AdapterEffec
 #[test]
 fn adapter_hot_context_projections_retain_the_verified_registry_identity() {
     let directory = TempDir::new().expect("context projection directory");
-    let (adapter, startup) = open_test(&directory).expect("verified adapter");
+    let (mut adapter, startup) = open_test(&directory).expect("verified adapter");
     assert!(startup.is_empty());
     let expected = adapter.wire_context().id();
     assert_eq!(adapter.frozen_wire_context_id(), expected);
@@ -1501,7 +1501,7 @@ fn adapter_hot_context_projections_retain_the_verified_registry_identity() {
         "changing an external wire-context copy cannot alter the verified owner"
     );
     drop(adapter);
-    let restarted = open_test(&directory)
+    let mut restarted = open_test(&directory)
         .expect("reopen the same frozen context")
         .0;
     assert_eq!(restarted.frozen_wire_context_id(), expected);

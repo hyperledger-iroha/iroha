@@ -40,7 +40,10 @@ use crate::sumeragi::{
         RecoveredLifecycleSignCapacityCaptureErrorV1, RecoveredLifecycleSignCapacityCaptureV1,
     },
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 /// Capability proving that raw planner rows are assembled only inside this
 /// production factory.
 ///

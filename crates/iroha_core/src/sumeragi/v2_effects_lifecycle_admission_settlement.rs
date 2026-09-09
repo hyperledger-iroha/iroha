@@ -3767,13 +3767,12 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
         Ok(())
     }
 
-    fn validate_body<S: V2EffectServices>(
+    fn validate_body(
         &mut self,
         tag: EventTag,
         round: wire::ConsensusRound,
         subject: wire::BlockSubject,
         ownership: RuntimeEffectOwnership,
-        services: &mut S,
     ) -> Result<Option<DirectValidatedApplySuccessorV1>, EffectExecutorError> {
         let key = (round, subject);
         let effect = AdapterEffect::ValidateBody {

@@ -1747,7 +1747,6 @@ fn stored_proposal_validate_owner_reaches_terminal_query_before_late_carrier() {
 fn post_validate_proposal_seal_projects_late_store_before_terminal_coalescing() {
     let fixture = Fixture::new();
     let mut executor = fixture.executor(EffectQueueConfig::default());
-    let mut services = fixture.services();
     let key = (fixture.manifest.round, fixture.manifest.subject);
     let store_incumbent =
         install_stored_remote_proposal_replay(&mut executor, &fixture, tag(0), 9_026);
@@ -1766,7 +1765,6 @@ fn post_validate_proposal_seal_projects_late_store_before_terminal_coalescing() 
                 fixture.manifest.round,
                 fixture.manifest.subject,
                 validate_ownership.clone(),
-                &mut services,
             )
             .expect("consume Stored replay into durable Validate admission")
             .is_none()

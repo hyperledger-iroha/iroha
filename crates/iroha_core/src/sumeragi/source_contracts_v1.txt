@@ -4809,7 +4809,7 @@ region|replay_verify|effects|at|pub(crate) fn verify_pending_kura_apply_replay(|
 region|runtime_prepare|runtime|at|pub(in crate::sumeragi) fn prepare_pending_kura_validated_apply(|before|/// Freeze the serialized shell around one ordinary Fetch-to-Store preview.
 region|runtime_default|effects|after|pub(crate) trait EffectRuntime {|before|/// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
 region|runtime_serialized|effects|after|impl EffectRuntime for SerializedV2Runtime {|before|fn can_admit_network_message_with_ingress_ownership(
-region|validate_child|effects|at|fn validate_body<S: V2EffectServices>(|before|fn begin_apply<S: V2EffectServices>(
+region|validate_child|effects|at|fn validate_body(|before|fn begin_apply<S: V2EffectServices>(
 region|consume_child|effects|at|fn consume_one<S: V2EffectServices>(|before|fn ensure_pending_tip_recovery_effect_is_local(
 region|recovery_step|effects|at|pub(crate) fn step_pending_tip_recovery<S: V2EffectServices>(|before|/// Publish the terminal scheduler observation immediately before the runner
 region|retired_carrier|coordinator_support|begin|-|end|-
