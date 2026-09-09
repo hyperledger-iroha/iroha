@@ -557,8 +557,10 @@ mod portable_tests {
     fn bounded_decoder_rejects_missing_or_unknown_version() -> Result<()> {
         let stored = StoredArgs::from_args(&IzanamiArgs::defaults())?;
         let bare = stored.encode();
-        decode_stored_args_bounded(&bare)
-            .expect_err("bare pre-release configuration must not be guessed");
+        assert!(
+            decode_stored_args_bounded(&bare).is_err(),
+            "bare configuration must not be guessed"
+        );
 
         let error = decode_stored_args_bounded(&[])
             .expect_err("missing persisted version must fail closed");

@@ -195,6 +195,7 @@ pub(crate) struct Snapshot {
     pub(crate) total: Usage,
     /// Componentwise high-water values of complete published aggregate states.
     /// Mutating intervals are explicitly unavailable and are not covered by this value.
+    #[cfg(test)]
     pub(crate) observed_high_water: Usage,
     /// Sticky number of failed accounting publications in this process instance.
     pub(crate) fault_count: u64,
@@ -388,6 +389,7 @@ impl Inventory {
             generation: state.generation,
             components: state.components.map(|component| component.usage),
             total: aggregate(&state.components)?,
+            #[cfg(test)]
             observed_high_water: state.high_water,
             fault_count: state.fault_count,
         })

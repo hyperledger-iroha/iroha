@@ -33,6 +33,8 @@ const AUDIT_RETENTION_LIMITS_V1: AuditRetentionLimitsV1 = AuditRetentionLimitsV1
     max_records: AUDIT_MAX_RECORDS_V1,
     max_total_bytes: AUDIT_MAX_TOTAL_BYTES_V1,
 };
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::journal::SoftwareSignerAuditEventV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) enum SoftwareSignerAuditEventV1 {
     Genesis {
@@ -67,6 +69,10 @@ pub(super) enum SoftwareSignerAuditEventV1 {
         reason_digest: [u8; 32],
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::journal::SoftwareSignerAuditRecordBodyV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct SoftwareSignerAuditRecordBodyV1 {
     magic: [u8; 8],
@@ -75,6 +81,8 @@ struct SoftwareSignerAuditRecordBodyV1 {
     predecessor_digest: [u8; 32],
     event: SoftwareSignerAuditEventV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::journal::SoftwareSignerAuditRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct SoftwareSignerAuditRecordV1 {
     body: SoftwareSignerAuditRecordBodyV1,

@@ -77,7 +77,7 @@ fn por_report_rejects_response_for_a_different_week_before_output() {
 fn por_export_rejects_cross_origin_redirect_before_writing() {
     let origin = MockServer::start();
     let substituted_origin = MockServer::start();
-    let payload = to_bytes(&TestPorStatusExportPageV1 {
+    let payload = to_bytes(&PorStatusExportPageV1 {
         version: 1,
         start_epoch: None,
         end_epoch: None,

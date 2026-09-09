@@ -1284,7 +1284,9 @@ impl Run for Args {
             if config.network_id != context.config().network_id {
                 bail!("account pool changes the selected network");
             }
-            let client = Client::new(config);
+            let client = Client::builder(config)
+                .build()
+                .map_err(|_| eyre!("account client configuration cannot be validated"))?;
             let account = client
                 .account_client()
                 .map_err(|_| eyre!("account context cannot be bound"))?;

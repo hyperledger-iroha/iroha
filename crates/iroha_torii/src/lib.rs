@@ -4189,6 +4189,8 @@ enum NoritoRpcGateFailure {
     CanaryDenied,
     MtlsRequired,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcCapabilitiesResponse")]
 #[derive(
     Debug,
     Clone,
@@ -4204,6 +4206,8 @@ struct RpcCapabilitiesResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcPingResponse")]
 #[derive(
     Debug,
     Clone,
@@ -4223,6 +4227,8 @@ struct RpcPingResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcNoritoRpcCapability")]
 #[derive(
     Debug,
     Clone,
@@ -12664,6 +12670,8 @@ async fn handler_gov_unlock_stats(
     check_access(&app, &headers, Some(remote.ip()), "v1/gov/unlocks/stats").await?;
     crate::gov::handle_gov_unlock_stats(app.state.clone()).await
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::InternalAccountReadResponse")]
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
@@ -19046,6 +19054,8 @@ async fn handler_zk_verify_batch(
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     routing::handle_v1_zk_verify_batch_admitted(format, body, limits, admission).await
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmDeriveRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -19071,6 +19081,8 @@ pub struct ZkIvmDeriveRequestDto {
     /// IVM bytecode to execute.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmDeriveResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -19088,6 +19100,8 @@ pub struct ZkIvmDeriveResponseDto {
     /// Proved executable payload derived from local IVM execution.
     pub proved: iroha_data_model::transaction::IvmProved,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -19138,6 +19152,8 @@ mod zk_ivm_request_dto_json_tests {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveJobCreatedDto")]
 #[derive(
     Debug,
     Clone,
@@ -19153,6 +19169,8 @@ pub struct ZkIvmProveJobCreatedDto {
     /// Stable job identifier.
     pub job_id: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveJobDto")]
 #[derive(
     Debug,
     Clone,

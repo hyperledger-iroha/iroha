@@ -4,6 +4,8 @@ use thiserror::Error;
 /// Expected length of a Blake3 digest used for namehash and manifest hashes.
 pub const BLAKE3_HASH_LEN: usize = 32;
 /// Proof bundle describing the linkage between registry entries, manifests, and CAR archives.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "soradns_resolver::bundle::ProofBundleV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct ProofBundleV1 {
     pub namehash: [u8; BLAKE3_HASH_LEN],

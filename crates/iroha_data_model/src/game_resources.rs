@@ -33,6 +33,8 @@ macro_rules! record {
 }
 
 /// Closed custody policy. Wins, ties and forfeits never change the recipient.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::game_resources::GameResourceReturnPolicyV1")]
 #[derive(
     Debug,
     Clone,
@@ -91,6 +93,8 @@ record! {
 }
 record! {
     /// Permanent audit record; it contains no configurable release recipient.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::game_resources::GameResourceReservationRecordV1")]
     pub struct GameResourceReservationRecordV1 {
         /// Permanent participant slot.
         pub slot: u8,

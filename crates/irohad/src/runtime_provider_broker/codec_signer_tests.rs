@@ -1,3 +1,7 @@
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::HandshakeRequestWithoutNetworkV1"
+)]
 #[derive(Encode)]
 struct HandshakeRequestWithoutNetworkV1 {
     chain_id: String,
@@ -21,6 +25,25 @@ fn canonical_framing_rejects_magic_version_kind_trailing_and_oversize() {
         MAX_HANDSHAKE_FRAME_BYTES_V1,
     )
     .expect("encode handshake frame");
+    let envelope_header = norito::core::Header::read(&frame[..]).expect("read broker header");
+    assert_eq!(
+        envelope_header.schema,
+        norito::core::schema_hash_for_name(
+            "irohad::runtime_provider_broker::protocol::primitives::BrokerFrameV1",
+        ),
+        "broker envelopes advertise their declared protocol identity",
+    );
+    let envelope = decode_canonical::<BrokerFrameV1>(&frame, MAX_HANDSHAKE_FRAME_BYTES_V1)
+        .expect("decode canonical envelope");
+    let request_header =
+        norito::core::Header::read(&envelope.body[..]).expect("read handshake header");
+    assert_eq!(
+        request_header.schema,
+        norito::core::schema_hash_for_name(
+            "irohad::runtime_provider_broker::protocol::HandshakeRequestV1",
+        ),
+        "nested requests advertise their own declared protocol identity",
+    );
     assert_eq!(
         decode_frame::<HandshakeRequestV1>(
             &frame,

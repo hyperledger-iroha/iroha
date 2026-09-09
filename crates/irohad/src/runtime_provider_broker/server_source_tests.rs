@@ -2029,6 +2029,10 @@ fn source_fetch_v1_accepts_generic_and_rejects_musubi_substitution() {
 }
 #[test]
 fn source_fetch_v1_rejects_an_incomplete_two_field_wire() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "irohad::runtime_provider_broker::protocol::platform::tests::source_fetch_v1_rejects_an_incomplete_two_field_wire::IncompleteProviderIngestSourceFetchRequestWire"
+    )]
     #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
     struct IncompleteProviderIngestSourceFetchRequestWire {
         authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,

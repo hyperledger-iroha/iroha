@@ -327,6 +327,10 @@ pub enum ReputationJournalCheckpointExternalErrorV1 {
 /// The record carries the exact canonical checkpoint bytes rather than a local-store fingerprint.
 /// Its deterministic revision authenticates the sequence, predecessor, checkpoint digest, and every
 /// checkpoint field, including the compacted replay floor and cumulative eviction count.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalSealedCheckpointRecordV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ReputationJournalSealedCheckpointRecordV1 {
     version: u8,
@@ -1539,6 +1543,10 @@ impl ReputationJournalProducerPolicyV1 {
         )
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalProducerPolicyDigestMaterialV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationJournalProducerPolicyDigestMaterialV1 {
     network_id: NetworkId,
@@ -1791,6 +1799,8 @@ struct StoredStreamTokenGatewayAdmissionV1 {
     event_id: ReputationJournalEventIdV1,
     entry: ReputationJournalEntryV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationJournalProducerCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationJournalProducerCheckpointV1 {
     version: u8,
@@ -4018,6 +4028,8 @@ fn instruction_for_entry(
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationJournalSourceMaterialV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationJournalSourceMaterialV1 {
     provider_id: ProviderId,
@@ -5216,6 +5228,10 @@ pub fn reputation_journal_submitter_policy_digest_v1(
         },
     )
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalSubmitterPolicyDigestMaterialV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationJournalSubmitterPolicyDigestMaterialV1 {
     network_id: NetworkId,
@@ -5765,6 +5781,10 @@ impl ReputationJournalDeliveryWorkerV1 {
             .revalidate_submitter_provider(self.submitter.as_ref())
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalTransactionIdempotencyMaterialV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct ReputationJournalTransactionIdempotencyMaterialV1 {
     sequence: u64,
@@ -5775,6 +5795,10 @@ struct ReputationJournalTransactionIdempotencyMaterialV1 {
     attempt: u32,
     instruction_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationJournalAbsenceReceiptMaterialV1"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize)]
 struct ReputationJournalAbsenceReceiptMaterialV1 {
     event_id: ReputationJournalEventIdV1,
@@ -5879,7 +5903,8 @@ pub struct ReputationGovernanceDagPublicationRequestV1 {
 /// `inclusion_path` is in ascending block order, contains the exact requested snapshot exactly
 /// once, and ends at `head.head_block_cid`. After the first acknowledgement, its first block must
 /// be the immediate successor of the previously authenticated head.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationGovernanceDagReadbackV1")]
 pub struct ReputationGovernanceDagReadbackV1 {
     /// Schema version.
     pub version: u8,
@@ -6215,6 +6240,10 @@ impl ReputationPublicationPolicyV1 {
         )
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reputation::runtime::ReputationPublicationPolicyDigestMaterialV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationPublicationPolicyDigestMaterialV1 {
     trust_policy_digest: [u8; 32],
@@ -6488,6 +6517,8 @@ pub trait ReputationNativeOutcomeAdmissionApiV1: Send + Sync + fmt::Debug {
         outcome: StreamTokenValidationOutcomeV1,
     ) -> Result<StreamTokenReputationAdmissionOutcomeV1, ReputationRuntimeError>;
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reputation::runtime::ReputationPublicationCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReputationPublicationCheckpointV1 {
     version: u8,

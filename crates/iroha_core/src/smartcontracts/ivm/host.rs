@@ -19962,6 +19962,10 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn fastpq_batch_apply_rejects_noncanonical_amount() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::NonCanonicalNumeric"
+        )]
         #[derive(norito::Encode)]
         struct NonCanonicalNumeric {
             #[codec(compact)]
@@ -19969,6 +19973,10 @@ seiyaku OpaqueInstructionSubmission {
             #[codec(compact)]
             scale: u32,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::ForgedTransferAssetBatchEntry"
+        )]
         #[derive(norito::Encode)]
         struct ForgedTransferAssetBatchEntry {
             from: AccountId,
@@ -19976,6 +19984,10 @@ seiyaku OpaqueInstructionSubmission {
             asset_definition: AssetDefinitionId,
             amount: NonCanonicalNumeric,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::ForgedTransferAssetBatch"
+        )]
         #[derive(norito::Encode)]
         struct ForgedTransferAssetBatch {
             entries: Vec<ForgedTransferAssetBatchEntry>,

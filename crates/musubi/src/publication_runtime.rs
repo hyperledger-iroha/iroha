@@ -95,6 +95,10 @@ const PROVIDER_ATTESTATION_CHECKPOINT_DECODE_LIMITS: DecodeLimits = DecodeLimits
 // location transition may require rebasing still-missing registration transactions, but it must
 // never permit the coordinator to substitute the archive/order/provider proof set for this
 // publication generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "musubi::publication_runtime::PublicationProviderAttestationSetCheckpointV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct PublicationProviderAttestationSetCheckpointV1 {
     schema: String,
@@ -106,6 +110,8 @@ struct PublicationProviderAttestationSetCheckpointV1 {
     references: Vec<MusubiProviderBundleAttestationRefV1>,
     set_digest: MusubiProviderBundleAttestationSetDigestV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::publication_runtime::PublicationProviderAttestationCheckpointV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct PublicationProviderAttestationCheckpointV1 {
     schema: String,

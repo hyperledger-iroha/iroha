@@ -1165,6 +1165,8 @@ fn retained_block_decode_rejects_absurd_lengths_trailing_truncation_and_version(
         );
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::RetiredKuraRetainedBlockRecordV2Fixture")]
 #[derive(Encode)]
 struct RetiredKuraRetainedBlockRecordV2Fixture {
     format_version: u16,

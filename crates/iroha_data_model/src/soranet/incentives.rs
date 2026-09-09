@@ -109,6 +109,8 @@ impl RelayBondPolicyV1 {
     }
 }
 /// Ledger entry recording the bond posted by a `SoraNet` relay.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayBondLedgerEntryV1")]
 #[derive(
     Debug,
     Clone,
@@ -355,6 +357,8 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
     }
 }
 /// Aggregated metrics for a relay within a specific epoch window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayEpochMetricsV1")]
 #[derive(
     Debug,
     Clone,
@@ -419,6 +423,8 @@ impl RelayEpochMetricsV1 {
     }
 }
 /// Instruction surfaced to the XOR treasury for rewarding a relay.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayRewardInstructionV1")]
 #[derive(
     Debug,
     Clone,
@@ -534,6 +540,8 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
     }
 }
 /// Record describing a relay reward dispute submitted to the treasury.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayRewardDisputeV1")]
 #[derive(
     Debug,
     Clone,

@@ -301,6 +301,8 @@ impl StoredPotrReceiptV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::potr::PotrTrackerCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PotrTrackerCheckpointV1 {
     version: u8,

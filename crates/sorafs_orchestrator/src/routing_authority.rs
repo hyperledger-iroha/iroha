@@ -94,6 +94,10 @@ struct RoutingAuthorityRouteV1 {
     manifest_root_cid: ManifestRootCid,
     provider_ids: Vec<[u8; 32]>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_orchestrator::routing_authority::RoutingAuthorityProjectionEnvelopeV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct RoutingAuthorityProjectionEnvelopeV1 {
     version: u8,

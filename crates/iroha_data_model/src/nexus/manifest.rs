@@ -190,6 +190,8 @@ impl From<ManifestVersion> for u16 {
     }
 }
 /// Capability manifest describing deterministic allowances for a UAID.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::manifest::AssetPermissionManifest")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),

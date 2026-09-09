@@ -155,6 +155,8 @@ pub const ALIAS_AUTO_RENEW_FAILURES_EXHAUSTED_CODE: &str = "alias.auto_renew.fai
 const ALIAS_AUTO_RENEW_CURSOR_VERSION: u8 = 1;
 const ALIAS_AUTO_RENEW_STATE_PREFIX: &str = "sns/auto_renew/";
 const ALIAS_AUTO_RENEW_CURSOR_KEY: &str = "sns/auto_renew_cursor/v1";
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sns::AliasAutoRenewCursorV1")]
 #[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct AliasAutoRenewCursorV1 {
     version: u8,

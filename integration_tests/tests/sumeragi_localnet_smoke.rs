@@ -28,9 +28,8 @@ use iroha::{
         },
         metadata::Metadata,
         name::Name,
-        nexus::{DataSpaceId, LaneId, UniversalAccountId},
+        nexus::UniversalAccountId,
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
-        peer::PeerId,
         prelude::{Action, FindAccountById, FindAssetById, Quantity, Repeats},
         query::block::prelude::FindBlocks,
         ram_lfe::{
@@ -8478,23 +8477,6 @@ fn parse_prom_histogram(payload: &str, metric: &str) -> HistogramSnapshot {
         sum,
         count,
     }
-}
-fn parse_prom_counter(payload: &str, metric: &str) -> Option<u64> {
-    payload
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .find_map(|line| {
-            let mut parts = line.split_whitespace();
-            let name = parts.next()?;
-            if name != metric {
-                return None;
-            }
-            let raw = parts.next()?;
-            raw.parse::<u64>()
-                .ok()
-                .or_else(|| raw.parse::<f64>().ok().map(|value| value.round() as u64))
-        })
 }
 fn metrics_url(torii_url: &str) -> String {
     if torii_url.ends_with("/metrics") {

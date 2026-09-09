@@ -225,6 +225,8 @@ pub fn extract_authority_domains(
     Ok(domains.into_iter().collect())
 }
 /// Deterministic mapping from a UAID to the dataspaces/accounts where it is active.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::UaidDataspaceBindings")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct UaidDataspaceBindings {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountId>>,
@@ -305,6 +307,8 @@ impl UaidDataspaceBindings {
 }
 /// Deterministic mapping from a canonical account id to the dataspaces and domains where it is
 /// visible for routed read queries.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::AccountScopeDirectoryEntry")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct AccountScopeDirectoryEntry {
     entries: BTreeMap<DataSpaceId, BTreeSet<AccountAliasDomain>>,
@@ -409,6 +413,8 @@ impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
     }
 }
 /// Manifest record tracked by the Space Directory host.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRecord {
     /// Canonical manifest payload (UAID + dataspace scope).
@@ -446,6 +452,8 @@ impl SpaceDirectoryManifestRecord {
     }
 }
 /// Lifecycle metadata recorded for a manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestLifecycle")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 pub struct SpaceDirectoryManifestLifecycle {
     /// Epoch (inclusive) when the manifest actually became active, if known.
@@ -456,6 +464,8 @@ pub struct SpaceDirectoryManifestLifecycle {
     pub revocation: Option<SpaceDirectoryManifestRevocation>,
 }
 /// Metadata describing a manifest revocation event.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestRevocation")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRevocation {
     /// Epoch when the revocation took effect.
@@ -485,6 +495,8 @@ impl SpaceDirectoryManifestLifecycle {
     }
 }
 /// Deterministic mapping from dataspace id to manifest record for a UAID.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestSet")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestSet {
     entries: BTreeMap<DataSpaceId, SpaceDirectoryManifestRecord>,

@@ -67,7 +67,10 @@ fn parse_uaid_accepts_only_exact_canonical_literal() {
         format!(" {prefixed}"),
         format!("{prefixed} "),
     ] {
-        parse_uaid(&retired).expect_err("noncanonical UAID spelling must fail");
+        assert!(
+            parse_uaid(&retired).is_err(),
+            "noncanonical UAID spelling must fail"
+        );
     }
 }
 fn parse_numeric(value: &Value, context: &str) -> Result<Quantity> {

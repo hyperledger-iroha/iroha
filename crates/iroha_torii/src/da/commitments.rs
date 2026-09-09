@@ -30,6 +30,8 @@ pub(crate) const DA_COMMITMENT_REQUEST_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_COMMITMENT_PAGE_SIZE: usize = 100;
 const MAX_COMMITMENT_PAGE_SIZE: usize = 1_000;
 /// Canonical ledger tip that binds a DA list cursor to one immutable view.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaListSnapshot")]
 #[derive(
     Debug,
     Clone,
@@ -54,6 +56,8 @@ impl DaListSnapshot {
     }
 }
 /// Forward-only cursor for canonically ordered DA commitments.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListCursor")]
 #[derive(
     Debug,
     Clone,
@@ -72,6 +76,8 @@ pub struct DaCommitmentListCursor {
     pub after: DaCommitmentKey,
 }
 /// Request payload for bounded DA commitment traversal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListRequest")]
 #[derive(
     Debug,
     Default,
@@ -90,6 +96,8 @@ pub struct DaCommitmentListRequest {
     pub cursor: Option<DaCommitmentListCursor>,
 }
 /// Exact selector used to generate one DA commitment proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentProofRequest")]
 #[derive(
     Debug,
     Default,
@@ -110,6 +118,8 @@ pub struct DaCommitmentProofRequest {
     pub sequence: Option<u64>,
 }
 /// Response surface for DA commitment listings.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentListResponse")]
 #[derive(
     Debug,
     Clone,
@@ -126,6 +136,8 @@ pub struct DaCommitmentListResponse {
     pub next_cursor: Option<DaCommitmentListCursor>,
 }
 /// Response surface for DA commitment proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentProofResponse")]
 #[derive(
     Debug,
     Clone,
@@ -139,6 +151,8 @@ pub struct DaCommitmentProofResponse {
     pub proof: DaCommitmentProof,
 }
 /// Verification response for a DA commitment Merkle proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::commitments::DaCommitmentVerifyResponse")]
 #[derive(
     Debug,
     Clone,

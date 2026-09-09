@@ -2956,6 +2956,8 @@ pub(crate) fn dataspace_label(dataspace: DataSpaceId) -> String {
     dataspace.as_u64().to_string()
 }
 /// Message for gossiping batches of transactions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::TransactionGossip")]
 #[derive(Debug, Clone)]
 pub struct TransactionGossip {
     /// Batch of transactions.
@@ -3054,7 +3056,6 @@ fn decode_transaction_gossip_payload(
         offset,
     ))
 }
-impl NoritoSerialize for TransactionGossip {}
 impl SerializePayload for TransactionGossip {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         ensure_transaction_gossip_sequence_len(self.txs.len())?;
@@ -3080,7 +3081,6 @@ impl SerializePayload for TransactionGossip {
         gossip_message_encoded_len(txs_payload_len, routes_payload_len, plans_payload_len)
     }
 }
-impl NoritoDeserialize<'_> for TransactionGossip {}
 impl<'a> DeserializePayload<'a> for TransactionGossip {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode transaction gossip")
@@ -3099,6 +3099,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for TransactionGossip {
     }
 }
 /// Gossip payload wrapper for transaction entrypoints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::GossipTransaction")]
 #[derive(Debug)]
 pub struct GossipTransaction {
     entrypoint: Arc<OnceLock<Arc<TransactionEntrypoint>>>,
@@ -3267,7 +3269,7 @@ fn framed_prefix_info<T: NoritoSerialize>(bytes: &[u8]) -> Result<FramedPrefixIn
         });
     }
     let schema = bytes.get(6..22).ok_or(ncore::Error::LengthMismatch)?;
-    if schema != <T as NoritoSerialize>::schema_hash().as_slice() {
+    if schema != norito::schema::identity::frame_hash::<T>().as_slice() {
         return Err(ncore::Error::SchemaMismatch);
     }
     let compression = *bytes.get(22).ok_or(ncore::Error::LengthMismatch)?;
@@ -3511,7 +3513,6 @@ impl From<SignedTransaction> for GossipTransaction {
         }
     }
 }
-impl NoritoSerialize for GossipTransaction {}
 impl SerializePayload for GossipTransaction {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
         writer.write_all(self.encoded.as_slice())?;
@@ -3532,7 +3533,6 @@ impl SerializePayload for GossipTransaction {
             .checked_add(certificate_len)
     }
 }
-impl NoritoDeserialize<'_> for GossipTransaction {}
 impl<'a> DeserializePayload<'a> for GossipTransaction {
     fn deserialize(archived: &'a ncore::Archived<Self>) -> Self {
         Self::try_deserialize(archived).expect("decode gossip transaction")
@@ -3561,6 +3561,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for GossipTransaction {
     }
 }
 /// Visibility plane for transaction gossip frames.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::GossipPlane")]
 #[derive(Decode, Encode, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GossipPlane {
     /// Public lanes/dataspaces; broadcast is permitted.
@@ -3643,6 +3645,8 @@ fn gossip_routes_payload_len(len: usize) -> Option<usize> {
     ncore::seq_len_prefix_len(len).checked_add(elems)
 }
 /// Lane/dataspace tags carried alongside gossiped transactions for visibility gating.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::gossiper::GossipRoute")]
 #[derive(Debug, Clone, Copy, Decode, Encode)]
 pub struct GossipRoute {
     /// Lane assigned to the transaction at the sender.

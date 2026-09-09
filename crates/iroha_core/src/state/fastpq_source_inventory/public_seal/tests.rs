@@ -320,6 +320,11 @@ fn streaming_writer_errors_never_return_a_partial_digest() {
 }
 
 /// A serializer-owned allocation charge tests the adapter's inherited-budget error path.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::state::fastpq_source_inventory::public_seal::tests::BudgetedField",
+    frame = "u8"
+)]
 struct BudgetedField;
 
 impl norito::SerializePayload for BudgetedField {
@@ -327,12 +332,6 @@ impl norito::SerializePayload for BudgetedField {
         norito::core::reserve_decode_allocation(1)?;
         writer.write_all(&[42])?;
         Ok(())
-    }
-}
-
-impl NoritoSerialize for BudgetedField {
-    fn schema_hash() -> [u8; 16] {
-        <u8 as NoritoSerialize>::schema_hash()
     }
 }
 

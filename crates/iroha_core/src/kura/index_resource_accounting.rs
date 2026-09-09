@@ -1,32 +1,11 @@
 // Included at Kura module scope. Index observations do not grant storage authority.
 use resource_inventory::{Family as ResourceFamily, Usage as ResourceUsage};
 
-const INDEX_RESOURCE_FAMILIES: [ResourceFamily; 13] = [
-    ResourceFamily::CanonicalIndex,
-    ResourceFamily::CanonicalHashes,
-    ResourceFamily::PipelineIndex,
-    ResourceFamily::OwnershipIndex,
-    ResourceFamily::CertifiedIndex,
-    ResourceFamily::ExecutionInputIndex,
-    ResourceFamily::ExecutionPreflightIndex,
-    ResourceFamily::ApplicationReceiptIndex,
-    ResourceFamily::MergeBundleIndex,
-    ResourceFamily::CanonicalReplicaIndex,
-    ResourceFamily::MergeCarrierRecord,
-    ResourceFamily::NativeLatestRecord,
-    ResourceFamily::QueryMarkerRecords,
-];
 const INDEX_RESOURCE_MAX_PATHS: usize = 48;
 // Startup/retirement walks share the existing retained-tree traversal ceiling.
 const INDEX_RESOURCE_MAX_TREE_ENTRIES: usize = 4_000_000;
 const INDEX_RESOURCE_MAX_DEPTH: usize = 128;
 type IndexResourceCounts = [ResourceUsage; resource_inventory::FAMILY_COUNT];
-
-fn index_resource_mask() -> u32 {
-    INDEX_RESOURCE_FAMILIES
-        .iter()
-        .fold(0, |mask, family| mask | family.mask())
-}
 
 #[derive(Clone, Copy)]
 enum IndexResourceFormat {
@@ -233,6 +212,7 @@ fn index_resource_file_usage_with_admission_hooks(
     })
 }
 
+#[cfg(test)]
 fn index_resource_paths_usage(
     paths: &[PathBuf],
 ) -> std::result::Result<IndexResourceCounts, resource_inventory::Unavailable> {
@@ -254,7 +234,8 @@ fn index_resource_paths_usage(
     Ok(result)
 }
 
-/// Bounded initialization/retirement inventory, never called by the scrape path.
+/// Independent bounded inventory used by index-file regression tests.
+#[cfg(test)]
 fn index_resource_tree_usage(
     root: &Path,
 ) -> std::result::Result<IndexResourceCounts, resource_inventory::Unavailable> {

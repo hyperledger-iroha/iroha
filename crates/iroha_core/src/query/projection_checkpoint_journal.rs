@@ -76,6 +76,10 @@ pub enum QueryProjectionCheckpointJournalError {
         reason: String,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::projection_checkpoint_journal::PersistedQueryProjectionCheckpoint"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct PersistedQueryProjectionCheckpoint {
     version: u32,

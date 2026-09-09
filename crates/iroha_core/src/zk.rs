@@ -116,6 +116,8 @@ const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_CIRCUIT_FAMILY_BYTES: usize =
     iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES;
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_NESTING_DEPTH: usize = 16;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::Halo2IpaProvingKeyArchive")]
 #[cfg(feature = "zk-halo2-ipa")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct Halo2IpaProvingKeyArchive {

@@ -106,6 +106,8 @@ impl QueuePlanJournalLivePosition {
     }
 }
 /// One exact removal carried by an atomic queue-plan journal batch tombstone.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalRemovalV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanJournalRemovalV1 {
@@ -208,6 +210,8 @@ impl QueuePlanJournalLimits {
     }
 }
 /// Pending transaction routing-plan journal record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanJournalRecordV1 {
     /// Record format version.
@@ -273,6 +277,8 @@ impl QueuePlanJournalRecordV1 {
     }
 }
 /// One append-only queue plan journal operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalFrameV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 enum QueuePlanJournalFrameV1 {
     /// Typed file-format marker atomically installed before any ownership operation.

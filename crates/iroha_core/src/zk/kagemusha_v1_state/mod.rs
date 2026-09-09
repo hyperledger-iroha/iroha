@@ -477,6 +477,8 @@ impl KagemushaStateProofReleaseV1 {
 }
 
 /// Stable identity of one hardware lane and asset on one network.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaLaneIdV1")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub struct KagemushaLaneIdV1 {
     /// Exact typed network identity used by the public wire statement.
@@ -514,6 +516,8 @@ impl KagemushaLaneIdV1 {
 }
 
 /// One attested hardware-key/counter epoch for a stable device lane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::HardwareEpochV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct HardwareEpochV1 {
     /// Monotonically increasing epoch generation.
@@ -532,6 +536,8 @@ impl HardwareEpochV1 {
 }
 
 /// Exact device key and governed hardware policy bound to one private state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::DevicePolicyBindingV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub struct DevicePolicyBindingV1 {
     /// Domain-separated reference to the currently authorized hardware key.
@@ -550,6 +556,8 @@ impl DevicePolicyBindingV1 {
 }
 
 /// Globally unique identity of one inbound mint or peer credit.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::CreditIdV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub struct CreditIdV1(
     /// Raw domain-separated credit identity digest.
@@ -569,6 +577,8 @@ impl CreditIdV1 {
 /// Construction of this record does not itself grant monetary authority. Bootstrap and every
 /// successor transition must prove the same values against an authenticated release and a
 /// qualified hardware credential.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaStateContextV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStateContextV1 {
     /// Exact protocol version.
@@ -606,6 +616,8 @@ impl KagemushaStateContextV1 {
 }
 
 /// Private aggregate balance state for one device lane and asset.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStateV1 {
     /// State-machine version.
@@ -799,6 +811,8 @@ impl KagemushaStateV1 {
 }
 
 /// Closed set of aggregate balance transitions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaTransitionKindV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum KagemushaTransitionKindV1 {
     /// Fold a finalized on-chain mint credit into the aggregate.
@@ -814,6 +828,8 @@ pub enum KagemushaTransitionKindV1 {
 }
 
 /// Public recursive-proof statement derived by Core for one transition.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::TransitionProofStatementV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct TransitionProofStatementV1 {
     /// State-machine version.
@@ -898,6 +914,8 @@ impl TransitionProofStatementV1 {
 }
 
 /// Exact statement that a hardware GuardBundle must authorize.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::HardwareTransitionStatementV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct HardwareTransitionStatementV1 {
     /// State-machine version.
@@ -1003,6 +1021,8 @@ impl HardwareTransitionStatementV1 {
 }
 
 /// Hardware transition statement plus its opaque platform GuardBundle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::HardwareTransitionCertificateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct HardwareTransitionCertificateV1 {
     /// Exact statement signed or attested by the device hardware.
@@ -1179,6 +1199,8 @@ impl CreditFoldPreviewV1 {
 }
 
 /// Exact statement authorizing durable receipt of one peer credit.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::CreditStageStatementV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct CreditStageStatementV1 {
     /// State-machine version.
@@ -1206,6 +1228,8 @@ pub struct CreditStageStatementV1 {
 }
 
 /// Hardware authorization for durable, replay-safe credit staging.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::CreditStageCertificateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct CreditStageCertificateV1 {
     /// Exact stage statement.
@@ -1215,6 +1239,8 @@ pub struct CreditStageCertificateV1 {
 }
 
 /// One peer credit retained in the authenticated pending inbox.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::StagedCreditV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct StagedCreditV1 {
     /// Exact signed recipient request which authorized the payment.
@@ -1230,6 +1256,8 @@ pub struct StagedCreditV1 {
 }
 
 /// Exact signed acknowledgement retained for byte-identical duplicate delivery.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::DurableAcknowledgementV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct DurableAcknowledgementV1 {
     /// Validated public acknowledgement.
@@ -1274,6 +1302,8 @@ impl DurableAcknowledgementV1 {
 }
 
 /// Complete durable replay record needed to reproduce one receiver acknowledgement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::AcceptedPaymentReceiptV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct AcceptedPaymentReceiptV1 {
     /// Unique receiver-bound credit identity.
@@ -1293,6 +1323,8 @@ pub struct AcceptedPaymentReceiptV1 {
 }
 
 /// Hardware result supplied only when staging a previously unseen payment.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::PaymentStageAuthorizationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct PaymentStageAuthorizationV1 {
     /// Atomic rollback-resistant inbox transition certificate.
@@ -1326,6 +1358,8 @@ pub enum StagePaymentOutcomeV1 {
 }
 
 /// Exact local replay record committed into the sparse-Merkle tree.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::ConsumedCreditRecordV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct ConsumedCreditRecordV1 {
     /// Unique mint or peer credit identity.
@@ -1458,6 +1492,8 @@ impl KagemushaGuardBundleVerifierV1 for RejectAllKagemushaGuardBundleVerifierV1 
 }
 
 /// Exact device bootstrap statement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapStatementV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct BootstrapStatementV1 {
     /// State-machine version.
@@ -1511,6 +1547,8 @@ pub struct BootstrapPreviewV1 {
 }
 
 /// Proof and hardware authorization for a new zero-balance lane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapAuthorizationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct BootstrapAuthorizationV1 {
     /// Complete fixed-profile paired-Pasta bootstrap proof.
@@ -1520,6 +1558,8 @@ pub struct BootstrapAuthorizationV1 {
 }
 
 /// One hardware-sealed recovery statement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::DurabilityAnchorStatementV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct DurabilityAnchorStatementV1 {
     /// Stable-wallet metadata revision; never resets on hardware epoch rotation.
@@ -1547,6 +1587,8 @@ pub struct DurabilityAnchorStatementV1 {
 }
 
 /// Hardware-sealed recovery anchor that detects an older snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::DurabilityAnchorV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct DurabilityAnchorV1 {
     /// Exact anchor statement.
@@ -1556,6 +1598,8 @@ pub struct DurabilityAnchorV1 {
 }
 
 /// Canonical crash-recovery projection for one aggregate lane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaStateSnapshotV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStateSnapshotV1 {
     /// Required credential floor and complete recovery-journal checkpoint metadata.
@@ -1595,6 +1639,8 @@ pub struct KagemushaStateSnapshotV1 {
     pub snapshot_commitment: DigestV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::SnapshotCommitmentPreimageV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct SnapshotCommitmentPreimageV1 {
     recovery_metadata: KagemushaRecoveryMetadataV1,
@@ -1903,6 +1949,10 @@ pub(crate) fn disk_history_lane_binding(
     context: KagemushaStateContextV1,
     lane: &KagemushaLaneIdV1,
 ) -> Result<DigestV1, KagemushaStateErrorV1> {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::zk::kagemusha_v1_state::disk_history_lane_binding::LaneBinding"
+    )]
     #[derive(Encode)]
     struct LaneBinding {
         version: u16,
@@ -4614,6 +4664,8 @@ fn required_pending_credit_prefix(
     Err(KagemushaStateErrorV1::InsufficientBalance)
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::MintFoldEffectV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct MintFoldEffectV1 {
     credit_id: CreditIdV1,
@@ -4624,6 +4676,8 @@ struct MintFoldEffectV1 {
     mint_finality_proof_binding_digest: DigestV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::RotateEffectV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct RotateEffectV1 {
     predecessor_epoch: HardwareEpochV1,
@@ -4636,6 +4690,8 @@ struct RotateEffectV1 {
     carried_consumed_credit_root: KagemushaPastaStateCommitmentV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::TransitionIntentPreimageV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct TransitionIntentPreimageV1 {
     release_id: DigestV1,
@@ -4644,6 +4700,8 @@ struct TransitionIntentPreimageV1 {
     statement: TransitionProofStatementV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::RecoveryRecordPreimageV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct RecoveryRecordPreimageV1 {
     transition_intent_digest: DigestV1,
@@ -4652,6 +4710,8 @@ struct RecoveryRecordPreimageV1 {
     journal_revision_after: u128,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::DurableEffectPreimageV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct DurableEffectPreimageV1 {
     kind: KagemushaTransitionKindV1,
@@ -4661,6 +4721,8 @@ struct DurableEffectPreimageV1 {
     journal_revision_after: u128,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::LocalTransitionTransportStatementV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct LocalTransitionTransportStatementV1 {
     version: u16,
@@ -4673,12 +4735,16 @@ struct LocalTransitionTransportStatementV1 {
     normalized_guard_statement_digest: DigestV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapIntentPreimageV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct BootstrapIntentPreimageV1 {
     trusted_commit_time_ms: u64,
     statement: BootstrapStatementV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapRecoveryPreimageV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct BootstrapRecoveryPreimageV1 {
     transition_intent_digest: DigestV1,

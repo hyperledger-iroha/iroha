@@ -942,6 +942,8 @@ pub struct SorafsPotrProofOutcomeSubmissionV1 {
     pub admission_envelope_digest: [u8; 32],
 }
 /// Existing canonical proof material accepted by the chain-authoritative outcome journal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::sorafs::SorafsProofOutcomeSubmissionV1")]
 #[derive(
     Debug,
     Clone,

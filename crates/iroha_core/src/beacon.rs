@@ -144,6 +144,8 @@ pub struct GlobalThresholdBeaconSessionBindingV1 {
 /// The cursor is not part of any later pulse's signed message or seed. It only
 /// records the latest admitted slot so persistence can reject late insertion
 /// while permitting intentionally skipped optional heights.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::beacon::GlobalThresholdBeaconPulseLinkV1")]
 #[derive(
     Debug,
     Clone,
@@ -190,6 +192,8 @@ impl GlobalThresholdBeaconPulseLinkV1 {
 /// This is deliberately a projection of public broadcasts only. Private share
 /// deliveries and threshold-signature partials have no field in this type and
 /// therefore cannot enter authoritative World persistence.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::beacon::GlobalThresholdBeaconDkgSnapshotV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -318,6 +322,8 @@ impl GlobalThresholdBeaconDkgSnapshotV1 {
 }
 
 /// Finalized public beacon-key session with activation and retirement metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::beacon::FinalizedGlobalThresholdBeaconKeySessionRecordV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]

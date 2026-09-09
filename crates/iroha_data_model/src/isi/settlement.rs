@@ -23,6 +23,8 @@ const FX_CORRIDOR_ESCROW_ACCOUNT_DOMAIN_V1: &[u8] = b"iroha:fx-corridor:escrow-a
 mod model {
     use super::*;
     /// One-shot identifier consumed when a settlement commits successfully.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::isi::settlement::model::SettlementId")]
     #[derive(
         Debug,
         Display,

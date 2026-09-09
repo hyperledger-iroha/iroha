@@ -15,11 +15,8 @@ where
 {
     let frame = norito::encode_canonical(value).expect("encode canonical capture frame");
     let header = Header::read(frame.as_slice()).expect("read capture header");
-    let encode_hash = <T as NoritoSerialize>::schema_hash();
-    let decode_hash = <T as NoritoDeserialize<'_>>::schema_hash();
-    assert_eq!(norito::schema::identity::frame_hash::<T>(), encode_hash);
-    assert_eq!(header.schema, encode_hash, "{case}: encode frame identity");
-    assert_eq!(header.schema, decode_hash, "{case}: decode frame identity");
+    let identity_hash = norito::schema::identity::frame_hash::<T>();
+    assert_eq!(header.schema, identity_hash, "{case}: frame identity");
     assert_eq!(norito::canonical_frame_len(value).unwrap(), frame.len());
 
     let decoded: T = norito::decode_canonical(&frame).expect("decode canonical capture frame");
@@ -73,8 +70,8 @@ where
         // Compare the declared nominal identity with the compiler-observed capture.
         // Physical source relocation must not change this recorded wire contract.
         "actual_type_name": (T::nominal_name()),
-        "serialize_schema_hash_hex": (hex::encode(encode_hash)),
-        "deserialize_schema_hash_hex": (hex::encode(decode_hash)),
+        "serialize_schema_hash_hex": (hex::encode(identity_hash)),
+        "deserialize_schema_hash_hex": (hex::encode(identity_hash)),
         "header_schema_hash_hex": (hex::encode(header.schema)),
         "header_flags": (header.flags),
         "payload_length": (header.length),

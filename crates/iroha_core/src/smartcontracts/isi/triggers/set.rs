@@ -109,16 +109,18 @@ impl<'a, T> BorrowedEnumVariant<'a, T> {
         }
     }
 }
-impl<T: norito::core::NoritoSerialize> norito::core::NoritoSerialize
-    for BorrowedEnumVariant<'_, T>
-{
-    fn schema_hash() -> [u8; 16] {
-        T::schema_hash()
+impl<T: norito::NoritoSchema> norito::NoritoSchema for BorrowedEnumVariant<'_, T> {
+    fn nominal_name() -> String {
+        norito::schema::identity::generic_name(
+            "iroha_core::smartcontracts::isi::triggers::set::BorrowedEnumVariant",
+            &["'_".to_owned(), T::nominal_name()],
+        )
+    }
+    fn frame_name() -> String {
+        T::frame_name()
     }
 }
-impl<T: norito::core::NoritoSerialize> norito::core::SerializePayload
-    for BorrowedEnumVariant<'_, T>
-{
+impl<T> norito::core::SerializePayload for BorrowedEnumVariant<'_, T> {
     fn serialize(
         &self,
         writer: &mut norito::core::Encoder<'_>,
@@ -1159,6 +1161,8 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
     }
 }
 // Norito DTOs for Set serialization
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::ExecutableRefDto")]
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum ExecutableRefDto {
     Ivm(HashOf<IvmBytecode>),
@@ -1189,6 +1193,8 @@ impl TryFrom<ExecutableRefDto> for ExecutableRef {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::IvmBytecodeEntryDto")]
 #[derive(Encode, Decode)]
 struct IvmBytecodeEntryDto {
     original_contract: IvmBytecode,
@@ -1220,6 +1226,8 @@ impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::LoadedActionDto")]
 #[derive(Encode, Decode, Clone)]
 struct LoadedActionDto<F> {
     executable: ExecutableRefDto,
@@ -2704,6 +2712,24 @@ mod tests {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
     #[test]
+    fn borrowed_enum_variants_preserve_the_owned_frame_identity() {
+        #[derive(norito::Encode, norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_core::triggers::tests::BorrowedVariantProjection")]
+        enum Projection {
+            Value(u64),
+        }
+        let value = 31_u64;
+        let borrowed = BorrowedEnumVariant::<Projection>::new(0, &value);
+        assert_eq!(
+            norito::encode_canonical(&borrowed).unwrap(),
+            norito::encode_canonical(&Projection::Value(value)).unwrap(),
+        );
+        assert_ne!(
+            <BorrowedEnumVariant<'_, Projection> as norito::NoritoSchema>::nominal_name(),
+            <Projection as norito::NoritoSchema>::nominal_name(),
+        );
+    }
+    #[test]
     fn inspect_by_id_skips_missing_entry() {
         let mut set = Set::default();
         let trigger_id: TriggerId = "missing_trigger".parse().expect("valid trigger id");
@@ -3431,6 +3457,8 @@ impl From<ModRepeatsError> for InstructionExecutionError {
 // --- Norito DTO for Set (Phase 1 scaffolding) ---
 /// Norito-encoded Data Transfer Object for serializing/deserializing the `Set` of triggers and
 /// associated entries. Used in scaffolding paths where a compact binary representation is required.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::SetDto")]
 #[derive(Encode, Decode)]
 pub struct SetDto {
     data: Vec<(TriggerId, LoadedActionDto<DataEventFilter>)>,

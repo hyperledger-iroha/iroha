@@ -3692,6 +3692,8 @@ impl Default for GovernanceOutboxRuntime {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::GcStorageIdentityV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct GcStorageIdentityV1 {
     total_bytes: u64,
@@ -4736,6 +4738,8 @@ struct AdmittedReputationSnapshotV1 {
     encoded_len: u64,
     envelope: SignedReputationSnapshotV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::AuxiliaryRuntimeCheckpointV5")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct AuxiliaryRuntimeCheckpointV5 {
     version: u8,

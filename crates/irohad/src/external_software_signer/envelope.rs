@@ -16,6 +16,10 @@ const KEY_ENVELOPE_AAD_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.a
 const KEY_ENVELOPE_KEK_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.kek.v1";
 const KEY_ENVELOPE_MAX_CIPHERTEXT_BYTES_V1: usize = SIGNER_MAX_PRIVATE_KEY_BYTES_V1 + 1024;
 /// Public, authenticated metadata for one encrypted signer key generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeAadV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SoftwareSignerKeyEnvelopeAadV1 {
     pub backend: super::protocol::ExternalSignerBackendV1,
@@ -71,6 +75,8 @@ impl SoftwareSignerKeyEnvelopeAadV1 {
     }
 }
 /// Versioned ChaCha20-Poly1305 envelope for one software signing key.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerKeyEnvelopeV1 {
     /// Exact key-envelope marker.
@@ -225,6 +231,10 @@ impl SoftwareSignerKeyEnvelopeV1 {
         &self.aad
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::envelope::SoftwareSignerPrivateKeyPlaintextV1"
+)]
 #[derive(Decode, Encode)]
 struct SoftwareSignerPrivateKeyPlaintextV1 {
     magic: [u8; 8],

@@ -1,3 +1,5 @@
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::DummySidecar")]
 #[derive(Debug, Encode, Decode, PartialEq, Eq)]
 struct DummySidecar {
     height: u64,
@@ -1405,6 +1407,8 @@ fn bound_progress_recovery_handles_crash_phases_without_path_escape() {
     // not first-release authority: rejection precedes both rollback and
     // roll-forward mutation and retains the marker for diagnosis.
     {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_core::kura::tests::bound_progress_recovery_handles_crash_phases_without_path_escape::PreNamespaceBoundProgressAppendIntentV1")]
         #[derive(Encode)]
         struct PreNamespaceBoundProgressAppendIntentV1 {
             version: u16,

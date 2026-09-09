@@ -72,7 +72,8 @@ impl<K: Ord, V: AssociationValue> NestedMap<K, V> {
         self.count = candidate;
         old
     }
-    /// Clear the map while retaining any earlier arithmetic failure.
+    /// Clear a fixture map while retaining any earlier arithmetic failure.
+    #[cfg(test)]
     pub(super) fn clear(&mut self) {
         let mut candidate = self.count;
         let before = candidate.get().ok();

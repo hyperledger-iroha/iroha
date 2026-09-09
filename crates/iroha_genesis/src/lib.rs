@@ -529,6 +529,8 @@ pub struct GenesisBlock(pub SignedBlock);
 /// It should be signed, converted to a [`GenesisBlock`], and serialized in Norito format before
 /// supplying to an Iroha peer. See `kagami genesis sign`. Only the canonical Norito form is
 /// supported. The structure mirrors the user-facing manifest consumed by `kagami genesis`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_genesis::RawGenesisTransaction")]
 #[derive(Debug, Clone, JsonSerialize, IntoSchema, Encode, Decode)]
 pub struct RawGenesisTransaction {
     /// Unique chain identifier of the blockchain instance.

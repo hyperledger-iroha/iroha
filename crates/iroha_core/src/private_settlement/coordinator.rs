@@ -23,6 +23,10 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 /// Bundle-level private-settlement lifecycle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::coordinator::PrivateSettlementBundleLifecycleV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub(crate) enum PrivateSettlementBundleLifecycleV1 {
     /// Per-leg auditor evidence is still being collected.

@@ -352,6 +352,8 @@ pub const PRIVACY_RELEASE_MAX_TOTAL_PROOF_ARTIFACT_BYTES_V1: u64 =
         None => panic!("privacy release aggregate proof-byte ceiling overflow"),
     };
 /// Mandatory evidence cases, in canonical per-protocol order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseCaseKindV1")]
 #[derive(
     Clone,
     Copy,
@@ -711,6 +713,8 @@ pub fn validate_privacy_release_stage_coordinates_v1(
     index == coordinates.len()
 }
 /// Stable classification of the expected verifier failure exercised by a successful evidence stage.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseFailureClassV1")]
 #[derive(
     Clone,
     Copy,
@@ -740,6 +744,8 @@ pub enum PrivacyReleaseFailureClassV1 {
 }
 /// Closed numeric resource facts. Unit semantics are frozen in the protocol
 /// descriptor; unbounded caller-selected labels are intentionally absent.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseResourceFactsV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct PrivacyReleaseResourceFactsV1 {
     /// Primary relation dimension actually exercised.
@@ -943,6 +949,10 @@ pub fn privacy_release_resource_facts_v1(
 ///
 /// Artifact semantics and order are frozen by the typed protocol/case pair and
 /// its protocol descriptor. No caller-selected label can alter that meaning.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_release_evidence::PrivacyReleaseProofArtifactEvidenceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyReleaseProofArtifactEvidenceV1 {
@@ -999,6 +1009,8 @@ mod privacy_release_base64_bytes_v1 {
 }
 /// One complete native stage result. It contains exact canonical proofs, their hashes, and public
 /// resource facts; witness material never crosses this API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseStageEvidenceV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct PrivacyReleaseStageEvidenceV1 {
     /// Evidence schema version.
@@ -1021,6 +1033,8 @@ pub struct PrivacyReleaseStageEvidenceV1 {
     pub resources: PrivacyReleaseResourceFactsV1,
 }
 /// Stable fail-closed error category returned by the native evidence API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseEvidenceErrorClassV1")]
 #[derive(
     Clone,
     Copy,
@@ -1068,6 +1082,8 @@ pub enum PrivacyReleaseEvidenceErrorClassV1 {
     ProductionEnvelopeRejected,
 }
 /// Fail-closed native stage error without secret-bearing engine diagnostics.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_release_evidence::PrivacyReleaseEvidenceErrorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct PrivacyReleaseEvidenceErrorV1 {
     /// Protocol whose evidence failed.

@@ -428,6 +428,8 @@ fn stored_challenge_status(record: &StoredChallengeV1) -> PdpChallengeStatusV1 {
         },
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::pdp_provider::PdpProviderCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PdpProviderCheckpointV1 {
     version: u8,

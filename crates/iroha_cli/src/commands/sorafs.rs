@@ -6907,7 +6907,7 @@ fn read_ledger_export(path: &Path) -> Result<LedgerExportFile> {
             if matches!(err, norito::Error::SchemaMismatch) {
                 const SCHEMA_OFFSET: usize = 4 + 1 + 1;
                 const SCHEMA_LEN: usize = 16;
-                let expected = LedgerExportFile::schema_hash();
+                let expected = norito::schema::identity::frame_hash::<LedgerExportFile>();
                 let actual = bytes
                     .get(SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN)
                     .map(|slice| {
@@ -7585,6 +7585,8 @@ fn require_budget_approval_id(budget_hex: Option<&String>) -> Result<[u8; 32]> {
     norito::json::JsonDeserialize,
 )]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::commands::sorafs::IncentivesState")]
 struct IncentivesState {
     version: u16,
     reward_config: RewardConfigState,
@@ -7601,6 +7603,8 @@ struct IncentivesState {
     norito::json::JsonDeserialize,
 )]
 #[norito(decode_from_slice)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha::commands::sorafs::LedgerExportFile")]
 struct LedgerExportFile {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,

@@ -235,6 +235,10 @@ impl VerifiedModerationChallengeBondMovement {
         )
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::AppealDepositBindingStateV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealDepositBindingStateV1 {
     deposit_lock_digest: [u8; 32],
@@ -242,6 +246,10 @@ struct AppealDepositBindingStateV1 {
     round_id: String,
     intake_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::AppealProofTokenBindingStateV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct AppealProofTokenBindingStateV1 {
     proof_token_digest: [u8; 32],
@@ -249,6 +257,10 @@ struct AppealProofTokenBindingStateV1 {
     round_id: String,
     intake_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationSortitionAnchorScheduleEntryV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationSortitionAnchorScheduleEntryV1 {
     registration_deadline_unix_ms: u64,
@@ -256,11 +268,19 @@ struct ModerationSortitionAnchorScheduleEntryV1 {
     round_id: String,
     intake_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationSortitionAnchorScheduleV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationSortitionAnchorScheduleV1 {
     version: u16,
     entries: Vec<ModerationSortitionAnchorScheduleEntryV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationPersistedEventV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationPersistedEventV1 {
     sequence: u64,
@@ -268,6 +288,10 @@ struct ModerationPersistedEventV1 {
     event_index: u32,
     event: SorafsModerationLedgerEvent,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_moderation::ModerationEventJournalHeadV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationEventJournalHeadV1 {
     last_sequence: u64,
@@ -6450,6 +6474,10 @@ mod tests {
     const REVEAL_DEADLINE: u64 = CHALLENGE_RESOLUTION_DEADLINE + 1_000;
     const REVEAL_AT: u64 = CHALLENGE_RESOLUTION_DEADLINE + 500;
     const FINALIZE_AT: u64 = REVEAL_DEADLINE + 1;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::smartcontracts::isi::sorafs_moderation::tests::PreCutModerationLedgerPolicyV1"
+    )]
     #[derive(norito::codec::Encode)]
     struct PreCutModerationLedgerPolicyV1 {
         version: u16,
@@ -6464,6 +6492,10 @@ mod tests {
         missing_commit_penalty_points: u32,
         unrevealed_commit_penalty_points: u32,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::smartcontracts::isi::sorafs_moderation::tests::PreCutModerationLedgerPolicyRecord"
+    )]
     #[derive(norito::codec::Encode)]
     struct PreCutModerationLedgerPolicyRecord {
         policy: PreCutModerationLedgerPolicyV1,
@@ -6471,6 +6503,10 @@ mod tests {
         activated_at_unix_ms: u64,
         activated_by: AccountId,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::smartcontracts::isi::sorafs_moderation::tests::PreCutModerationCaseSpecV1"
+    )]
     #[derive(norito::codec::Encode)]
     struct PreCutModerationCaseSpecV1 {
         version: u16,
@@ -6483,6 +6519,10 @@ mod tests {
         reveal_deadline_unix_ms: u64,
         policy_digest: [u8; 32],
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::smartcontracts::isi::sorafs_moderation::tests::PreCutModerationCaseRecordV1"
+    )]
     #[derive(norito::codec::Encode)]
     struct PreCutModerationCaseRecordV1 {
         spec: PreCutModerationCaseSpecV1,
@@ -6498,6 +6538,10 @@ mod tests {
         accepted_challenge_count: u32,
         expired_challenge_count: u32,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::smartcontracts::isi::sorafs_moderation::tests::PreCutModerationAppealRecordV1"
+    )]
     #[derive(norito::codec::Encode)]
     struct PreCutModerationAppealRecordV1 {
         intake: ModerationAppealIntakeV1,

@@ -18,6 +18,8 @@ use std::{
 };
 use thiserror::Error;
 /// Snapshot of the latest durable query index state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::index_status::QueryIndexStatus")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Encode, Decode)]
 pub struct QueryIndexStatus {
     /// Latest block height covered by the query index.
@@ -27,6 +29,8 @@ pub struct QueryIndexStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub indexed_block_hash: Option<HashOf<BlockHeader>>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::index_status::PersistedQueryIndexStatus")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedQueryIndexStatus {
     version: u32,

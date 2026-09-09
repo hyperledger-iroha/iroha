@@ -90,6 +90,8 @@ pub enum P256EngineError {
     InvalidProofEncoding,
 }
 /// Canonical compressed SEC1 encoding of a non-identity P-256 point.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::p256::CompressedPointV1")]
 #[derive(
     Clone,
     Copy,
@@ -176,6 +178,8 @@ impl fmt::Debug for CompressedPointV1 {
     }
 }
 /// Canonical big-endian encoding of a P-256 scalar.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::p256::CanonicalScalarV1")]
 #[derive(
     Clone,
     Copy,

@@ -1632,7 +1632,6 @@ async fn connect_ws_rejects_query_token() {
         Err(err) => panic!("failed to bind test listener: {err}"),
     };
     let addr = listener.local_addr().unwrap();
-    let app2 = app.router();
     let server = spawn_test_server(listener, app);
     let sid = B64.encode([0x72u8; 32]);
     let url = format!("ws://{addr}/v1/connect/ws?sid={sid}&role=app&token=deadbeef");

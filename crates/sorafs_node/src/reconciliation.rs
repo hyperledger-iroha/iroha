@@ -6,12 +6,16 @@ use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::deal::XorQuantity;
 use sorafs_manifest::retention::RetentionSourceV1;
 pub(crate) const RECONCILIATION_SNAPSHOT_VERSION_V1: u8 = 1;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reconciliation::RepairReconciliationSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct RepairReconciliationSnapshot {
     pub(crate) version: u8,
     pub(crate) finalized_cursor: RepairFinalizedCursorV1,
     pub(crate) tasks: Vec<RepairLedgerTaskV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reconciliation::RetentionReconciliationSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct RetentionReconciliationSnapshot {
     pub(crate) version: u8,
@@ -25,6 +29,8 @@ pub(crate) struct RetentionReconciliationEntry {
     #[norito(default)]
     pub(crate) retention_source: Option<RetentionSourceV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reconciliation::GcReconciliationSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct GcReconciliationSnapshot {
     pub(crate) version: u8,
@@ -33,6 +39,8 @@ pub(crate) struct GcReconciliationSnapshot {
     #[norito(default)]
     pub(crate) chunk_refcounts: Vec<ChunkRefcountEntry>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reconciliation::AppealFinanceRollupReconciliationSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct AppealFinanceRollupReconciliationSnapshot {
     pub(crate) version: u8,

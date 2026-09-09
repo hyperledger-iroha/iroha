@@ -65,6 +65,10 @@ type ResponseKey = (u8, [u8; 32]);
 ///
 /// Native verification must resolve the original release and authenticate all these bindings.
 /// A newer credential or release cannot replace the context of an older response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::response_evidence_archive::KagemushaResponseEvidenceContextV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct KagemushaResponseEvidenceContextV1 {
     /// Complete original canonical credential, including its governance signature.
@@ -77,6 +81,8 @@ pub struct KagemushaResponseEvidenceContextV1 {
     pub qualification_report_digest: [u8; 32],
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::response_evidence_archive::Record")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 enum Record {
     Initialize {

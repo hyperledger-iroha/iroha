@@ -258,7 +258,9 @@ fn physical_initialization_checks_full_fastpq_policy_before_registering_any_fami
         max_artifacts: std::num::NonZeroUsize::new(1).unwrap(),
         max_total_bytes: std::num::NonZeroU64::new(8).unwrap(),
     };
-    kura.persist_fastpq_artifact(b"12345678").unwrap();
+    let receipt = kura.persist_fastpq_artifact(b"12345678").unwrap();
+    assert!(receipt.is_from(&kura));
+    assert_eq!(receipt.reference().byte_len(), 8);
     let pending = kura
         .store_root
         .join(fastpq_artifact_store::DIRECTORY)
@@ -276,6 +278,10 @@ fn physical_initialization_checks_full_fastpq_policy_before_registering_any_fami
     std::fs::write(&pending, []).unwrap();
     kura.reconcile_physical_resource_inventory().unwrap();
     assert!(physical_component(&kura, ResourceFamily::EvidenceKeyRecords).persisted_entries >= 2);
+    assert_eq!(
+        kura.read_fastpq_artifact(receipt.reference()).unwrap(),
+        b"12345678"
+    );
 }
 
 #[test]

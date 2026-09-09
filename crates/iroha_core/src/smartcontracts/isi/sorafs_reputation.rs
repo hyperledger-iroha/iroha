@@ -70,6 +70,10 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     STATE_MAX_BYTES * 2,
     64,
 );
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_reputation::ReputationJournalHeadStateV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ReputationJournalHeadStateV1 {
     last_sequence: u64,

@@ -620,6 +620,8 @@ struct ActiveCapacityCheckpointV1 {
     declaration_window: DeclarationWindow,
 }
 /// Canonical restart snapshot for capacity declarations and outstanding reservations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::capacity::CapacityRuntimeCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct CapacityRuntimeCheckpointV1 {
     finalized_cursor: Option<CapacityFinalizedCursorV1>,

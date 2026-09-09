@@ -1,4 +1,8 @@
 // Moderation source-attestation request validation regressions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::RetiredModerationArchiveQualifyRequestWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct RetiredModerationArchiveQualifyRequestWireV1 {
     version: u16,

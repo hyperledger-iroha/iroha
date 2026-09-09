@@ -736,18 +736,18 @@ mod tests {
             norito::core::to_bytes(&shared).unwrap()
         };
         let raw_verifying_started = std::time::Instant::now();
-        let raw_work = super::super::compact_protocol::shared_openings::codec::decode_and_verify(
-            &verifier, &encoded, limits,
-        )
+        let raw_work = super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
+            &verifier, &encoded, limits, 64 * 1024 * 1024)
         .unwrap();
         let raw_verifying = raw_verifying_started.elapsed();
         assert_eq!(raw_work, shared_work);
         let facade_started = std::time::Instant::now();
-        let verified = super::super::compact_public_api::verify_transfer(
+        let verified = super::super::compact_public_api::verify_transfer_with_allocation(
             &prepared,
             &expected(&prepared),
             &encoded,
             limits,
+            64 * 1024 * 1024,
         )
         .unwrap();
         let facade_verifying = facade_started.elapsed();
@@ -800,19 +800,19 @@ mod tests {
             .is_err()
         );
         assert!(
-            super::super::compact_protocol::shared_openings::codec::decode_and_verify(
+            super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
                 &changed_air,
                 &encoded,
-                limits,
-            )
+                limits, 64 * 1024 * 1024)
             .is_err()
         );
         assert!(
-            super::super::compact_public_api::verify_transfer(
+            super::super::compact_public_api::verify_transfer_with_allocation(
                 &changed,
                 &expected(&changed),
                 &encoded,
                 limits,
+                64 * 1024 * 1024,
             )
             .is_err()
         );

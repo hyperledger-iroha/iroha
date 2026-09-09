@@ -102,6 +102,10 @@ impl KagemushaHistoryDeviceCredentialsV1 {
 
 // Norito's canonical header declares the layout. The frame magic fixes this journal at V1;
 // callers cannot select another schema/codec or decode a verified capability from disk.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::disk_history_store::JournalRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 enum JournalRecordV1 {
     Initialize {

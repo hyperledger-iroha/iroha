@@ -2,7 +2,6 @@
 // deterministic software key only as a protocol fixture; this is not hardware qualification.
 mod stream_token_mutation_tests {
     use super::*;
-    use iroha_torii::sorafs::StreamTokenHardwareClientV1 as _;
     use std::io::{Read as _, Write as _};
 
     struct Fixture {

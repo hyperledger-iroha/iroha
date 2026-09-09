@@ -341,6 +341,10 @@ impl<F> LoadedAction<F> {
     }
 }
 /// Internal retry runtime state for scheduled time triggers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::triggers::specialized::TimeTriggerRetryState"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct TimeTriggerRetryState {
     /// Number of automatic retries already consumed.

@@ -220,6 +220,8 @@ mod model {
     #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractAddress")]
     pub struct ContractAddress(pub(super) ConstString);
     /// Active smart-contract instance binding.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::smart_contract::model::ContractInstance")]
     #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct ContractInstance {

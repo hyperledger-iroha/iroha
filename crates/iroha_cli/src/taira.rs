@@ -854,17 +854,6 @@ impl InrouProbeScope {
         }
     }
 
-    pub(super) fn check_names(self) -> &'static [&'static str] {
-        match self {
-            Self::Candidate => &["inrou_authoritative_status", "inrou_public_routes"],
-            Self::Public => &[
-                "inrou_authoritative_status",
-                "inrou_public_routes",
-                "inrou_public_discovery",
-            ],
-        }
-    }
-
     fn validate_root(self, root: &str) -> Result<()> {
         if self == Self::Candidate {
             let root = Url::parse(&normalize_root_url(root)?)?;
@@ -5132,7 +5121,8 @@ fn submit_server_prepared_operation(
         .checked_add(Duration::from_secs(args.timeout_secs))
         .ok_or_else(|| eyre!("prepared server submission deadline overflow"))?;
     let signer = resolve_canary_signer(config)?;
-    let mut client_builder = IrohaClient::builder(write_canary_config(config, public_root, &signer)?);
+    let mut client_builder =
+        IrohaClient::builder(write_canary_config(config, public_root, &signer)?);
     let request_budget = Duration::from_secs(args.timeout_secs);
     client_builder.torii_request_timeout = if client_builder.torii_request_timeout.is_zero() {
         request_budget
@@ -7906,7 +7896,9 @@ mod tests {
         let mut config = crate::fallback_config();
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
         let outcome = await_exact_prepared_operation(
-            &IrohaClient::builder(config).build().expect("valid Taira fixture context"),
+            &IrohaClient::builder(config)
+                .build()
+                .expect("valid Taira fixture context"),
             &validated,
             PreparedRecoveryClassification::Absent,
             Instant::now() + Duration::from_secs(5),
@@ -7946,7 +7938,9 @@ mod tests {
             });
             let mut config = crate::fallback_config();
             config.torii_api_url = Url::parse(&server.base_url).unwrap();
-            let client = IrohaClient::builder(config).build().expect("valid Taira fixture context");
+            let client = IrohaClient::builder(config)
+                .build()
+                .expect("valid Taira fixture context");
             let outcome = await_exact_prepared_operation(
                 &client,
                 &validated,
@@ -7987,7 +7981,9 @@ mod tests {
         });
         let mut config = crate::fallback_config();
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
-        let client = IrohaClient::builder(config).build().expect("valid Taira fixture context");
+        let client = IrohaClient::builder(config)
+            .build()
+            .expect("valid Taira fixture context");
         let first = classify_exact_prepared_operation(&client, &validated).unwrap();
         let started = Instant::now();
         let outcome = await_exact_prepared_operation(
@@ -8025,7 +8021,9 @@ mod tests {
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
         assert!(
             await_exact_prepared_operation(
-                &IrohaClient::builder(config).build().expect("valid Taira fixture context"),
+                &IrohaClient::builder(config)
+                    .build()
+                    .expect("valid Taira fixture context"),
                 &validated,
                 PreparedRecoveryClassification::Absent,
                 Instant::now() + Duration::from_secs(5),
@@ -8039,7 +8037,9 @@ mod tests {
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
         assert!(
             await_exact_prepared_operation(
-                &IrohaClient::builder(config).build().expect("valid Taira fixture context"),
+                &IrohaClient::builder(config)
+                    .build()
+                    .expect("valid Taira fixture context"),
                 &validated,
                 PreparedRecoveryClassification::Pending {
                     terminal_kind: "Queued".to_owned()
@@ -11000,6 +11000,16 @@ mod tests {
                 .get("checks")
                 .and_then(Value::as_array)
                 .expect("probe checks");
+            let expected_checks: &[&str] = match scope {
+                InrouProbeScope::Candidate => {
+                    &["inrou_authoritative_status", "inrou_public_routes"]
+                }
+                InrouProbeScope::Public => &[
+                    "inrou_authoritative_status",
+                    "inrou_public_routes",
+                    "inrou_public_discovery",
+                ],
+            };
             assert_eq!(
                 checks
                     .iter()
@@ -11008,7 +11018,7 @@ mod tests {
                         .and_then(Value::as_str)
                         .expect("check name"))
                     .collect::<Vec<_>>(),
-                scope.check_names()
+                expected_checks
             );
             let accepted =
                 crate::taira_public_reset::validate_inrou_checks_for_test(&report, scope);

@@ -49,22 +49,6 @@ impl SequenceBudget {
     }
 }
 
-#[cfg(test)]
-fn decode_limits(
-    relation: &impl FixedAir,
-    geometry: &Geometry,
-    frame_bytes: usize,
-    limits: VerifyLimits,
-) -> Result<DecodeLimits> {
-    decode_limits_with_allocation(
-        relation,
-        geometry,
-        frame_bytes,
-        limits,
-        MAX_DECODE_ALLOCATION_CHARGES,
-    )
-}
-
 fn decode_limits_with_allocation(
     relation: &impl FixedAir,
     geometry: &Geometry,
@@ -143,11 +127,18 @@ fn decode_bounded(
     relation: &impl FixedAir,
     bytes: &[u8],
     limits: VerifyLimits,
+    allocation_charges: usize,
 ) -> Result<SharedProof> {
     // This must precede even Geometry::new and Norito header/CRC inspection.
     check_limit("max_proof_bytes", bytes.len(), limits.max_proof_bytes)?;
     let geometry = Geometry::new(relation)?;
-    let decode_limits = decode_limits(relation, &geometry, bytes.len(), limits)?;
+    let decode_limits = decode_limits_with_allocation(
+        relation,
+        &geometry,
+        bytes.len(),
+        limits,
+        allocation_charges,
+    )?;
     // This API scopes canonical flags, validates the complete frame and
     // compares canonical re-encoding without another frame-sized allocation.
     // Its payload-derived defaults and any outer budgets remain active too.
@@ -173,44 +164,15 @@ impl VerifiedSharedProof {
     }
 }
 
-/// Return the exact authenticated row root without decoding the frame again.
-#[cfg(test)]
-pub(in crate::backend) fn decode_and_verify_committed(
-    relation: &impl FixedAir,
-    bytes: &[u8],
-    limits: VerifyLimits,
-) -> Result<VerifiedSharedProof> {
-    let proof = decode_bounded(relation, bytes, limits)?;
-    let mut work = SharedVerificationWork::default();
-    verify_shared_recorded(relation, &proof, limits, &mut work)?;
-    Ok(VerifiedSharedProof {
-        work,
-        row_root: proof.row_root,
-    })
-}
-
-/// Decode one bounded canonical frame and verify its complete shared proof.
-///
-/// The trusted relation supplies schema geometry and authenticated public
-/// inputs. This entry point accepts no private witness or replay material and
-/// never derives admission limits from proof-supplied counts.
-#[cfg(test)]
-pub(in crate::backend) fn decode_and_verify(
-    relation: &impl FixedAir,
-    bytes: &[u8],
-    limits: VerifyLimits,
-) -> Result<SharedVerificationWork> {
-    Ok(decode_and_verify_committed(relation, bytes, limits)?.work())
-}
-
 #[cfg(test)]
 fn decode_and_verify_recorded(
     relation: &impl FixedAir,
     bytes: &[u8],
     limits: VerifyLimits,
     work: &mut SharedVerificationWork,
+    allocation_charges: usize,
 ) -> Result<()> {
-    let proof = decode_bounded(relation, bytes, limits)?;
+    let proof = decode_bounded(relation, bytes, limits, allocation_charges)?;
     // Keep the existing typed preflight, transcript, Merkle and FRI checks in
     // one implementation; no successful raw decode bypasses any of them.
     verify_shared_recorded(relation, &proof, limits, work)
@@ -264,6 +226,10 @@ mod tests {
     use super::super::tests::{air, fixture};
     use super::*;
 
+    // Full 375-query frames use the same explicit diagnostic policy as the
+    // complete-transfer tests. The 32 MiB baseline remains a rejection control.
+    const FIXTURE_ALLOCATION_CHARGES: usize = 64 * 1024 * 1024;
+
     fn diagnostic_limits() -> VerifyLimits {
         super::super::super::test_fixture::limits()
     }
@@ -274,8 +240,14 @@ mod tests {
 
     fn assert_before_transcript(bytes: &[u8], limits: VerifyLimits) -> Error {
         let mut work = SharedVerificationWork::default();
-        let error = decode_and_verify_recorded(&air(), bytes, limits, &mut work)
-            .expect_err("malformed raw proof must be rejected");
+        let error = decode_and_verify_recorded(
+            &air(),
+            bytes,
+            limits,
+            &mut work,
+            FIXTURE_ALLOCATION_CHARGES,
+        )
+        .expect_err("malformed raw proof must be rejected");
         assert_eq!(work, SharedVerificationWork::default());
         error
     }
@@ -330,27 +302,57 @@ mod tests {
         let bytes = encode(proof);
         let limits = diagnostic_limits();
         let expected = verify_shared(&relation, proof, limits).unwrap();
+        assert!(matches!(
+            decode_bounded(&relation, &bytes, limits, MAX_DECODE_ALLOCATION_CHARGES),
+            Err(Error::Encode(norito::Error::TotalAllocationExceeded { limit, .. }))
+                if limit == MAX_DECODE_ALLOCATION_CHARGES as u64
+        ));
         assert_eq!(
-            decode_and_verify(&relation, &bytes, limits).unwrap(),
+            decode_and_verify_with_allocation(
+                &relation,
+                &bytes,
+                limits,
+                FIXTURE_ALLOCATION_CHARGES
+            )
+            .unwrap(),
             expected
         );
         let geometry = Geometry::new(&relation).unwrap();
-        let budget = decode_limits(&relation, &geometry, bytes.len(), limits).unwrap();
+        let budget = decode_limits_with_allocation(
+            &relation,
+            &geometry,
+            bytes.len(),
+            limits,
+            FIXTURE_ALLOCATION_CHARGES,
+        )
+        .unwrap();
         let (decoded, usage) = norito::core::with_decode_limits_measured(budget, || {
-            decode_bounded(&relation, &bytes, limits)
+            decode_bounded(&relation, &bytes, limits, FIXTURE_ALLOCATION_CHARGES)
         });
         assert_eq!(&decoded.unwrap(), proof);
         assert!(usage.total_elements() <= budget.max_total_elements());
-        assert!(usage.total_allocated_bytes() < MAX_DECODE_ALLOCATION_CHARGES);
+        assert!(usage.total_allocated_bytes() < FIXTURE_ALLOCATION_CHARGES);
+        eprintln!(
+            "full_geometry_fixture_bytes={}; allocation_charges={}; diagnostic_allocation_limit={}; default_allocation_limit={}",
+            bytes.len(),
+            usage.total_allocated_bytes(),
+            FIXTURE_ALLOCATION_CHARGES,
+            MAX_DECODE_ALLOCATION_CHARGES,
+        );
         // A caller-owned subslice may require different alignment copies.
         let mut unaligned = vec![0; bytes.len() + 8];
         for offset in 0..8 {
             unaligned[offset..offset + bytes.len()].copy_from_slice(&bytes);
             let (decoded, usage) = norito::core::with_decode_limits_measured(budget, || {
-                decode_bounded(&relation, &unaligned[offset..offset + bytes.len()], limits)
+                decode_bounded(
+                    &relation,
+                    &unaligned[offset..offset + bytes.len()],
+                    limits,
+                    FIXTURE_ALLOCATION_CHARGES,
+                )
             });
             assert_eq!(&decoded.unwrap(), proof);
-            assert!(usage.total_allocated_bytes() < MAX_DECODE_ALLOCATION_CHARGES);
+            assert!(usage.total_allocated_bytes() < FIXTURE_ALLOCATION_CHARGES);
         }
     }
 
@@ -385,6 +387,7 @@ mod tests {
                     max_proof_bytes: bytes.len(),
                     ..diagnostic_limits()
                 },
+                FIXTURE_ALLOCATION_CHARGES
             )
             .is_ok()
         );
@@ -400,8 +403,14 @@ mod tests {
             let count = field(&payload, index).start;
             payload[count..count + 8].copy_from_slice(&u64::MAX.to_le_bytes());
             let bytes = frame(&payload); // Valid schema, flags, length and CRC.
-            let budget =
-                decode_limits(&relation, &geometry, bytes.len(), diagnostic_limits()).unwrap();
+            let budget = decode_limits_with_allocation(
+                &relation,
+                &geometry,
+                bytes.len(),
+                diagnostic_limits(),
+                FIXTURE_ALLOCATION_CHARGES,
+            )
+            .unwrap();
             let (error, usage) = norito::core::with_decode_limits_measured(budget, || {
                 assert_before_transcript(&bytes, diagnostic_limits())
             });
@@ -450,11 +459,12 @@ mod tests {
     fn cumulative_nested_elements_and_allocation_scopes_cannot_be_relaxed() {
         let relation = air();
         let geometry = Geometry::new(&relation).unwrap();
-        let budget = decode_limits(
+        let budget = decode_limits_with_allocation(
             &relation,
             &geometry,
             diagnostic_limits().max_proof_bytes,
             diagnostic_limits(),
+            FIXTURE_ALLOCATION_CHARGES,
         )
         .unwrap();
         let mut proof = fixture().shared.clone();
@@ -483,7 +493,15 @@ mod tests {
         ));
         assert_eq!(usage.total_allocated_bytes(), 0);
         // The prior budget is restored after the terminal failure.
-        assert!(decode_bounded(&relation, &bytes, diagnostic_limits()).is_ok());
+        assert!(
+            decode_bounded(
+                &relation,
+                &bytes,
+                diagnostic_limits(),
+                FIXTURE_ALLOCATION_CHARGES
+            )
+            .is_ok()
+        );
         let shallow = DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 1);
         let (error, _) = norito::core::with_decode_limits_measured(shallow, || {
             assert_before_transcript(&bytes, diagnostic_limits())
@@ -492,8 +510,24 @@ mod tests {
             error,
             Error::Encode(norito::Error::NestingDepthExceeded { limit: 1, .. })
         ));
-        assert!(decode_bounded(&relation, &bytes, diagnostic_limits()).is_ok());
-        let error = norito::with_decode_limits(budget, || {
+        assert!(
+            decode_bounded(
+                &relation,
+                &bytes,
+                diagnostic_limits(),
+                FIXTURE_ALLOCATION_CHARGES
+            )
+            .is_ok()
+        );
+        let baseline_budget = decode_limits_with_allocation(
+            &relation,
+            &geometry,
+            bytes.len(),
+            diagnostic_limits(),
+            MAX_DECODE_ALLOCATION_CHARGES,
+        )
+        .unwrap();
+        let error = norito::with_decode_limits(baseline_budget, || {
             norito::core::reserve_decode_allocation(MAX_DECODE_ALLOCATION_CHARGES + 1)
         })
         .unwrap_err();
@@ -546,7 +580,13 @@ mod tests {
         {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
             assert_eq!(
-                decode_bounded(&air(), &canonical, diagnostic_limits()).unwrap(),
+                decode_bounded(
+                    &air(),
+                    &canonical,
+                    diagnostic_limits(),
+                    FIXTURE_ALLOCATION_CHARGES
+                )
+                .unwrap(),
                 *proof
             );
             assert_eq!(norito::core::get_decode_flags(), flags);
@@ -567,7 +607,15 @@ mod tests {
         width.rows[0].values.push(0);
         let bytes = encode(&width);
         // The uniform ceiling deliberately permits this small malformed row.
-        assert!(decode_bounded(&air(), &bytes, diagnostic_limits()).is_ok());
+        assert!(
+            decode_bounded(
+                &air(),
+                &bytes,
+                diagnostic_limits(),
+                FIXTURE_ALLOCATION_CHARGES
+            )
+            .is_ok()
+        );
         assert_before_transcript(&bytes, diagnostic_limits());
         let mut base = baseline.clone();
         base.rows[0].values[0] = GOLDILOCKS_MODULUS;
@@ -670,7 +718,14 @@ mod tests {
         let bytes = encode(&proof);
         assert_eq!(bytes.len(), 6_713_525);
         assert!(bytes.len() > VerifyLimits::default().max_proof_bytes);
-        let budget = decode_limits(&relation, &geometry, bytes.len(), diagnostic_limits()).unwrap();
+        let budget = decode_limits_with_allocation(
+            &relation,
+            &geometry,
+            bytes.len(),
+            diagnostic_limits(),
+            MAX_DECODE_ALLOCATION_CHARGES,
+        )
+        .unwrap();
         assert_eq!(budget.max_sequence_elements(), 14_250);
         assert_eq!(budget.max_total_elements(), 344_631);
         assert_eq!(budget.max_total_allocated_bytes(), 32 * 1024 * 1024);
@@ -678,7 +733,7 @@ mod tests {
         // This loose shape exceeds the unchanged 32 MiB default allocation
         // policy. Keep that rejection explicit before isolating element counts.
         assert!(matches!(
-            decode_bounded(&relation, &bytes, diagnostic_limits()),
+            decode_bounded(&relation, &bytes, diagnostic_limits(), MAX_DECODE_ALLOCATION_CHARGES),
             Err(Error::Encode(norito::Error::TotalAllocationExceeded {
                 attempted,
                 limit,
@@ -707,7 +762,12 @@ mod tests {
             bytes.len()
         );
         assert!(matches!(
-            decode_bounded(&relation, &bytes, VerifyLimits::default()),
+            decode_bounded(
+                &relation,
+                &bytes,
+                VerifyLimits::default(),
+                MAX_DECODE_ALLOCATION_CHARGES
+            ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
                 ..
@@ -1070,21 +1130,49 @@ mod tests {
         let proof = &fixture().shared;
         let bytes = encode(proof);
         let limits = diagnostic_limits();
-        let verified = decode_and_verify_committed(&relation, &bytes, limits).unwrap();
+        let verified = decode_and_verify_with_allocation_committed(
+            &relation,
+            &bytes,
+            limits,
+            FIXTURE_ALLOCATION_CHARGES,
+        )
+        .unwrap();
         assert_eq!(verified.row_root(), proof.row_root);
         assert_eq!(verified.row_root().to_le_bytes().len(), 48);
         assert_eq!(
             verified.work(),
-            decode_and_verify(&relation, &bytes, limits).unwrap()
+            decode_and_verify_with_allocation(
+                &relation,
+                &bytes,
+                limits,
+                FIXTURE_ALLOCATION_CHARGES
+            )
+            .unwrap()
         );
         let mut changed = proof.clone();
         let mut words = changed.row_root.words();
         words[5] = (words[5] + 1) % GOLDILOCKS_MODULUS;
         changed.row_root = WireDigest::new(words).unwrap();
-        assert!(decode_and_verify_committed(&relation, &encode(&changed), limits).is_err());
+        assert!(
+            decode_and_verify_with_allocation_committed(
+                &relation,
+                &encode(&changed),
+                limits,
+                FIXTURE_ALLOCATION_CHARGES
+            )
+            .is_err()
+        );
         changed = proof.clone();
         changed.terminal_values[0] = changed.terminal_values[0].add(GoldilocksFp4V1::ONE);
-        assert!(decode_and_verify_committed(&relation, &encode(&changed), limits).is_err());
+        assert!(
+            decode_and_verify_with_allocation_committed(
+                &relation,
+                &encode(&changed),
+                limits,
+                FIXTURE_ALLOCATION_CHARGES
+            )
+            .is_err()
+        );
     }
 
     #[test]

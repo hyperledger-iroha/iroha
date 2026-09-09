@@ -730,7 +730,7 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
     }
     let header = norito::core::Header::read(Cursor::new(bytes)).map_err(|_| malformed())?;
     if header.compression != norito::core::Compression::None
-        || header.schema != <QueryOutputBatchBox as NoritoSerialize>::schema_hash()
+        || header.schema != norito::schema::identity::frame_hash::<QueryOutputBatchBox>()
         || header.flags != norito::core::header_flags::COMPACT_LEN
     {
         return Err(malformed());

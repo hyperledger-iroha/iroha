@@ -37,8 +37,12 @@ const KAGEMUSHA_AUTHENTICATED_REDEMPTION_STATUS_DOMAIN_V1: &[u8] =
 /// This value is safe to pass through the bounded native command ABI, but decoding or hashing it
 /// does not grant release authority. A qualified in-process caller must also supply the matching
 /// [`VerifiedKagemushaRedemptionReleaseV1`] created by Core from the complete finalized status.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::redemption_release::KagemushaRedemptionTerminalReceiptV1",
+    frame = "iroha.kagemusha.device.v1.redemption-terminal-receipt"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.redemption-terminal-receipt")]
 pub struct KagemushaRedemptionTerminalReceiptV1 {
     /// Sole first-release layout version.
     pub version: u16,

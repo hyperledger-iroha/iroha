@@ -239,6 +239,8 @@ impl PgcDecryptionTableV1 {
 static PGC_DECRYPTION_TABLE: Lazy<Result<PgcDecryptionTableV1, AnonymousPgcError>> =
     Lazy::new(PgcDecryptionTableV1::derive);
 /// Canonical non-identity Twisted-ElGamal public key `pk = g·sk`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::TwistedElGamalPublicKeyV1")]
 #[derive(
     Clone,
     Copy,
@@ -298,6 +300,8 @@ impl TwistedElGamalPublicKeyV1 {
     }
 }
 /// Twisted-ElGamal ciphertext `(C_L, C_R) = (pk·r, g·r + h·m)`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::TwistedElGamalCiphertextV1")]
 #[derive(
     Clone,
     Copy,
@@ -805,6 +809,8 @@ impl<'a> PgcKeyPossessionStatementV1<'a> {
     }
 }
 /// Canonical Schnorr proof that `pk = g·sk`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::PgcKeyPossessionProofV1")]
 #[derive(
     Clone,
     Copy,
@@ -961,6 +967,8 @@ impl<'a> PgcCiphertextOpeningStatementV1<'a> {
     }
 }
 /// Canonical generalized-Schnorr proof of a Twisted-ElGamal opening.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::anonymous_pgc::PgcCiphertextOpeningProofV1")]
 #[derive(
     Clone,
     Copy,

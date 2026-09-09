@@ -327,6 +327,8 @@ const SNAPSHOT_GENERATION_GC_MAX_ENTRIES: usize = 4096;
 static SNAPSHOT_PUBLICATION_LOCK: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
 
 /// Constant-size authority needed by emergency Fast startup.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::snapshot::EmergencyFastSnapshotManifestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, norito::codec::Encode, norito::codec::Decode)]
 struct EmergencyFastSnapshotManifestV1 {
     version: u8,

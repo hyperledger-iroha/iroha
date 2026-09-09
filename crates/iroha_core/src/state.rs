@@ -2178,6 +2178,8 @@ impl VerifiedNexusFeeBurn {
         (self.asset_id, self.amount)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedMergeExecutionBatchMarker")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AppliedMergeExecutionBatchMarker {
     version: u8,
@@ -2187,6 +2189,8 @@ struct AppliedMergeExecutionBatchMarker {
     execution_root: Hash,
     application_write_set_root: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedMergeLaneExecutionMarker")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AppliedMergeLaneExecutionMarker {
     version: u8,
@@ -2197,6 +2201,8 @@ struct AppliedMergeLaneExecutionMarker {
     lane_execution_hash: Hash,
 }
 /// Replicated exact per-lane frontier used by the two-phase autoscale drain.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 struct AppliedMergeLaneFrontierMarker {
     version: u8,
@@ -2208,6 +2214,8 @@ struct AppliedMergeLaneFrontierMarker {
 }
 /// One exact lane incarnation that remains responsible for globally admitted
 /// QueuePlan work until its canonical carrier commits the entrypoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationRouteV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanPendingObligationRouteV1 {
@@ -2222,6 +2230,8 @@ struct QueuePlanPendingObligationRouteV1 {
 /// carrier kind. Every compact identity and deduplicated route
 /// is checked against the embedded, registry-hash-authenticated admission
 /// binding whenever the marker is decoded.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanPendingObligationV1 {
@@ -2237,6 +2247,8 @@ struct QueuePlanPendingObligationV1 {
 /// on one deduplicated route. Route-prefixed keys form the authoritative,
 /// canonically ordered roster; bounded prefix enumeration replaces the lossy
 /// count/XOR summary and keeps drain/removal exact.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingRouteMemberV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanPendingRouteMemberV1 {
@@ -2252,6 +2264,8 @@ struct QueuePlanPendingRouteMemberV1 {
 /// The key is ordered by network, signed payload, then outer entrypoint, so a
 /// committed signed identity can find every distinct pending carrier with one
 /// protocol-bounded prefix scan.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingSignedAliasMemberV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanPendingSignedAliasMemberV1 {
@@ -2263,6 +2277,8 @@ struct QueuePlanPendingSignedAliasMemberV1 {
 }
 /// Compact outer-key evidence that a distinct committed signed identity made
 /// one QueuePlan carrier replay-terminal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanSignedAliasTerminalV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanSignedAliasTerminalV1 {
@@ -2302,6 +2318,8 @@ impl QueuePlanMarkerStorage for StorageTransaction<'_, '_, StatePath, Vec<u8>> {
 /// Replicated Native AMX participant-control frontier. Presence certifies that
 /// the global block committed the exact control QCs; the independently durable
 /// Kura application receipt determines whether its effects are published.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedNativeAmxParticipantFrontierMarker")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
@@ -2342,6 +2360,8 @@ pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
 /// finally an exact Kura application receipt. Keeping carrier coordinates out
 /// of the identity lets those durable stages coalesce without hiding
 /// same-height participant equivocation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::NativeAmxParticipantApplicationDiagnosticIdentity")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
 struct NativeAmxParticipantApplicationDiagnosticIdentity {
     lane_id: LaneId,
@@ -2379,6 +2399,8 @@ impl NativeAmxParticipantApplicationDiagnosticIdentity {
 }
 /// Canonical authority pinned for the full lifetime of one autoscale lane
 /// incarnation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutoscaleLaneCommitteeV1 {
     version: u8,
@@ -3874,6 +3896,8 @@ pub enum BlockProofError {
     ExecutedBlockWireHashUnavailable(NonZeroU64),
 }
 /// Consensus key identifying one authority-owned pending contract-code upload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::SmartContractCodeUploadKey")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct SmartContractCodeUploadKey {
     /// Account that owns and may finalize or cancel the upload.
@@ -3941,6 +3965,8 @@ fn decode_contract_upload_key_hash(encoded: &str) -> Result<Hash, json::Error> {
     Ok(Hash::prehashed(bytes))
 }
 /// Consensus key identifying one chunk within an authority-owned pending upload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::SmartContractCodeUploadChunkKey")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct SmartContractCodeUploadChunkKey {
     /// Pending upload that owns the chunk.
@@ -4008,6 +4034,8 @@ impl mv::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
     }
 }
 /// Immutable shape descriptor for a pending contract-code upload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::SmartContractCodeUploadDescriptor")]
 #[derive(
     Debug,
     Clone,
@@ -4034,6 +4062,8 @@ pub struct SmartContractCodeUploadProgress {
     pub received_chunks: u32,
 }
 /// Non-zero universal Musubi resolver-index revision persisted in world state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::MusubiResolverIndexRevisionV1")]
 #[derive(
     Debug,
     Clone,
@@ -4093,6 +4123,8 @@ impl mv::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentTimedOvnResourceReservationV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ParliamentTimedOvnResourceReservationV1 {
     governance_attempt_id: GovernanceAttemptId,
@@ -4101,6 +4133,8 @@ struct ParliamentTimedOvnResourceReservationV1 {
 }
 
 /// One active hidden-ballot phase window eligible for the compact casting snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentTimedOvnCastingCandidateV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 pub(crate) struct ParliamentTimedOvnCastingCandidateV1 {
     pub(crate) governance_attempt_id: GovernanceAttemptId,
@@ -4109,6 +4143,8 @@ pub(crate) struct ParliamentTimedOvnCastingCandidateV1 {
 }
 
 /// Counts of distinct Parliament attempts that reference one account.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentMemberReferenceCountsV1")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode)]
 pub(crate) struct ParliamentMemberReferenceCountsV1 {
     /// Attempts with a live candidate snapshot or immutable sealed assignment.
@@ -4135,6 +4171,8 @@ impl ParliamentMemberReferenceCountsV1 {
 }
 
 /// Exact counts of canonical Parliament attempts by status and current stage.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentAttemptCountsV1")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode)]
 pub(crate) struct ParliamentAttemptCountsV1 {
     status_counts: [u64; 6],
@@ -9567,6 +9605,8 @@ pub struct WorldView<'world> {
 /// fixed-shape output record map; keeping both fields makes the release
 /// assertion explicit. `replay_markers` counts both finalized receipts and
 /// terminal abort/expiry markers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::PrivateSettlementLedgerMapCountsV1")]
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct PrivateSettlementLedgerMapCountsV1 {
@@ -9940,6 +9980,8 @@ mod private_settlement_ledger_evidence_tests {
 }
 
 /// Verifying-key binding enforced for a ZK asset operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ZkAssetVerifierBinding")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -9954,6 +9996,8 @@ pub struct ZkAssetVerifierBinding {
 /// Iroha 3 has one first-release profile. Persisting it in world state makes the
 /// hash construction an authenticated ledger property instead of inferring it
 /// from whichever verifier key or node configuration happens to be present.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ConfidentialTreeProfile")]
 #[derive(
     Copy,
     Clone,
@@ -10098,6 +10142,8 @@ impl json::JsonDeserialize for ZkAssetState {
     }
 }
 /// Election state for anonymous voting.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ElectionState")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10130,6 +10176,8 @@ pub struct ElectionState {
     pub domain_tag: String,
 }
 /// Canonical first-release projection of one typed governance proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceProposalRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct GovernanceProposalRecord {
@@ -10342,6 +10390,8 @@ impl GovernanceProposalRecord {
     }
 }
 /// Lifecycle status of a governance proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceProposalStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum GovernanceProposalStatus {
     /// Proposal has been submitted and its latest attempt is active or certified.
@@ -10530,6 +10580,8 @@ fn update_oracle_change_pipeline(
     }
 }
 /// Referendum record for governance (status and schedule)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceReferendumRecord")]
 #[derive(
     Copy,
     Clone,
@@ -10553,6 +10605,8 @@ pub struct GovernanceReferendumRecord {
     pub mode: GovernanceReferendumMode,
 }
 /// Lifecycle status of a referendum
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceReferendumStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum GovernanceReferendumStatus {
     /// Referendum proposed but not yet open for voting
@@ -10586,6 +10640,8 @@ impl json::JsonDeserialize for GovernanceReferendumStatus {
     }
 }
 /// Voting mode for a referendum
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceReferendumMode")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum GovernanceReferendumMode {
     /// Zero-knowledge verified (ZK) voting mode
@@ -10616,6 +10672,8 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
     }
 }
 /// Immutable asset-custody identities retained with a governance lock.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceLockCustody")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10630,6 +10688,8 @@ pub struct GovernanceLockCustody {
     pub slash_receiver_account: iroha_data_model::account::AccountId,
 }
 /// Lock record for governance voting (plain mode)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceLockRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct GovernanceLockRecord {
     /// Account that owns the lock.
@@ -10650,6 +10710,8 @@ pub struct GovernanceLockRecord {
     pub custody: GovernanceLockCustody,
 }
 /// Locks for a single referendum keyed by voter account id
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceLocksForReferendum")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10660,6 +10722,8 @@ pub struct GovernanceLocksForReferendum {
         std::collections::BTreeMap<iroha_data_model::account::AccountId, GovernanceLockRecord>,
 }
 /// Persisted O(1) projection of the latest authoritative governance unlock sweep.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceUnlockStatsSnapshot")]
 #[derive(
     Clone,
     Copy,
@@ -10735,6 +10799,8 @@ pub enum AssetDefinitionAliasLeaseStatus {
     ExpiredPendingCleanup,
 }
 /// On-chain alias lease metadata for an asset definition.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AssetDefinitionAliasBindingRecord")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10796,6 +10862,8 @@ pub enum ContractAliasLeaseStatus {
     ExpiredPendingCleanup,
 }
 /// On-chain alias lease metadata for a contract address.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ContractAliasBindingRecord")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10845,6 +10913,8 @@ impl ContractAliasBindingRecord {
     }
 }
 /// Citizenship registry entry (bonded amount held in escrow).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::CitizenshipRecord")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10915,6 +10985,8 @@ mod governance_locks_map_json {
     }
 }
 /// Record of slashing/restitution applied to a specific voter for a referendum.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceSlashEntry")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10929,6 +11001,8 @@ pub struct GovernanceSlashEntry {
     pub last_height: u64,
 }
 /// Slashing ledger for a single referendum keyed by voter account id.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceSlashLedger")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]

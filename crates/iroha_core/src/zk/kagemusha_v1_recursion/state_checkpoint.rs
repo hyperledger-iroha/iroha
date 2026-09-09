@@ -57,6 +57,10 @@ pub enum KagemushaStateCheckpointErrorV1 {
 }
 
 /// Role-separated identities obtained only from the authenticated verifier loader.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::state_checkpoint::KagemushaStateCheckpointBindingV1"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct KagemushaStateCheckpointBindingV1 {
     pub(super) release_id: DigestV1,
@@ -81,8 +85,12 @@ pub(super) struct KagemushaStateCheckpointVerifierMaterialV1<'a> {
     pub(super) artifacts: KagemushaRecursionArtifactsV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::state_checkpoint::CheckpointWire",
+    frame = "iroha.kagemusha.core.v1.recursive-state-checkpoint"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.kagemusha.core.v1.recursive-state-checkpoint")]
 struct CheckpointWire {
     version: u16,
     binding: KagemushaStateCheckpointBindingV1,
@@ -659,11 +667,11 @@ mod tests {
             SCHEMA,
         );
         assert_eq!(
-            <CheckpointWire as norito::NoritoSerialize>::schema_hash(),
-            SCHEMA
+            <CheckpointWire as norito::NoritoSchema>::nominal_name(),
+            "iroha_core::zk::kagemusha_v1_recursion::state_checkpoint::CheckpointWire"
         );
         assert_eq!(
-            <CheckpointWire as norito::NoritoDeserialize<'static>>::schema_hash(),
+            norito::schema::identity::frame_hash::<CheckpointWire>(),
             SCHEMA
         );
         let (checkpoint, _, lengths) = fixture();
@@ -684,9 +692,9 @@ mod tests {
         );
         // Preserve the complete payload and its checksum, changing only the frame's schema.
         let mut substituted = bytes;
-        substituted[6..22].copy_from_slice(
-            &<KagemushaStateCheckpointBindingV1 as norito::NoritoSerialize>::schema_hash(),
-        );
+        substituted[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<
+            KagemushaStateCheckpointBindingV1,
+        >());
         assert_eq!(
             KagemushaRecursiveStateCheckpointV1::decode_with_lengths(
                 &substituted,

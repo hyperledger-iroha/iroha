@@ -1,0 +1,118 @@
+[
+  {
+    "nominal": "iroha_p2p::network::accept_stream_tests::Dummy",
+    "schema_hash": "609ae72cd1893b34e661a4a73ab658e2"
+  },
+  {
+    "nominal": "iroha_p2p::network::accept_stream_tests::DummyConsensus",
+    "schema_hash": "132b1bbb26cf85d51cf48048111df432"
+  },
+  {
+    "nominal": "iroha_p2p::network::accept_stream_tests::DummyConsensusChunk",
+    "schema_hash": "4648bbf7eb6f65843355c25021ee1fa1"
+  },
+  {
+    "nominal": "iroha_p2p::network::accept_stream_tests::DummyConsensusPayload",
+    "schema_hash": "45435aabe0e2e0cd3af245622c94af83"
+  },
+  {
+    "nominal": "iroha_p2p::network::data_frame_wire_len_tests::DeniedDummy",
+    "schema_hash": "b29206bd1756defed45ff76dbcfd97bf"
+  },
+  {
+    "nominal": "iroha_p2p::network::data_frame_wire_len_tests::Dummy",
+    "schema_hash": "5b40a856927f75cfbb87b10cb6879ca7"
+  },
+  {
+    "nominal": "iroha_p2p::network::data_frame_wire_len_tests::DynamicDummy",
+    "schema_hash": "1cc55cf34b113b19112513578d8e96b9"
+  },
+  {
+    "nominal": "iroha_p2p::network::handle_update_tests::CloneCountingPayload",
+    "schema_hash": "b8688745d89760ce07192608385cd8e5"
+  },
+  {
+    "nominal": "iroha_p2p::network::handle_update_tests::Dummy",
+    "schema_hash": "0c2cde1453db9f136fcc99ac1be25dd6"
+  },
+  {
+    "nominal": "iroha_p2p::network::handle_update_tests::RoutedActorDummy",
+    "schema_hash": "454296cc0718952aa77091cbe05b83a2"
+  },
+  {
+    "nominal": "iroha_p2p::network::quic_tests::Dummy",
+    "schema_hash": "3c102b39c113def5e354d8e496700bad"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::DeferredProgressMsg",
+    "schema_hash": "1597c1a8ef23bb07b9d73ead7054cef5"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::DummyMsg",
+    "schema_hash": "abe003e55876cedf27075f2f843e02b8"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::PeerGossipMsg",
+    "schema_hash": "697bf04712f5e9302955694bd0d490d2"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::RouteMsg",
+    "schema_hash": "a30c52af3b934f5c53addf89e5f11381"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::SafetyMsg",
+    "schema_hash": "d734a678db105fb7647f97054ff10123"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::TamperableMsg",
+    "schema_hash": "54d611af983aeff69ee464c55edee2b7"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::TopicMsg",
+    "schema_hash": "5018af8801620ec0f1a00fac4ee44c8d"
+  },
+  {
+    "nominal": "iroha_p2p::network::tests::TrustGossipMsg",
+    "schema_hash": "a32897319c5aa16f78bbc6da413b4848"
+  },
+  {
+    "nominal": "iroha_p2p::peer::handles::tests::BudgetRouteMsg",
+    "schema_hash": "8ddaad8f6eb6dd070b10add315a45ee5"
+  },
+  {
+    "nominal": "iroha_p2p::peer::handles::tests::ConsensusChunkMsg",
+    "schema_hash": "a30b9560c35550b9f3100e376bda0066"
+  },
+  {
+    "nominal": "iroha_p2p::peer::handles::tests::ConsensusPayloadMsg",
+    "schema_hash": "2e4f96c4aa10c9dc3a21a6d6448bfe8c"
+  },
+  {
+    "nominal": "iroha_p2p::peer::handles::tests::ConsensusSafetyMsg",
+    "schema_hash": "34ab10d30ebb8daca2f5ba28ff6bc75a"
+  },
+  {
+    "nominal": "iroha_p2p::peer::handles::tests::PriorityMsg",
+    "schema_hash": "52585a7c86d35003cc421757a347188a"
+  },
+  {
+    "nominal": "iroha_p2p::peer::run::tests::Blob",
+    "schema_hash": "0c581804991033a8f92f75ed8385423f"
+  },
+  {
+    "nominal": "iroha_p2p::peer::run::tests::Dummy",
+    "schema_hash": "faf7bb4b7614b2d02fce8e15945dca90"
+  },
+  {
+    "nominal": "iroha_p2p::peer::run::tests::GuardedBlob",
+    "schema_hash": "0e1b5e68948583a0a5fcda8010d57bf3"
+  },
+  {
+    "nominal": "iroha_p2p::peer::run::tests::PredecodeGuardedBlob",
+    "schema_hash": "13e1cc0073f39ab3d2a9d2050e2e1307"
+  },
+  {
+    "nominal": "iroha_p2p::peer::run::tests::RoutedMsg",
+    "schema_hash": "a41e332f6cb8a17968fba95101f6d6e0"
+  }
+]

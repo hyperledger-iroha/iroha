@@ -110,6 +110,8 @@ pub fn compute_register_leaf_digest(value: u64, tag: bool) -> [u8; 32] {
 /// When a builder is given a depth cap shorter than the complete audit path,
 /// `root` is a partial-path root. Such a root does not authenticate a leaf
 /// count and must not be treated as a Merkle membership commitment.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "ivm::merkle_utils::CompactProofBundle")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct CompactProofBundle {
     /// Number of levels in the proof (≤ 32).

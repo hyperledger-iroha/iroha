@@ -206,6 +206,8 @@ impl StreamTokenHardwarePinsV1 {
         self.config_digest
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::token::hardware_pins::PinsPreimageV1")]
 #[derive(Encode)]
 struct PinsPreimageV1 {
     binding: SignerCustodyBindingV1,

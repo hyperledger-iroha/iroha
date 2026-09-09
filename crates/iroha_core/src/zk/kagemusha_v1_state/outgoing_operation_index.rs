@@ -76,8 +76,12 @@ pub type KagemushaOutgoingOperationIndexResultV1<T> =
 /// currently has no credential registry, so the qualified native session must authenticate
 /// `credential_id` and `core_authorization_key_reference` before binding a new operation.
 /// Nonzero shape and a caller-supplied key reference do not establish that authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationContextV1",
+    frame = "iroha.kagemusha.device.v1.sender-wallet-context"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-wallet-context")]
 pub struct KagemushaOutgoingOperationContextV1 {
     /// Stable network, device lane, asset, and scale.
     pub lane: KagemushaLaneIdV1,
@@ -260,8 +264,12 @@ impl KagemushaOutgoingOperationContextV1 {
 }
 
 /// Public inputs fixed before Core accepts an outgoing preparation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingPublicInputsV1",
+    frame = "iroha.kagemusha.device.v1.sender-public-inputs"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-public-inputs")]
 pub enum KagemushaOutgoingPublicInputsV1 {
     /// Exact canonical receiver request bytes.
     SendSplit {
@@ -384,8 +392,12 @@ impl KagemushaOutgoingPublicInputsV1 {
 }
 
 /// Canonical preimage shared by Core and the ABI-23 sender bridge.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingPublicInputPreimageV1",
+    frame = "iroha.kagemusha.device.v1.sender-public-input-preimage"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-public-input-preimage")]
 pub struct KagemushaOutgoingPublicInputPreimageV1 {
     /// Sole schema version.
     pub version: u16,
@@ -412,6 +424,10 @@ impl KagemushaOutgoingPublicInputPreimageV1 {
 }
 
 /// Monotonic durable stage of one caller operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationPhaseV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum KagemushaOutgoingOperationPhaseV1 {
     /// Core accepted the exact preparation and reserved terminal capacity.
@@ -427,6 +443,10 @@ pub enum KagemushaOutgoingOperationPhaseV1 {
 }
 
 /// Snapshot-owned immutable operation binding and monotonic recovery projection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaOutgoingOperationRecordV1 {
     /// Independently generated caller operation ID.
@@ -676,6 +696,10 @@ pub struct KagemushaOutgoingOperationPageV1 {
 /// acknowledgment, never evict an old binding or turn a used caller ID into Missing.
 /// TODO: qualify authenticated external paging for devices whose durable local
 /// storage cannot retain their complete operation history.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationIndexV1"
+)]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaOutgoingOperationIndexV1 {
     pub(super) revision: u128,

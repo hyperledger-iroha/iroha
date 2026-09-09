@@ -833,11 +833,14 @@ fn fanout_decode_budget_accepts_exact_bound_and_rejects_next_byte() {
 #[test]
 fn versioned_ingress_counts_bad_exact_serializer_before_destination_allocation() {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_torii::torii_routed_read_tests::versioned_ingress_counts_bad_exact_serializer_before_destination_allocation::BadExact"
+    )]
     struct BadExact<'a> {
         calls: &'a AtomicUsize,
         payload: [u8; 32],
     }
-    impl norito::core::NoritoSerialize for BadExact<'_> {}
     impl norito::core::SerializePayload for BadExact<'_> {
         fn serialize(
             &self,

@@ -261,6 +261,8 @@ const GC_FAIL_AFTER_COMPACTION_INTENT: usize = 1;
 const GC_FAIL_AFTER_ARCHIVE_QUARANTINE: usize = 2;
 const GC_FAIL_AFTER_ARCHIVE_DELETION: usize = 3;
 const GC_FAIL_AFTER_COMPLETION: usize = 4;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryPhase")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum LaneGeometryPhase {
     Intent,
@@ -276,6 +278,8 @@ enum LaneGeometryRecoveryCursor {
     BeforeTransition(u64),
     BeforeFirstTransitionAtHeight(u64),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryOperationKind")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum LaneGeometryOperationKind {
     Create,
@@ -416,6 +420,8 @@ fn rename_geometry_path_noreplace_at(
         "atomic descriptor-relative lane geometry rename is unsupported on this platform",
     ))
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryBinding")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneGeometryBinding {
     lane_id: LaneId,
@@ -424,6 +430,8 @@ struct LaneGeometryBinding {
     blocks_path: String,
     merge_path: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryOperation")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneGeometryOperation {
     kind: LaneGeometryOperationKind,
@@ -435,6 +443,8 @@ struct LaneGeometryOperation {
     unpublished_blocks_path: String,
     unpublished_merge_path: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryIntent")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneGeometryIntent {
     transition_id: Hash,
@@ -449,6 +459,8 @@ struct LaneGeometryIntent {
     phase: LaneGeometryPhase,
     operations: Vec<LaneGeometryOperation>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometrySnapshotCheckpoint")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneGeometrySnapshotCheckpoint {
     version: u8,
@@ -467,10 +479,14 @@ struct LaneGeometrySnapshotCheckpoint {
     pending_archive_gc_root: Option<Hash>,
     commitment: Hash,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryPendingArchiveGc")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneGeometryPendingArchiveGc {
     intent: LaneGeometryIntent,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryMergeRelease")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct LaneGeometryMergeRelease {
     lane_id: LaneId,
@@ -544,6 +560,8 @@ pub(super) struct ConfiguredPrimaryGeometryPreflight {
     merge_path: PathBuf,
     merge_identity: Option<GeometryFileIdentity>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneGeometryJournal")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneGeometryJournal {
     version: u8,
@@ -575,6 +593,8 @@ pub(crate) struct LaneGeometryGcSummary {
     /// Regular-file bytes removed from authenticated transition archive roots.
     pub(crate) reclaimed_bytes: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::lane_geometry::LaneIncarnationMarker")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct LaneIncarnationMarker {
     version: u8,

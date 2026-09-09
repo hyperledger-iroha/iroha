@@ -50,10 +50,7 @@ fn main() {
         );
     }
     if let Some(host_compiler) = select_cuda_host_compiler(&target_os) {
-        println!(
-            "cargo:warning=using CUDA host compiler {}",
-            host_compiler.display()
-        );
+        println!("using CUDA host compiler {}", host_compiler.display());
         build.ccbin(false);
         build.flag(format!("-ccbin={}", host_compiler.display()));
     } else if target_os == "linux" && !explicit_cxx_configured() {

@@ -2,6 +2,11 @@
 
 #[test]
 fn production_data_events_preserve_captured_identities() {
+    fn assert_frame_contract<
+        T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+    >() {
+    }
+
     macro_rules! check {
         ($ty:ty, $nominal:literal, $hash:literal) => {
             assert_eq!(<$ty as norito::NoritoSchema>::nominal_name(), $nominal);
@@ -9,8 +14,7 @@ fn production_data_events_preserve_captured_identities() {
             let actual = norito::schema::identity::frame_hash::<$ty>();
             let rendered = format!("{:032x}", u128::from_be_bytes(actual));
             assert_eq!(rendered, $hash);
-            assert_eq!(<$ty as norito::NoritoSerialize>::schema_hash(), actual);
-            assert_eq!(<$ty as norito::NoritoDeserialize>::schema_hash(), actual);
+            assert_frame_contract::<$ty>();
         };
     }
     check!(

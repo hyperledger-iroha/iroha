@@ -75,6 +75,10 @@ const PRODUCER_TURN_PHYSICAL_DOMAIN: &[u8] =
 ///
 /// The fields are private so neither decoded wire values nor an arbitrary
 /// source can become runtime authority through a parts API.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::LifecycleReplayAuthorityV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(in crate::sumeragi) struct LifecycleReplayAuthorityV1 {
@@ -441,6 +445,10 @@ enum ReplayAuthorityValidationError {
     RecordMismatch,
 }
 /// Fixed scalar projection of the process-local reducer tag.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::ReplayEventTagV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct ReplayEventTagV1 {
@@ -466,6 +474,10 @@ impl ReplayEventTagV1 {
     }
 }
 /// Fixed scalar code for the WAL record that owns a replay action.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::ReplayWalRoleV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[repr(transparent)]
 struct ReplayWalRoleV1(u8);
@@ -480,6 +492,10 @@ impl ReplayWalRoleV1 {
         self.0 == expected.0
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::LifecycleReplaySourceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum LifecycleReplaySourceV1 {
@@ -519,6 +535,10 @@ impl LifecycleReplaySourceV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::WalReplaySourceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct WalReplaySourceV1 {
@@ -527,6 +547,10 @@ struct WalReplaySourceV1 {
     tag: ReplayEventTagV1,
     action: WalReplayActionV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::WalReplayActionV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum WalReplayActionV1 {

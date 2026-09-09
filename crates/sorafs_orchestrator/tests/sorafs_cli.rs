@@ -12,7 +12,6 @@ use iroha_data_model::taikai::TaikaiSegmentEnvelopeV1;
 use norito::{
     codec::Encode as _,
     decode_from_bytes,
-    derive::NoritoSerialize,
     json::{Map, Value, from_slice, to_vec},
     to_bytes,
 };
@@ -23,7 +22,7 @@ use sorafs_car::{
 };
 use sorafs_manifest::por::{
     POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1,
-    POR_STATUS_CURSOR_VERSION_V1, PorStatusCursorV1,
+    POR_STATUS_CURSOR_VERSION_V1, PorStatusCursorV1, PorStatusExportPageV1, PorStatusPageV1,
 };
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, CouncilSignature, DagCodecId, GOVERNANCE_LOG_VERSION_V1,
@@ -40,8 +39,6 @@ use sorafs_manifest::{
     StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
     governance_dag_submission_account_digest_v1, validate_governance_dag_head_against_chain_v1,
 };
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt as _;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -76,37 +73,15 @@ impl CanonicalTempDir {
         &self.path
     }
 }
-#[derive(NoritoSerialize)]
-struct TestPorStatusPageV1 {
-    version: u8,
-    snapshot_generation: u64,
-    record_limit: u32,
-    canonical_byte_limit: u64,
-    canonical_bytes: u64,
-    inspected_candidates: u32,
-    has_more: bool,
-    #[norito(default)]
-    next_cursor: Option<String>,
-    statuses: Vec<PorChallengeStatusV1>,
-}
-#[derive(NoritoSerialize)]
-struct TestPorStatusExportPageV1 {
-    version: u8,
-    #[norito(default)]
-    start_epoch: Option<u64>,
-    #[norito(default)]
-    end_epoch: Option<u64>,
-    page: TestPorStatusPageV1,
-}
 fn test_por_status_page(
     statuses: Vec<PorChallengeStatusV1>,
     next_cursor: Option<String>,
-) -> TestPorStatusPageV1 {
+) -> PorStatusPageV1 {
     let canonical_bytes = statuses
         .iter()
         .map(|status| to_bytes(status).expect("encode PoR status fixture").len())
         .sum::<usize>();
-    TestPorStatusPageV1 {
+    PorStatusPageV1 {
         version: 1,
         snapshot_generation: u64::try_from(statuses.len())
             .expect("fixture status count fits u64")
@@ -140,7 +115,7 @@ fn test_por_cursor(
     .encode_opaque()
     .expect("encode canonical PoR cursor fixture")
 }
-fn large_por_status_page() -> TestPorStatusPageV1 {
+fn large_por_status_page() -> PorStatusPageV1 {
     let statuses = (0..512)
         .map(|index| {
             let ordinal = u64::try_from(index + 1).expect("fixture ordinal fits u64");
@@ -555,7 +530,7 @@ fn por_status_and_export_accept_fields_above_legacy_64k_limit() {
         .arg(format!("--torii-url={}", server.base_url()))
         .assert()
         .success();
-    let export_body = to_bytes(&TestPorStatusExportPageV1 {
+    let export_body = to_bytes(&PorStatusExportPageV1 {
         version: 1,
         start_epoch: None,
         end_epoch: None,
@@ -735,7 +710,7 @@ fn por_export_writes_file() {
         verifier_latency_ms: None,
     };
     let next_cursor = test_por_cursor(2, status.epoch_id, status.issued_at, status.challenge_id);
-    let payload = to_bytes(&TestPorStatusExportPageV1 {
+    let payload = to_bytes(&PorStatusExportPageV1 {
         version: 1,
         start_epoch: Some(10),
         end_epoch: Some(10),
@@ -794,7 +769,7 @@ fn por_export_rejects_noncanonical_response_cursor_without_writing() {
         failure_reason: None,
         verifier_latency_ms: None,
     };
-    let payload = to_bytes(&TestPorStatusExportPageV1 {
+    let payload = to_bytes(&PorStatusExportPageV1 {
         version: 1,
         start_epoch: Some(10),
         end_epoch: Some(10),

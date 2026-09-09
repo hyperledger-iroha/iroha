@@ -47,6 +47,10 @@ pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_BYTES_MAX_V1: u64 =
 /// Maximum age of a V1 orphan blob before authenticated collection is required.
 pub const MUSUBI_PROVIDER_ATTESTATION_ORPHAN_BLOB_AGE_MAX_MS_V1: u64 = 24 * 60 * 60 * 1_000;
 /// Exact chain incarnation and provider whose journal consumes the clock.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_attestation_clock::MusubiProviderAttestationClockScopeV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationClockScopeV1 {
     network_id: NetworkId,
@@ -97,6 +101,10 @@ impl MusubiProviderAttestationClockScopeV1 {
     }
 }
 /// Exact deployment and journal-policy scope of one sealed checkpoint chain.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_attestation_clock::MusubiProviderAttestationJournalCheckpointScopeV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct MusubiProviderAttestationJournalCheckpointScopeV1 {
     network_id: NetworkId,
@@ -223,6 +231,10 @@ impl MusubiProviderAttestationJournalCheckpointHeadV1 {
         Ok(())
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_attestation_clock::JournalCheckpointHeadRecordMaterialV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct JournalCheckpointHeadRecordMaterialV1 {
     version: u8,
@@ -528,6 +540,8 @@ impl MusubiProviderAttestationClockSealBindingV1 {
         self.qualification
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_clock::ClockRecordMaterialV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ClockRecordMaterialV1 {
     version: u8,

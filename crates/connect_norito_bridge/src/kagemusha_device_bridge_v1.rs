@@ -8,11 +8,19 @@
 
 use iroha_data_model::kagemusha::{
     KAGEMUSHA_DEVICE_SIGNATURE_BYTES_V1, KagemushaDeviceMintStageCommandV1,
-    KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1,
-    KagemushaHardwareProfileV1, kagemusha_decode_device_success_response_v1,
-    kagemusha_device_response_signing_bytes_v1, kagemusha_verify_device_response_v1,
+    KagemushaDevicePublicKeyV1, KagemushaDeviceSuccessResponseV1,
+    kagemusha_decode_device_success_response_v1, kagemusha_verify_device_response_v1,
 };
-use iroha_data_model::{NetworkId, asset::AssetDefinitionId, nexus::AxtAssetIncarnationV1};
+#[cfg(test)]
+use iroha_data_model::{
+    NetworkId,
+    asset::AssetDefinitionId,
+    kagemusha::{
+        KagemushaDeviceSignatureV1, KagemushaHardwareCredentialV1, KagemushaHardwareProfileV1,
+        kagemusha_device_response_signing_bytes_v1,
+    },
+    nexus::AxtAssetIncarnationV1,
+};
 use sha2::{Digest as _, Sha256};
 
 use crate::KagemushaDeviceLifecycleOperationV1;
@@ -32,11 +40,13 @@ pub(super) const MAX_RESPONSE_BYTES_V1: usize =
     RESPONSE_HEADER_BYTES_V1 + MAX_RESPONSE_PAYLOAD_BYTES_V1 + RESPONSE_AUTHENTICATOR_BYTES_V1;
 
 const COMMAND_MAGIC_V1: &[u8; 8] = b"IKGMJCM1";
+#[cfg(test)]
 const RESPONSE_MAGIC_V1: &[u8; 8] = b"IKGMJRS1";
 const DEVICE_BRIDGE_VERSION_V1: u16 = 1;
 
 /// Public wallet selectors independently pinned by native enrollment/configuration.
 /// Constructing these fields supplies no authenticated state or bootstrap authority.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ObservationWalletContextV1 {
     pub(crate) network_id: NetworkId,
@@ -47,6 +57,7 @@ pub(crate) struct ObservationWalletContextV1 {
 }
 
 /// Shape-checked startup projection; catalog membership and freshness are separate native checks.
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct QualificationProjectionV1 {
     pub(crate) release_id: [u8; 32],
@@ -56,12 +67,14 @@ pub(crate) struct QualificationProjectionV1 {
     pub(crate) credential: KagemushaHardwareCredentialV1,
 }
 
+#[cfg(test)]
 pub(crate) fn qualification_projection_v1(bytes: &[u8]) -> Option<QualificationProjectionV1> {
     control_payload::qualification_projection_v1(bytes).ok()
 }
 
 /// Verify exact coordinator reply components using the sole device signature transcript.
 /// This grants no catalog membership, current credential status, or outstanding-challenge authority.
+#[cfg(test)]
 pub(crate) fn verify_observation_reply_v1(
     operation: u8,
     request_id: [u8; 32],
@@ -98,8 +111,8 @@ pub(crate) fn verify_observation_reply_v1(
     let Some(operation) = KagemushaDeviceLifecycleOperationV1::from_code(operation) else {
         return false;
     };
-    let frame = DeviceSuccessResponseFrameV1 {
-        operation,
+    let frame = KagemushaDeviceSuccessResponseV1 {
+        operation: operation.code(),
         request_id,
         payload: reply,
         authenticator,
@@ -210,45 +223,32 @@ fn decode_command_frame_v1(bytes: &[u8]) -> Option<DeviceCommandFrameV1<'_>> {
     })
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DeviceSuccessResponseFrameV1<'a> {
-    operation: KagemushaDeviceLifecycleOperationV1,
-    request_id: [u8; 32],
-    payload: &'a [u8],
-    authenticator: &'a [u8],
-}
-
 fn decode_success_response_frame_v1(
     bytes: &[u8],
     expected_operation: KagemushaDeviceLifecycleOperationV1,
     expected_request_id: [u8; 32],
-) -> Option<DeviceSuccessResponseFrameV1<'_>> {
-    let frame = kagemusha_decode_device_success_response_v1(
+) -> Option<KagemushaDeviceSuccessResponseV1<'_>> {
+    kagemusha_decode_device_success_response_v1(
         bytes,
         expected_operation.code(),
         expected_request_id,
     )
-    .ok()?;
-    Some(DeviceSuccessResponseFrameV1 {
-        operation: expected_operation,
-        request_id: frame.request_id,
-        payload: frame.payload,
-        authenticator: frame.authenticator,
-    })
+    .ok()
 }
 
 /// Build the sole V1 response-authenticator transcript.
 ///
 /// The authenticator digest from the transport header is deliberately absent:
 /// it hashes the signature itself and therefore cannot be a signature input.
+#[cfg(test)]
 fn response_authenticator_transcript_v1(
-    frame: DeviceSuccessResponseFrameV1<'_>,
+    frame: KagemushaDeviceSuccessResponseV1<'_>,
     canonical_command: &[u8],
     hardware_policy_id: [u8; 32],
     qualification_report_digest: [u8; 32],
 ) -> Option<Vec<u8>> {
     kagemusha_device_response_signing_bytes_v1(
-        frame.operation.code(),
+        frame.operation,
         frame.request_id,
         canonical_command,
         frame.payload,

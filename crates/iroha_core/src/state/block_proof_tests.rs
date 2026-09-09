@@ -15,6 +15,8 @@ use iroha_data_model::{
 use iroha_primitives::const_vec::ConstVec;
 use nonzero_ext::nonzero;
 use norito::codec::DecodeAll as _;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::block_proof_tests::MutableSignedBlockWire")]
 #[derive(norito::codec::Decode, norito::codec::Encode)]
 struct MutableSignedBlockWire {
     signatures: BTreeSet<BlockSignature>,

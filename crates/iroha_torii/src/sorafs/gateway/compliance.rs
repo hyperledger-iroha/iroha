@@ -73,6 +73,10 @@ pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_HANDLE_V1: &str =
 /// Exact V1 runtime adapter revision.
 pub const GATEWAY_COMPLIANCE_FEED_TRANSPORT_REVISION_V1: u64 = 1;
 /// One strong Ed25519 identity authorized by policy.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceTrustedSignerV1"
+)]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -83,6 +87,8 @@ pub struct GatewayComplianceTrustedSignerV1 {
     pub public_key: [u8; 32],
 }
 /// Config-derived threshold trust policy.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceTrustPolicyV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -143,6 +149,8 @@ impl GatewayComplianceTrustPolicyV1 {
     }
 }
 /// Canonical compliance subject family.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceSubjectKindV1")]
 #[derive(
     Debug,
     Clone,
@@ -168,6 +176,8 @@ pub enum GatewayComplianceSubjectKindV1 {
     Url,
 }
 /// Baseline deny rule from an admitted feed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceBaselineRuleV1")]
 #[derive(
     Debug,
     Clone,
@@ -201,6 +211,10 @@ pub struct GatewayComplianceBaselineRuleV1 {
     pub expires_at_unix: Option<u64>,
 }
 /// Accepted appeal that allows one otherwise denied subject.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceAppealOverrideV1"
+)]
 #[derive(
     Debug,
     Clone,
@@ -230,6 +244,10 @@ pub struct GatewayComplianceAppealOverrideV1 {
     pub expires_at_unix: u64,
 }
 /// Legal or safety hold that cannot be bypassed by an appeal or toggle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceLegalSafetyHoldV1"
+)]
 #[derive(
     Debug,
     Clone,
@@ -259,6 +277,8 @@ pub struct GatewayComplianceLegalSafetyHoldV1 {
     pub expires_at_unix: Option<u64>,
 }
 /// Threshold-approved scoped policy toggle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceToggleV1")]
 #[derive(
     Debug,
     Clone,
@@ -286,6 +306,8 @@ pub struct GatewayComplianceToggleV1 {
     pub expires_at_unix: u64,
 }
 /// Digest anchor for one normalized source feed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceSourceAnchorV1")]
 #[derive(
     Debug,
     Clone,
@@ -307,6 +329,10 @@ pub struct GatewayComplianceSourceAnchorV1 {
     pub generated_at_unix: u64,
 }
 /// Unsigned, deterministic catalog payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCatalogPayloadV1"
+)]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -450,6 +476,10 @@ impl GatewayComplianceCatalogPayloadV1 {
     }
 }
 /// One governance approval on a catalog.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCatalogApprovalV1"
+)]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -462,6 +492,8 @@ pub struct GatewayComplianceCatalogApprovalV1 {
     pub signature: [u8; 64],
 }
 /// Threshold-signed predecessor-bound catalog.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCatalogV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -547,6 +579,10 @@ impl GatewayComplianceCatalogV1 {
     }
 }
 /// Payload signed by one regional gateway after staging a catalog.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceAcknowledgementPayloadV1"
+)]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -565,6 +601,10 @@ pub struct GatewayComplianceAcknowledgementPayloadV1 {
     pub rejection_code: Option<String>,
 }
 /// Signed regional gateway acknowledgement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceAcknowledgementV1"
+)]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -644,6 +684,10 @@ impl GatewayComplianceAcknowledgementV1 {
     }
 }
 /// Unsigned rollback command.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceRollbackPayloadV1"
+)]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -662,6 +706,8 @@ pub struct GatewayComplianceRollbackPayloadV1 {
     pub authorized_at_unix: u64,
 }
 /// Threshold-approved rollback authorization.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceRollbackV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -672,6 +718,8 @@ pub struct GatewayComplianceRollbackV1 {
     pub approvals: Vec<GatewayComplianceCatalogApprovalV1>,
 }
 /// Canonical normalized external feed document.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedDocumentV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -901,11 +949,19 @@ pub struct GatewayComplianceFeedTransportIdentityV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("gateway compliance feed transport qualification failed")]
 pub struct GatewayComplianceFeedTransportProbeError;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedTransportPolicyDigestV1"
+)]
 #[derive(Debug, NoritoSerialize)]
 struct GatewayComplianceFeedTransportPolicyDigestV1 {
     version: u8,
     hosts: Vec<GatewayComplianceFeedTransportHostDigestV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceFeedTransportHostDigestV1"
+)]
 #[derive(Debug, NoritoSerialize)]
 struct GatewayComplianceFeedTransportHostDigestV1 {
     hostname: String,
@@ -1177,6 +1233,10 @@ pub struct GatewayComplianceDecision {
     pub catalog_valid_until_unix: u64,
 }
 /// Durable promotion or rollback record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceHistoryRecordV1"
+)]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]
@@ -1195,6 +1255,8 @@ pub struct GatewayComplianceHistoryRecordV1 {
     pub reason_code: String,
 }
 /// Exact durable gateway-compliance mutation kind.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceMutationKindV1")]
 #[derive(
     Debug,
     Clone,
@@ -1245,6 +1307,10 @@ pub struct GatewayComplianceMutationResultV1 {
     pub recorded_at_unix: u64,
 }
 /// Durable replay binding for one successful mutation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceIdempotencyRecordV1"
+)]
 #[derive(
     Debug,
     Clone,
@@ -1269,6 +1335,8 @@ pub struct GatewayComplianceIdempotencyRecordV1 {
     pub recorded_at_unix: u64,
 }
 /// Durable controller state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::gateway::compliance::GatewayComplianceCheckpointV1")]
 #[derive(
     Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize, PartialEq, Eq,
 )]

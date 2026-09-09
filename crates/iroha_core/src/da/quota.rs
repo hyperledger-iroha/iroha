@@ -13,6 +13,8 @@ const QUOTA_USAGE_VERSION_V1: u8 = 1;
 const MAX_QUOTA_USAGE_BYTES: usize = 128;
 /// Transactional smart-contract-state writes prepared for one accepted block.
 pub(crate) type DaIngestQuotaWrites = BTreeMap<StatePath, Vec<u8>>;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::da::quota::DaIngestQuotaUsageV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 struct DaIngestQuotaUsageV1 {
     version: u8,

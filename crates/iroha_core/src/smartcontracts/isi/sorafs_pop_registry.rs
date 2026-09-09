@@ -83,6 +83,8 @@ const REVOCATION_LIMITS: DecodeLimits = DecodeLimits::new(
     POP_REVOCATION_LIST_PAYLOAD_MAX_BYTES_V1 * 2,
     32,
 );
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs_pop_registry::NonceBindingStateV1")]
 #[derive(Clone, Debug, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct NonceBindingStateV1 {
     credential_commitment: [u8; 32],

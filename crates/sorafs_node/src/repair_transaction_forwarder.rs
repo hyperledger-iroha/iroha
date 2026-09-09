@@ -129,6 +129,8 @@ pub enum RepairTransactionKindV1 {
 ///
 /// The forwarder validates the operation, its embedded canonical payloads, and its authority
 /// binding before persistence. It never creates or retains a private key.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::repair_transaction_forwarder::RepairOperationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum RepairOperationV1 {
     /// Admit one source-bound repair report.
@@ -426,6 +428,10 @@ struct StoredDeadRepairTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::repair_transaction_forwarder::RepairTransactionForwarderCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RepairTransactionForwarderCheckpointV1 {
     version: u8,

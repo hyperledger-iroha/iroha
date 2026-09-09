@@ -93,6 +93,8 @@ impl SoftwareSignerEndpointPolicyV1 {
     }
 }
 /// Public, payload-free evidence returned for one durably committed signature.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::unix::SoftwareSignerSignatureReceiptV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerSignatureReceiptV1 {
     /// Caller-selected replay/idempotency identifier.

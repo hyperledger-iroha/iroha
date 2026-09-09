@@ -75,6 +75,8 @@ const V2_STARTUP_INHERITED_AUTHORITY_DOMAIN: &[u8] =
 /// fields rather than copied as an optional child field. This makes an NPoS
 /// transition consume exactly the powered roster, quorum, PoPs, epoch bounds,
 /// and leader seed authenticated by the preceding roster.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::V2StartupInheritedAuthoritySeal")]
 #[derive(Encode)]
 struct V2StartupInheritedAuthoritySeal {
     version: u16,

@@ -422,6 +422,8 @@ pub enum ConsensusKeyStatus {
     Disabled,
 }
 /// Recorded consensus/committee key with lifecycle metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::consensus::ConsensusKeyRecord")]
 #[derive(
     Debug,
     Clone,
@@ -821,6 +823,8 @@ pub struct GlobalThresholdBeaconPartialSignatureV1 {
 /// itself would permit a session to claim a roster or DKG transcript it did not
 /// actually use. Beacon sessions are a separate typed cryptographic domain from
 /// Parliament timelock-release sessions.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::consensus::GlobalThresholdBeaconKeySessionV1")]
 #[derive(
     Debug,
     Clone,
@@ -893,6 +897,8 @@ pub struct GlobalThresholdBeaconChainAnchorV1 {
 /// key, so the public result cannot vary with the subset used internally to
 /// reconstruct it. `seed` and `pulse_id` are redundant audit fields which must
 /// be recomputed from the verified final signature.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1")]
 #[derive(
     Debug,
     Clone,
@@ -1156,6 +1162,38 @@ mod tests {
         assert_eq!(decoded.rechain_seq, 5);
         assert_eq!(decoded.validator_set_hash, expected_hash);
         assert_eq!(decoded.validator_set, validator_set);
+    }
+    #[test]
+    fn consensus_key_record_and_list_use_distinct_canonical_frames() {
+        let record = ConsensusKeyRecord {
+            id: ConsensusKeyId::new(ConsensusKeyRole::Validator, "v1"),
+            public_key: checked_random_keypair().public_key().clone(),
+            pop: None,
+            activation_height: 10,
+            expiry_height: Some(20),
+            replaces: Some(ConsensusKeyId::new(ConsensusKeyRole::Validator, "v0")),
+            status: ConsensusKeyStatus::Active,
+        };
+        let encoded = norito::encode_canonical(&record).expect("encode consensus key record");
+        let header = norito::core::Header::read(&encoded[..]).expect("record frame header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name("iroha_data_model::consensus::ConsensusKeyRecord"),
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<ConsensusKeyRecord>(&encoded).unwrap(),
+            record,
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<Vec<ConsensusKeyRecord>>(&encoded),
+            Err(norito::core::Error::SchemaMismatch),
+        ));
+        let records = vec![record];
+        let encoded = norito::encode_canonical(&records).expect("encode consensus key list");
+        assert_eq!(
+            norito::decode_from_bytes::<Vec<ConsensusKeyRecord>>(&encoded).unwrap(),
+            records,
+        );
     }
     #[test]
     fn consensus_key_record_liveness_respects_activation_and_expiry() {

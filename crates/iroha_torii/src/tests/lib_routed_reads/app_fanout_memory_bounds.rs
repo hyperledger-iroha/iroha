@@ -1,4 +1,6 @@
 // Focused generic application-API fanout memory bounds.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ToriiAppFanoutNoritoTestDto")]
 #[derive(
     Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]

@@ -1,4 +1,6 @@
 /// Policy and state for a shielded asset.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::FrontierCheckpoint")]
 #[derive(
     Copy, Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -34,6 +36,8 @@ mod zk_asset_tree_frontier_json {
     }
 }
 /// Canonical shielded asset ledger snapshot persisted within the world state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ZkAssetState")]
 #[derive(Clone, Debug, JsonSerialize, NoritoSerialize, NoritoDeserialize)]
 pub struct ZkAssetState {
     /// Authenticated commitment-tree construction for this asset.

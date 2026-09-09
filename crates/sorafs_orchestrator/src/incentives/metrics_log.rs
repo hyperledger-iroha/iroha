@@ -310,7 +310,7 @@ fn read_metrics_frame(
     {
         return Err(norito::Error::NonCanonicalEncoding);
     }
-    if header.schema != <RelayEpochMetricsV1 as norito::NoritoSerialize>::schema_hash() {
+    if header.schema != norito::schema::identity::frame_hash::<RelayEpochMetricsV1>() {
         return Err(norito::Error::SchemaMismatch);
     }
     let limit = norito::core::max_archive_len();

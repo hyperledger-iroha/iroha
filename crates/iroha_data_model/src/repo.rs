@@ -24,6 +24,8 @@ use norito::{
 mod model {
     use super::*;
     /// Identifier for a repo agreement lifecycle.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::repo::model::RepoAgreementId")]
     #[derive(
         Debug,
         Display,
