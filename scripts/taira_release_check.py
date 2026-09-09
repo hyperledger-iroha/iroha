@@ -174,6 +174,9 @@ STAGES = (
     ("server-prepared transaction confirmation", (
         "taira::tests::prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire",
         "taira::tests::prepared_server_confirmation_preserves_fixed_failure_and_deadline",
+        "taira::tests::prepared_server_confirmation_retries_deadline_timeout_until_fixed_failure",
+        "taira::tests::prepared_server_confirmation_preserves_configured_timeout_errors",
+        "taira::tests::prepared_server_confirmation_preserves_other_transport_errors",
         "taira::tests::prepared_server_confirmation_rejects_malformed_status_without_resubmission",
     )),
     ("stopped owner runtime cleanup", (
