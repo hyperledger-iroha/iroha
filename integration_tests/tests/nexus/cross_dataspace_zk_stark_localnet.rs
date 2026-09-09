@@ -53,7 +53,7 @@ use iroha_data_model::{
     },
 };
 use iroha_primitives::json::Json;
-use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
+use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use reqwest::{Client as HttpClient, StatusCode};
 use std::{collections::BTreeSet, num::NonZeroU64, time::Duration};
@@ -235,7 +235,7 @@ fn localnet_builder() -> NetworkBuilder {
         .with_genesis_block(|topology, topology_entries| {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
-            let mut genesis = genesis_factory_with_post_topology(
+            let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 npos_override_transactions(TOTAL_PEERS),
                 post_topology,
                 topology,

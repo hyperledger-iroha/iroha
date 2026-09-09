@@ -100,8 +100,8 @@ use iroha_executor_data_model::permission::sorafs::{
 };
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, dataspace_setup_instruction,
-    domain_setup_instruction_in_dataspace, genesis_factory_with_post_topology,
-    init_instruction_registry,
+    domain_setup_instruction_in_dataspace, init_instruction_registry,
+    unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use norito::json::{self, Value as JsonValue};
@@ -388,7 +388,7 @@ fn localnet_builder() -> NetworkBuilder {
         .with_auto_populated_trusted_peers()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
-            let mut genesis = genesis_factory_with_post_topology(
+            let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 Vec::new(),
                 genesis_post_topology_transactions(topology.as_ref()),
                 topology,

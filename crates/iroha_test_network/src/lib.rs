@@ -808,9 +808,7 @@ pub fn repo_root() -> PathBuf {
         .canonicalize()
         .unwrap()
 }
-fn default_rans_tables_path() -> PathBuf {
-    repo_root().join("codec/rans/tables/rans_seed0.toml")
-}
+const DEFAULT_RANS_TABLES: &[u8] = include_bytes!("../../../codec/rans/tables/rans_seed0.toml");
 fn tempdir_in() -> Option<impl AsRef<Path>> {
     static ENV: OnceLock<Option<PathBuf>> = OnceLock::new();
     ENV.get_or_init(|| std::env::var(TEMPDIR_IN_ENV).map(PathBuf::from).ok())
@@ -2637,6 +2635,14 @@ impl Program {
     /// # Errors
     /// If the path is not found (and build did not help).
     fn resolve_internal(&self, skip_build_override: Option<bool>) -> color_eyre::Result<PathBuf> {
+        self.resolve_internal_in_repo(skip_build_override, &repo_root())
+    }
+
+    fn resolve_internal_in_repo(
+        &self,
+        skip_build_override: Option<bool>,
+        repo: &Path,
+    ) -> color_eyre::Result<PathBuf> {
         fn bin_name(raw: &str) -> String {
             if cfg!(windows) {
                 format!("{raw}.exe")
@@ -2651,8 +2657,7 @@ impl Program {
             build_args,
             isolated_target_subdir,
         } = self.spec();
-        let repo = repo_root();
-        let release_contract = release_program_contract(&repo)?;
+        let release_contract = release_program_contract(repo)?;
         if release_contract.is_some() && !self.release_prebuilt_allowed() {
             return Err(eyre!(
                 "the feature-isolated Parliament signer daemon is forbidden in release-prebuilt corridors"
@@ -2720,8 +2725,8 @@ impl Program {
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
         let target_dir = isolated_target_subdir.map_or_else(
-            || resolve_target_dir(&repo),
-            |subdir| resolve_target_dir(&repo).join(subdir),
+            || resolve_target_dir(repo),
+            |subdir| resolve_target_dir(repo).join(subdir),
         );
         let primary_binary = target_dir.join(format!("{profile}/{bin}"));
         let mut candidates: Vec<PathBuf> = Vec::new();
@@ -2792,7 +2797,7 @@ impl Program {
         }
         if validate_freshness {
             ensure_binary_fresh(
-                &repo,
+                repo,
                 pkg,
                 name,
                 &target_dir,
@@ -10116,22 +10121,39 @@ impl NetworkPeer {
             )
     }
     fn ensure_rans_tables(&self) {
-        let src = default_rans_tables_path();
-        assert!(
-            src.exists(),
-            "missing codec rANS tables at {}; ensure codec/rans/tables/rans_seed0.toml is present",
-            src.display()
-        );
         let dst = self
             .dir
             .join("codec")
             .join("rans")
             .join("tables")
             .join("rans_seed0.toml");
-        if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).expect("create codec/rans/tables dir");
+        let parent = dst
+            .parent()
+            .expect("codec rANS table has a parent directory");
+        fs::create_dir_all(parent).expect("create codec/rans/tables dir");
+        match fs::symlink_metadata(&dst) {
+            Ok(metadata) => {
+                assert!(
+                    metadata.file_type().is_file(),
+                    "peer codec rANS tables must be a regular file"
+                );
+                if fs::read(&dst).expect("read peer codec rANS tables") == DEFAULT_RANS_TABLES {
+                    return;
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => panic!("inspect peer codec rANS tables: {error}"),
         }
-        std::fs::copy(src, dst).expect("copy deterministic rANS tables into peer dir");
+        // Source captures are read-only. Materialize owned bytes instead of inheriting
+        // source permissions, and replace stale tables without truncating a read-only file.
+        let mut staged = tempfile::NamedTempFile::new_in(parent)
+            .expect("create owner-private codec rANS table fixture");
+        staged
+            .write_all(DEFAULT_RANS_TABLES)
+            .expect("write canonical codec rANS tables");
+        staged
+            .persist(&dst)
+            .expect("publish canonical codec rANS tables into peer dir");
     }
     fn canonical_genesis_bytes(block: &GenesisBlock) -> Result<Vec<u8>> {
         let framed = block
@@ -11962,10 +11984,44 @@ mod tests {
             .join("rans")
             .join("tables")
             .join("rans_seed0.toml");
-        assert!(
-            tables_path.exists(),
-            "expected deterministic rANS tables at {}",
-            tables_path.display()
+        assert_eq!(
+            fs::read(&tables_path).expect("read materialized rANS tables"),
+            DEFAULT_RANS_TABLES
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&tables_path, fs::Permissions::from_mode(0o400))
+                .expect("make existing canonical tables read-only");
+        }
+        peer.write_base_config();
+        peer.write_base_config();
+        assert_eq!(
+            fs::read(&tables_path).expect("read reused canonical rANS tables"),
+            DEFAULT_RANS_TABLES
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                fs::metadata(&tables_path).unwrap().permissions().mode() & 0o777,
+                0o400,
+                "matching read-only tables must be reused without mutation"
+            );
+            fs::set_permissions(&tables_path, fs::Permissions::from_mode(0o600))
+                .expect("prepare divergent table fixture");
+        }
+        fs::write(&tables_path, b"different table bytes").expect("write divergent table fixture");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&tables_path, fs::Permissions::from_mode(0o400))
+                .expect("make divergent table fixture read-only");
+        }
+        peer.write_base_config();
+        assert_eq!(
+            fs::read(&tables_path).expect("read repaired canonical rANS tables"),
+            DEFAULT_RANS_TABLES
         );
     }
     #[test]
@@ -15564,17 +15620,16 @@ mod tests {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
-        // Point TEST_NETWORK_BIN_IROHA to a dummy file under repo root
-        let repo = repo_root();
+        let repo = tempfile::tempdir().expect("create isolated repository fixture");
         let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy");
-        let abs = repo.join(&rel);
+        let abs = repo.path().join(&rel);
         std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
         std::fs::write(&abs, b"dummy").unwrap();
         let old_env = env::var(super::PROGRAM_IROHA_ENV).ok();
         set_env_var(super::PROGRAM_IROHA_ENV, rel.display().to_string());
         // Should resolve to the dummy file via env override
         let resolved = Program::Iroha
-            .resolve_skip_build()
+            .resolve_internal_in_repo(Some(true), repo.path())
             .expect("resolve via env");
         assert_eq!(resolved, abs.canonicalize().unwrap());
         // Cleanup and restore environment
@@ -15583,21 +15638,17 @@ mod tests {
         } else {
             remove_env_var(super::PROGRAM_IROHA_ENV);
         }
-        // Do not remove the dummy file to avoid races if other tests concurrently resolve;
-        // it's under target/ and harmless.
     }
     #[tokio::test]
     async fn program_resolve_async_honors_env_override() {
         let _guard = lock_env_guard_async(&PROGRAM_BIN_ENV_GUARD).await;
         let _clear_release = EnvVarGuard::cleared(IROHA_RELEASE_SOURCE_MANIFEST_SHA256_ENV);
         let _clear_prebuilt = EnvVarGuard::cleared(IROHA_RELEASE_PREBUILT_MANIFEST_SHA256_ENV);
-        let repo = repo_root();
-        let rel = PathBuf::from("target/test-bin-dummy/iroha-cli-dummy-async");
-        let abs = repo.join(&rel);
-        std::fs::create_dir_all(abs.parent().unwrap()).unwrap();
+        let fixture = tempfile::tempdir().expect("create isolated executable fixture");
+        let abs = fixture.path().join("iroha-cli-dummy-async");
         std::fs::write(&abs, b"dummy").unwrap();
         let old_env = env::var(super::PROGRAM_IROHA_ENV).ok();
-        set_env_var(super::PROGRAM_IROHA_ENV, rel.display().to_string());
+        set_env_var(super::PROGRAM_IROHA_ENV, abs.display().to_string());
         let resolved = Program::Iroha
             .resolve_async()
             .await
@@ -15621,8 +15672,8 @@ mod tests {
     #[test]
     fn cached_binary_if_present_ignores_missing_path() {
         let cache = OnceLock::new();
-        let missing = repo_root().join("target/test-bin-dummy/missing-iroha3d");
-        let _ = fs::remove_file(&missing);
+        let fixture = tempfile::tempdir().expect("create isolated missing executable fixture");
+        let missing = fixture.path().join("missing-iroha3d");
         cache.set(missing).expect("cache should be empty for test");
         assert!(cached_binary_if_present(&cache).is_none());
     }
