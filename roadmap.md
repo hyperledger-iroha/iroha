@@ -20,8 +20,9 @@ authentication/cancellation and durable finalization handoff fixes, then prove
 public transaction application on all four validators, canaries, restart proof,
 public cutover and application connectivity. Reuse stable build lanes and verify
 closed-attempt reclamation through the maintained retry path. Run shared lifecycle
-source assertions before Cargo and qualify the combined native library build
-without relaxing the four-validator or release gates.
+source assertions before Cargo, qualify consistent Nexus descriptor defaults
+and complete the combined native gate without relaxing the four-validator
+or release checks.
 
 ## Architecture and build ownership
 

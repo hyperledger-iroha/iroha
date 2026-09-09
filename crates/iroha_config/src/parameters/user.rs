@@ -9822,6 +9822,8 @@ impl NexusStorageWeights {
     }
 }
 /// User-level configuration container for `LaneDescriptor`.
+/// Catalog entries cross the Norito JSON boundary, so their field defaults
+/// must also be declared for JSON decoding rather than only `ReadConfig`.
 #[derive(Debug, Clone, ReadConfig, Default, norito::JsonDeserialize)]
 pub struct LaneDescriptor {
     /// Zero-based lane index within the configured lane count.
@@ -9861,6 +9863,7 @@ pub struct LaneDescriptor {
     /// Reserved autoscale keys remain consensus-relevant. Raw scheduler and settlement buffer
     /// metadata are rejected in favor of their dedicated typed fields.
     #[config(default)]
+    #[norito(default)]
     pub metadata: BTreeMap<String, String>,
 }
 const RETIRED_LANE_SHARD_ID_METADATA_KEY: &str = "da_shard_id";
@@ -9892,6 +9895,7 @@ pub struct ConfidentialComputeDescriptor {
     pub key_version: Option<u32>,
     /// Canonical audience labels allowed to fetch confidential payloads.
     #[config(default)]
+    #[norito(default)]
     pub allowed_audiences: Vec<String>,
 }
 /// User-facing positive lane scheduler overrides.
@@ -10420,6 +10424,7 @@ pub struct GovernanceModule {
     pub module_type: Option<String>,
     /// Additional parameters defined by the module.
     #[config(default)]
+    #[norito(default)]
     pub params: BTreeMap<String, String>,
 }
 /// User-level configuration container for `RoutingPolicy`.
@@ -10431,6 +10436,7 @@ pub struct RoutingPolicy {
     pub default_dataspace: Option<String>,
     /// Declarative routing rules inspected in order.
     #[config(default)]
+    #[norito(default)]
     pub rules: Vec<RoutingRule>,
 }
 /// User-level configuration container for `RoutingRule`.
@@ -10442,6 +10448,7 @@ pub struct RoutingRule {
     pub dataspace: Option<String>,
     /// Matcher criteria for the rule.
     #[config(default)]
+    #[norito(default)]
     pub matcher: RouteMatcher,
 }
 /// User-level configuration container for `RouteMatcher`.

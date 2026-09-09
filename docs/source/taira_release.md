@@ -90,6 +90,9 @@ of their existing default features. Tests retain crypto, transport, consensus
 and fixture order; a failure stops before daemon startup. The daemon/CLI and
 Linux release feature selections remain independent. This reduces repeated
 dependency work; it does not promise a fixed build duration.
+The fixture checks read the public Taira Nexus profile without runtime inputs
+and verify that collection decoding preserves declared configuration defaults
+while rejecting malformed values.
 
 Rerun the exact same `prepare` command and output directory after interruption.
 The command locks that owner-private preparation directory, checks that its

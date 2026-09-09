@@ -320,6 +320,10 @@ PROOF_FLOW_STAGES = (("default proof production and verification", (
 )),)
 
 TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
+    "config::tests::lane_descriptor_collection_defaults_match_config_defaults",
+    "config::tests::lane_descriptor_collection_defaults_reject_malformed_values",
+    "config::tests::taira_profile_nexus_collections_deserialize_without_runtime_inputs",
+    "config::tests::nexus_routing_and_governance_collection_defaults_match_config_defaults",
     "config::tests::base_config_applies_bounded_storage_caps",
     "config::tests::base_config_preserves_caller_storage_budget_and_smaller_component_cap",
     "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
