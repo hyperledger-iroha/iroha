@@ -120,7 +120,12 @@ fn pending_kura_mixed_decision_fetch_services_older_cold_output_before_producer_
 
 #[test]
 fn pending_kura_actor_backpressure_reaches_durable_rollover_after_closed_prefix() {
-    let pending_runner_source = include_str!("v2_runner/lifecycle_pending_kura.rs");
+    assert_pending_kura_actor_backpressure_contract(include_str!(
+        "v2_runner/lifecycle_pending_kura.rs"
+    ));
+}
+
+fn assert_pending_kura_actor_backpressure_contract(pending_runner_source: &str) {
     let worker_source = include_str!("v2_worker_services_impl.rs");
 
     let exact_output_drive = source_region(
@@ -152,14 +157,38 @@ fn pending_kura_actor_backpressure_reaches_durable_rollover_after_closed_prefix(
     assert_source_tokens_in_order(
         runtime_readiness,
         &[
-            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)",
             "let _ = retry_exact_output_and_apply_sidecar_admissions(",
+            "services.drain_completions(executor)?",
+            "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)",
             "Ok(executor.ready_to_finish())",
             "let ready = ready_to_finish",
             "&& !block_sync_server.has_pending_historical_body_serve()",
             "if !ready",
             "wake_rx.recv_timeout(IDLE_POLL)",
         ],
+    );
+
+    // The readiness turn reconciles existing output before recovery and again
+    // after dispatch. Match the second call inside its own phase; a global
+    // first-occurrence search would accidentally select the earlier retry.
+    assert_source_token_count(
+        runtime_readiness,
+        "let _ = retry_exact_output_and_apply_sidecar_admissions(",
+        2,
+    );
+    let post_dispatch_readiness = source_region(
+        runtime_readiness,
+        "dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;",
+        "Ok(executor.ready_to_finish())",
+    );
+    assert_source_token_count(
+        post_dispatch_readiness,
+        "let _ = retry_exact_output_and_apply_sidecar_admissions(",
+        1,
+    );
+    assert_forbidden_source_tokens(
+        post_dispatch_readiness,
+        &["if ", "wake_rx.recv_timeout", "continue;", "return "],
     );
 
     let finalized_preflight = source_region(

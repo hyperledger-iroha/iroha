@@ -362,7 +362,10 @@ def selected_regression_count() -> int:
 def compile_command(root: Path, env: dict[str, str], *, harness: str = "cli") -> list[str]:
     if harness not in HARNESS_TARGETS:
         raise CheckError("invalid native regression harness selection")
-    selection = HARNESS_TARGETS[harness][3]
+    return _compile_command(root, env, HARNESS_TARGETS[harness][3])
+
+
+def _compile_command(root: Path, env: dict[str, str], selection: list[str]) -> list[str]:
     return [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
             "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
             *selection, "--no-run",
@@ -405,26 +408,57 @@ def show_build_diagnostic(line: str) -> None:
 def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (),
                     harness: str = "cli") -> str:
     command = compile_command(root, env, harness=harness)
-    label = HARNESS_TARGETS[harness][0]
+    return _build_harnesses(command, env, (harness,), lock_fds)[harness]
+
+
+def compile_library_harnesses(root: Path, env: dict[str, str], *,
+                              harnesses: tuple[str, ...],
+                              lock_fds: tuple[int, ...] = ()) -> dict[str, str]:
+    """Unify selected library dependencies once, retaining every default feature."""
+    if not harnesses or len(harnesses) != len(set(harnesses)):
+        raise CheckError("native library batch requires distinct harness selections")
+    selection: list[str] = []
+    for harness in harnesses:
+        target = HARNESS_TARGETS.get(harness)
+        if target is None:
+            raise CheckError("invalid native regression harness selection")
+        _, _, kind, arguments = target
+        if (kind != "lib" or len(arguments) != 3
+                or arguments[0] != "-p" or arguments[-1] != "--lib"):
+            raise CheckError("native library batch requires explicit library packages")
+        selection.extend(arguments[:-1])
+    command = _compile_command(root, env, [*selection, "--lib"])
+    return _build_harnesses(command, env, harnesses, lock_fds)
+
+
+def _build_harnesses(command: list[str], env: dict[str, str],
+                     harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> dict[str, str]:
+    label = "; ".join(HARNESS_TARGETS[harness][0] for harness in harnesses)
     print(f"[taira-check] build {label} test harness", flush=True)
     started = time.monotonic()
-    artifacts: set[str] = set()
+    artifacts: dict[str, set[str]] = {harness: set() for harness in harnesses}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
-            artifact = test_artifact(line, harness=harness)
-            if artifact is not None:
-                artifacts.add(artifact)
+            for harness in harnesses:
+                artifact = test_artifact(line, harness=harness)
+                if artifact is not None:
+                    artifacts[harness].add(artifact)
         code = child.wait()
     elapsed = time.monotonic() - started
     if code:
         raise CheckError(f"{label} build failed (exit {code}, {elapsed:.1f}s)")
-    if len(artifacts) != 1:
-        raise CheckError(f"{label} build reported {len(artifacts)} test executables; expected one")
+    for harness, executables in artifacts.items():
+        if len(executables) != 1:
+            raise CheckError(f"{HARNESS_TARGETS[harness][0]} build reported "
+                             f"{len(executables)} test executables; expected one")
+    result = {harness: next(iter(executables)) for harness, executables in artifacts.items()}
+    if len(set(result.values())) != len(result):
+        raise CheckError("native build reused one executable for distinct test harnesses")
     print(f"[taira-check] {label} build passed in {elapsed:.1f}s", flush=True)
-    return artifacts.pop()
+    return result
 
 
 def require_tests(listing: str, stages=None) -> None:
@@ -548,32 +582,47 @@ def require_network_fixture_capacity(directory: Path) -> None:
 
 def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
     """Run every production reducer test without Cargo or adapter dependencies."""
+    _run_standalone_checks(root, env, lock_fds,
+        source="crates/iroha_sumeragi_core/src/lib.rs", output_name="sumeragi-core-tests",
+        label="pure FSM", description="pure consensus FSM (exact production reducer)")
+
+
+def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+    """Check the same lifecycle source contracts before compiling Core dependencies."""
+    _run_standalone_checks(root, env, lock_fds,
+        source="crates/iroha_core/src/sumeragi/v2_lifecycle_source_contract_harness.rs",
+        output_name="lifecycle-source-tests", label="lifecycle source contracts",
+        description="lifecycle source contracts (shared Core assertions)")
+
+
+def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...], *,
+                           source: str, output_name: str, label: str, description: str) -> None:
     compiler = env.get("RUSTC")
     if not compiler or not Path(compiler).is_absolute():
-        raise CheckError("pure FSM checks require the coordinated pinned RUSTC")
+        raise CheckError(f"{label} checks require the coordinated pinned RUSTC")
     target = Path(env["CARGO_TARGET_DIR"])
     output = target / "taira-consensus-fsm-check"
     output.mkdir(mode=0o700, exist_ok=True)
     if output.is_symlink() or not output.is_dir():
-        raise CheckError("pure FSM output must be a direct directory in the existing target")
-    executable = output / "sumeragi-core-tests"
+        raise CheckError(f"{label} output must be a direct directory in the existing target")
+    executable = output / output_name
     if executable.is_symlink():
-        raise CheckError("pure FSM executable cannot be a symlink")
+        raise CheckError(f"{label} executable cannot be a symlink")
     started = time.monotonic()
-    print("[taira-check] start pure consensus FSM (exact production reducer)", flush=True)
+    print(f"[taira-check] start {description}", flush=True)
     common = dict(cwd="/", env=env, stdin=subprocess.DEVNULL, text=True,
                   capture_output=True, check=False, pass_fds=lock_fds, timeout=120)
     compiled = subprocess.run([compiler, "--edition=2024", "--test",
-        str(root / "crates/iroha_sumeragi_core/src/lib.rs"), "-o", str(executable)], **common)
+        str(root / source), "-o", str(executable)], **common)
     if compiled.returncode:
         sys.stderr.write(compiled.stdout + compiled.stderr)
-        raise CheckError(f"pure FSM compilation failed (exit {compiled.returncode})")
+        raise CheckError(f"{label} compilation failed (exit {compiled.returncode})")
     listing = subprocess.run([str(executable), "--list", "--format", "terse"], **common)
     lines = listing.stdout.splitlines()
     names = [line.removesuffix(": test") for line in lines if line.endswith(": test")]
     if (listing.returncode or not names or len(names) != len(set(names))
             or len(names) != len(lines) or any(not name for name in names)):
-        raise CheckError("pure FSM test census is missing, duplicated, or malformed")
+        raise CheckError(f"{label} test census is missing, duplicated, or malformed")
     result = subprocess.run([str(executable), "--color", "never", "--test-threads=6"], **common)
     passed = [line.removeprefix("test ").removesuffix(" ... ok")
               for line in result.stdout.splitlines()
@@ -584,8 +633,8 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
     if (result.returncode or len(passed) != len(names) or set(passed) != set(names)
             or summaries != [str(len(names))]):
         sys.stderr.write(result.stdout + result.stderr)
-        raise CheckError("pure FSM suite did not execute every listed test successfully without skips")
-    print(f"[taira-check] pure FSM PASS: {len(names)} listed, {len(passed)} passed, 0 ignored "
+        raise CheckError(f"{label} suite did not execute every listed test successfully without skips")
+    print(f"[taira-check] {label} PASS: {len(names)} listed, {len(passed)} passed, 0 ignored "
           f"in {time.monotonic() - started:.1f}s", flush=True)
 
 
@@ -608,20 +657,17 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if NETWORK_STAGES:
         require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
-    # Check the authentication lifetime and its bounded cryptographic work
-    # before paying for daemon startup or a four-validator consensus deadline.
-    for name, stages in (("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES)):
-        if stages:
-            selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
-            run_stages(selected_harness, fixture_root, env, stages, lock_fds)
-    # Fail on focused scheduling regressions before building the full node and
-    # network harness; exercise the composed runtime before unrelated contracts.
-    if CORE_STAGES:
-        core = compile_harness(root, env, lock_fds=lock_fds, harness="core")
-        run_stages(core, fixture_root, env, CORE_STAGES, lock_fds)
-    if TEST_NETWORK_STAGES:
-        fixture_harness = compile_harness(root, env, lock_fds=lock_fds, harness="test-network")
-        run_stages(fixture_harness, fixture_root, env, TEST_NETWORK_STAGES, lock_fds)
+    run_lifecycle_source_checks(root, env, lock_fds)
+    # Resolve the shared library graph once. Keep logical regression order and
+    # stop before daemon startup if any selected library stage fails.
+    library_stages = tuple((name, stages) for name, stages in (
+        ("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES), ("core", CORE_STAGES),
+        ("test-network", TEST_NETWORK_STAGES)) if stages)
+    if library_stages:
+        libraries = compile_library_harnesses(root, env, lock_fds=lock_fds,
+                                             harnesses=tuple(name for name, _ in library_stages))
+        for name, stages in library_stages:
+            run_stages(libraries[name], fixture_root, env, stages, lock_fds)
     if NETWORK_STAGES:
         run_network_checks(root, fixture_root, env, lock_fds)
     harness = compile_harness(root, env, lock_fds=lock_fds)

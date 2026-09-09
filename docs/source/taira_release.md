@@ -81,6 +81,16 @@ installed sccache remain in use. No target or cache is cleaned or replaced.
 Compiler overrides, interpreter hooks and runtime credentials are not forwarded.
 The native gate receives the same source, toolchain and explicit target directory.
 
+Before Cargo, the gate compiles the dependency-free consensus reducers and the
+shared lifecycle source assertions directly with the pinned Rust compiler. Both
+must execute every listed test without skips. Lifecycle mutation controls check
+that removing or reordering required retries still fails. Crypto, P2P, Core and
+fixture library harnesses then share one Cargo invocation, resolving the union
+of their existing default features. Tests retain crypto, transport, consensus
+and fixture order; a failure stops before daemon startup. The daemon/CLI and
+Linux release feature selections remain independent. This reduces repeated
+dependency work; it does not promise a fixed build duration.
+
 Rerun the exact same `prepare` command and output directory after interruption.
 The command locks that owner-private preparation directory, checks that its
 recorded inputs still match the fixed signed source capture and tools, and resumes locally:
