@@ -222,11 +222,13 @@ TORII_STAGES = (("routed onboarding and faucet contracts", (
 )),)
 
 CORE_STAGES = (("consensus scheduling and multi-route progress", (
+    "sumeragi::lane_planner::tests::autonomous_reservation_retries_only_transient_planning_failures",
     "sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery",
     "sumeragi::v2_worker::tests::deferred_apply_retry_full_queue_preserves_output_and_exact_task",
     "sumeragi::v2_worker::tests::deferred_apply_retry_disconnected_or_conflicting_queue_fails_closed",
     "sumeragi::v2_lane_work::tests::completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged",
     "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reservations_until_participant_predecessor_repair",
+    "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair",
     "sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes",
     "sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently",
     "sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application",

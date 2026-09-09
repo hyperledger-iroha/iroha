@@ -2160,20 +2160,12 @@ pub(crate) enum AutonomousLaneReservationSlotPlanError {
         /// Requested dataspace.
         dataspace_id: DataSpaceId,
     },
-    /// A predecessor artifact or certificate has not crossed its application boundary.
+    /// The exact applied predecessor is unavailable or changed during discovery.
     #[error("lane reservation predecessor is not durably applied")]
     BlockedPredecessor {
         /// Blocked lane.
         lane_id: LaneId,
         /// Blocked dataspace.
-        dataspace_id: DataSpaceId,
-    },
-    /// Durable sources disagree about the latest predecessor identity.
-    #[error("lane reservation predecessor identity is conflicting")]
-    ConflictingPredecessor {
-        /// Conflicting lane.
-        lane_id: LaneId,
-        /// Conflicting dataspace.
         dataspace_id: DataSpaceId,
     },
     /// A non-genesis predecessor lacks its exact descriptor hash.
@@ -2556,12 +2548,10 @@ pub(crate) fn plan_autonomous_lane_reservation_slot(
             lane_incarnation,
         )
         .map_err(storage_error)?
-        .ok_or(
-            AutonomousLaneReservationSlotPlanError::ConflictingPredecessor {
-                lane_id,
-                dataspace_id,
-            },
-        )?;
+        .ok_or(AutonomousLaneReservationSlotPlanError::BlockedPredecessor {
+            lane_id,
+            dataspace_id,
+        })?;
     let validator_set =
         autonomous_lane_reservation_committee(state, context, lane_id, dataspace_id)?;
     let plan = assemble_autonomous_lane_reservation_slot(
@@ -2851,68 +2841,65 @@ fn prepare_v2_lane_payload_plan_inner(
                 })
         })
         .collect::<Result<BTreeMap<_, _>, _>>()?;
-    let tips = domains
-        .iter()
-        .map(|domain| {
-            let lane_incarnation = *lane_incarnations.get(&domain.lane_id).ok_or_else(|| {
-                V2LanePayloadPlanError::new(format!(
-                    "lane {} has no planned incarnation at height {}",
+    let mut tips = Vec::with_capacity(domains.len());
+    for domain in &domains {
+        let lane_incarnation = *lane_incarnations.get(&domain.lane_id).ok_or_else(|| {
+            V2LanePayloadPlanError::new(format!(
+                "lane {} has no planned incarnation at height {}",
+                domain.lane_id.as_u32(),
+                context.height
+            ))
+        })?;
+        let Some(ordinary_tip) = v2_known_lane_tip_for_route(
+            state,
+            kura,
+            context.height,
+            domain.lane_id,
+            domain.dataspace_id,
+            lane_incarnation,
+        )
+        .map_err(|error| {
+            V2LanePayloadPlanError::storage(format!(
+                "lane predecessor storage read failed: {error}"
+            ))
+        })?
+        else {
+            // A publication may become pending after the blocked-route snapshot.
+            // Preserve the same unavailable result so producer retry and received-
+            // body recovery never interpret this race as invalid input.
+            return Ok(V2LanePayloadPlan {
+                unavailable_indices: domain.accepted_candidate_indices.iter().copied().collect(),
+                ..V2LanePayloadPlan::default()
+            });
+        };
+        let canonical_tip = canonical_unapplied_tips
+            .get(&(domain.lane_id, domain.dataspace_id))
+            .filter(|tip| tip.lane_incarnation == lane_incarnation)
+            .map(|tip| {
+                (
+                    tip.latest_lane_block_height,
+                    tip.latest_lane_block_descriptor_hash,
+                )
+            });
+        let (latest_lane_block_height, latest_lane_block_descriptor_hash) = match canonical_tip {
+            Some(canonical) if canonical.0 > ordinary_tip.0 => canonical,
+            Some(canonical) if canonical.0 == ordinary_tip.0 && canonical.1 != ordinary_tip.1 => {
+                return Err(V2LanePayloadPlanError::new(format!(
+                    "lane {} has conflicting canonical predecessor evidence at height {}",
                     domain.lane_id.as_u32(),
                     context.height
-                ))
-            })?;
-            let ordinary_tip = v2_known_lane_tip_for_route(
-                state,
-                kura,
-                context.height,
-                domain.lane_id,
-                domain.dataspace_id,
-                lane_incarnation,
-            )
-            .map_err(|error| {
-                V2LanePayloadPlanError::storage(format!(
-                    "lane predecessor storage read failed: {error}"
-                ))
-            })?
-            .ok_or_else(|| {
-                V2LanePayloadPlanError::new(format!(
-                    "lane {} has conflicting durable predecessor evidence at height {}",
-                    domain.lane_id.as_u32(),
-                    context.height
-                ))
-            })?;
-            let canonical_tip = canonical_unapplied_tips
-                .get(&(domain.lane_id, domain.dataspace_id))
-                .filter(|tip| tip.lane_incarnation == lane_incarnation)
-                .map(|tip| {
-                    (
-                        tip.latest_lane_block_height,
-                        tip.latest_lane_block_descriptor_hash,
-                    )
-                });
-            let (latest_lane_block_height, latest_lane_block_descriptor_hash) = match canonical_tip
-            {
-                Some(canonical) if canonical.0 > ordinary_tip.0 => canonical,
-                Some(canonical)
-                    if canonical.0 == ordinary_tip.0 && canonical.1 != ordinary_tip.1 =>
-                {
-                    return Err(V2LanePayloadPlanError::new(format!(
-                        "lane {} has conflicting canonical predecessor evidence at height {}",
-                        domain.lane_id.as_u32(),
-                        context.height
-                    )));
-                }
-                _ => ordinary_tip,
-            };
-            Ok(LaneBlockTip {
-                lane_id: domain.lane_id,
-                dataspace_id: domain.dataspace_id,
-                lane_incarnation,
-                latest_lane_block_height,
-                latest_lane_block_descriptor_hash,
-            })
-        })
-        .collect::<Result<Vec<_>, V2LanePayloadPlanError>>()?;
+                )));
+            }
+            _ => ordinary_tip,
+        };
+        tips.push(LaneBlockTip {
+            lane_id: domain.lane_id,
+            dataspace_id: domain.dataspace_id,
+            lane_incarnation,
+            latest_lane_block_height,
+            latest_lane_block_descriptor_hash,
+        });
+    }
     // A fresh lane height always originates at lane view zero. The global
     // proposal view is carried separately in the ownership/hint below; binding
     // it into the lane view would make every global reproposal look like an
@@ -3041,17 +3028,29 @@ pub(crate) fn v2_known_lane_tip_for_route(
         })
         .collect::<Vec<_>>();
     if !kura.emergency_fast_startup_enabled() {
-        let observation = kura
-            .read_latest_native_amx_participant_application_receipt(lane_id)
+        let history = kura
+            .read_native_amx_participant_application_history(lane_id)
             .map_err(crate::state::MergeLedgerCommitError::Persistence)?;
-        match observation {
-            crate::kura::NativeAmxLatestReceiptObservation::Absent => {}
-            crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {
-                // The exact durable frontier is occupied. Owned Apply recovery
-                // must complete before a new participant slot can be planned.
+        match history
+            .entries()
+            .next_back()
+            .map(|(_, observation)| observation)
+        {
+            None => {}
+            Some(
+                crate::kura::NativeAmxParticipantApplicationObservation::PendingTipMetadata(_)
+                | crate::kura::NativeAmxParticipantApplicationObservation::PendingManifestRepair(_)
+                | crate::kura::NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_),
+            ) => {
+                // The authenticated highest slot is occupied but incomplete.
+                // Owned Apply recovery must finish it before planning a successor.
+                // The history reader still rejects corrupt or conflicting evidence;
+                // a valid interrupted publication is retryable, not storage failure.
                 return Ok(None);
             }
-            crate::kura::NativeAmxLatestReceiptObservation::Applied(latest_receipt) => {
+            Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(
+                latest_receipt,
+            )) => {
                 let descriptor = &latest_receipt.participant_proposal.descriptor;
                 if descriptor.dataspace_id != dataspace_id
                     || descriptor.lane_incarnation != lane_incarnation

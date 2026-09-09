@@ -4320,6 +4320,9 @@ impl V2LaneWorkAdapter {
             &coordinator_routes,
             &entrypoint_hashes,
         ) {
+            Ok(plan) if !plan.unavailable_indices.is_empty() => {
+                return Ok(AutonomousProducerBatchOutcome::Pending);
+            }
             Ok(plan) if plan.unavailable_indices.is_empty() && plan.proposals.len() == 1 => plan,
             Err(error) if error.is_storage_error() => {
                 self.output_guard.close_admission_for_restart();
