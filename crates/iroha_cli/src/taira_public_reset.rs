@@ -7256,13 +7256,13 @@ mod executor_model {
                 recovery_outcome: Some(RecoveryOutcome::Rejected(class.to_owned())),
                 ..MockTransport::default()
             };
-            execute_plan(&inventory, &mut recovery, &mut journal)
+            let _ = execute_plan(&inventory, &mut recovery, &mut journal)
                 .expect_err("authenticated rejection publishes rollback-only successor");
             assert_eq!(recovery.events, ["recover:canary"]);
             assert_eq!(journal.state.status, "rolling_back");
             assert!(journal.state.recovery_intent.is_none());
             let mut rollback = MockTransport::default();
-            execute_plan(&inventory, &mut rollback, &mut journal)
+            let _ = execute_plan(&inventory, &mut rollback, &mut journal)
                 .expect_err("rollback reports the rejected release outcome");
             assert_eq!(journal.state.status, "rolled_back");
             assert_eq!(rollback.events.len(), VALIDATOR_SLUGS.len());
@@ -7362,7 +7362,7 @@ mod executor_model {
                     journal.replace(state).unwrap();
                     let outer_cursor = journal.state().next_step;
                     let mut observer = MockTransport::default();
-                    execute_plan(&admitted.inventory, &mut observer, &mut journal)
+                    let _ = execute_plan(&admitted.inventory, &mut observer, &mut journal)
                         .expect_err("observation must stop before forward siblings");
                     assert!(observer.mutation_dispatches.is_empty());
                     assert_eq!(observer.events, [format!("recover:{}", step.label())]);
@@ -7438,7 +7438,7 @@ mod executor_model {
             journal.state.touched_validators = VALIDATOR_SLUGS.map(str::to_owned).to_vec();
             journal.state.recovery_intent = Some(intent);
             let mut observer = MockTransport::default();
-            execute_plan(&admitted.inventory, &mut observer, &mut journal)
+            let _ = execute_plan(&admitted.inventory, &mut observer, &mut journal)
                 .expect_err("stop after exact proof");
             assert_eq!(journal.state.status, "in_progress");
             let expiry = admitted.authorization.claims.execution_expires_at_unix_ms;
@@ -7446,7 +7446,7 @@ mod executor_model {
                 .expect_err("original expiry cannot be refreshed");
             begin_rollback_after_preparation_failure(&mut journal, &error).unwrap();
             let mut rollback = MockTransport::default();
-            execute_plan(&admitted.inventory, &mut rollback, &mut journal)
+            let _ = execute_plan(&admitted.inventory, &mut rollback, &mut journal)
                 .expect_err("expired continuation rolls back");
             assert!(rollback.mutation_dispatches.is_empty());
             assert!(

@@ -9654,7 +9654,11 @@ mod tests {
         let stop = Arc::new(AtomicBool::new(false));
         let server_stop = Arc::clone(&stop);
         let responder = Arc::new(responder);
+        let chain_discriminant = iroha::data_model::account::address::chain_discriminant();
         let handle = thread::spawn(move || {
+            // Account JSON uses a thread-scoped network identity. The fixture's
+            // HTTP peer must decode and encode in the caller's selected network.
+            let _chain = ChainDiscriminantGuard::enter(chain_discriminant);
             let mut accepted = 0_usize;
             while accepted < expected_requests && !server_stop.load(Ordering::Acquire) {
                 match listener.accept() {
