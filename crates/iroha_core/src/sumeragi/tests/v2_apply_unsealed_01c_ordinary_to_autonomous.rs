@@ -21,6 +21,7 @@ v2_apply_test!(
         fixture
             .execute(&mut fixture.reopen_body_store())
             .expect("commit real genesis");
+        let keys = fixture_validator_keys();
         let mut predecessor = None;
         for slot in 1..=2 {
             let context = verified_successor_context_at_fixture_tip(&fixture);
@@ -40,10 +41,64 @@ v2_apply_test!(
             assert_eq!(ownership.lane_id.as_u32(), 0);
             assert_eq!(ownership.lane_block_height, slot);
             assert_eq!(ownership.previous_lane_block_height, slot - 1);
+            let certificate = ordinary_frontier_certificate(&fixture, &ordinary, &keys);
             fixture
                 .service
                 .execute(&ordinary.context, &mut ordinary.store, &ordinary.task)
                 .expect("execute ordinary globally ordered lane transactions");
+            assert_eq!(
+                fixture
+                    .state
+                    .unapplied_lane_block_artifact_heights_snapshot_cached()
+                    .expect("observe ordinary certificate completion debt")
+                    .get(&(ownership.lane_id, ownership.dataspace_id)),
+                Some(&slot),
+                "ordinary Apply must not impersonate lane certificate completion"
+            );
+            // Normal successor recovery completes the ordinary certificate and
+            // receipt before a later ordinary or autonomous producer may extend it.
+            let successor = verified_successor_context_at_fixture_tip(&fixture);
+            let mut completion = V2LaneWorkAdapter::new(
+                successor.context().clone(),
+                PeerId::new(keys[0].public_key().clone()),
+                keys[0].clone(),
+                false,
+                Arc::clone(&fixture.state),
+                Arc::clone(&fixture.kura),
+                ordinary_frontier_lane_work_limits(),
+                None,
+            )
+            .expect("open observer for exact ordinary certificate recovery");
+            assert_eq!(
+                completion.accept_lane_message(
+                    crate::sumeragi::InboundBlockMessage::from_authenticated_peer(
+                        crate::sumeragi::message::BlockMessage::LaneBlockCertificate(Box::new(
+                            certificate.clone(),
+                        )),
+                        PeerId::new(keys[0].public_key().clone()),
+                    ),
+                    0,
+                ),
+                V2LaneIngressOutcome::Inserted
+            );
+            assert!(matches!(
+                completion
+                    .service_next_historical_recovery()
+                    .expect("publish exact ordinary certificate and application receipt"),
+                HistoricalRecoveryServiceOutcome::Complete(_)
+            ));
+            assert!(
+                fixture
+                    .kura
+                    .lane_block_application_receipt_available(&certificate.proposal)
+            );
+            assert!(
+                fixture
+                    .state
+                    .unapplied_lane_block_artifact_heights_snapshot_cached()
+                    .expect("ordinary completion unblocks the exact predecessor")
+                    .is_empty()
+            );
             predecessor = Some(ownership);
         }
         assert_eq!(fixture.state.committed_height(), 3);
@@ -171,7 +226,6 @@ v2_apply_test!(
             "the successor has no ordinary transaction wakeup"
         );
 
-        let keys = fixture_validator_keys();
         let target_view = 4;
         let local = active.context().leader(target_view);
         let local_key = keys[usize::try_from(local).expect("leader index")].clone();
@@ -456,6 +510,86 @@ v2_apply_test!(
         assert_eq!(receipt.application_block_height, 5);
     }
 );
+
+/// Certify the actual ordinary body with its canonical planned lane descriptor.
+fn ordinary_frontier_certificate(
+    fixture: &ApplyFixture,
+    ordinary: &SuccessorApplyFixture,
+    keys: &[KeyPair],
+) -> iroha_data_model::block::consensus::LaneBlockCertificateV1 {
+    let transaction = ordinary
+        .body
+        .external_transactions()
+        .next()
+        .expect("ordinary fixture has one real transaction")
+        .clone();
+    let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(transaction));
+    let routing = fixture
+        .service
+        .queue
+        .route_plan_with_state(&accepted, fixture.state.as_ref())
+        .expect("route exact ordinary body");
+    let route = routing.coordinator_route();
+    let entrypoint = Hash::from(accepted.hash_as_entrypoint());
+    let plan = super::super::lane_planner::prepare_v2_lane_payload_plan(
+        fixture.state.as_ref(),
+        fixture.kura.as_ref(),
+        &ordinary.context,
+        0,
+        &ordinary.context.roster[usize::try_from(ordinary.context.leader(0)).unwrap()].validator,
+        std::slice::from_ref(&route),
+        std::slice::from_ref(&entrypoint),
+    )
+    .expect("rederive exact ordinary proposal before Apply");
+    assert!(plan.unavailable_indices.is_empty());
+    assert_eq!(
+        plan.ownerships,
+        ordinary
+            .body
+            .execution_context()
+            .unwrap()
+            .lane_payload_ownerships
+    );
+    assert_eq!(plan.proposals.len(), 1);
+    let proposal = plan.proposals[0].clone().with_payload_block_hint(
+        iroha_data_model::block::consensus::LaneBlockProposalPayloadHintV1 {
+            proposal_height: ordinary.context.height,
+            proposal_view: 0,
+            proposal_block_hash: ordinary.body.hash(),
+        },
+    );
+    let qc = |phase| {
+        let votes = keys[..3]
+            .iter()
+            .map(|key| {
+                let body = proposal.vote_body(phase);
+                crate::lane_consensus::LaneBlockVoteV1 {
+                    bls_signature: Signature::try_new(
+                        key.private_key(),
+                        &body.signature_preimage(),
+                    )
+                    .expect("sign exact ordinary lane vote")
+                    .payload()
+                    .to_vec(),
+                    body,
+                    signer: PeerId::new(key.public_key().clone()),
+                    payload_availability_vote: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        crate::lane_consensus::aggregate_lane_block_votes_to_qc(
+            proposal.vote_body(phase),
+            proposal.descriptor.validator_set.clone(),
+            &votes,
+        )
+        .expect("aggregate exactly three ordinary lane votes")
+    };
+    iroha_data_model::block::consensus::LaneBlockCertificateV1 {
+        prepare_qc: qc(CertPhase::Prepare),
+        commit_qc: qc(CertPhase::Commit),
+        proposal,
+    }
+}
 
 /// Use the same finite lane-work limits as the existing historical Apply fixture.
 fn ordinary_frontier_lane_work_limits() -> crate::sumeragi::v2_lane_work::V2LaneWorkLimits {
