@@ -814,10 +814,10 @@ fn lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix() {
     let ((data, index), _) = &pairs[1];
     let rewrite_bytes = Kura::sidecar_tracked_bytes(data, index).expect("certified rewrite peak");
     assert!(rewrite_bytes > 1);
-    fixture.config.max_disk_usage_bytes = baseline + rewrite_bytes - 1;
+    fixture.config.max_disk_usage_bytes = iroha_config_base::util::Bytes(baseline + rewrite_bytes - 1);
     Arc::get_mut(&mut fixture.kura)
         .expect("exclusive compaction fixture")
-        .max_disk_usage_bytes = fixture.config.max_disk_usage_bytes;
+        .max_disk_usage_bytes = fixture.config.max_disk_usage_bytes.0;
     let before = snapshot_regular_test_tree(fixture.temp_dir.path());
     assert_eq!(
         compact_fixture_lane_histories(
@@ -1046,7 +1046,7 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
                     .expect("pending canonical bytes")
                 + Kura::canonical_prune_intent_maintenance_headroom_bytes()
                 + remaining_index_growth;
-            fixture.config.max_disk_usage_bytes = required - u64::from(one_under);
+            fixture.config.max_disk_usage_bytes = iroha_config_base::util::Bytes(required - u64::from(one_under));
             let AutonomousHistoryCompactionFixture {
                 temp_dir,
                 config,
