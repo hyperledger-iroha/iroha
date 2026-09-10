@@ -36,6 +36,12 @@ import time
 
 
 STAGES = (
+    ("explicit core testnet qualification", (
+        "taira_public_reset::executor_model::tests::qualification_scope_is_required_and_canonical_in_all_authority_documents",
+        "taira_public_reset::executor_model::tests::qualification_scope_is_bound_before_normal_and_recovery_signature_admission",
+        "taira_public_reset::executor_model::tests::qualification_scope_is_immutable_in_recovery_and_reported_explicitly",
+        "taira_public_reset::host::tests::core_testnet_scope_preserves_baseline_recovery_and_host_plan",
+    )),
     ("private config descriptors", (
         "client_config::tests::inherited_config_loads_exact_descriptor_without_reopening_provenance",
         "client_config::tests::inherited_private_descriptor_rejects_writable_unsafe_and_nonregular_inputs",

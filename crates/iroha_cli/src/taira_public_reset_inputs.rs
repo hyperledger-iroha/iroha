@@ -451,6 +451,7 @@ fn sign_inventory(
     }
     let claims = AuthorizationClaimsV1 {
         action: "reset_and_deploy".to_owned(),
+        qualification_scope: inventory.qualification_scope,
         deployment_id: inventory.deployment_id.clone(),
         inventory_sha256: sha256_hex(bytes),
         artifact_closure_sha256: inventory.artifact_closure_sha256.clone(),

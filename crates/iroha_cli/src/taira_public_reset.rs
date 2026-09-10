@@ -603,10 +603,71 @@ fn private_custody_test_dir(prefix: &str) -> tempfile::TempDir {
     directory
 }
 
+/// Exact qualification selected by the signed inventory; omitted scopes never default.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum QualificationScopeV1 {
+    CoreTestnet,
+    Inrou,
+}
+
+impl QualificationScopeV1 {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::CoreTestnet => "core_testnet",
+            Self::Inrou => "inrou",
+        }
+    }
+
+    const fn includes_inrou(self) -> bool {
+        matches!(self, Self::Inrou)
+    }
+
+    const fn canary_kinds(self) -> &'static [&'static str] {
+        match self {
+            Self::CoreTestnet => &["onboarding", "faucet", "write_canary"],
+            Self::Inrou => &[
+                "onboarding",
+                "faucet",
+                "write_canary",
+                "inrou_bundle_pin",
+                "inrou_guest_pin",
+                "inrou_discovery_pin",
+                "inrou_canary",
+            ],
+        }
+    }
+}
+
+impl json::FastJsonWrite for QualificationScopeV1 {
+    fn write_json(&self, output: &mut String) {
+        json::write_json_string(self.as_str(), output);
+    }
+
+    fn write_json_to(
+        &self,
+        output: &mut dyn json::JsonWriteSink,
+    ) -> Result<(), json::BoundedJsonError> {
+        json::write_json_string_to(self.as_str(), output)
+    }
+}
+
+impl JsonDeserialize for QualificationScopeV1 {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        match parser.parse_string()?.as_str() {
+            "core_testnet" => Ok(Self::CoreTestnet),
+            "inrou" => Ok(Self::Inrou),
+            _ => Err(json::Error::Message(
+                "unsupported public-reset qualification scope".to_owned(),
+            )),
+        }
+    }
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 struct InventoryV1 {
     schema: String,
+    qualification_scope: QualificationScopeV1,
     deployment_id: String,
     chain_id: String,
     chain_discriminant: u16,
@@ -920,6 +981,7 @@ struct AuthorizationEnvelopeV1 {
 #[norito(deny_unknown_fields)]
 struct AuthorizationClaimsV1 {
     action: String,
+    qualification_scope: QualificationScopeV1,
     deployment_id: String,
     inventory_sha256: String,
     artifact_closure_sha256: String,
@@ -1271,6 +1333,7 @@ fn verify_authorization_window(
     }
     let claims = &envelope.claims;
     if claims.action != "reset_and_deploy"
+        || claims.qualification_scope != inventory.qualification_scope
         || claims.deployment_id != inventory.deployment_id
         || claims.inventory_sha256 != inventory_sha256
         || claims.artifact_closure_sha256 != inventory.artifact_closure_sha256
@@ -1375,9 +1438,10 @@ fn execution_lifetime_ms(inventory: &InventoryV1) -> Result<u64> {
         .len();
     let physical_validator_hosts = u64::try_from(physical_validator_hosts)
         .map_err(|_| eyre!("physical validator host count does not fit u64"))?;
-    // This is the exact first-release action ledger. Keep the coefficients tied
-    // to the closed four-validator/one-edge plan rather than relying on one
-    // timeout class to compensate for another independently configurable class.
+    // This conservative maximum covers both explicit qualification scopes. Core
+    // omits Inrou execution without changing host actions or shortening custody
+    // leases; unused budget never introduces a wait. Keep each timeout class
+    // independently bounded for the closed four-validator/one-edge plan.
     let seconds = timeouts
         .install_secs
         // Five preflights, twenty-eight validator stage actions, four installs,
@@ -3349,6 +3413,10 @@ fn now_unix_ms() -> Result<u64> {
 fn report(admitted: &AdmittedReset, command: &str, status: &str, detail: &str) -> Value {
     let mut object = Map::new();
     object.insert("schema".into(), Value::String(REPORT_SCHEMA_V1.to_owned()));
+    object.insert(
+        "qualification_scope".into(),
+        Value::String(admitted.inventory.qualification_scope.as_str().to_owned()),
+    );
     object.insert("command".into(), Value::String(command.to_owned()));
     object.insert("status".into(), Value::String(status.to_owned()));
     object.insert("detail".into(), Value::String(detail.to_owned()));
@@ -3392,6 +3460,7 @@ mod executor_model {
     #[norito(deny_unknown_fields)]
     pub(super) struct JournalV1 {
         schema: String,
+        qualification_scope: QualificationScopeV1,
         deployment_id: String,
         inventory_sha256: String,
         authorization_sha256: String,
@@ -3730,6 +3799,7 @@ mod executor_model {
     fn initial_journal(admitted: &AdmittedReset) -> JournalV1 {
         JournalV1 {
             schema: JOURNAL_SCHEMA_V1.to_owned(),
+            qualification_scope: admitted.inventory.qualification_scope,
             deployment_id: admitted.inventory.deployment_id.clone(),
             inventory_sha256: admitted.inventory_sha256.clone(),
             authorization_sha256: admitted.authorization_sha256.clone(),
@@ -3749,6 +3819,7 @@ mod executor_model {
 
     fn validate_resumable_journal(actual: &JournalV1, expected: &JournalV1) -> Result<()> {
         if actual.schema != JOURNAL_SCHEMA_V1
+            || actual.qualification_scope != expected.qualification_scope
             || actual.deployment_id != expected.deployment_id
             || actual.inventory_sha256 != expected.inventory_sha256
             || actual.authorization_sha256 != expected.authorization_sha256
@@ -3962,6 +4033,7 @@ mod executor_model {
 
     fn valid_journal_successor(before: &JournalV1, after: &JournalV1) -> bool {
         before.schema == after.schema
+            && before.qualification_scope == after.qualification_scope
             && before.deployment_id == after.deployment_id
             && before.inventory_sha256 == after.inventory_sha256
             && before.authorization_sha256 == after.authorization_sha256
@@ -4441,6 +4513,7 @@ mod executor_model {
         let (completed, _) = read_json::<JournalV1>(receipt, "completed reset receipt")?;
         let expected = initial_journal(admitted);
         if completed.schema != JOURNAL_SCHEMA_V1
+            || completed.qualification_scope != expected.qualification_scope
             || completed.status != "completed"
             || completed.phase != "completed"
             || completed.inventory_sha256 != expected.inventory_sha256
@@ -5672,6 +5745,129 @@ mod executor_model {
             wrong.chain_discriminant = 753;
             assert!(canonical_inventory_bytes(&wrong).is_err());
             assert_eq!(chain_discriminant(), 753);
+        }
+
+        #[test]
+        fn qualification_scope_is_required_and_canonical_in_all_authority_documents() {
+            for scope in [
+                QualificationScopeV1::CoreTestnet,
+                QualificationScopeV1::Inrou,
+            ] {
+                let mut inventory = sample_inventory();
+                inventory.qualification_scope = scope;
+                validate_inventory(&inventory).expect("both explicit scopes are admitted");
+                let bytes = canonical_inventory_bytes(&inventory).expect("inventory bytes");
+                let inventory_value: Value = json::from_slice(&bytes).expect("inventory JSON");
+                let (decoded, _guard) =
+                    decode_inventory(&bytes, "inventory").expect("inventory scope");
+                assert_eq!(decoded.qualification_scope, scope);
+                let admitted = admitted(inventory);
+                let claims_value =
+                    json::to_value(&admitted.authorization.claims).expect("claims JSON");
+                let journal_value =
+                    json::to_value(&initial_journal(&admitted)).expect("journal JSON");
+                assert_eq!(
+                    json::from_value::<AuthorizationClaimsV1>(claims_value.clone())
+                        .expect("claims scope")
+                        .qualification_scope,
+                    scope
+                );
+                assert_eq!(
+                    json::from_value::<JournalV1>(journal_value.clone())
+                        .expect("journal scope")
+                        .qualification_scope,
+                    scope
+                );
+                for value in [&inventory_value, &claims_value, &journal_value] {
+                    assert_eq!(
+                        value.get("qualification_scope").and_then(Value::as_str),
+                        Some(scope.as_str())
+                    );
+                }
+                for replacement in [
+                    None,
+                    Some(Value::Null),
+                    Some(Value::String("all".to_owned())),
+                    Some(Value::String("CoreTestnet".to_owned())),
+                    Some(Value::Object(Map::new())),
+                ] {
+                    let corrupt = |value: &Value| {
+                        let mut value = value.clone();
+                        let object = value.as_object_mut().expect("authority document object");
+                        match &replacement {
+                            Some(replacement) => {
+                                object
+                                    .insert("qualification_scope".to_owned(), replacement.clone());
+                            }
+                            None => {
+                                object.remove("qualification_scope");
+                            }
+                        }
+                        value
+                    };
+                    assert!(
+                        decode_inventory(
+                            &json::to_vec(&corrupt(&inventory_value))
+                                .expect("invalid inventory bytes"),
+                            "inventory"
+                        )
+                        .is_err()
+                    );
+                    assert!(
+                        json::from_value::<AuthorizationClaimsV1>(corrupt(&claims_value)).is_err()
+                    );
+                    assert!(json::from_value::<JournalV1>(corrupt(&journal_value)).is_err());
+                }
+            }
+        }
+
+        #[test]
+        fn qualification_scope_is_bound_before_normal_and_recovery_signature_admission() {
+            let mut inventory = sample_inventory();
+            inventory.qualification_scope = QualificationScopeV1::CoreTestnet;
+            let mut admitted = admitted(inventory);
+            admitted.authorization.claims.qualification_scope = QualificationScopeV1::Inrou;
+            for admission_window in [true, false] {
+                let error = verify_authorization_window(
+                    &admitted.inventory,
+                    &admitted.inventory_sha256,
+                    &admitted.authorization,
+                    &admitted.trusted_key,
+                    1_000_000,
+                    admission_window,
+                )
+                .expect_err("a scope change must fail before signature decoding");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("claims do not exactly bind this reset inventory"),
+                    "{error:#}"
+                );
+            }
+        }
+
+        #[test]
+        fn qualification_scope_is_immutable_in_recovery_and_reported_explicitly() {
+            let mut inventory = sample_inventory();
+            inventory.qualification_scope = QualificationScopeV1::CoreTestnet;
+            let admitted = admitted(inventory);
+            let initial = initial_journal(&admitted);
+            validate_resumable_journal(&initial, &initial).expect("same core scope resumes");
+            let mut changed = initial.clone();
+            changed.qualification_scope = QualificationScopeV1::Inrou;
+            assert!(validate_resumable_journal(&changed, &initial).is_err());
+            assert!(!valid_journal_successor(&initial, &changed));
+            let report = report(&admitted, "apply", "ok", "core qualification completed");
+            assert_eq!(
+                report.get("qualification_scope").and_then(Value::as_str),
+                Some("core_testnet")
+            );
+            let mut full_inventory = admitted.inventory.clone();
+            full_inventory.qualification_scope = QualificationScopeV1::Inrou;
+            assert_eq!(
+                execution_lifetime_ms(&admitted.inventory).expect("core lease"),
+                execution_lifetime_ms(&full_inventory).expect("conservative maximum lease")
+            );
         }
 
         #[test]
@@ -7271,6 +7467,7 @@ mod executor_model {
         fn sample_claims(inventory: &InventoryV1, inventory_sha256: &str) -> AuthorizationClaimsV1 {
             AuthorizationClaimsV1 {
                 action: "reset_and_deploy".to_owned(),
+                qualification_scope: inventory.qualification_scope,
                 deployment_id: inventory.deployment_id.clone(),
                 inventory_sha256: inventory_sha256.to_owned(),
                 artifact_closure_sha256: inventory.artifact_closure_sha256.clone(),
@@ -7939,6 +8136,7 @@ mod executor_model {
             let edge_root = "/srv/taira/edge";
             let mut inventory = InventoryV1 {
                 schema: INVENTORY_SCHEMA_V1.to_owned(),
+                qualification_scope: QualificationScopeV1::Inrou,
                 deployment_id: "taira-public".to_owned(),
                 chain_id: CHAIN_ID.to_owned(),
                 chain_discriminant: CHAIN_DISCRIMINANT,

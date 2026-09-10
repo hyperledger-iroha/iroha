@@ -293,6 +293,7 @@ class RetryTests(unittest.TestCase):
     def test_fresh_inventory_changes_only_attempt_and_nonce(self):
         previous = {
             "deployment_id": "retained",
+            "qualification_scope": "core_testnet",
             "operator_public_key": OPERATOR_PUBLIC_KEY,
             "authorization_nonce": "0" * 32,
             "revision": {"commit": "a" * 40},
@@ -321,12 +322,18 @@ class RetryTests(unittest.TestCase):
             )
 
     def test_candidate_probe_inventory_rejects_obsolete_or_ambiguous_drafts(self):
-        valid = {"operator_public_key": OPERATOR_PUBLIC_KEY, "validator_clients": [
+        valid = {"qualification_scope": "core_testnet",
+                 "operator_public_key": OPERATOR_PUBLIC_KEY, "validator_clients": [
             {"slug": f"taira-validator-{index}",
              "probe_origin": f"http://127.0.0.1:{18080 + index}/"}
             for index in range(1, 5)
         ]}
         retry.require_candidate_probe_inventory(valid)
+        for scope in (None, "", "all", "CORE_TESTNET", True, []):
+            value = copy.deepcopy(valid)
+            value["qualification_scope"] = scope
+            with self.subTest(scope=scope), self.assertRaises(retry.RetryError):
+                retry.require_candidate_probe_inventory(value)
         for public_key in (None, "", OPERATOR_PUBLIC_KEY.lower(),
                            OPERATOR_PUBLIC_KEY.upper(), OPERATOR_PUBLIC_KEY + "\n",
                            OPERATOR_PUBLIC_KEY[:-1], "802620" + "A" * 64, 1):
@@ -979,6 +986,7 @@ class WorkflowTests(unittest.TestCase):
         build, self.binary, self.source = artifact_receipts()
         self.inventory = {
             "revision": {"commit": build["commit"], "source_root": "/source"},
+            "qualification_scope": "core_testnet",
             "operator_public_key": OPERATOR_PUBLIC_KEY,
             "deployment_id": "retained",
             "authorization_nonce": "0" * 32,
@@ -1159,6 +1167,7 @@ class WorkflowTests(unittest.TestCase):
                     "schema": "iroha.taira.public-reset.report.v1",
                     "command": "preflight",
                     "status": "ok",
+                    "qualification_scope": inventory["qualification_scope"],
                     "deployment_id": inventory["deployment_id"],
                     "revision": inventory["revision"]["commit"],
                     "inventory_sha256": retry.hashlib.sha256(
@@ -1174,6 +1183,7 @@ class WorkflowTests(unittest.TestCase):
             completed = {
                 "schema": "iroha.taira.public-reset.journal.v1",
                 "deployment_id": inventory["deployment_id"],
+                "qualification_scope": inventory["qualification_scope"],
                 "inventory_sha256": frontier["inventory_sha256"],
                 "authorization_sha256": frontier["authorization_sha256"],
                 "authorization_nonce": inventory["authorization_nonce"],
@@ -1252,6 +1262,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue((attempt / "apply-started.json").exists())
         self.assertEqual(self.calls, ["assemble", "authorize", "preflight", "apply"])
         self.assertEqual(result["completed"], list(retry.PHASES))
+        self.assertEqual(result["qualification_scope"], "core_testnet")
+
+    def test_missing_scope_stops_before_retirement_or_native_calls(self):
+        del self.inventory["qualification_scope"]
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        with self.assertRaisesRegex(retry.RetryError, "qualification scope"):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        retry._retire_retained_state.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_inrou_workflow_preserves_its_explicit_scope(self):
+        self.inventory["qualification_scope"] = "inrou"
+        Path(self.plan["previous_inventory"]).write_text(json.dumps(self.inventory))
+        result = retry.guest_locked(self.request, self.capacity, self.attempts)
+        self.assertEqual(result["qualification_scope"], "inrou")
+        self.assertEqual(self.calls.count("apply"), 1)
+
+    def test_completed_scope_cannot_be_upgraded_during_recovery(self):
+        self.fail_phase = "seed-post"
+        with self.assertRaises(retry.RetryError):
+            retry.guest_locked(self.request, self.capacity, self.attempts)
+        target = self.root / "journal-v1/completed" / ("9" * 64 + ".json")
+        value = json.loads(target.read_bytes())
+        value["qualification_scope"] = "inrou"
+        target.write_text(json.dumps(value))
+        with self.assertRaisesRegex(retry.RetryError, "exact completed deployment"):
+            retry.previous_attempt(self.plan)
+        self.assertEqual(self.calls.count("apply"), 1)
 
     def test_preapply_failure_resumes_same_identity_and_preserves_evidence(self):
         self.fail_phase = "assemble"

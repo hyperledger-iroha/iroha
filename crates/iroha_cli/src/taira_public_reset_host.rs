@@ -15356,18 +15356,12 @@ fn recovery_intent_identity_matches(
 fn build_recovery_intent(inventory: &InventoryV1, step: ExecutionStep) -> Option<RecoveryIntentV1> {
     let nonce = &inventory.authorization_nonce;
     let mutations = match step {
-        ExecutionStep::Canary => [
-            "onboarding",
-            "faucet",
-            "write_canary",
-            "inrou_bundle_pin",
-            "inrou_guest_pin",
-            "inrou_discovery_pin",
-            "inrou_canary",
-        ]
-        .into_iter()
-        .map(|kind| recovery_child_mutation(nonce, "pre_edge", kind, None))
-        .collect(),
+        ExecutionStep::Canary => inventory
+            .qualification_scope
+            .canary_kinds()
+            .iter()
+            .map(|kind| recovery_child_mutation(nonce, "pre_edge", kind, None))
+            .collect(),
         ExecutionStep::RestartProof => (1..=4)
             .flat_map(|wave| {
                 let phase = format!("restart-wave-{wave}");
@@ -15521,22 +15515,34 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
             ExecutionStep::Canary => {}
             ExecutionStep::RestartProof => {
                 let result = (|| {
-                    self.read_inrou_restart_baselines_with_mode(true)?;
+                    if inventory.qualification_scope.includes_inrou() {
+                        self.read_inrou_restart_baselines_with_mode(true)?;
+                    }
                     for wave in 1..=4 {
                         self.convergence(inventory.timeouts.convergence_secs, wave, true)?;
-                        self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
+                        if inventory.qualification_scope.includes_inrou() {
+                            self.inrou_check_with_mode(inventory.timeouts.canary_secs, wave, true)?;
+                        }
                     }
-                    self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, true)
+                    if inventory.qualification_scope.includes_inrou() {
+                        self.require_final_inrou_restart_sweep(
+                            inventory.timeouts.canary_secs,
+                            true,
+                        )?;
+                    }
+                    Ok(())
                 })();
                 return classify_inrou_restart_recovery_outcome(result);
             }
             ExecutionStep::EdgeVerify => {
                 self.doctor_with_mode(inventory.timeouts.canary_secs, true)?;
-                self.require_fresh_inrou_check(
-                    "inrou-post-edge.json",
-                    inventory.timeouts.canary_secs,
-                    true,
-                )?;
+                if inventory.qualification_scope.includes_inrou() {
+                    self.require_fresh_inrou_check(
+                        "inrou-post-edge.json",
+                        inventory.timeouts.canary_secs,
+                        true,
+                    )?;
+                }
             }
             _ => {
                 return Ok(RecoveryOutcome::Rejected("recovery_step_kind".to_owned()));
@@ -15561,39 +15567,36 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         }
         match step {
             ExecutionStep::Canary => {
-                for (index, kind) in ["onboarding", "faucet", "write_canary"]
-                    .into_iter()
+                for (index, kind) in inventory
+                    .qualification_scope
+                    .canary_kinds()
+                    .iter()
                     .enumerate()
                 {
-                    self.run_journaled_write_canary_child(
-                        progress,
-                        index,
-                        inventory.timeouts.canary_secs,
-                        "pre_edge",
-                        kind,
-                    )?;
-                }
-                for (offset, kind) in [
-                    "inrou_bundle_pin",
-                    "inrou_guest_pin",
-                    "inrou_discovery_pin",
-                    "inrou_canary",
-                ]
-                .into_iter()
-                .enumerate()
-                {
-                    self.run_journaled_inrou_prepared_child(
-                        progress,
-                        offset + 3,
-                        inventory.timeouts.canary_secs,
-                        "pre_edge",
-                        kind,
-                    )?;
+                    match *kind {
+                        "onboarding" | "faucet" | "write_canary" => self
+                            .run_journaled_write_canary_child(
+                                progress,
+                                index,
+                                inventory.timeouts.canary_secs,
+                                "pre_edge",
+                                kind,
+                            )?,
+                        _ => self.run_journaled_inrou_prepared_child(
+                            progress,
+                            index,
+                            inventory.timeouts.canary_secs,
+                            "pre_edge",
+                            kind,
+                        )?,
+                    }
                 }
                 Ok(())
             }
             ExecutionStep::RestartProof => {
-                self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
+                if inventory.qualification_scope.includes_inrou() {
+                    self.ensure_inrou_restart_baselines(inventory.timeouts.canary_secs)?;
+                }
                 for (index, validator) in inventory.validators.iter().enumerate() {
                     let wave = index + 1;
                     let restart_index = index * 4;
@@ -15631,9 +15634,14 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         )?;
                     }
                     self.convergence(inventory.timeouts.convergence_secs, wave, false)?;
-                    self.inrou_check(inventory.timeouts.canary_secs, wave)?;
+                    if inventory.qualification_scope.includes_inrou() {
+                        self.inrou_check(inventory.timeouts.canary_secs, wave)?;
+                    }
                 }
-                self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)
+                if inventory.qualification_scope.includes_inrou() {
+                    self.require_final_inrou_restart_sweep(inventory.timeouts.canary_secs, false)?;
+                }
+                Ok(())
             }
             ExecutionStep::EdgeVerify => {
                 self.bootstrap_and_dispatch_edge(
@@ -15654,11 +15662,13 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         kind,
                     )?;
                 }
-                self.require_fresh_inrou_check(
-                    "inrou-post-edge.json",
-                    inventory.timeouts.canary_secs,
-                    false,
-                )?;
+                if inventory.qualification_scope.includes_inrou() {
+                    self.require_fresh_inrou_check(
+                        "inrou-post-edge.json",
+                        inventory.timeouts.canary_secs,
+                        false,
+                    )?;
+                }
                 Ok(())
             }
             _ => Err(eyre!("step is not recovery-sensitive")),
@@ -19954,6 +19964,7 @@ mod tests {
         let inventory_sha256 = sha256_hex(&inventory_bytes);
         let claims = super::super::AuthorizationClaimsV1 {
             action: "reset_and_deploy".to_owned(),
+            qualification_scope: inventory.qualification_scope,
             deployment_id: inventory.deployment_id.clone(),
             inventory_sha256: inventory_sha256.clone(),
             artifact_closure_sha256: inventory.artifact_closure_sha256.clone(),
@@ -22972,6 +22983,66 @@ time.sleep(30)
         let edge = build_recovery_intent(&inventory, ExecutionStep::EdgeVerify)
             .expect("edge recovery intent");
         assert_eq!(edge.mutations.len(), 3);
+    }
+
+    #[test]
+    fn core_testnet_scope_preserves_baseline_recovery_and_host_plan() {
+        let mut admitted = progress_admission();
+        let full_plan = host_forward_plan(&admitted);
+        let full_canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary)
+            .expect("full qualification intent");
+        admitted.inventory.qualification_scope = super::super::QualificationScopeV1::CoreTestnet;
+        assert_eq!(
+            host_forward_plan(&admitted),
+            full_plan,
+            "artifact custody, stage, restarts, seal and rollback host plan remain fixed"
+        );
+        assert!(!admitted.inventory.qualification_scope.includes_inrou());
+        let canary = build_recovery_intent(&admitted.inventory, ExecutionStep::Canary)
+            .expect("core qualification intent");
+        assert_eq!(
+            canary
+                .mutations
+                .iter()
+                .map(|mutation| mutation.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["onboarding", "faucet", "write_canary"]
+        );
+        assert!(!recovery_intent_identity_matches(&canary, &full_canary));
+        assert!(!recovery_intent_identity_matches(&full_canary, &canary));
+        let restart = build_recovery_intent(&admitted.inventory, ExecutionStep::RestartProof)
+            .expect("core restart intent");
+        assert_eq!(restart.mutations.len(), 16);
+        for wave in 0..4 {
+            assert_eq!(restart.mutations[wave * 4].kind, "host_restart");
+            assert_eq!(
+                restart.mutations[wave * 4 + 1..wave * 4 + 4]
+                    .iter()
+                    .map(|mutation| mutation.kind.as_str())
+                    .collect::<Vec<_>>(),
+                ["onboarding", "faucet", "write_canary"]
+            );
+        }
+        let edge = build_recovery_intent(&admitted.inventory, ExecutionStep::EdgeVerify)
+            .expect("core post-edge intent");
+        assert_eq!(
+            edge.mutations
+                .iter()
+                .map(|mutation| mutation.kind.as_str())
+                .collect::<Vec<_>>(),
+            ["onboarding", "faucet", "write_canary"]
+        );
+        let writes = canary
+            .mutations
+            .iter()
+            .chain(&restart.mutations)
+            .chain(&edge.mutations)
+            .filter(|mutation| mutation.kind != "host_restart")
+            .count();
+        assert_eq!(
+            writes, 18,
+            "all baseline mutations retain immutable recovery evidence"
+        );
     }
 
     #[test]

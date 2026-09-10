@@ -18514,16 +18514,31 @@ mod tests {
             state.install_lane_manifests(&lane_manifests);
             (validation_root, state, kura)
         }
+        fn sign_configured_genesis_for_test(
+            genesis: RawGenesisTransaction,
+            genesis_authority: &KeyPair,
+            config: &Config,
+        ) -> GenesisBlock {
+            // Match Kagami's config-bound signer: both provisional staging and
+            // the final proposal must commit to the policy installed in State.
+            genesis
+                .with_consensus_meta()
+                .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+                    genesis_authority,
+                    Some(iroha_core::da::proof_policy_bundle(&config.nexus.lane_config)),
+                    Some(iroha_core::state::compute_genesis_confidential_policy_hash(
+                        &config.zk,
+                    )),
+                )
+                .expect("sign genesis fixture with configured DA and confidential policies")
+        }
         fn staged_context_hashes_for_test(
             genesis: &RawGenesisTransaction,
             genesis_authority: &KeyPair,
             config: &Config,
         ) -> (Hash, Hash) {
-            let provisional = genesis
-                .clone()
-                .with_consensus_meta()
-                .build_and_sign(genesis_authority)
-                .expect("sign provisional genesis fixture");
+            let provisional =
+                sign_configured_genesis_for_test(genesis.clone(), genesis_authority, config);
             let authority = AccountId::new(genesis_authority.public_key().clone());
             let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&provisional)
                 .expect("provisional fixture voting roster");
@@ -18572,11 +18587,11 @@ mod tests {
             let mut parameters = genesis.sumeragi_v2_context_parameters();
             parameters.nexus_amx_context_hash = nexus_amx_hash.into();
             parameters.execution_policy_hash = execution_policy_hash.into();
-            genesis
-                .with_sumeragi_v2_context_parameters(parameters)
-                .with_consensus_meta()
-                .build_and_sign(genesis_authority)
-                .expect("sign context-bound genesis fixture")
+            sign_configured_genesis_for_test(
+                genesis.with_sumeragi_v2_context_parameters(parameters),
+                genesis_authority,
+                config,
+            )
         }
         #[test]
         fn manifest_crypto_matches_config() {
@@ -18930,9 +18945,11 @@ mod tests {
             for instruction in extra_instructions {
                 builder = builder.append_instruction(instruction);
             }
-            let genesis = builder
-                .build_and_sign(&genesis_authority)
-                .expect("signed genesis fixture");
+            let genesis = sign_configured_genesis_for_test(
+                builder.build_raw().expect("build final genesis fixture"),
+                &genesis_authority,
+                &config,
+            );
             config.genesis.expected_hash = genesis.0.hash();
             let (mode, parameters) =
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
