@@ -174,13 +174,13 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.require_tests("\n".join(f"{name}: test" for name in names[1:]), stages)
 
     def test_complete_regression_census_tracks_every_native_stage_group(self):
-        self.assertEqual(gate.selected_regression_count(), 376)
+        self.assertEqual(gate.selected_regression_count(), 392)
         for group in ("STAGES", "CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES",
                       "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
                       "PROOF_FLOW_STAGES", "TORII_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES"):
             original_count = sum(len(names) for _, names in getattr(gate, group))
             with self.subTest(group=group), patch.object(gate, group, (("fixture", ("one", "two")),)):
-                self.assertEqual(gate.selected_regression_count(), 376 - original_count + 2)
+                self.assertEqual(gate.selected_regression_count(), 392 - original_count + 2)
 
     def test_exact_one_test_passes(self):
         result = subprocess.CompletedProcess([], 0,
@@ -265,9 +265,11 @@ class EarlyReleaseCheckTests(unittest.TestCase):
     def test_torii_contract_failure_prevents_overall_pass_and_keeps_same_custody(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         results = [subprocess.CompletedProcess([], 0, "route: test\n", ""),
-                   subprocess.CompletedProcess([], 101, "test route ... FAILED\n", "")]
+                   subprocess.CompletedProcess([], 101, "test route ... FAILED\n", ""),
+                   subprocess.CompletedProcess([], 0, "cli: test\n", ""),
+                   subprocess.CompletedProcess([], 0, "test cli ... ok\ntest result: ok. 1 passed; 0 failed; 0 ignored;\n", "")]
         output = io.StringIO()
-        with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes"})) as compile, \
+        with patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({"torii": "/warm/routes", "cli": "/warm/cli"})) as compile, \
              patch.object(gate.subprocess, "run", side_effect=results) as run, \
              patch.object(gate, "STAGES", (("CLI", ("cli",)),)), \
              patch.object(gate, "CRYPTO_STAGES", ()), \
@@ -324,9 +326,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
-        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in names[:-2]])
+        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in names[:-2] + ("cli",)])
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, gate.DAEMON_STAGES])
+                         [gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, gate.DAEMON_STAGES, gate.STAGES])
 
     def test_transport_or_fixture_failure_stops_before_network_and_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
@@ -482,7 +484,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
                 gate.run_checks(Path("/frozen"), environment=self.env,
                                 source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(events, ["fsm", "source", "config-build", "config-pass", "library-build",
-                                  *["/warm/" + name for name in libraries[:-2]]])
+                                  *["/warm/" + name for name in libraries[:-2] + ("cli",)]])
 
     def test_configuration_build_or_schema_failure_stops_before_core_and_network(self):
         for phase in ("build", "schema"):
@@ -1158,7 +1160,7 @@ class PureFsmGateTests(unittest.TestCase):
         config.assert_not_called()
         libraries.assert_not_called()
         network.assert_not_called()
-        self.assertEqual(gate.selected_regression_count(), 376)
+        self.assertEqual(gate.selected_regression_count(), 392)
 
     def test_lifecycle_failure_stops_before_any_cargo_or_network_work(self):
         env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}

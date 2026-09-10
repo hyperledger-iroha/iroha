@@ -11855,8 +11855,6 @@ impl RuntimeCustody {
             ));
         }
         validate_fee_args(&inputs.fee_args)?;
-        let validator_operator_key =
-            pin_validator_operator_key(&inputs.validator_operator_key, &admitted.inventory)?;
         let client_config =
             pin_owner_private_file(&inputs.client_config, "Taira runtime client config")?;
         let onboarding_token =
@@ -11873,6 +11871,22 @@ impl RuntimeCustody {
         let token_hash = hash_pinned_input(&onboarding_token, "Taira onboarding token", None)?;
         let validator_hash = validator_config_closure_sha256(&validator_client_configs, None)?;
         validate_validator_client_semantics(&validator_client_configs, admitted)?;
+        let runtime_config = load_client_config_for_inventory(
+            &client_config,
+            "Taira runtime client config",
+            &admitted.inventory,
+        )?;
+        let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
+        if runtime_config.torii_api_url.as_str() != expected_public_root
+            || runtime_config.account.to_string()
+                != admitted.inventory.canary_onboarding_request.account_id
+        {
+            return Err(eyre!(
+                "runtime canary config does not target the exact signed public Taira canary"
+            ));
+        }
+        let validator_operator_key =
+            pin_validator_operator_key(&inputs.validator_operator_key, &admitted.inventory)?;
         let (stage_hash, stage_bytes, stage_files, fixed) =
             pin_stage_tree(&inputs.inrou_stage_dir, None)?;
         let claims = &admitted.authorization.claims;
@@ -11924,17 +11938,6 @@ impl RuntimeCustody {
             if fixed.get(path) != Some(expected) {
                 return Err(eyre!("retained Inrou stage fixed-file hash mismatch"));
             }
-        }
-        let runtime_config =
-            load_client_config_from_pinned(&client_config, "Taira runtime client config")?;
-        let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
-        if runtime_config.torii_api_url.as_str() != expected_public_root
-            || runtime_config.account.to_string()
-                != admitted.inventory.canary_onboarding_request.account_id
-        {
-            return Err(eyre!(
-                "runtime canary config does not target the exact signed public Taira canary"
-            ));
         }
         let retained_stage_dir =
             snapshot_stage_tree(journal_dir, &admitted.authorization_sha256, &stage_files)?;
@@ -12076,13 +12079,6 @@ impl RuntimeCustody {
                 "recovery requires either zero or exactly four validator client configs"
             ));
         }
-        let validator_operator_key = if validator_config_paths.len() == 4 {
-            let path = validator_operator_key_path
-                .ok_or_else(|| eyre!("RestartProof recovery requires --validator-operator-key"))?;
-            Some(pin_validator_operator_key(&path, &admitted.inventory)?)
-        } else {
-            None
-        };
         let client_config =
             pin_owner_private_file(&client_config_path, "Taira recovery client config")?;
         let client_hash = hash_pinned_input(&client_config, "Taira recovery client config", None)?;
@@ -12091,8 +12087,11 @@ impl RuntimeCustody {
                 "recovery client config is not bound by the signed authorization"
             ));
         }
-        let runtime_config =
-            load_client_config_from_pinned(&client_config, "Taira recovery client config")?;
+        let runtime_config = load_client_config_for_inventory(
+            &client_config,
+            "Taira recovery client config",
+            &admitted.inventory,
+        )?;
         let expected_public_root = format!("{}/", admitted.inventory.inrou_canary.public_root);
         if runtime_config.torii_api_url.as_str() != expected_public_root
             || runtime_config.account.to_string()
@@ -12126,6 +12125,13 @@ impl RuntimeCustody {
             }
             validate_validator_client_semantics(&validator_client_configs, admitted)?;
         }
+        let validator_operator_key = if validator_config_paths.len() == 4 {
+            let path = validator_operator_key_path
+                .ok_or_else(|| eyre!("RestartProof recovery requires --validator-operator-key"))?;
+            Some(pin_validator_operator_key(&path, &admitted.inventory)?)
+        } else {
+            None
+        };
         let inrou_stage_dir = journal_dir
             .join("runtime-stage-v1")
             .join(&admitted.authorization_sha256);
@@ -12247,7 +12253,7 @@ pub(super) fn validate_validator_client_inputs(
     }
     for (input, expected) in inputs.iter().zip(&inventory.validator_clients) {
         revalidate_pinned(input, "validator client config")?;
-        let config = load_client_config_from_pinned(input, "validator client config")?;
+        let config = load_client_config_for_inventory(input, "validator client config", inventory)?;
         let expected_account =
             iroha::data_model::account::AccountId::parse_encoded(&expected.account_id)
                 .wrap_err("signed validator client account is invalid")?;
@@ -12260,6 +12266,34 @@ pub(super) fn validate_validator_client_inputs(
         }
     }
     Ok(())
+}
+
+/// Bind a runtime signer to the exact signed public testnet generation before use.
+fn validate_client_network_identity(config: &ClientConfig, inventory: &InventoryV1) -> Result<()> {
+    super::validate_canonical_iroha_hash("client network genesis", &inventory.next_genesis_hash)?;
+    let genesis = hex::decode(&inventory.next_genesis_hash)
+        .map_err(|_| eyre!("signed inventory client network identity is invalid"))?;
+    if inventory.chain_id != super::CHAIN_ID
+        || inventory.chain_discriminant != super::CHAIN_DISCRIMINANT
+        || config.chain.to_string() != inventory.chain_id
+        || config.account_chain_discriminant != inventory.chain_discriminant
+        || config.network_id.as_bytes().as_slice() != genesis.as_slice()
+    {
+        return Err(eyre!(
+            "client config chain, network identity or account discriminant differs from the signed inventory"
+        ));
+    }
+    Ok(())
+}
+
+pub(super) fn load_client_config_for_inventory(
+    input: &super::PinnedInput,
+    label: &str,
+    inventory: &InventoryV1,
+) -> Result<ClientConfig> {
+    let config = load_client_config_from_pinned(input, label)?;
+    validate_client_network_identity(&config, inventory)?;
+    Ok(config)
 }
 
 pub(super) fn load_client_config_from_pinned(
@@ -12419,6 +12453,8 @@ fn inherited_candidate_operator_status_args(
     inventory: &InventoryV1,
     origin: &str,
 ) -> Result<(Vec<OsString>, Vec<File>, tempfile::NamedTempFile)> {
+    let _config =
+        load_client_config_for_inventory(client_config, "validator client config", inventory)?;
     let operator_key = operator_key
         .ok_or_else(|| eyre!("validator convergence requires its retained operator key"))?;
     validate_pinned_validator_operator_key(operator_key, inventory)?;
@@ -18210,7 +18246,8 @@ mod tests {
     #[test]
     fn prepared_child_rejects_failed_exit_even_with_authenticated_applied_report() {
         use std::os::unix::process::ExitStatusExt as _;
-        let _chain = ChainDiscriminantGuard::enter(super::super::CHAIN_DISCRIMINANT);
+        // The retained signed proof uses SORA account literals, as do its other consumers.
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
         let (host_admission, prepared, bytes, _, _) =
             authenticated_proof_required_fixture("https://taira.sora.org");
         let stdout = proof_required_evidence(&host_admission, &prepared);
@@ -21045,6 +21082,94 @@ time.sleep(30)
         }
     }
 
+    fn client_config_bytes_for_inventory(inventory: &InventoryV1) -> Vec<u8> {
+        let mut table: toml::Table = toml::from_str(include_str!("../../../defaults/client.toml"))
+            .expect("public client fixture TOML");
+        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            inventory
+                .next_genesis_hash
+                .parse::<Hash>()
+                .expect("fixture genesis hash"),
+        ));
+        table.insert(
+            "chain".to_owned(),
+            toml::Value::String(inventory.chain_id.clone()),
+        );
+        table.insert(
+            "network_id".to_owned(),
+            toml::Value::String(network.to_string()),
+        );
+        table
+            .get_mut("account")
+            .and_then(toml::Value::as_table_mut)
+            .expect("fixture account")
+            .insert(
+                "chain_discriminant".to_owned(),
+                toml::Value::Integer(i64::from(inventory.chain_discriminant)),
+            );
+        toml::to_string(&table)
+            .expect("public fixture encoding")
+            .into_bytes()
+    }
+
+    #[test]
+    fn client_network_identity_rejects_wrong_chain_genesis_and_discriminant() {
+        let inventory = super::super::sample_inventory_fixture();
+        let (config, _) = ClientConfig::load_bytes_with_musubi_publication(
+            Path::new("client-network-fixture.toml"),
+            &client_config_bytes_for_inventory(&inventory),
+        )
+        .expect("strict canonical fixture config");
+        validate_client_network_identity(&config, &inventory)
+            .expect("exact signed client generation");
+        let mut wrong = config.clone();
+        wrong.chain = "00000000-0000-0000-0000-000000000000"
+            .parse()
+            .expect("fixture chain");
+        assert!(validate_client_network_identity(&wrong, &inventory).is_err());
+        wrong = config.clone();
+        wrong.account_chain_discriminant = inventory.chain_discriminant + 1;
+        assert!(validate_client_network_identity(&wrong, &inventory).is_err());
+        wrong = config.clone();
+        wrong.network_id =
+            NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"wrong client network fixture",
+            )));
+        assert!(validate_client_network_identity(&wrong, &inventory).is_err());
+        let mut malformed = inventory.clone();
+        malformed.next_genesis_hash = "0".repeat(64);
+        assert!(validate_client_network_identity(&config, &malformed).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pinned_client_inventory_loader_rejects_wrong_generation_without_child_custody() {
+        let directory = super::super::private_custody_test_dir("taira-client-network-");
+        let path = directory.path().join("client.toml");
+        let inventory = super::super::sample_inventory_fixture();
+        fs::write(&path, client_config_bytes_for_inventory(&inventory))
+            .expect("write public fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
+            .expect("private fixture mode");
+        let input = pin_owner_private_file(&path, "client fixture").expect("pinned fixture");
+        load_client_config_for_inventory(&input, "client fixture", &inventory)
+            .expect("exact generation");
+        let mut next = inventory.clone();
+        next.next_genesis_hash = Hash::new(b"successor network fixture").to_string();
+        let error = load_client_config_for_inventory(&input, "client fixture", &next)
+            .expect_err("old-generation client must fail before child creation");
+        assert_eq!(
+            error.to_string(),
+            "client config chain, network identity or account discriminant differs from the signed inventory"
+        );
+        assert_eq!(
+            fs::read_dir(directory.path())
+                .expect("fixture directory")
+                .count(),
+            1
+        );
+    }
+
     #[cfg(unix)]
     #[test]
     fn retained_client_config_semantics_and_child_fd_share_exact_source() {
@@ -21200,11 +21325,8 @@ time.sleep(30)
         let (key_path, expected_operator) =
             validator_operator_key_fixture(directory.path(), &mut inventory);
         let config_path = directory.path().join("client.toml");
-        fs::write(
-            &config_path,
-            include_bytes!("../../../defaults/client.toml"),
-        )
-        .expect("public account config fixture");
+        fs::write(&config_path, client_config_bytes_for_inventory(&inventory))
+            .expect("public account config fixture");
         fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
             .expect("private account config");
         let config = pin_owner_private_file(&config_path, "account fixture").expect("pin account");
@@ -21273,11 +21395,8 @@ time.sleep(30)
         let mut inventory = super::super::sample_inventory_fixture();
         let (key_path, _) = validator_operator_key_fixture(directory.path(), &mut inventory);
         let config_path = directory.path().join("client.toml");
-        fs::write(
-            &config_path,
-            include_bytes!("../../../defaults/client.toml"),
-        )
-        .expect("public config fixture");
+        fs::write(&config_path, client_config_bytes_for_inventory(&inventory))
+            .expect("public config fixture");
         fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
             .expect("private config fixture");
         let config = pin_owner_private_file(&config_path, "account fixture").expect("pin config");

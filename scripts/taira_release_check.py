@@ -68,6 +68,8 @@ STAGES = (
         "taira_public_reset::host::tests::validator_operator_key_custody_rejects_wrong_identity_and_mutation",
         "taira_public_reset::host::tests::candidate_operator_status_child_binds_both_inherited_signers",
         "taira_public_reset::host::tests::candidate_operator_status_child_rejects_missing_or_replaced_operator_key",
+        "taira_public_reset::host::tests::client_network_identity_rejects_wrong_chain_genesis_and_discriminant",
+        "taira_public_reset::host::tests::pinned_client_inventory_loader_rejects_wrong_generation_without_child_custody",
     )),
     ("native validator config preparation", (
         "taira_public_reset::config::tests::config_rebase_network_identity_uses_exact_cas_and_preserves_other_config",
@@ -423,6 +425,20 @@ CLIENT_STAGES += (("exact transaction details error protocol", (
 )),)
 
 DAEMON_STAGES = (("offline final genesis deployment authority", (
+    "tests::manifest_crypto_checks::manifest_crypto_matches_config",
+    "tests::manifest_crypto_checks::detects_hash_mismatch",
+    "tests::manifest_crypto_checks::detects_allowed_signing_mismatch",
+    "tests::manifest_crypto_checks::detects_allowed_curve_ids_mismatch",
+    "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_crypto_mismatch_in_block",
+    "tests::manifest_crypto_checks::fresh_v2_genesis_staging_does_not_commit_state_or_kura",
+    "tests::manifest_crypto_checks::check_config_offline_executes_available_genesis",
+    "tests::manifest_crypto_checks::check_config_accepts_taira_without_offline_backend_settings",
+    "tests::manifest_crypto_checks::check_config_qualifies_the_fixed_moderation_strict_ingress",
+    "tests::manifest_crypto_checks::check_config_offline_rejects_genesis_instruction_failure",
+    "tests::manifest_crypto_checks::consensus_config_caps_use_canonical_v2_fields",
+    "tests::manifest_crypto_checks::consensus_caps_use_frozen_height_context_mode",
+    "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_consensus_mode_mismatch",
+    "tests::manifest_crypto_checks::verify_genesis_metadata_rejects_fingerprint_mismatch",
     "tests::cli_args::inrou_deployment_authority_requires_offline_check_config",
     "tests::manifest_crypto_checks::check_config_offline_accepts_final_inrou_deployment_capability",
     "tests::manifest_crypto_checks::check_config_offline_rejects_absent_or_revoked_inrou_deployment_capability",
@@ -540,6 +556,15 @@ HARNESS_TARGETS = {
 
 class CheckError(Exception):
     """A build or selected regression did not pass."""
+
+
+class SelectedRegressionFailures(CheckError):
+    """Completed selected tests failed; other isolated fixtures can still run."""
+
+    def __init__(self, failures: list[str]):
+        self.failures = tuple(failures)
+        super().__init__(f"{len(self.failures)} selected regressions failed: "
+                         + "; ".join(self.failures))
 
 
 def selected_regression_count() -> int:
@@ -911,7 +936,7 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
         outcome = "passed" if len(failures) == failed_before else "failed"
         print(f"[taira-check] {outcome} {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
     if failures:
-        raise CheckError(f"{len(failures)} selected regressions failed: " + "; ".join(failures))
+        raise SelectedRegressionFailures(failures)
 
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> dict[str, str]:
@@ -1095,8 +1120,10 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     # Build early library/HTTP, network and CLI test harnesses in one Cargo graph.
     # A separate CLI test build after the production node build changes the
     # package/dev-dependency feature union and recompiles shared dependencies.
-    # Retain its private test copy until the four-peer check completes; shipping
-    # node/CLI binaries still use their separate production graph below.
+    # Run every independent immutable test copy, including CLI, before starting
+    # the shipping binary graph or four-peer fixture. Aggregate test failures;
+    # missing tests, artifact custody failures and other infrastructure errors
+    # still stop immediately. Production binaries use a separate graph below.
     early_stages = tuple((name, stages) for name, stages in (
         ("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES), ("core", CORE_STAGES),
         ("test-network", TEST_NETWORK_STAGES),
@@ -1110,15 +1137,19 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if selections:
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
-            for name, stages in early_stages:
-                run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+            failures = []
+            independent_stages = early_stages + ((("cli", STAGES),) if STAGES else ())
+            for name, stages in independent_stages:
+                try:
+                    run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+                except SelectedRegressionFailures as error:
+                    failures.extend(error.failures)
                 harnesses.release(name)
+            if failures:
+                raise SelectedRegressionFailures(failures)
             if NETWORK_STAGES:
                 run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
                 harnesses.release("network")
-            if STAGES:
-                run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds)
-                harnesses.release("cli")
     for name, stages in (("proof", PROOF_STAGES),
                          ("proof-flows", PROOF_FLOW_STAGES)):
         if stages:

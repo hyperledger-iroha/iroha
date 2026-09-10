@@ -16,9 +16,16 @@ fn assert_initial_soracloud_core_denial(error: ValidationFail, message: &str) {
     let ValidationFail::InstructionFailed(error) = error else {
         panic!("instruction must reach Core authorization, got {error:?}");
     };
+    let detail = match &error {
+        InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(detail)) => {
+            detail.as_str()
+        }
+        InstructionExecutionError::InvariantViolation(detail) => detail.as_ref(),
+        _ => panic!("unexpected Core rejection category: {error:?}"),
+    };
     assert!(
-        error.to_string().contains(message),
-        "unexpected Core rejection: {error}"
+        detail.contains(message),
+        "unexpected Core rejection: expected {message:?}, got {error:?}"
     );
 }
 

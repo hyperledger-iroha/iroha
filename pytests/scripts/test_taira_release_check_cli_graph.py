@@ -158,10 +158,12 @@ class CliCopyLifetimeTests(unittest.TestCase):
             self.assertEqual(harness, str(copy))
             self.assertTrue(copy.exists())
             if network:
-                self.assertFalse(Path(copies["network"]).exists(), "release finished network copy before CLI execution")
-                self.assertEqual(order, ["combined-build", "production-build-and-four-peer"])
+                self.assertTrue(Path(copies["network"]).exists(), "network copy remains frozen until unit checks pass")
+                self.assertEqual(order, ["combined-build"])
             else:
                 self.assertEqual(order, ["combined-build"])
+            # Source Cargo outputs may already have changed; use only the copy.
+            raw_cli.write_bytes(b"replacement from unrelated later Cargo graph")
             runs.append(harness)
             return real_run_stages(harness, *args)
 
@@ -174,9 +176,9 @@ class CliCopyLifetimeTests(unittest.TestCase):
         def four_peer(*args, **kwargs):
             self.assertEqual(kwargs, {"harness": copies["network"]})
             order.append("production-build-and-four-peer")
-            self.assertTrue(copy.exists())
-            self.assertFalse(executed.exists())
-            self.assertEqual(stat.S_IMODE(copy.stat().st_mode), 0o500)
+            self.assertFalse(copy.exists(), "release completed CLI copy before production graph")
+            self.assertTrue(executed.exists())
+            self.assertEqual(stat.S_IMODE(Path(copies["network"]).stat().st_mode), 0o500)
             self.assertEqual(stat.S_IMODE(copy.parent.stat().st_mode), 0o500)
             # A later Cargo graph can replace the original output; selected
             # execution must remain on the completed immutable CLI test copy.
@@ -200,8 +202,8 @@ class CliCopyLifetimeTests(unittest.TestCase):
             gate.run_checks(self.source, environment=self.env | {"CARGO_HOME": "/isolated"}, source_commit="a" * 40, lock_fds=locks)
         self.assertEqual(batch.call_count, 1)
         later_compile.assert_not_called()
-        self.assertEqual(peers.call_count, int(network))
-        self.assertEqual(runs, [] if failure == "network" else [str(copy)])
+        self.assertEqual(peers.call_count, int(network and failure != "cli"))
+        self.assertEqual(runs, [str(copy)])
         self.assertFalse(copy.exists())
         self.assertIsNone(copies.directory_fd)
         if network:
@@ -209,14 +211,14 @@ class CliCopyLifetimeTests(unittest.TestCase):
             self.assertEqual(raw_cli.read_bytes(), b"replacement from unrelated later Cargo graph")
         self.assertEqual(original_production.read_bytes(), b"shipping cli retained")
         self.assertEqual(original_node.read_bytes(), b"shipping node retained")
-        self.assertEqual(executed.exists(), failure != "network")
+        self.assertTrue(executed.exists())
         if executed.exists():
             self.assertEqual(executed.read_text(), "original isolated CLI")
 
-    def test_cli_copy_survives_production_build_and_executes_once_after_four_peer(self):
+    def test_cli_copy_executes_once_before_production_build_and_four_peer(self):
         self.run_sequence()
 
-    def test_network_failure_releases_unused_cli_without_executing_it(self):
+    def test_network_failure_retains_completed_cli_result_and_releases_copies(self):
         self.run_sequence(failure="network")
 
     def test_cli_failure_releases_test_copies_without_touching_shipping_snapshots(self):

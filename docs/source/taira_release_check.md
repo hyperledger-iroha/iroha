@@ -39,17 +39,23 @@ runtime improvement is claimed without measurement.
 The combined native test build selects the exact `iroha_cli --bin iroha`
 and `irohad --lib` test harnesses. The daemon cases execute signed genesis
 and check the deployment account in its final staged state, including role and
-revocation semantics; the deployment flag is restricted to offline `--check-config`. A single Cargo invocation unifies the selected packages and their
+revocation semantics; the deployment flag is restricted to offline `--check-config`. The genesis fixtures share the canonical daemon configuration and production staging setup; all affected unconditional manifest/crypto consumers are selected with them. A single Cargo invocation unifies the selected packages and their
 default/dev-dependency features; it does not add feature overrides. The CLI test
-copy stays under the original immutable artifact owner while the separate
-production `iroha3d`/`iroha` build and four-validator test run, then executes
-without another Cargo test build. Its manifest, bin target kind and test profile
-distinguish it from the Rust SDK's `iroha` library harness and the production CLI.
-An earlier failure releases the unused CLI copy through the existing owner;
-production binaries remain retained. Configuration and proof checks retain their
+copy executes under the original immutable artifact owner with all independent
+library and daemon checks, before the separate production `iroha3d`/`iroha`
+build and four-validator test. It needs no second Cargo test build. Its manifest,
+bin target kind and test profile distinguish it from the Rust SDK's `iroha`
+library harness and the production CLI. Each completed test copy is released
+through its existing owner. Any collected test failure stops before production
+compilation or network execution; production snapshots remain retained. Configuration and proof checks retain their
 existing separate gates. Adding the CLI changes the combined test feature union,
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
+
+CLI client admission binds the configured chain, genesis NetworkId and account
+address discriminant to the signed inventory during assembly, apply and recovery.
+The same check runs before convergence child custody; stale runtime or validator
+clients fail before operator-key admission or stage snapshots.
 
 Core checks cover the complete Soracloud and SoraFS instruction inventories at
 the Initial executor boundary. Dispatch and admission come from the same typed
@@ -184,8 +190,9 @@ release compilation retains its original sanitized environment and release
 profile. Each feature graph keeps its own Cargo cache; no test features are
 added or removed to force reuse. The first incremental run populates those
 caches, so a speed improvement must be measured on subsequent focused changes.
-The FSM and focused Core regressions precede the four-validator runtime check, so source-staging or consensus
-failures stop before compiling the independent contract harnesses. Its log
+The FSM, source checks and independent native regressions precede the
+four-validator runtime check. Unit test failures stop before production binary
+compilation; the contract test harnesses share the earlier combined graph. Its log
 records the actual Cargo-selected native binary paths and profiles separately
 from the later Linux release artifacts.
 
@@ -262,9 +269,10 @@ Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test
 must exist and execute exactly once. Missing,
-ignored, failed or empty selections fail the command. All independent cases in
-a harness run before reporting their combined failures, so one bad fixture cannot
-hide another defect until the next build. Fix the named failures and
+ignored, failed or empty selections fail the command. All independent cases in each combined library, daemon and CLI harness run
+before reporting their combined failures, so one bad fixture cannot hide
+another defect until the next build. Missing selected tests, artifact custody
+failures and infrastructure errors still stop immediately. Fix the named failures and
 rerun the same command to reuse compiled dependencies.
 
 The selected toolchain's Cargo executes this command from `/` with the isolated

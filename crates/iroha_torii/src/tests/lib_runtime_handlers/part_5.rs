@@ -1837,28 +1837,41 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
             sorafs_anonymity_policy: Default::default(),
             sorafs_rollout_phase: Default::default(),
         };
-        let result = tokio::task::spawn_blocking(move || {
-            iroha::client::Client::builder(config)
+        // `spawn_blocking` still enters Tokio's runtime context, which the synchronous
+        // SDK correctly rejects. A plain thread plus an async result channel lets the
+        // actual HTTP server keep progressing without bypassing that SDK guard.
+        let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+        let worker = std::thread::spawn(move || {
+            assert!(tokio::runtime::Handle::try_current().is_err());
+            let result = iroha::client::Client::builder(config)
                 .build()
                 .expect("exact SDK fixture")
-                .get_transaction_details(hash)
-        })
-        .await
-        .expect("SDK exact proof worker");
+                .get_transaction_details(hash);
+            assert!(
+                result_tx.send(result).is_ok(),
+                "SDK fixture result receiver"
+            );
+        });
+        let result = result_rx.await.expect("SDK exact proof worker response");
+        worker.join().expect("SDK exact proof worker");
+        let failure = result
+            .as_ref()
+            .err()
+            .map(|error| format!("{error:?}").chars().take(2_048).collect::<String>());
         assert_eq!(
             result.is_ok(),
             expected_success,
-            "actual Torii→HTTP→SDK success contract"
+            "actual Torii→HTTP→SDK success contract: {failure:?}"
         );
         assert_eq!(
             matches!(
-                result,
+                &result,
                 Err(iroha::query::QueryError::Validation(
                     ValidationFail::QueryFailed(QueryExecutionFail::NotFound)
                 ))
             ),
             expected_missing,
-            "only a registered authority's exact missing proof may become typed absence"
+            "only a registered authority's exact missing proof may become typed absence: {failure:?}"
         );
     }
     server.abort();
@@ -1932,9 +1945,17 @@ async fn transaction_details_allows_sender_and_batch_recipient_but_rejects_other
             panic!("{label} should read involved transaction details: {error}")
         });
         assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[axum::http::header::CONTENT_TYPE],
+            crate::utils::NORITO_MIME_TYPE,
+        );
         let body = torii_body_bytes(response, "transaction-details response body").await;
         let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
-            norito::json::from_slice(&body).expect("typed transaction-details JSON");
+            norito::decode_canonical_with_limits(
+                &body,
+                norito::canonical_decode_limits(body.len()),
+            )
+            .expect("typed transaction-details canonical Norito");
         assert_eq!(details.transaction.entrypoint_hash(), &entrypoint_hash);
         assert_eq!(
             details.transaction.result().batch_transfer_outcomes(),
@@ -2125,9 +2146,17 @@ async fn transaction_details_native_beneficiaries_preserve_restricted_history_is
                         panic!("{label}/{caller_label}/{applied}: exact details denied: {error}")
                     });
                     assert_eq!(response.status(), StatusCode::OK);
+                    assert_eq!(
+                        response.headers()[axum::http::header::CONTENT_TYPE],
+                        crate::utils::NORITO_MIME_TYPE,
+                    );
                     let body = torii_body_bytes(response, "native beneficiary details").await;
                     let details: iroha_torii_shared::PipelineTransactionDetailsResponse =
-                        norito::json::from_slice(&body).expect("native beneficiary details JSON");
+                        norito::decode_canonical_with_limits(
+                            &body,
+                            norito::canonical_decode_limits(body.len()),
+                        )
+                        .expect("native beneficiary details canonical Norito");
                     let TransactionEntrypoint::External(committed) =
                         details.transaction.entrypoint()
                     else {

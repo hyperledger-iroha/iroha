@@ -18383,28 +18383,22 @@ mod tests {
             .expect("build complete sample genesis manifest")
         }
         fn sample_config_table() -> toml::Table {
-            toml::toml! {
-                chain = "00000000-0000-0000-0000-000000000000"
-                public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
-                private_key = "8926201CA347641228C3B79AA43839DEDC85FA51C0E8B9B6A00F6B0D6B0423E902973F"
-                trusted_peers_pop = [
-                  { public_key = "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2", pop_hex = "8515da750f81182aaba5c22fc9f03a01e81ed85e4495a2ca6b29a71c0c8549537e31e79cddf6ff285b9e22d0d9dc17ce0f46e7d0cf78b2ef9feab50c849a1ea8e1e4f07e966f6113faa8a999317545d9f111b8e08a7273913710b43a20b19c08" }
-                ]
-                [network]
-                address = "addr:127.0.0.1:1337#8F78"
-                public_address = "addr:127.0.0.1:1337#8F78"
-                [genesis]
-                public_key = "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4"
-                file = "./genesis.signed.nrt"
-                expected_hash = "hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
-                [streaming]
-                identity_public_key = "ed01208BA62848CF767D72E7F7F4B9D2D7BA07FEE33760F79ABE5597A51520E292A0CB"
-                identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544168B6CB894F84F"
-                [torii]
-                address = "addr:127.0.0.1:8080#8942"
-                [logger]
-                format = "pretty"
-            }
+            // Share the daemon's complete parser fixture, including independent
+            // consensus, transport and streaming identities. Keep only these
+            // manifest-test overrides here so required config fields cannot drift.
+            let mut table = crate::config_tests::minimal_config_table();
+            iroha_config::base::toml::Writer::new(&mut table)
+                .write(
+                    ["genesis", "public_key"],
+                    "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
+                )
+                .write(["genesis", "file"], "./genesis.signed.nrt")
+                .write(["logger", "format"], "pretty")
+                .write(
+                    ["nexus", "storage", "local_budget_bytes"],
+                    1_073_741_824_i64,
+                );
+            table
         }
         fn sample_config() -> Config {
             ConfigReader::new()
@@ -18482,7 +18476,11 @@ mod tests {
         fn genesis_staging_state_for_test(
             config: &Config,
             genesis: &GenesisBlock,
-        ) -> (State, Arc<Kura>) {
+        ) -> (DisposableValidationRoot, State, Arc<Kura>) {
+            let validation_root = DisposableValidationRoot::create()
+                .expect("allocate disposable fixture validation storage");
+            let kura = open_disposable_validation_kura(config, &validation_root)
+                .expect("open fixture Kura with current configured geometry");
             let authority = AccountId::new(config.genesis.public_key.clone());
             let mut world = World::with(
                 [Domain::new(iroha_genesis::GENESIS_DOMAIN_ID.clone()).build(&authority)],
@@ -18494,32 +18492,27 @@ mod tests {
                 &genesis.0,
                 &config.nexus.dataspace_catalog,
             );
-            let kura = Kura::blank_kura_for_testing();
-            let mut state = State::new_with_chain_for_testing(
+            let mut state = State::try_new_with_chain_and_network_id(
                 world,
                 Arc::clone(&kura),
                 LiveQueryStore::start_test(),
                 config.common.chain.clone(),
-            );
-            state.set_pipeline(config.pipeline.clone());
-            state.set_oracle(config.oracle.clone());
-            state.set_fraud_monitoring(config.fraud_monitoring.clone());
-            state.set_gov(config.gov.clone());
-            state.content = config.content.clone();
-            state.set_settlement(config.settlement.clone());
-            state
-                .set_zk(config.zk.clone())
-                .expect("test ZK config must be valid");
-            state
-                .set_nexus(config.nexus.clone())
-                .expect("test Nexus config must be valid");
-            state.set_crypto(config.crypto.clone());
-            let nexus = state.nexus_snapshot();
-            let lane_manifests = Arc::new(
-                LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-            );
+                NetworkId::from_genesis_hash(genesis.0.hash()),
+                #[cfg(feature = "telemetry")]
+                StateTelemetry::default(),
+            )
+            .expect("initialize fixture world with its signed genesis identity");
+            install_zk_config_before_kura_replay(&mut state, config)
+                .expect("fixture ZK policy must be valid");
+            apply_state_runtime_config_before_snapshot_auth(&mut state, config)
+                .expect("fixture execution policy must be valid");
+            apply_state_geometry_config_before_kura_replay(&mut state, config)
+                .expect("fixture Nexus geometry must be valid");
+            let nexus = nexus_for_runtime_surfaces(&state);
+            let lane_manifests = freeze_lane_manifests_for_startup_replay(&nexus)
+                .expect("fixture lane manifests must be ready for genesis replay");
             state.install_lane_manifests(&lane_manifests);
-            (state, kura)
+            (validation_root, state, kura)
         }
         fn staged_context_hashes_for_test(
             genesis: &RawGenesisTransaction,
@@ -18537,7 +18530,8 @@ mod tests {
             let topology = Topology::new(voters);
             let (mode, _) =
                 signed_v2_genesis_context_metadata(&provisional).expect("signed v2 metadata");
-            let (state, _kura) = genesis_staging_state_for_test(config, &provisional);
+            let (_validation_root, state, _kura) =
+                genesis_staging_state_for_test(config, &provisional);
             let mut voting_block = None;
             let (_valid, staged) = ValidBlock::validate_signed_genesis_keep_voting_block(
                 provisional.0,
@@ -18607,10 +18601,13 @@ mod tests {
         fn detects_allowed_signing_mismatch() {
             let mut manifest = sample_manifest();
             let crypto = ManifestCrypto {
-                allowed_signing: vec![Algorithm::Ed25519, Algorithm::Sm2],
-                default_hash: "sm3-256".to_owned(),
+                allowed_signing: vec![Algorithm::Ed25519],
+                allowed_curve_ids: vec![iroha_data_model::account::curve::CurveId::ED25519.as_u8()],
                 ..Default::default()
             };
+            crypto
+                .validate()
+                .expect("mismatched manifest policy must be valid");
             manifest = manifest
                 .into_builder()
                 .with_crypto(crypto)
@@ -18628,7 +18625,8 @@ mod tests {
         fn detects_allowed_curve_ids_mismatch() {
             let manifest = sample_manifest();
             let mut config = sample_config();
-            config.crypto.allowed_curve_ids.push(2);
+            config.crypto.allowed_curve_ids =
+                vec![iroha_data_model::account::curve::CurveId::ED25519.as_u8()];
             let err = ensure_manifest_crypto_matches(&manifest, &config)
                 .expect_err("curve id mismatch should be detected");
             assert!(
@@ -18836,7 +18834,8 @@ mod tests {
                 config.crypto.allowed_signing.push(Algorithm::BlsNormal);
             }
             let genesis = bind_staged_context_for_test(raw_genesis, &genesis_authority, &config);
-            let (state, _kura) = genesis_staging_state_for_test(&config, &genesis);
+            let (_validation_root, state, _kura) =
+                genesis_staging_state_for_test(&config, &genesis);
             let voters = iroha_core::sumeragi::signed_genesis_voting_peers(&genesis)
                 .expect("signed voting roster");
             let topology = Topology::new(voters);
@@ -18934,6 +18933,7 @@ mod tests {
             let genesis = builder
                 .build_and_sign(&genesis_authority)
                 .expect("signed genesis fixture");
+            config.genesis.expected_hash = genesis.0.hash();
             let (mode, parameters) =
                 signed_v2_genesis_context_metadata(&genesis).expect("signed v2 metadata");
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
@@ -19376,56 +19376,27 @@ mod tests {
         }
         #[test]
         fn verify_genesis_metadata_rejects_fingerprint_mismatch() -> eyre::Result<()> {
-            use iroha_core::{kura::Kura, query::store::LiveQueryStore};
             let _registry_guard = instruction_registry_test_guard();
             iroha_genesis::init_instruction_registry();
-            let mut config = sample_config();
+            let config = sample_config();
             let genesis_keys = config.common.key_pair.clone();
             let chain = config.common.chain.clone();
-            // Build a canonical manifest with consensus metadata, then tamper with the advertised
-            // fingerprint so genesis validation should fail.
-            let manifest = complete_test_genesis_builder(GenesisBuilder::new_without_executor(
-                chain,
-                PathBuf::from("."),
-            ))
+            let genesis_block = complete_test_genesis_builder(
+                GenesisBuilder::new_without_executor(chain, PathBuf::from(".")),
+            )
             .build_raw()
             .expect("build complete fingerprint-mismatch genesis manifest")
-            .with_consensus_meta();
-            let mut manifest_value =
-                norito::json::value::to_value(&manifest).expect("serialize manifest");
-            if let Some(obj) = manifest_value.as_object_mut() {
-                obj.insert(
-                    "consensus_fingerprint".to_owned(),
-                    norito::json::Value::String(
-                        "0x00000000000000000000000000000000000000000000000000000000000000ff"
-                            .to_owned(),
-                    ),
-                );
-            } else {
-                panic!("manifest must serialize as a JSON object");
-            }
-            let tampered: RawGenesisTransaction =
-                norito::json::value::from_value(manifest_value).expect("decode tampered manifest");
-            let genesis_block = tampered.build_and_sign(&genesis_keys)?;
+            .with_consensus_meta()
+            .build_and_sign(&genesis_keys)?;
             let config_caps = build_consensus_config_caps(&config.nexus, None, None)
                 .map_err(|err| eyre::eyre!(format!("{err:?}")))?;
-            let kura = Kura::blank_kura_for_testing();
-            let query = LiveQueryStore::start_test();
-            let state = State::new_for_testing(World::new(), kura, query);
-            let world = state.world_view();
-            let height = u64::try_from(state.committed_height()).unwrap_or(u64::MAX);
-            let (mode_tag, _bls_domain, consensus_caps) = compute_consensus_handshake_caps(
-                &world,
-                height,
-                &config,
-                &config_caps,
-                iroha_data_model::block::consensus_v2::ConsensusMode::Permissioned,
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
-            )
-            .expect("valid v2 handshake config");
-            // Diverge the runtime chain after computing consensus caps to force a
-            // fingerprint mismatch without altering the embedded handshake metadata.
-            config.common.chain = ChainId::from("fingerprint-mismatch");
+            let (mode_tag, _bls_domain, mut consensus_caps, _, _) =
+                consensus_caps_from_genesis(&genesis_block, &config_caps, &config.sumeragi)
+                    .expect("signed genesis must produce canonical v2 caps");
+            // Raw manifest fingerprints are normalized during signing. Mutate
+            // the expected admission fingerprint after deriving it from the
+            // actual signed genesis so this exercises the mismatch gate.
+            consensus_caps.consensus_fingerprint[0] ^= 1;
             let proto = iroha_core::sumeragi::consensus::PROTO_VERSION;
             let err =
                 verify_genesis_metadata(&genesis_block, &config, &consensus_caps, &mode_tag, proto)
