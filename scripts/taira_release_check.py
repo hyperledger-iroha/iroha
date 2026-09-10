@@ -202,6 +202,9 @@ STAGES = (
         "taira_public_reset::executor_model::tests::abandonment_partial_rollback_resumes_only_remaining_hosts_with_original_digest",
     )),
     ("server-prepared transaction confirmation", (
+        "taira::tests::final_canary_predecessor_requires_its_independent_faucet_policy",
+        "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
+        "taira_public_reset::host::tests::coordinator_write_canary_argv_passes_child_validation_for_all_core_actions",
         "taira::tests::prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire",
         "taira::tests::prepared_applied_confirmation_waits_for_exact_details_visibility",
         "taira::tests::prepared_applied_confirmation_rejects_unauthorized_or_malformed_exact_details",
@@ -715,6 +718,7 @@ class NativeArtifactCopies(dict[str, str]):
                  identities: dict[Path, tuple[int, ...]], observations: list[dict[str, object]]):
         super().__init__(copied)
         self.output = output
+        self.observations = tuple(observations)
         self.pending = {row["selection"]: (identities[Path(row["path"])], row)
                         for row in observations if row["selection"] in HARNESS_TARGETS
                         and row["cargo_artifact"]["profile"].get("test") is True}
@@ -1109,8 +1113,38 @@ def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int,
           f"in {time.monotonic() - started:.1f}s", flush=True)
 
 
+def independent_check_evidence(harnesses: NativeArtifactCopies, stages) -> dict[str, object]:
+    """Bind a complete independent pass to its exact census and copied Cargo artifacts."""
+    artifacts = {row["selection"]: row for row in harnesses.observations}
+    selections = [name for name, _ in stages]
+    if len(artifacts) != len(harnesses.observations) or any(name not in artifacts for name in selections):
+        raise CheckError("independent check artifact observations are incomplete or duplicated")
+    return {
+        "passed": True,
+        "selected_tests": [
+            {"selection": name, "stages": [
+                {"label": label, "tests": list(tests)} for label, tests in selected_stages
+            ]} for name, selected_stages in stages
+        ],
+        # The temporary copy path changes on retry. Its content and actual Cargo
+        # target metadata must still agree before an earlier test pass can apply.
+        "artifacts": [
+            {key: artifacts[name][key] for key in ("selection", "sha256", "size", "cargo_artifact")}
+            for name in selections
+        ],
+    }
+
+
 def run_checks(root: Path, *, environment: dict[str, str] | None = None,
-               source_commit: str | None = None, lock_fds: tuple[int, ...] = ()) -> None:
+               source_commit: str | None = None, lock_fds: tuple[int, ...] = (),
+               completed_independent_checks: dict[str, object] | None = None,
+               update_independent_checks=None) -> None:
+    """Run the gate; preparation alone may supply its exact-request checkpoint.
+
+    The callback receives None before rerunning independent tests, then complete
+    evidence after every selected independent test passed. A network failure
+    never publishes full-gate success. The CLI exposes no skip option.
+    """
     if sys.platform not in {"darwin", "linux"}:
         raise CheckError("the Taira descriptor/stage gate requires macOS or Linux")
     started = time.monotonic()
@@ -1152,14 +1186,26 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
                                     harnesses=selections) as harnesses:
             failures = []
             independent_stages = early_stages + ((("cli", STAGES),) if STAGES else ())
+            checkpoint_enabled = update_independent_checks is not None
+            evidence = independent_check_evidence(harnesses, independent_stages) if checkpoint_enabled else None
+            reuse_independent = checkpoint_enabled and completed_independent_checks == evidence
+            if reuse_independent:
+                print("[taira-check] reused exact independent test census and artifact pass", flush=True)
+            elif update_independent_checks is not None:
+                # Retire a mismatched old pass before a failed rerun could leave
+                # it available to a later attempt whose artifacts happen to match.
+                update_independent_checks(None)
             for name, stages in independent_stages:
-                try:
-                    run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
-                except SelectedRegressionFailures as error:
-                    failures.extend(error.failures)
+                if not reuse_independent:
+                    try:
+                        run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+                    except SelectedRegressionFailures as error:
+                        failures.extend(error.failures)
                 harnesses.release(name)
             if failures:
                 raise SelectedRegressionFailures(failures)
+            if not reuse_independent and update_independent_checks is not None:
+                update_independent_checks(evidence)
             if NETWORK_STAGES:
                 run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
                 harnesses.release("network")

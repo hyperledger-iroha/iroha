@@ -68,13 +68,13 @@ class TairaPrepareTests(unittest.TestCase):
             path.write_bytes(elf(machine))
             path.chmod(0o755)
 
-    def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None):
+    def prepare(self, *, check=None, build=None, snapshot=None, cache_admission=None, source_lane_fd=88):
         def default_build(_root, _command, _env, log):
             self.binaries()
             log.write_bytes(b"fixture compiler output\n")
         def wrapped_build(*args, **kwargs):
             return (build or default_build)(*args)
-        with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, 88))), \
+        with patch.object(release, "source_lane", side_effect=lambda *_: contextlib.nullcontext((self.source, source_lane_fd))), \
              patch.object(release, "verify_checkout", return_value="b" * 40), \
              patch.object(release, "source_snapshot", return_value=[]), \
              patch.object(release, "verify_signed_source", return_value="b" * 40), \
@@ -96,8 +96,11 @@ class TairaPrepareTests(unittest.TestCase):
 
     def test_prepare_orders_gate_build_capture_and_publishes_read_only_files(self):
         events = []
-        def check(_root, *, environment, source_commit, lock_fds):
+        def check(_root, *, environment, source_commit, lock_fds,
+                  completed_independent_checks, update_independent_checks):
             events.append("gate")
+            self.assertIsNone(completed_independent_checks)
+            self.assertTrue(callable(update_independent_checks))
             self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
             self.assertEqual(len(lock_fds), 3)
             self.assertEqual(lock_fds[1], 88)  # Existing source-custody fixture descriptor.
@@ -377,7 +380,8 @@ class TairaPrepareTests(unittest.TestCase):
             with self.subTest(preference=preference):
                 self.out = self.root / ("prepared-incremental-" + preference)
                 self.args.output_dir = self.out
-                def check(_root, *, environment, source_commit, lock_fds):
+                def check(_root, *, environment, source_commit, lock_fds,
+                          completed_independent_checks, update_independent_checks):
                     self.assertEqual(environment["CARGO_INCREMENTAL"], preference)
                     self.assertEqual(environment["CARGO_TARGET_DIR"], str(self.target))
                     self.assertEqual(source_commit, self.args.expected_commit)

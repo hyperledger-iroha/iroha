@@ -12809,6 +12809,27 @@ enum PreparedMutationOutcome {
     Rejected(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WriteCanaryChildAction {
+    Prepare,
+    Submit,
+    Recover,
+}
+
+impl WriteCanaryChildAction {
+    fn append_envelope_args(self, args: &mut Vec<OsString>, fd: i32) {
+        match self {
+            Self::Prepare => args.extend([
+                OsString::from("--prepare-envelope"),
+                OsString::from("--prepared-output-fd"),
+            ]),
+            Self::Submit => args.push(OsString::from("--submit-prepared-envelope-fd")),
+            Self::Recover => args.push(OsString::from("--recover-prepared-envelope-fd")),
+        }
+        args.push(fd.to_string().into());
+    }
+}
+
 /// Minimal read-only transport for reconciling a durably submitted local
 /// ledger mutation after the forward artifact and signing-token closure has
 /// been released.
@@ -13971,11 +13992,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             .open(&scratch)?;
         let mut output_reader = output_file.try_clone()?;
         let output_path = inherited_file_path(&output_file)?;
-        let (mut args, mut inherited_files) =
-            self.write_canary_base_args(phase, kind, idempotency_key, timeout_secs, true)?;
-        args.push(OsString::from("--prepare-envelope"));
-        args.push(OsString::from("--prepared-output-fd"));
-        args.push(output_file.as_raw_fd().to_string().into());
+        let (mut args, mut inherited_files) = self.write_canary_base_args(
+            phase,
+            kind,
+            idempotency_key,
+            timeout_secs,
+            WriteCanaryChildAction::Prepare,
+        )?;
+        WriteCanaryChildAction::Prepare.append_envelope_args(&mut args, output_file.as_raw_fd());
         debug_assert_eq!(
             output_path,
             PathBuf::from(format!("/proc/self/fd/{}", output_file.as_raw_fd()))
@@ -14050,19 +14074,19 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             kind,
         );
         let file = self.open_retained_prepared_envelope(prepared)?;
+        let action = if recover_only {
+            WriteCanaryChildAction::Recover
+        } else {
+            WriteCanaryChildAction::Submit
+        };
         let (mut args, mut inherited_files) = self.write_canary_base_args(
             phase,
             kind,
             &idempotency_key,
             remaining_seconds(deadline)?,
-            !recover_only,
+            action,
         )?;
-        args.push(if recover_only {
-            OsString::from("--recover-prepared-envelope-fd")
-        } else {
-            OsString::from("--submit-prepared-envelope-fd")
-        });
-        args.push(file.as_raw_fd().to_string().into());
+        action.append_envelope_args(&mut args, file.as_raw_fd());
         inherited_files.push(file);
         let process =
             self.run_local_cli_process_until(args, inherited_files, deadline, recover_only)?;
@@ -14100,7 +14124,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         kind: &str,
         idempotency_key: &str,
         timeout_secs: u64,
-        include_submission_secret: bool,
+        action: WriteCanaryChildAction,
     ) -> Result<(Vec<OsString>, Vec<File>)> {
         let (mut args, config_file) = inherited_client_config_args(
             &self.runtime.client_config,
@@ -14149,7 +14173,17 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
                 OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
             ]);
         }
-        if kind == "onboarding" && include_submission_secret {
+        if kind == "write_canary" && action == WriteCanaryChildAction::Prepare {
+            args.extend([
+                OsString::from("--predecessor-faucet-authority"),
+                OsString::from(&self.admitted.inventory.faucet_policy.authority),
+                OsString::from("--predecessor-faucet-asset-id"),
+                OsString::from(&self.admitted.inventory.faucet_policy.asset_definition_id),
+                OsString::from("--predecessor-faucet-amount"),
+                OsString::from(self.admitted.inventory.faucet_policy.amount.to_string()),
+            ]);
+        }
+        if kind == "onboarding" && action != WriteCanaryChildAction::Recover {
             let (_token_path, token_file) = inherited_input_path(
                 self.runtime
                     .onboarding_token
@@ -18007,6 +18041,8 @@ fn verify_remote_reservation_receipt(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    include!("taira_public_reset_host_canary_args_tests.rs");
 
     fn readiness_http_server(statuses: Vec<u16>) -> (String, std::thread::JoinHandle<usize>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("readiness listener");

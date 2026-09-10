@@ -497,6 +497,15 @@ pub struct WriteCanary {
     /// Independently trusted exact faucet transfer amount; required for the faucet child.
     #[arg(long, required_if_eq("operation", "faucet"))]
     pub faucet_amount: Option<String>,
+    /// Independently trusted faucet authority for the final canary's predecessor proof.
+    #[arg(long)]
+    pub predecessor_faucet_authority: Option<String>,
+    /// Exact faucet asset definition for the final canary's predecessor proof.
+    #[arg(long)]
+    pub predecessor_faucet_asset_id: Option<String>,
+    /// Exact faucet transfer amount for the final canary's predecessor proof.
+    #[arg(long)]
+    pub predecessor_faucet_amount: Option<String>,
     /// Owner-only onboarding token; required only while preparing or submitting the envelope.
     #[arg(long, value_name = "PATH", conflicts_with = "onboarding_token_fd")]
     pub onboarding_token_file: Option<PathBuf>,
@@ -556,35 +565,53 @@ impl WriteCanary {
         if self.operation != WriteCanaryOperation::Faucet {
             eyre::bail!("faucet policy is valid only for the exact faucet child");
         }
-        let authority_raw = self
-            .faucet_authority
-            .as_deref()
-            .ok_or_else(|| eyre!("the faucet child requires --faucet-authority"))?;
-        let authority = AccountId::parse_encoded(authority_raw)
-            .wrap_err("--faucet-authority is not a canonical AccountId")?;
-        if authority.to_string() != authority_raw {
-            eyre::bail!("--faucet-authority must use its exact canonical representation");
+        parse_write_canary_faucet_policy(
+            self.faucet_authority.as_deref(),
+            self.faucet_asset_id.as_deref(),
+            self.faucet_amount.as_deref(),
+            "faucet",
+        )
+    }
+
+    fn predecessor_faucet_policy(&self) -> Result<AccountFaucetPolicyV1> {
+        if self.operation != WriteCanaryOperation::FinalCanary
+            || !matches!(self.prepared_action()?, PreparedEnvelopeAction::Prepare(_))
+        {
+            eyre::bail!("predecessor faucet policy is valid only for final-canary preparation");
         }
-        let asset_raw = self
-            .faucet_asset_id
-            .as_deref()
-            .ok_or_else(|| eyre!("the faucet child requires --faucet-asset-id"))?;
-        let asset_definition_id = AssetDefinitionId::from_str(asset_raw)
-            .wrap_err("--faucet-asset-id is not a canonical asset definition")?;
-        if asset_definition_id.to_string() != asset_raw {
-            eyre::bail!("--faucet-asset-id must use its exact canonical representation");
+        parse_write_canary_faucet_policy(
+            self.predecessor_faucet_authority.as_deref(),
+            self.predecessor_faucet_asset_id.as_deref(),
+            self.predecessor_faucet_amount.as_deref(),
+            "predecessor-faucet",
+        )
+    }
+
+    fn validated_action(&self) -> Result<PreparedEnvelopeAction> {
+        let action = self.prepared_action()?;
+        self.validate_prerequisite_action(action)?;
+        self.validate_onboarding_token_action(action)?;
+        if self.operation == WriteCanaryOperation::Faucet {
+            PreparedOperationPolicyContext::Current(self).faucet_policy()?;
+        } else if self.faucet_authority.is_some()
+            || self.faucet_asset_id.is_some()
+            || self.faucet_amount.is_some()
+        {
+            eyre::bail!("faucet policy inputs are valid only for the exact faucet child");
         }
-        let amount_raw = self
-            .faucet_amount
-            .as_deref()
-            .ok_or_else(|| eyre!("the faucet child requires --faucet-amount"))?;
-        let amount = Quantity::from_str(amount_raw)
-            .wrap_err("--faucet-amount is not an exact positive quantity")?;
-        if amount.to_string() != amount_raw {
-            eyre::bail!("--faucet-amount must use its exact canonical representation");
+        if self.operation == WriteCanaryOperation::FinalCanary
+            && matches!(action, PreparedEnvelopeAction::Prepare(_))
+        {
+            PreparedOperationPolicyContext::Predecessor(self).faucet_policy()?;
+        } else if self.predecessor_faucet_authority.is_some()
+            || self.predecessor_faucet_asset_id.is_some()
+            || self.predecessor_faucet_amount.is_some()
+        {
+            eyre::bail!(
+                "predecessor faucet policy inputs are valid only for final-canary preparation"
+            );
         }
-        AccountFaucetPolicyV1::try_new(authority, asset_definition_id, amount)
-            .wrap_err("invalid independently trusted faucet policy")
+        Ok(action)
     }
 
     fn prepared_action(&self) -> Result<PreparedEnvelopeAction> {
@@ -713,6 +740,95 @@ impl WriteCanary {
             _ => eyre::bail!("onboarding requires exactly one explicit token input"),
         }
     }
+}
+
+fn parse_write_canary_faucet_policy(
+    authority_raw: Option<&str>,
+    asset_raw: Option<&str>,
+    amount_raw: Option<&str>,
+    flag_prefix: &str,
+) -> Result<AccountFaucetPolicyV1> {
+    let authority_raw = authority_raw.ok_or_else(|| eyre!("missing --{flag_prefix}-authority"))?;
+    let authority = AccountId::parse_encoded(authority_raw)
+        .wrap_err_with(|| format!("--{flag_prefix}-authority is not a canonical AccountId"))?;
+    if authority.to_string() != authority_raw {
+        eyre::bail!("--{flag_prefix}-authority must use its exact canonical representation");
+    }
+    let asset_raw = asset_raw.ok_or_else(|| eyre!("missing --{flag_prefix}-asset-id"))?;
+    let asset_definition_id = AssetDefinitionId::from_str(asset_raw).wrap_err_with(|| {
+        format!("--{flag_prefix}-asset-id is not a canonical asset definition")
+    })?;
+    if asset_definition_id.to_string() != asset_raw {
+        eyre::bail!("--{flag_prefix}-asset-id must use its exact canonical representation");
+    }
+    let amount_raw = amount_raw.ok_or_else(|| eyre!("missing --{flag_prefix}-amount"))?;
+    let amount = Quantity::from_str(amount_raw)
+        .wrap_err_with(|| format!("--{flag_prefix}-amount is not an exact positive quantity"))?;
+    if amount.to_string() != amount_raw {
+        eyre::bail!("--{flag_prefix}-amount must use its exact canonical representation");
+    }
+    AccountFaucetPolicyV1::try_new(authority, asset_definition_id, amount)
+        .wrap_err("invalid independently trusted faucet policy")
+}
+
+/// Distinguish the operation being executed from the predecessor being authenticated.
+#[derive(Clone, Copy)]
+enum PreparedOperationPolicyContext<'a> {
+    Current(&'a WriteCanary),
+    Predecessor(&'a WriteCanary),
+}
+
+impl PreparedOperationPolicyContext<'_> {
+    fn operation(self) -> Result<WriteCanaryOperation> {
+        match self {
+            Self::Current(args) => Ok(args.operation),
+            Self::Predecessor(args) => {
+                if !matches!(args.prepared_action()?, PreparedEnvelopeAction::Prepare(_)) {
+                    eyre::bail!(
+                        "predecessor policy is valid only while preparing the next operation"
+                    );
+                }
+                match args.operation {
+                    WriteCanaryOperation::Onboarding => {
+                        eyre::bail!("onboarding has no predecessor")
+                    }
+                    WriteCanaryOperation::Faucet => Ok(WriteCanaryOperation::Onboarding),
+                    WriteCanaryOperation::FinalCanary => Ok(WriteCanaryOperation::Faucet),
+                }
+            }
+        }
+    }
+
+    fn faucet_policy(self) -> Result<AccountFaucetPolicyV1> {
+        if self.operation()? != WriteCanaryOperation::Faucet {
+            eyre::bail!("the authenticated operation is not the faucet");
+        }
+        match self {
+            Self::Current(args) => args.faucet_policy(),
+            Self::Predecessor(args) => args.predecessor_faucet_policy(),
+        }
+    }
+}
+
+#[cfg(test)]
+/// Exercise the production action and policy validation with actual parent-produced arguments.
+pub(crate) fn validate_parent_write_canary_for_test(
+    args: &WriteCanary,
+) -> Result<(Option<AccountFaucetPolicyV1>, Option<AccountFaucetPolicyV1>)> {
+    args.binding()?;
+    let action = args.validated_action()?;
+    let current = PreparedOperationPolicyContext::Current(args);
+    let current_policy = (current.operation()? == WriteCanaryOperation::Faucet)
+        .then(|| current.faucet_policy())
+        .transpose()?;
+    let predecessor_policy = if matches!(action, PreparedEnvelopeAction::Prepare(_))
+        && args.operation == WriteCanaryOperation::FinalCanary
+    {
+        Some(PreparedOperationPolicyContext::Predecessor(args).faucet_policy()?)
+    } else {
+        None
+    };
+    Ok((current_policy, predecessor_policy))
 }
 
 fn validate_sha256_argument(value: &str) -> Result<String, String> {
@@ -3902,9 +4018,7 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
     let _guard = ChainDiscriminantGuard::enter(DEFAULT_CHAIN_DISCRIMINANT);
     let public_root = normalize_root_url(&args.public_root)?;
     let binding = args.binding()?;
-    let action = args.prepared_action()?;
-    args.validate_prerequisite_action(action)?;
-    args.validate_onboarding_token_action(action)?;
+    let action = args.validated_action()?;
     let expected_fee_payment = context.transaction_fee_payment()?;
     match action {
         PreparedEnvelopeAction::Prepare(output) => {
@@ -4035,11 +4149,11 @@ fn prove_predecessor_applied(
     expected_fee_payment: &FeePaymentIntent,
     deadline: Instant,
 ) -> Result<()> {
-    let predecessor = match args.operation {
-        WriteCanaryOperation::Onboarding => return Ok(()),
-        WriteCanaryOperation::Faucet => WriteCanaryOperation::Onboarding,
-        WriteCanaryOperation::FinalCanary => WriteCanaryOperation::Faucet,
-    };
+    if args.operation == WriteCanaryOperation::Onboarding {
+        return Ok(());
+    }
+    let policy_context = PreparedOperationPolicyContext::Predecessor(args);
+    let predecessor = policy_context.operation()?;
     let fd = args
         .prerequisite_envelope_fd
         .ok_or_else(|| eyre!("the next operation requires its exact predecessor envelope"))?;
@@ -4058,8 +4172,7 @@ fn prove_predecessor_applied(
         .transpose()?;
     let mut validated = validate_prepared_operation(
         config,
-        args,
-        predecessor,
+        policy_context,
         &predecessor_binding,
         public_root,
         envelope,
@@ -4158,8 +4271,7 @@ fn prepare_final_canary_operation(
     };
     validate_prepared_operation(
         config,
-        args,
-        args.operation,
+        PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
         envelope.clone(),
@@ -4323,8 +4435,7 @@ fn load_and_validate_prepared_operation(
     let binding = args.binding()?;
     let mut validated = validate_prepared_operation(
         config,
-        args,
-        args.operation,
+        PreparedOperationPolicyContext::Current(args),
         &binding,
         public_root,
         envelope,
@@ -4338,8 +4449,7 @@ fn load_and_validate_prepared_operation(
 
 fn validate_prepared_operation(
     config: &Config,
-    args: &WriteCanary,
-    expected_operation: WriteCanaryOperation,
+    policy_context: PreparedOperationPolicyContext<'_>,
     expected_binding: &PreparedMutationBindingV1,
     public_root: &str,
     envelope: PreparedMutationEnvelopeV1,
@@ -4360,6 +4470,7 @@ fn validate_prepared_operation(
     {
         eyre::bail!("prepared mutation envelope does not bind the exact CLI authorization");
     }
+    let expected_operation = policy_context.operation()?;
     let operation = &envelope.operation;
     if !operation.matches_binding(&envelope.binding)?
         || operation.label() != expected_operation.label()
@@ -4434,7 +4545,7 @@ fn validate_prepared_operation(
             None
         }
         PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
-            let faucet_policy = args.faucet_policy()?;
+            let faucet_policy = policy_context.faucet_policy()?;
             if prepared.account_id != config.account.to_string()
                 || prepared.asset_definition_id != faucet_policy.asset_definition_id().to_string()
             {
@@ -5237,8 +5348,7 @@ fn prepare_onboarding_operation(
     };
     validate_prepared_operation(
         config,
-        args,
-        WriteCanaryOperation::Onboarding,
+        PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
         envelope.clone(),
@@ -5279,8 +5389,7 @@ fn prepare_faucet_operation(
     };
     validate_prepared_operation(
         config,
-        args,
-        WriteCanaryOperation::Faucet,
+        PreparedOperationPolicyContext::Current(args),
         binding,
         public_root,
         envelope.clone(),
@@ -7687,6 +7796,128 @@ mod tests {
             .expect_err("zero faucet amount must fail closed");
     }
 
+    #[test]
+    fn final_canary_predecessor_requires_its_independent_faucet_policy() {
+        let mut args = fixture_write_canary_args(WriteCanaryOperation::FinalCanary);
+        args.prerequisite_envelope_fd = Some(4);
+        args.validated_action().expect("complete final preparation");
+        let expected = fixture_write_canary_args(WriteCanaryOperation::Faucet)
+            .faucet_policy()
+            .expect("independent operator policy");
+        let predecessor = PreparedOperationPolicyContext::Predecessor(&args);
+        assert_eq!(
+            predecessor.operation().unwrap(),
+            WriteCanaryOperation::Faucet
+        );
+        assert_eq!(predecessor.faucet_policy().unwrap(), expected);
+        assert!(
+            args.faucet_policy().is_err(),
+            "current-child faucet guard stays strict"
+        );
+        assert!(
+            PreparedOperationPolicyContext::Current(&args)
+                .faucet_policy()
+                .is_err()
+        );
+
+        for field in ["authority", "asset", "amount"] {
+            let mut missing = fixture_write_canary_args(WriteCanaryOperation::FinalCanary);
+            missing.prerequisite_envelope_fd = Some(4);
+            match field {
+                "authority" => missing.predecessor_faucet_authority = None,
+                "asset" => missing.predecessor_faucet_asset_id = None,
+                "amount" => missing.predecessor_faucet_amount = None,
+                _ => unreachable!(),
+            }
+            assert!(
+                missing.validated_action().is_err(),
+                "missing predecessor {field}"
+            );
+            assert!(
+                PreparedOperationPolicyContext::Predecessor(&missing)
+                    .faucet_policy()
+                    .is_err()
+            );
+        }
+        for (asset, amount) in [("xor#universal", "25000"), (DEFAULT_GAS_ASSET_ID, "0")] {
+            args.predecessor_faucet_asset_id = Some(asset.to_owned());
+            args.predecessor_faucet_amount = Some(amount.to_owned());
+            assert!(
+                args.validated_action().is_err(),
+                "invalid predecessor policy"
+            );
+        }
+    }
+
+    #[test]
+    fn write_canary_policy_inputs_are_operation_and_action_scoped() {
+        for operation in [
+            WriteCanaryOperation::Onboarding,
+            WriteCanaryOperation::Faucet,
+            WriteCanaryOperation::FinalCanary,
+        ] {
+            for action in [
+                PreparedEnvelopeAction::Prepare(3),
+                PreparedEnvelopeAction::Submit(3),
+                PreparedEnvelopeAction::Recover(3),
+            ] {
+                let mut args = fixture_write_canary_args(operation);
+                args.prepare_envelope = matches!(action, PreparedEnvelopeAction::Prepare(_));
+                args.prepared_output_fd = args.prepare_envelope.then_some(3);
+                args.submit_prepared_envelope_fd =
+                    matches!(action, PreparedEnvelopeAction::Submit(_)).then_some(3);
+                args.recover_prepared_envelope_fd =
+                    matches!(action, PreparedEnvelopeAction::Recover(_)).then_some(3);
+                args.prerequisite_envelope_fd = (args.prepare_envelope
+                    && operation != WriteCanaryOperation::Onboarding)
+                    .then_some(4);
+                args.onboarding_token_fd = (operation == WriteCanaryOperation::Onboarding
+                    && !matches!(action, PreparedEnvelopeAction::Recover(_)))
+                .then_some(5);
+                let predecessor_required =
+                    args.prepare_envelope && operation == WriteCanaryOperation::FinalCanary;
+                if !predecessor_required {
+                    args.predecessor_faucet_authority = None;
+                    args.predecessor_faucet_asset_id = None;
+                    args.predecessor_faucet_amount = None;
+                }
+                assert_eq!(
+                    args.validated_action().unwrap(),
+                    action,
+                    "{operation:?}/{action:?}"
+                );
+                let predecessor = PreparedOperationPolicyContext::Predecessor(&args);
+                if args.prepare_envelope && operation != WriteCanaryOperation::Onboarding {
+                    assert_eq!(
+                        predecessor.operation().unwrap(),
+                        if operation == WriteCanaryOperation::Faucet {
+                            WriteCanaryOperation::Onboarding
+                        } else {
+                            WriteCanaryOperation::Faucet
+                        }
+                    );
+                } else {
+                    assert!(
+                        predecessor.operation().is_err(),
+                        "no predecessor in this action"
+                    );
+                }
+                if operation != WriteCanaryOperation::Faucet {
+                    args.faucet_amount = Some("25000".to_owned());
+                    assert!(args.validated_action().is_err(), "misplaced current policy");
+                    args.faucet_amount = None;
+                }
+                if !predecessor_required {
+                    args.predecessor_faucet_amount = Some("25000".to_owned());
+                    assert!(
+                        args.validated_action().is_err(),
+                        "misplaced predecessor policy"
+                    );
+                }
+            }
+        }
+    }
+
     #[derive(clap::Parser, Debug)]
     struct TestTairaCli {
         #[command(subcommand)]
@@ -9097,9 +9328,17 @@ mod tests {
         );
         WriteCanary {
             public_root: DEFAULT_PUBLIC_ROOT.to_owned(),
-            faucet_authority: Some(faucet_authority.to_string()),
-            faucet_asset_id: Some(DEFAULT_GAS_ASSET_ID.to_owned()),
-            faucet_amount: Some("25000".to_owned()),
+            faucet_authority: (operation == WriteCanaryOperation::Faucet)
+                .then(|| faucet_authority.to_string()),
+            faucet_asset_id: (operation == WriteCanaryOperation::Faucet)
+                .then(|| DEFAULT_GAS_ASSET_ID.to_owned()),
+            faucet_amount: (operation == WriteCanaryOperation::Faucet).then(|| "25000".to_owned()),
+            predecessor_faucet_authority: (operation == WriteCanaryOperation::FinalCanary)
+                .then(|| faucet_authority.to_string()),
+            predecessor_faucet_asset_id: (operation == WriteCanaryOperation::FinalCanary)
+                .then(|| DEFAULT_GAS_ASSET_ID.to_owned()),
+            predecessor_faucet_amount: (operation == WriteCanaryOperation::FinalCanary)
+                .then(|| "25000".to_owned()),
             onboarding_token_file: None,
             onboarding_token_fd: None,
             operation,

@@ -177,13 +177,13 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.require_tests("\n".join(f"{name}: test" for name in names[1:]), stages)
 
     def test_complete_regression_census_tracks_every_native_stage_group(self):
-        self.assertEqual(gate.selected_regression_count(), 400)
+        self.assertEqual(gate.selected_regression_count(), 403)
         for group in ("STAGES", "CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES",
                       "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
                       "PROOF_FLOW_STAGES", "TORII_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES"):
             original_count = sum(len(names) for _, names in getattr(gate, group))
             with self.subTest(group=group), patch.object(gate, group, (("fixture", ("one", "two")),)):
-                self.assertEqual(gate.selected_regression_count(), 400 - original_count + 2)
+                self.assertEqual(gate.selected_regression_count(), 403 - original_count + 2)
 
     def test_exact_one_test_passes(self):
         result = subprocess.CompletedProcess([], 0,
@@ -1163,7 +1163,7 @@ class PureFsmGateTests(unittest.TestCase):
         config.assert_not_called()
         libraries.assert_not_called()
         network.assert_not_called()
-        self.assertEqual(gate.selected_regression_count(), 400)
+        self.assertEqual(gate.selected_regression_count(), 403)
 
     def test_lifecycle_failure_stops_before_any_cargo_or_network_work(self):
         env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
