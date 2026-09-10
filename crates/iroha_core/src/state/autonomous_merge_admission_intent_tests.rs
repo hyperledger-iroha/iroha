@@ -102,7 +102,7 @@ fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_ext
     state.validate_merge_execution_batch(
         &entry.active_lanes,
         &batch,
-        MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
+        MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
     ).expect("QueuePlanSynced merge content remains valid");
     let ordinary = ordinary_external_entrypoint_for_merge_intent_test(&state, 0x7A);
     let ordinary_hash = Hash::from(ordinary.hash());
@@ -119,7 +119,7 @@ fn autonomous_merge_admission_intent_follower_and_historical_reject_ordinary_ext
     let error = state.validate_merge_execution_batch(
         &entry.active_lanes,
         &batch,
-        MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
+        MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
     ).expect_err("follower validation must reject Ordinary content");
     assert_merge_queue_plan_synced_intent_error(error);
     // Historical authority is minted only after the whole entry's certificate

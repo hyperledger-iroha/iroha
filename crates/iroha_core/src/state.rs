@@ -3733,7 +3733,7 @@ struct HistoricalMergeExecutionAuthority<'a> {
     entry: &'a MergeLedgerEntry,
 }
 enum MergeExecutionValidationAuthority<'a> {
-    Live(ConsensusMode),
+    Live(&'a ConsensusMode),
     Historical(HistoricalMergeExecutionAuthority<'a>),
 }
 #[derive(Clone)]
@@ -36283,7 +36283,7 @@ impl State {
         self.validate_merge_execution_batch(
             &candidate.active_lanes,
             batch,
-            MergeExecutionValidationAuthority::Live(frozen_mode),
+            MergeExecutionValidationAuthority::Live(&frozen_mode),
         )?;
         let sources = batch
             .lanes
@@ -42918,7 +42918,7 @@ impl State {
         let invalid_batch =
             |message: &str| MergeLedgerCommitError::ExecutionBatchInvalid(message.to_owned());
         let frozen_mode = match validation_authority {
-            MergeExecutionValidationAuthority::Live(mode) => Some(mode),
+            MergeExecutionValidationAuthority::Live(mode) => Some(*mode),
             MergeExecutionValidationAuthority::Historical(authority) => {
                 if authority.entry.active_lanes != active_lanes
                     || authority.entry.execution_batch.as_ref() != Some(batch)
@@ -43595,7 +43595,7 @@ impl State {
             self.validate_merge_execution_batch(
                 &entry.active_lanes,
                 batch,
-                MergeExecutionValidationAuthority::Live(frozen_mode),
+                MergeExecutionValidationAuthority::Live(&frozen_mode),
             )?;
         }
         Ok(())

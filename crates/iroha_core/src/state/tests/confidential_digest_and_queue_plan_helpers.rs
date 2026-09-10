@@ -142,7 +142,7 @@ state_test! { sync malformed_merge_execution_batch_rejects_empty_lane_set
         state.validate_merge_execution_batch(
             &[],
             &batch,
-            MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
+            MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
             if reason == "lane count is empty or exceeds the hard limit"

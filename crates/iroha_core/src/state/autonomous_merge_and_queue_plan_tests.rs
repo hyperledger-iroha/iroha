@@ -285,7 +285,7 @@ fn assert_fastpq_batch_rejected(
     match state.validate_merge_execution_batch(
         active_lanes,
         &batch,
-        MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
+        MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
     ) {
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason)) => {
             assert_eq!(reason, expected_reason)
@@ -340,7 +340,7 @@ fn live_autonomous_merge_rejects_historical_sealed_signed_execution_alias_on_con
         state.validate_merge_execution_batch(
             &entry.active_lanes,
             batch,
-            MergeExecutionValidationAuthority::Live(ConsensusMode::Permissioned),
+            MergeExecutionValidationAuthority::Live(&ConsensusMode::Permissioned),
         ),
         Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
             if reason == "autonomous merge execution reuses a committed carrier or sealed signed-execution identity"
