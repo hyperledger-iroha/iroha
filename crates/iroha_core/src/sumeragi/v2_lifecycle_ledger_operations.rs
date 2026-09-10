@@ -3580,6 +3580,17 @@ impl AuthenticatedRetainedBodyApplyLineageV1 {
         self.matches_apply_binding(effect, pending)
             .then(|| self.candidate.clone())
     }
+    /// Rejoin the installed candidate without exposing its private identity
+    /// fields across the lifecycle ownership boundary.
+    pub(in crate::sumeragi) fn matches_apply_candidate_census(
+        &self,
+        effect: &crate::sumeragi::v2::AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+        candidates: &BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        self.matches_apply_binding(effect, pending)
+            && candidates.get(&self.candidate.key) == Some(&self.candidate)
+    }
     /// Compare the complete projected Apply candidate, including physical identity.
     pub(in crate::sumeragi) fn matches_apply_candidate(
         &self,

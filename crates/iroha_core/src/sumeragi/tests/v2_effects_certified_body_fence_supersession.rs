@@ -13,6 +13,20 @@ mod certified_body_fence_supersession {
         },
     };
 
+    impl V2EffectExecutor<crate::sumeragi::v2_runtime::SerializedV2Runtime> {
+        /// Observe the real recovered Decision without exposing executor internals.
+        pub(in crate::sumeragi) fn assert_decided_subject_for_test(
+            &self,
+            subject: wire::BlockSubject,
+        ) {
+            assert_eq!(
+                self.runtime.decided_body().expect("actual recovered Decision")
+                    .map(|decision| decision.2),
+                Some(subject),
+            );
+        }
+    }
+
     struct ReadyBodyFixture {
         transport: ProductionTransportFixture,
         owner: ProductionLifecycleOwnerV1,

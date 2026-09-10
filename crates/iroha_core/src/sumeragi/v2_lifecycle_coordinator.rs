@@ -230,6 +230,8 @@ pub(crate) use replay_authority::{
     RecoveredWalControlReplayEvidenceV1, RecoveredWalDecisionFetchReplayEvidenceV1,
     RecoveredWalVoteReplayEvidenceV1,
 };
+#[cfg(test)]
+pub(in crate::sumeragi) use scheduler_inputs::BodyOwnerSnapshotForTest;
 pub(in crate::sumeragi) use scheduler_inputs::ProducerTurnSchedulerClaimErrorV1;
 #[allow(
     unused_imports,

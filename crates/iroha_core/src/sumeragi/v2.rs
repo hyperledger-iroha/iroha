@@ -6103,9 +6103,11 @@ impl RecoveredDecisionApplyStagedStorageV1 {
         >,
     ) -> bool {
         match self.retained_body_lineage() {
-            Some(retained) => retained
-                .project_apply_candidate(&self.apply_effect, &self.apply_pending)
-                .is_some_and(|candidate| candidates.get(&candidate.key) == Some(&candidate)),
+            Some(retained) => retained.matches_apply_candidate_census(
+                &self.apply_effect,
+                &self.apply_pending,
+                candidates,
+            ),
             None => candidates
                 .values()
                 .any(|candidate| self.lineage.exactly_matches_apply_candidate(candidate)),

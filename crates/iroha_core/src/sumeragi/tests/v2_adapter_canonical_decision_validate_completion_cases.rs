@@ -85,14 +85,7 @@ fn continue_canonical_decision_validate_cold_fixture(
         &snapshot,
         LifecycleWorkClass::Validate,
     );
-    assert_eq!(
-        executor
-            .runtime
-            .decided_body()
-            .expect("actual recovered Decision")
-            .map(|decision| decision.2),
-        Some(expected_subject)
-    );
+    executor.assert_decided_subject_for_test(expected_subject);
     executor
         .arm_live_clocks(
             ProductionLifecycleLiveClockActivationPermitV1::for_test(),
