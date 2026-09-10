@@ -22,6 +22,7 @@ use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance,
     smart_contract::CanRegisterSmartContractCode,
 };
+use iroha_model_base::name::Name;
 use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use reqwest::StatusCode;
 use std::time::{Duration, Instant};
@@ -2198,34 +2199,6 @@ fn dynamic_counter_call_intent(
         },
         metadata,
     }
-}
-async fn wait_for_approved_txs(
-    client: &iroha::blocking::Client,
-    baseline: u64,
-    timeout: Duration,
-    stage: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut last_status = None;
-    let mut last_error = None;
-    while Instant::now() < deadline {
-        match client.client().status().get().await {
-            Ok(status) => {
-                if status.txs_approved > baseline {
-                    return Ok(());
-                }
-                last_status = Some(status);
-                last_error = None;
-            }
-            Err(err) => {
-                last_error = Some(err.to_string());
-            }
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
-    }
-    Err(eyre!(
-        "{stage}: timed out waiting for txs_approved to advance beyond {baseline}; last_status={last_status:?}; last_error={last_error:?}"
-    ))
 }
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     let status = payload

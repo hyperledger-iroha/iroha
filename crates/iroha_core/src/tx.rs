@@ -52,6 +52,7 @@ use iroha_data_model::{
 };
 use iroha_logger::{debug, error, warn};
 use iroha_macro::FromVariant;
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::time::TimeSource;
 use mv::storage::StorageReadOnly;
 use std::{
@@ -246,6 +247,8 @@ const FAUCET_CLAIM_EXECUTABLE_SHAPE_ERROR: &str = "faucet claim marker requires 
     non-zero authority-sourced asset transfer to a different account, optionally preceded by a \
     plain registration of the same destination";
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tx::FaucetClaimConsumptionRecordV1")]
 #[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
 struct FaucetClaimConsumptionRecordV1 {
     marker_version: u64,
@@ -598,8 +601,8 @@ pub(crate) fn prune_expired_sealed_commitments(state_block: &mut StateBlock<'_>)
 macro_rules! metadata_names {
     ($($name:ident => $value:expr),+ $(,)?) => {
         $(
-            static $name: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-                iroha_data_model::name::Name::from_str($value)
+            static $name: LazyLock<iroha_model_base::name::Name> = LazyLock::new(|| {
+                iroha_model_base::name::Name::from_str($value)
                     .expect("valid static metadata name")
             });
         )+
@@ -633,7 +636,10 @@ enum SignatureCheck {
 }
 #[cfg(feature = "telemetry")]
 #[allow(clippy::module_name_repetitions)]
-use iroha_data_model::{metadata::Metadata as TelemetryMetadata, name::Name as TelemetryName};
+use iroha_data_model::metadata::Metadata as TelemetryMetadata;
+#[cfg(feature = "telemetry")]
+#[allow(clippy::module_name_repetitions)]
+use iroha_model_base::name::Name as TelemetryName;
 /// `AcceptedTransaction` — a transaction accepted by Iroha peer.
 #[derive(Debug)]
 pub struct AcceptedTransaction<'tx> {
@@ -5446,7 +5452,6 @@ pub mod tests {
         },
         isi::{InstructionBox, Log, governance::ProposeRuntimeUpgradeProposal},
         metadata::Metadata,
-        name::Name,
         nexus::{
             AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, AssetPermissionManifest,
             AuditControls, DataSpaceCatalog, DataSpaceId as TestDataSpaceId, JurisdictionSet,
@@ -5467,6 +5472,7 @@ pub mod tests {
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
     use iroha_logger::Level;
+    use iroha_model_base::name::Name;
     use iroha_primitives::{
         const_vec::ConstVec,
         json::Json,
@@ -10801,7 +10807,7 @@ pub mod tests {
         let mut block = state.block(header);
         let mut metadata = Metadata::default();
         metadata.insert(
-            iroha_data_model::name::Name::from_str("tx_sequence").unwrap(),
+            iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
             Json::from(5_u64),
         );
         let tx = TransactionBuilder::new(
@@ -10866,7 +10872,7 @@ pub mod tests {
         let mut block = state.block(header);
         let mut metadata = Metadata::default();
         metadata.insert(
-            iroha_data_model::name::Name::from_str("tx_sequence").unwrap(),
+            iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
             Json::from(6_u64),
         );
         let tx = TransactionBuilder::new(
@@ -10909,13 +10915,11 @@ pub mod tests {
     }
     #[test]
     fn custom_parameter_cannot_disable_configured_ivm_cycle_ceiling() {
-        use iroha_data_model::{
-            parameter::{
-                Parameter,
-                custom::{CustomParameter, CustomParameterId},
-            },
-            prelude::Name,
+        use iroha_data_model::parameter::{
+            Parameter,
+            custom::{CustomParameter, CustomParameterId},
         };
+        use iroha_model_base::name::Name;
         use iroha_primitives::json::Json;
         let mut fixture = IvmAdmissionFixture::new();
         let mut pipeline = fixture.state.pipeline.clone();
@@ -10955,9 +10959,9 @@ pub mod tests {
                 Parameter,
                 custom::{CustomParameter, CustomParameterId},
             },
-            prelude::Name,
             transaction::{Executable, TransactionBuilder},
         };
+        use iroha_model_base::name::Name;
         use iroha_primitives::json::Json;
         use nonzero_ext::nonzero;
         let (world, authority_id, kp) = world_with_authority("wonderland");

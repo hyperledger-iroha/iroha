@@ -71,8 +71,8 @@ use super::{
         RemoteProposalFetchReplayEvidenceV1,
     },
     v2_lifecycle_coordinator::{
-        AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalStandaloneSignProjection,
         AuthenticatedRecoveredWalValidateLedgerParent, AuthenticatedRecoveredWalVoteProjection,
         DurableCertifiedFetchPendingMintPermit, DurableLifecycleOutputPendingMintPermit,
         DurableStandaloneValidatePendingMintPermit, DurableValidateReplayEvidenceV1,
@@ -2481,11 +2481,25 @@ pub(in crate::sumeragi) fn project_recovered_lifecycle_next_wal_vote_candidate(
 pub(in crate::sumeragi) fn project_recovered_wal_control_sign(
     verified: &super::v2::VerifiedHeightContext,
     recovered: RecoveredWalControlSign,
-) -> Result<AuthenticatedRecoveredWalControlProjection, RecoveredWalControlSign> {
+) -> Result<AuthenticatedRecoveredWalStandaloneSignProjection, RecoveredWalControlSign> {
     recovered.into_lifecycle_projection(
         RecoveredWalControlPendingMintPermit::new(),
         RecoveredWalCandidateProjectionPermit::new(),
         verified,
+    )
+}
+/// Consume a current WAL vote only with an authenticated immutable terminal result.
+#[allow(clippy::result_large_err)]
+pub(in crate::sumeragi) fn project_recovered_resolved_phase_vote(
+    verified: &super::v2::VerifiedHeightContext,
+    recovered: super::v2::RecoveredWalVoteSign,
+    terminal: std::sync::Arc<super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1>,
+) -> Result<AuthenticatedRecoveredWalStandaloneSignProjection, super::v2::RecoveredWalVoteSign> {
+    recovered.into_resolved_lifecycle_projection(
+        RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1::new(),
+        RecoveredWalCandidateProjectionPermit::new(),
+        verified,
+        terminal,
     )
 }
 /// Consume one authenticated Decision Fetch token into its closed lifecycle projection.
@@ -3674,7 +3688,9 @@ impl PendingRuntimeEffectBinding {
     ///
     /// An ordinary Validate which observed Prepare only after installation is
     /// handled by the separate move-only registered-Prepare projection below;
-    /// this inherited path never accepts that refinement implicitly.
+    /// this inherited path never accepts that refinement implicitly. The current
+    /// execution tag may be later than the unchanged certified body round.
+    /// Reporting that historical rejection cannot authorize a vote for its view.
     #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn project_validate_report_invalid_certified_body_successor(
         &self,
@@ -3696,7 +3712,7 @@ impl PendingRuntimeEffectBinding {
             return None;
         };
         if predecessor_tag.height() != certificate.round.height
-            || predecessor_tag.view() != certificate.round.view
+            || predecessor_tag.view() < certificate.round.view
             || certificate.phase != wire::GlobalPhase::Prepare
             || certificate.round != *predecessor_round
             || certificate.proposal_round != *predecessor_round
@@ -3759,7 +3775,7 @@ impl PendingRuntimeEffectBinding {
         };
         if !registered.exactly_matches_report(successor)
             || predecessor_tag.height() != certificate.round.height
-            || predecessor_tag.view() != certificate.round.view
+            || predecessor_tag.view() < certificate.round.view
             || certificate.phase != wire::GlobalPhase::Prepare
             || certificate.round != *predecessor_round
             || certificate.proposal_round != *predecessor_round
@@ -16990,6 +17006,23 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
             return Err((marker, AdapterError::RecoveredPendingKuraApplyMismatch));
         }
         marker.prepare_apply(&mut self.driver, predecessor, ownership)
+    }
+
+    /// Reconsider a real terminal result under one exact current protected
+    /// occurrence, with the same serialized shell exclusion as Ready completion.
+    pub(in crate::sumeragi) fn prepare_resolved_validate_replay(
+        &mut self,
+        pending: &super::v2_lifecycle_coordinator::PendingResolvedValidateReplayV1,
+    ) -> Result<super::v2::PreparedReadyDurableValidateAdapterPublication<'_>, AdapterError> {
+        if self.fail_closed
+            || !self.clocks_armed
+            || self.pending_effect_ownership.is_some()
+            || self.last_scheduler_ownership.is_some()
+            || !self.pending_leader_wire_terminals.is_empty()
+        {
+            return Err(AdapterError::ReadyDurableValidatePublicationContractViolation);
+        }
+        pending.prepare_adapter(&mut self.driver)
     }
 
     /// Stage one released live lifecycle validation and its exact Apply child.

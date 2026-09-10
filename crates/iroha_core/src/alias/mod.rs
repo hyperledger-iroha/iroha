@@ -13,7 +13,6 @@ use iroha_data_model::{
     alias_setup::{AccountAliasName, ResolvedAccountAliasV1},
     asset::ResolvedAssetDefinitionAliasV1,
     domain::DomainId,
-    name::Name,
     nexus::DataSpaceId,
     permission::Permission,
 };
@@ -23,6 +22,7 @@ use iroha_executor_data_model::permission::account::{
 use iroha_executor_data_model::permission::asset_definition::{
     AssetDefinitionAliasPermissionScope, CanManageAssetDefinitionAlias,
 };
+use iroha_model_base::name::Name;
 use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
 use std::{
@@ -607,7 +607,8 @@ impl AliasService {
 mod tests {
     use super::*;
     use iroha_crypto::Algorithm;
-    use iroha_data_model::{account::AccountId, alias::AliasIndex, name::Name};
+    use iroha_data_model::{account::AccountId, alias::AliasIndex};
+    use iroha_model_base::name::Name;
     use std::{
         panic::{AssertUnwindSafe, catch_unwind},
         str::FromStr,

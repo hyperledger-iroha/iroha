@@ -7,6 +7,7 @@ use iroha::{
     blocking::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in, load_sample_ivm};

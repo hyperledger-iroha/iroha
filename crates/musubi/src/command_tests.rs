@@ -129,6 +129,289 @@ fn create_test_package(temp: &TempDir) -> (PathBuf, PathBuf) {
     let manifest = root.join(MANIFEST_FILE_NAME);
     (root, manifest)
 }
+
+fn assert_scaffold_compiler_workflows(root: &Path, cache_root: &Path) {
+    write_test_lock(root);
+    let workspace = load_workspace(root).expect("scaffold workspace");
+    let selector = "apps.sora/demo".parse().expect("scaffold selector");
+    let lock = LockfileV1::read(&root.join(LOCK_FILE_NAME)).expect("scaffold lock");
+    let cache = MusubiCache::open(cache_root).expect("empty private compiler cache");
+    let mut interfaces = None;
+    for action in [CompilerActionV1::Check, CompilerActionV1::Build] {
+        let execution = execute_compiler_graph(
+            &cache,
+            &workspace,
+            std::slice::from_ref(&selector),
+            &lock,
+            action,
+            false,
+            753,
+        )
+        .expect("canonical scaffold compiler workflow");
+        assert_eq!(execution.validated_packages, 1);
+        assert_eq!(execution.contract_targets, 0);
+        assert_eq!(execution.warnings, 0);
+        assert!(
+            execution.artifacts.is_empty(),
+            "a library is not a contract"
+        );
+        assert_eq!(execution.package_interfaces.len(), 1);
+        assert_eq!(execution.package_interfaces[0].package, selector);
+        assert!(!execution.package_interfaces[0].digest.is_zero());
+        if let Some(expected) = &interfaces {
+            assert_eq!(&execution.package_interfaces, expected);
+        }
+        interfaces = Some(execution.package_interfaces);
+    }
+}
+
+#[test]
+fn new_and_init_scaffolds_check_and_build_with_exact_exports() {
+    for command in ["new", "init"] {
+        for exports in [vec![], vec!["route", "quote", "route"]] {
+            let temp = TempDir::new().expect("scaffold directory");
+            let root = temp.path().join("demo");
+            if command == "init" {
+                fs::create_dir(&root).expect("existing init directory");
+            }
+            let mut arguments = vec![
+                OsString::from("musubi"),
+                OsString::from(command),
+                root.as_os_str().to_owned(),
+                OsString::from("--namespace"),
+                OsString::from("apps.sora"),
+            ];
+            for name in &exports {
+                arguments.extend([OsString::from("--export"), OsString::from(name)]);
+            }
+            assert_eq!(invoke(arguments).output.exit_code(), 0);
+            let source = fs::read_to_string(root.join("src/lib.ko")).expect("scaffold source");
+            assert!(source.contains("module Library {"));
+            assert!(source.contains("TODO: Define the library interface"));
+            let program = ivm::kotodama::parser::parse(&source).expect("canonical module grammar");
+            let expected = exports.into_iter().collect::<BTreeSet<_>>();
+            let functions = program
+                .items
+                .iter()
+                .map(|item| match item {
+                    ivm::kotodama::ast::Item::Function(function) => function.name.as_str(),
+                    _ => panic!("scaffold must contain only placeholder functions"),
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(functions, expected.iter().copied().collect::<Vec<_>>());
+            let manifest = parse_manifest(
+                &fs::read_to_string(root.join(MANIFEST_FILE_NAME)).expect("scaffold manifest"),
+            )
+            .expect("canonical scaffold manifest");
+            assert_eq!(
+                manifest
+                    .library
+                    .expect("library manifest")
+                    .exports
+                    .iter()
+                    .map(AsRef::as_ref)
+                    .collect::<Vec<_>>(),
+                functions,
+            );
+            assert_scaffold_compiler_workflows(&root, &temp.path().join("compiler-cache"));
+        }
+    }
+}
+
+#[test]
+fn scaffold_rejects_noncanonical_and_reserved_exports_before_writing() {
+    for name in [
+        "bad-name",
+        "café",
+        "fn",
+        "int",
+        "__kotodama_link_user",
+        "run(){}//",
+        "run/*x*/",
+    ] {
+        let temp = TempDir::new().expect("invalid scaffold directory");
+        let new_root = temp.path().join("new-package");
+        let new = invoke([
+            OsString::from("musubi"),
+            OsString::from("new"),
+            new_root.as_os_str().to_owned(),
+            OsString::from("--namespace"),
+            OsString::from("apps.sora"),
+            OsString::from("--export"),
+            OsString::from(name),
+        ]);
+        assert_eq!(
+            new.output.exit_code(),
+            ErrorCode::Usage.exit_code(),
+            "{name}"
+        );
+        assert!(
+            !new_root.exists(),
+            "invalid export must not create a package"
+        );
+        let (root, manifest_path) = create_test_package(&temp);
+        let manifest = fs::read(&manifest_path).expect("original manifest");
+        let library = fs::read(root.join("src/lib.ko")).expect("original source");
+        let init = invoke([
+            OsString::from("musubi"),
+            OsString::from("init"),
+            root.as_os_str().to_owned(),
+            OsString::from("--force"),
+            OsString::from("--namespace"),
+            OsString::from("apps.sora"),
+            OsString::from("--export"),
+            OsString::from(name),
+        ]);
+        assert_eq!(
+            init.output.exit_code(),
+            ErrorCode::Usage.exit_code(),
+            "{name}"
+        );
+        assert_eq!(
+            fs::read(&manifest_path).expect("unchanged manifest"),
+            manifest
+        );
+        assert_eq!(
+            fs::read(root.join("src/lib.ko")).expect("unchanged source"),
+            library
+        );
+    }
+}
+
+#[test]
+fn init_preserves_existing_type_exports_and_custom_source_directory() {
+    let temp = TempDir::new().expect("existing library directory");
+    let root = temp.path().join("demo");
+    fs::create_dir_all(root.join("library")).expect("custom source directory");
+    let source = "module Existing { struct Receipt { int value; } struct assert { int value; } }\n";
+    assert!(ivm::kotodama::semantic::is_reserved_source_declaration(
+        "assert", true,
+    ));
+    assert!(!ivm::kotodama::semantic::is_reserved_source_type_declaration("assert"));
+    let library = root.join("library/lib.ko");
+    fs::write(&library, source).expect("existing type export");
+    for force in [false, true] {
+        let mut arguments = vec![
+            OsString::from("musubi"),
+            OsString::from("init"),
+            root.as_os_str().to_owned(),
+            OsString::from("--namespace"),
+            OsString::from("apps.sora"),
+            OsString::from("--source-dir"),
+            OsString::from("library"),
+            OsString::from("--export"),
+            OsString::from("Receipt"),
+            OsString::from("--export"),
+            OsString::from("assert"),
+        ];
+        if force {
+            arguments.push(OsString::from("--force"));
+        }
+        assert_eq!(invoke(arguments).output.exit_code(), 0);
+        assert_eq!(
+            fs::read_to_string(&library).expect("preserved source"),
+            source
+        );
+        assert!(!root.join("src").exists());
+    }
+    assert_scaffold_compiler_workflows(&root, &temp.path().join("compiler-cache"));
+}
+
+#[test]
+fn new_source_rejects_function_only_reserved_exports_before_writing() {
+    for command in ["new", "init"] {
+        let temp = TempDir::new().expect("scaffold directory");
+        let root = temp.path().join("demo");
+        if command == "init" {
+            fs::create_dir(&root).expect("existing empty package directory");
+        }
+        let invocation = invoke([
+            OsString::from("musubi"),
+            OsString::from(command),
+            root.as_os_str().to_owned(),
+            OsString::from("--namespace"),
+            OsString::from("apps.sora"),
+            OsString::from("--export"),
+            OsString::from("assert"),
+        ]);
+        assert_eq!(invocation.output.exit_code(), ErrorCode::Usage.exit_code());
+        if command == "new" {
+            assert!(!root.exists());
+        } else {
+            assert_eq!(
+                fs::read_dir(&root).expect("unchanged empty root").count(),
+                0
+            );
+        }
+    }
+}
+
+#[test]
+fn preserved_source_disappearance_or_substitution_never_creates_a_scaffold() {
+    for replacement in ["missing", "directory", "symlink"] {
+        let temp = TempDir::new().expect("preserved source directory");
+        let root = temp.path().join("demo");
+        fs::create_dir_all(root.join("src")).expect("library source directory");
+        let source_dir = PortablePath::new("src").expect("source directory");
+        let library = root.join("src/lib.ko");
+        fs::write(&library, "module Existing { struct assert { int value; } }")
+            .expect("existing type export");
+        let choice = prepare_existing_package_library(
+            &root,
+            &source_dir,
+            &["assert".parse().expect("export name")],
+        )
+        .expect("preserve valid type export");
+        assert!(matches!(choice, PackageLibrarySource::Existing));
+        fs::remove_file(&library).expect("remove selected existing source");
+        let other = temp.path().join("other.ko");
+        fs::write(&other, "untouched").expect("unrelated source");
+        match replacement {
+            "directory" => fs::create_dir(&library).expect("substitute directory"),
+            "symlink" => std::os::unix::fs::symlink(&other, &library).expect("substitute link"),
+            _ => {}
+        }
+        let error = initialize_package_files(&root, &source_dir, "unused manifest", &choice)
+            .expect_err("changed source must not fall back to scaffold generation");
+        assert_eq!(error.code(), ErrorCode::Io);
+        assert!(!root.join(MANIFEST_FILE_NAME).exists());
+        assert_eq!(
+            fs::read_to_string(&other).expect("unrelated source"),
+            "untouched"
+        );
+        if replacement == "missing" {
+            assert!(!library.exists());
+        }
+    }
+}
+
+#[test]
+fn prepared_scaffold_never_overwrites_a_concurrently_created_library() {
+    let temp = TempDir::new().expect("scaffold directory");
+    let root = temp.path().join("demo");
+    fs::create_dir(&root).expect("empty package directory");
+    let source_dir = PortablePath::new("src").expect("source directory");
+    let choice = prepare_existing_package_library(
+        &root,
+        &source_dir,
+        &["run".parse().expect("export name")],
+    )
+    .expect("prepare scaffold before writes");
+    assert!(matches!(choice, PackageLibrarySource::Scaffold(_)));
+    fs::create_dir(root.join("src")).expect("concurrent source directory");
+    let library = root.join("src/lib.ko");
+    let existing = "module UserLibrary { fn run() {} }\n";
+    fs::write(&library, existing).expect("concurrent user source");
+    let error = initialize_package_files(&root, &source_dir, "unused manifest", &choice)
+        .expect_err("concurrent user source must not be overwritten");
+    assert_eq!(error.code(), ErrorCode::Io);
+    assert_eq!(
+        fs::read_to_string(&library).expect("preserved source"),
+        existing
+    );
+    assert!(!root.join(MANIFEST_FILE_NAME).exists());
+}
+
 fn test_account(seed: u8) -> AccountId {
     let keypair =
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("derive test account");
@@ -1940,6 +2223,85 @@ fn offline_publish_recovery_reports_cache_miss_before_transport() {
             .expect("unchanged recovery journal"),
         journal_before
     );
+    assert_no_recovery_sidecars(
+        &state_root,
+        operation_id,
+        request.archive_commitment.car_size,
+    );
+}
+#[cfg(unix)]
+#[test]
+fn online_publish_recovery_uses_cached_nodes_without_loading_credentials() {
+    let temp = TempDir::new().expect("temporary recovery fixture");
+    let (_root, manifest_path) = create_test_package(&temp);
+    add_dependency_to_fixture_manifest(&manifest_path);
+    let cache = MusubiCache::open(temp.path().join("cache")).expect("private fixture cache");
+    let (edge, node) = build_and_install_dependency_fixture(temp.path(), &cache);
+    let request = build_root_recovery_request(&manifest_path, &cache, vec![edge], vec![node]);
+    let state_root = temp.path().join("state");
+    create_private_fixture_directory(&state_root);
+    let operation_id = persist_recovery_request(&state_root, &request);
+    let config = write_poisoned_recovery_config(temp.path());
+    assert_archive_transport_is_poisoned(&config);
+    let args = recovery_publish_args(operation_id, &config, false, false);
+    recover_publication_sidecars_at(
+        Some(&manifest_path),
+        &args,
+        operation_id,
+        &state_root,
+        Some(&cache),
+    )
+    .expect("an online cache hit must not load unusable signing or provider credentials");
+    let source = PublicationStagedCarSourceV1::new(
+        &state_root,
+        operation_id,
+        request.archive_commitment.car_size,
+    );
+    assert!(source.path().is_file());
+    assert!(source.plan_path().is_file());
+    let journal = PublicationJournalStore::open(&state_root)
+        .expect("reopen journal store")
+        .load(operation_id)
+        .expect("unchanged recovery journal");
+    assert_eq!(journal.request, request);
+    assert_eq!(journal.revision, 1);
+}
+#[cfg(unix)]
+#[test]
+fn online_publish_recovery_requires_credentials_only_after_a_cache_miss() {
+    let temp = TempDir::new().expect("temporary recovery fixture");
+    let (_root, manifest_path) = create_test_package(&temp);
+    add_dependency_to_fixture_manifest(&manifest_path);
+    let builder_cache =
+        MusubiCache::open(temp.path().join("builder-cache")).expect("private builder cache");
+    let (edge, node) = build_and_install_dependency_fixture(temp.path(), &builder_cache);
+    let request =
+        build_root_recovery_request(&manifest_path, &builder_cache, vec![edge], vec![node]);
+    let empty_cache =
+        MusubiCache::open(temp.path().join("empty-cache")).expect("private empty cache");
+    let state_root = temp.path().join("state");
+    create_private_fixture_directory(&state_root);
+    let operation_id = persist_recovery_request(&state_root, &request);
+    let store = PublicationJournalStore::open(&state_root).expect("reopen journal store");
+    let before = store.load(operation_id).expect("pristine journal");
+    let config = write_poisoned_recovery_config(temp.path());
+    let args = recovery_publish_args(operation_id, &config, false, false);
+    let error = match recover_publication_sidecars_at(
+        Some(&manifest_path),
+        &args,
+        operation_id,
+        &state_root,
+        Some(&empty_cache),
+    ) {
+        Err(error) => error,
+        Ok(_) => panic!("an online cache miss requires valid registry credentials"),
+    };
+    assert_eq!(error.code(), ErrorCode::Publish);
+    assert_eq!(
+        error.context().get("registry_code").map(String::as_str),
+        Some("MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"),
+    );
+    assert_eq!(store.load(operation_id).expect("unchanged journal"), before);
     assert_no_recovery_sidecars(
         &state_root,
         operation_id,

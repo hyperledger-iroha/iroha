@@ -680,7 +680,6 @@ mod tests {
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
-        name::Name,
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyNoteEncryptionKeyDigestV1,
             PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPoolIdV1,
@@ -689,6 +688,7 @@ mod tests {
             PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
         },
     };
+    use iroha_model_base::name::Name;
     use rand::{SeedableRng as _, TryCryptoRng, TryRngCore, rngs::StdRng};
     use soranet_pq::{generate_mldsa_keypair_from_seed, generate_mlkem_keypair_from_seed};
     use std::str::FromStr as _;

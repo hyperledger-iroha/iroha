@@ -54,6 +54,8 @@ mod model {
     ///
     /// - Permission tokens (see [`crate::permission::Permission`])
     /// - Configuration parameters (see [`crate::parameter::Parameter`])
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ExecutorDataModel")]
     #[derive(
         Default,
         Debug,
@@ -74,8 +76,7 @@ mod model {
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     #[display("{self:?}")]
     #[getset(get = "pub")]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::executor::model::ExecutorDataModel")]
+
     pub struct ExecutorDataModel {
         /// Corresponds to the [`crate::parameter::Parameter::Custom`].
         /// Holds the initial value of the parameter
@@ -526,11 +527,9 @@ mod tests {
 
     #[test]
     fn executor_data_model_json_has_closed_output_bound() {
-        use crate::{
-            name::Name,
-            parameter::{CustomParameter, CustomParameterId},
-        };
+        use crate::parameter::{CustomParameter, CustomParameterId};
         use core::str::FromStr as _;
+        use iroha_model_base::name::Name;
         use std::collections::{BTreeMap, BTreeSet};
         let id = CustomParameterId::new(Name::from_str("bounded").expect("valid name"));
         let parameter = CustomParameter::new(id.clone(), Json::new(vec![1_u64, 2, 3]));

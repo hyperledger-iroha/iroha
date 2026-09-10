@@ -459,6 +459,8 @@ pub trait EvidenceViewerWebAuthnBoundaryV1: EvidenceViewerRuntimeProviderV1 {
     ) -> Result<EvidenceViewerWebAuthnResultV1, EvidenceViewerExternalErrorV1>;
 }
 /// Claims bound into every rotating grant.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::EvidenceViewerGrantClaimsV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerGrantClaimsV1 {
     /// Session identifier.
@@ -1767,6 +1769,8 @@ pub struct EvidenceViewerAuditStatusV1 {
     /// Exact signed checkpoint and receipt-chain head represented by the counters above.
     pub checkpoint_anchor: EvidenceViewerSignedCheckpointAnchorV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::evidence_viewer::ChallengeRecordV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeRecordV1 {
     challenge_id: [u8; 16],

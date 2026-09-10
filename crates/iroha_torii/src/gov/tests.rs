@@ -24,10 +24,10 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::{Domain, DomainId},
     isi::{InstructionBox, governance::RegisterCitizen},
-    name::Name,
     permission::Permission,
     smart_contract::manifest::ContractManifest,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;

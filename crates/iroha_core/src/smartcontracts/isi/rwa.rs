@@ -1,5 +1,6 @@
 //! This module contains RWA instructions and queries implementations.
 use super::prelude::*;
+use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 /// ISI module contains all instructions related to RWA lots.
 pub mod isi {

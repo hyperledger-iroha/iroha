@@ -69,6 +69,10 @@ impl CertifiedServePayloadId {
 ///
 /// The variant is part of the durable meaning: a rejection and a failed local
 /// service attempt with the same numeric code are never interchangeable.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_certified_serve_payload_store::CertifiedServePayloadNegativeOutcome"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) enum CertifiedServePayloadNegativeOutcome {
     /// The request was deterministically cancelled.
@@ -81,6 +85,10 @@ pub(crate) enum CertifiedServePayloadNegativeOutcome {
     #[codec(index = 2)]
     Failed(u16),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_certified_serve_payload_store::PersistedCertifiedServePayloadStateV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 enum PersistedCertifiedServePayloadStateV1 {
     #[codec(index = 0)]
@@ -97,6 +105,10 @@ enum PersistedCertifiedServePayloadStateV1 {
         outcome: CertifiedServePayloadNegativeOutcome,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_certified_serve_payload_store::PersistedCertifiedServePayloadV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedCertifiedServePayloadV1 {

@@ -3,6 +3,7 @@ use color_eyre::{
     eyre::{Context, eyre},
 };
 use iroha::{blocking::Client, data_model::prelude::*};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, init_instruction_registry, submit_ensure_domain,

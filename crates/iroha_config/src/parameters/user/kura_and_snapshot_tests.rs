@@ -333,3 +333,86 @@ fn snapshot_bootstrap_policy_rejects_partial_or_invalid_authority() {
         );
     }
 }
+
+#[test]
+fn kura_fastpq_artifact_defaults_have_explicit_finite_byte_and_count_caps() {
+    let root = load_root(base_table());
+    assert_eq!(
+        root.kura.fastpq_artifacts,
+        defaults::kura::FASTPQ_ARTIFACT_POLICY
+    );
+    assert_eq!(
+        root.kura.fastpq_artifacts.max_artifact_bytes.get() as u64,
+        defaults::zk::fastpq::PROOF_SIDECAR_MAX_BYTES.get()
+    );
+    assert_eq!(root.kura.fastpq_artifacts.max_artifacts.get(), 1024);
+    assert_eq!(
+        root.kura.fastpq_artifacts.max_total_bytes.get(),
+        256 * 1024 * 1024
+    );
+    assert!(root.kura.fastpq_artifacts.validate().is_ok());
+}
+
+#[test]
+fn kura_fastpq_artifact_policy_parses_nested_file_config_and_rejects_zero_or_inconsistent_caps() {
+    for (artifact, records, total, valid) in [
+        (8, 2, 16, true),
+        (8, 2, 8, true),
+        (0, 2, 16, false),
+        (8, 0, 16, false),
+        (8, 2, 0, false),
+        (9, 2, 8, false),
+    ] {
+        let mut table = base_table();
+        let mut policy = Table::new();
+        policy.insert("max_artifact_bytes".into(), Value::Integer(artifact));
+        policy.insert("max_artifacts".into(), Value::Integer(records));
+        policy.insert("max_total_bytes".into(), Value::Integer(total));
+        let kura = table
+            .entry("kura")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .unwrap();
+        kura.insert("fastpq_artifacts".into(), Value::Table(policy));
+        let parsed = actual::Root::from_toml_source(TomlSource::inline(table));
+        assert_eq!(
+            parsed.is_ok(),
+            valid,
+            "artifact={artifact} records={records} total={total}"
+        );
+        if valid {
+            let parsed = parsed.unwrap().kura.fastpq_artifacts;
+            assert_eq!(parsed.max_artifact_bytes.get(), artifact as usize);
+            assert_eq!(parsed.max_artifacts.get(), records as usize);
+            assert_eq!(parsed.max_total_bytes.get(), total as u64);
+        }
+    }
+}
+
+#[test]
+fn kura_fastpq_artifact_policy_checks_overflow_probe_and_temporary_slot_geometry() {
+    let policy = defaults::kura::FASTPQ_ARTIFACT_POLICY;
+    let no_probe = actual::KuraFastpqArtifactPolicy {
+        max_artifact_bytes: NonZeroUsize::new(usize::MAX).unwrap(),
+        max_total_bytes: NonZeroU64::new(u64::MAX).unwrap(),
+        ..policy
+    };
+    assert_eq!(
+        no_probe.validate(),
+        Err(actual::KuraFastpqArtifactPolicyError::ArtifactReadOverflow)
+    );
+    let no_temporary = actual::KuraFastpqArtifactPolicy {
+        max_artifacts: NonZeroUsize::new(usize::MAX).unwrap(),
+        ..policy
+    };
+    assert_eq!(
+        no_temporary.validate(),
+        Err(actual::KuraFastpqArtifactPolicyError::TemporaryCountOverflow)
+    );
+    let exact_geometry = actual::KuraFastpqArtifactPolicy {
+        max_artifact_bytes: NonZeroUsize::new(1).unwrap(),
+        max_artifacts: NonZeroUsize::new(usize::MAX - 1).unwrap(),
+        max_total_bytes: NonZeroU64::new(1).unwrap(),
+    };
+    assert!(exact_geometry.validate().is_ok());
+}

@@ -10,6 +10,7 @@ use iroha_data_model::{
     prelude::*,
     query::error::FindError,
 };
+use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 /// ISI module contains all instructions related to assets:
 /// - minting/burning assets

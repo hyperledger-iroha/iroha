@@ -1193,7 +1193,7 @@ where
                     norito::json::BoundedJsonError::Unsupported
                     | norito::json::BoundedJsonError::LengthMismatch => {
                         MusubiQueryExecutionErrorV1::from(query_invalid(
-                            iroha_data_model::ParseError::new(
+                            iroha_model_base::error::ParseError::new(
                                 "Musubi resolver row cannot be encoded as canonical JSON",
                             ),
                         ))
@@ -1204,13 +1204,13 @@ where
                 .checked_add(separator_bytes)
                 .and_then(|bytes| bytes.checked_add(encoded_len))
                 .ok_or_else(|| {
-                    query_invalid(iroha_data_model::ParseError::new(
+                    query_invalid(iroha_model_base::error::ParseError::new(
                         "Musubi resolver JSON item budget overflow",
                     ))
                 })?;
             if candidate_bytes > json_items_budget {
                 if items.is_empty() {
-                    return Err(query_invalid(iroha_data_model::ParseError::new(
+                    return Err(query_invalid(iroha_model_base::error::ParseError::new(
                         "one Musubi resolver row exceeds the JSON item budget",
                     ))
                     .into());
@@ -1243,6 +1243,6 @@ where
     };
     Ok((items.into_vec()?, next_cursor))
 }
-fn query_invalid(error: iroha_data_model::ParseError) -> QueryExecutionFail {
+fn query_invalid(error: iroha_model_base::error::ParseError) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
 }

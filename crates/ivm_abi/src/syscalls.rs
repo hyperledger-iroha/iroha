@@ -129,8 +129,8 @@ pub const STATE_SCAN_MAX_ITEMS_V1: u64 = 64;
 ///
 /// The 16 KiB path accommodates a canonical `Name` base of at most 255 UTF-8 bytes, one separator,
 /// and the lowercase-hex expansion of a 4 KiB canonical key. Keep this synchronized with
-/// `iroha_data_model::state_path::MAX_STATE_PATH_BYTES`.
-pub const STATE_MAX_PATH_BYTES: usize = iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
+/// `iroha_model_base::state_path::MAX_STATE_PATH_BYTES`.
+pub const STATE_MAX_PATH_BYTES: usize = iroha_model_base::state_path::MAX_STATE_PATH_BYTES;
 /// Conservative maximum canonical Norito frame carried inside the `NoritoBytes` path TLV.
 ///
 /// This separately ABI-binds transport framing so header-only gas quoting can
@@ -149,7 +149,7 @@ pub const STATE_MAX_VALUE_BYTES: usize = 512 * 1024;
 /// Maximum raw canonical Norito key-payload bytes accepted by V1 `StateMap` paths.
 pub const STATE_MAP_MAX_KEY_BYTES: usize = 4 * 1024;
 /// Maximum UTF-8 bytes in the canonical `Name` used as a V1 `StateMap` base.
-pub const STATE_MAP_MAX_BASE_BYTES: usize = iroha_data_model::name::MAX_NAME_BYTES;
+pub const STATE_MAP_MAX_BASE_BYTES: usize = iroha_model_base::name::MAX_NAME_BYTES;
 /// Conservative maximum canonical Norito `Name` frame accepted for a V1 `StateMap` base.
 pub const STATE_MAP_MAX_BASE_FRAME_BYTES: usize = STATE_MAP_MAX_BASE_BYTES
     + norito::core::Header::SIZE
@@ -3560,13 +3560,13 @@ mod tests {
     use super::*;
     #[test]
     fn durable_state_frame_bounds_cover_exact_text_maxima() {
-        let path: iroha_data_model::state_path::StatePath = "p"
+        let path: iroha_model_base::state_path::StatePath = "p"
             .repeat(STATE_MAX_PATH_BYTES)
             .parse()
             .expect("maximum StatePath");
         let path_frame = norito::to_bytes(&path).expect("encode maximum StatePath");
         assert!(path_frame.len() <= STATE_MAX_PATH_FRAME_BYTES);
-        let base: iroha_data_model::name::Name = "b"
+        let base: iroha_model_base::name::Name = "b"
             .repeat(STATE_MAP_MAX_BASE_BYTES)
             .parse()
             .expect("maximum Name");
@@ -3574,11 +3574,11 @@ mod tests {
         assert!(base_frame.len() <= STATE_MAP_MAX_BASE_FRAME_BYTES);
         assert_eq!(
             STATE_MAX_PATH_BYTES,
-            iroha_data_model::state_path::MAX_STATE_PATH_BYTES
+            iroha_model_base::state_path::MAX_STATE_PATH_BYTES
         );
         assert_eq!(
             STATE_MAP_MAX_BASE_BYTES,
-            iroha_data_model::name::MAX_NAME_BYTES
+            iroha_model_base::name::MAX_NAME_BYTES
         );
     }
     fn canonical_surface() -> AbiSurface {

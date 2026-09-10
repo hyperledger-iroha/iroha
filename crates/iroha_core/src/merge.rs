@@ -175,6 +175,8 @@ pub fn merge_ledger_entry_reference_matches(
 ) -> bool {
     entry.canonical_encoded_len() == expected_encoded_len && entry.canonical_hash() == expected_hash
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergeLedgerSignPayload")]
 #[derive(Encode)]
 struct MergeLedgerSignPayload {
     version: u8,
@@ -330,6 +332,8 @@ pub fn merge_execution_result_merkle_root(
         .collect::<MerkleTree<TransactionResult>>()
         .root()
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergePostStatePreimage")]
 #[derive(Encode)]
 struct MergePostStatePreimage {
     base_state_height: u64,
@@ -359,6 +363,8 @@ pub fn merge_expected_post_state_hash(
         encoded.as_slice(),
     ]))
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergeExecutionBatchPreimage")]
 #[derive(Encode)]
 struct MergeExecutionBatchPreimage {
     version: u8,
@@ -394,6 +400,8 @@ pub fn merge_execution_batch_hash(batch: &MergeExecutionBatch) -> Hash {
     .encode();
     Hash::new_from_chunks(&[MERGE_EXECUTION_BATCH_DOMAIN_TAG, encoded.as_slice()])
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge::MergeExecutionIdentityPreimage")]
 #[derive(Encode)]
 struct MergeExecutionIdentityPreimage {
     version: u8,

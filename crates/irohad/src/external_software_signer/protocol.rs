@@ -30,6 +30,8 @@ const RESPONSE_DIGEST_DOMAIN_V1: &[u8] = b"iroha.external-signer.response.v1";
 pub const SORAFS_FOUNDATIONAL_PROMOTION_DOMAIN_V1: &[u8] =
     b"iroha:sorafs:production-readiness:foundational-prerequisites:v1\0";
 /// Provider implementation class carried by external-signer provenance.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::protocol::ExternalSignerBackendV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
 pub enum ExternalSignerBackendV1 {
@@ -337,9 +339,8 @@ pub(super) fn valid_software_signer_handle(role: SignerRoleV1, value: &str) -> b
         SignerRoleV1::PotrProvider => ("potr", Some("provider-")),
         SignerRoleV1::BillingStatement => ("billing", None),
         SignerRoleV1::EvidenceViewer => ("evidence-viewer", None),
-        SignerRoleV1::StreamToken => ("stream-token", None),
         SignerRoleV1::PopCredentials => ("pop-credentials", None),
-        SignerRoleV1::ReleaseManifest => return false,
+        SignerRoleV1::ReleaseManifest | SignerRoleV1::StreamToken => return false,
     };
     let prefix = format!("software://sorafs/{role_segment}/");
     iroha_config::parameters::validate_production_runtime_handle(value).is_ok()
@@ -356,22 +357,7 @@ pub(super) fn public_key_digest(public_key: &PublicKey) -> Result<[u8; 32], ()> 
         &[&[algorithm as u8], payload],
     ))
 }
-pub(super) fn digest_parts(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(domain);
-    for part in parts {
-        hasher.update(&u64::try_from(part.len()).unwrap_or(u64::MAX).to_be_bytes());
-        hasher.update(part);
-    }
-    *hasher.finalize().as_bytes()
-}
-pub(super) fn digest_canonical<T: norito::NoritoSerialize>(
-    domain: &[u8],
-    value: &T,
-) -> Result<[u8; 32], ()> {
-    let bytes = norito::encode_canonical(value).map_err(|_| ())?;
-    Ok(digest_parts(domain, &[&bytes]))
-}
+pub(super) use crate::signer_operation::{digest_canonical, digest_parts};
 pub(super) fn payload_digest(payload: &[u8]) -> [u8; 32] {
     digest_parts(b"iroha.external-signer.payload.v1", &[payload])
 }

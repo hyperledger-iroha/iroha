@@ -79,7 +79,6 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
         soracloud as isi,
     },
-    name::Name,
     proof::ProofAttachment,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -204,6 +203,7 @@ use iroha_data_model::{
     sorafs::pin_registry::{PinStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity, RoundingMode},
@@ -478,7 +478,7 @@ fn verify_app_infra_provenance(
 }
 fn verify_rollback_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     target_version: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -500,7 +500,7 @@ fn service_config_value_hash(value_json: &Json) -> Result<Hash, InstructionExecu
 }
 fn verify_service_config_set_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     config_name: &str,
     value_json: &Json,
     provenance: &ManifestProvenance,
@@ -525,7 +525,7 @@ fn verify_service_config_set_provenance(
 }
 fn verify_service_config_delete_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     config_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -548,7 +548,7 @@ fn verify_service_config_delete_provenance(
 }
 fn verify_service_secret_set_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     secret_name: &str,
     secret: &SecretEnvelopeV1,
     provenance: &ManifestProvenance,
@@ -570,7 +570,7 @@ fn verify_service_secret_set_provenance(
 }
 fn verify_service_secret_delete_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     secret_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -593,7 +593,7 @@ fn verify_service_secret_delete_provenance(
 }
 fn verify_rollout_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     rollout_handle: &str,
     healthy: bool,
     promote_to_percent: Option<u8>,
@@ -619,8 +619,8 @@ fn verify_rollout_provenance(
 }
 fn verify_state_mutation_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     state_key: &str,
     operation: SoraStateMutationOperationV1,
     value_size_bytes: Option<u64>,
@@ -1607,7 +1607,29 @@ fn validate_soracloud_fhe_stark_native_air_binding(
             "{label} native AIR opening count mismatch"
         )));
     }
-    if native.proof.commits.roots.first().copied() != Some(air.composition_root) {
+    if native.proof.commits.roots.is_empty() {
+        return Err(invalid_parameter(format!(
+            "{label} native AIR commitment root count mismatch"
+        )));
+    }
+    if native.params.n_log2 > crate::zk_stark::MAX_BINDING_AIR_DOMAIN_LOG2 {
+        return Err(invalid_parameter(format!(
+            "{label} native AIR binding domain exceeds the supported limit"
+        )));
+    }
+    // AIR composition uses base-field leaves in its own Merkle domain. FRI commits
+    // the same evaluations as Fp4 values under a distinct, round-specific domain.
+    let domain_size = 1_usize << native.params.n_log2;
+    let expected_composition_root = crate::zk_stark::stark_merkle_root_from_field_values_v1(
+        &native.params,
+        &vec![0; domain_size],
+    )
+    .ok_or_else(|| {
+        invalid_parameter(format!(
+            "{label} native AIR composition root reconstruction failed"
+        ))
+    })?;
+    if air.composition_root != expected_composition_root {
         return Err(invalid_parameter(format!(
             "{label} native AIR composition root mismatch"
         )));
@@ -1823,11 +1845,9 @@ fn validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary_with_limits(
             "{label} native BFV AIR must not carry auxiliary composition value commitments"
         )));
     }
-    if native.proof.commits.roots.first().copied() != Some(air.composition_root) {
-        return Err(invalid_parameter(format!(
-            "{label} native BFV AIR composition root mismatch"
-        )));
-    }
+    // The AIR and FRI roots use distinct typed Merkle domains. Reconstruct the
+    // governed AIR root below, then authenticate each FRI chain and bind its
+    // initial opened value to the corresponding AIR composition evaluation.
     let expected_public_digest =
         crate::zk_stark::bfv_full_bootstrap_stark_public_digest_v1(&native.params, statement_hash)
             .ok_or_else(|| {
@@ -3989,8 +4009,8 @@ fn verify_soracloud_fhe_input_admission_proof(
 }
 fn verify_fhe_job_run_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     job: FheJobSpecV1,
     policy_reference: SoracloudFhePolicyReferenceV1,
     public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
@@ -4084,7 +4104,7 @@ fn verify_fhe_policy_revoke_provenance(
 }
 fn verify_decryption_request_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     policy: DecryptionAuthorityPolicyV1,
     request: DecryptionRequestV1,
     provenance: &ManifestProvenance,
@@ -4106,7 +4126,7 @@ fn verify_decryption_request_provenance(
 }
 fn verify_training_job_start_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     job_id: &str,
     worker_group_size: u16,
@@ -4145,7 +4165,7 @@ fn verify_training_job_start_provenance(
 }
 fn verify_training_job_checkpoint_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     completed_step: u32,
     checkpoint_size_bytes: u64,
@@ -4176,7 +4196,7 @@ fn verify_training_job_checkpoint_provenance(
 }
 fn verify_training_job_retry_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     reason: &str,
     provenance: &ManifestProvenance,
@@ -4199,7 +4219,7 @@ fn verify_training_job_retry_provenance(
 #[allow(clippy::too_many_arguments)]
 fn verify_model_artifact_register_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     training_job_id: &str,
     weight_artifact_hash: Hash,
@@ -4235,7 +4255,7 @@ fn verify_model_artifact_register_provenance(
 #[allow(clippy::too_many_arguments)]
 fn verify_model_weight_register_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     training_job_id: &str,
@@ -4272,7 +4292,7 @@ fn verify_model_weight_register_provenance(
 }
 fn verify_model_weight_promote_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     gate_approved: bool,
@@ -4303,7 +4323,7 @@ fn verify_model_weight_promote_provenance(
 }
 fn verify_model_weight_rollback_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     target_version: &str,
     reason: &str,
@@ -4453,7 +4473,7 @@ fn parse_training_model_name(model_name: &str) -> Result<String, InstructionExec
             "model_name must not contain surrounding whitespace",
         ));
     }
-    let parsed: iroha_data_model::name::Name = model_name
+    let parsed: iroha_model_base::name::Name = model_name
         .parse()
         .map_err(|err| invalid_parameter(format!("invalid model_name: {err}")))?;
     if parsed.as_ref() != model_name {
@@ -4947,7 +4967,7 @@ fn rollout_handle(service_name: &str, sequence: u64) -> String {
 #[cfg(test)]
 fn latest_service_audit_event(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
 ) -> Option<SoraServiceAuditEventV1> {
     state_transaction
         .world
@@ -4959,7 +4979,7 @@ fn latest_service_audit_event(
 }
 fn load_admitted_bundle(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     service_version: &str,
 ) -> Result<SoraDeploymentBundleV1, InstructionExecutionError> {
     state_transaction
@@ -4976,7 +4996,7 @@ fn load_admitted_bundle(
 }
 pub(crate) fn load_active_bundle(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
 ) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), InstructionExecutionError> {
     let deployment = state_transaction
         .world
@@ -5136,6 +5156,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             .iter()
             .find(|placement| {
                 placement.replica_slot == replica_slot
+                    && placement.placement_incarnation == placement_incarnation
                     && placement.validator_account_id == *reporter
             })
             .cloned()
@@ -5228,6 +5249,8 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 checkpoint.reporting_epoch == reporting_epoch
                     && checkpoint.assignment.service_version == active_service_version
                     && checkpoint.assignment.placement.replica_slot == replica_slot
+                    && checkpoint.assignment.placement.placement_incarnation
+                        == placement_incarnation
                     && checkpoint.assignment.placement.validator_account_id == *reporter
             })
         {
@@ -5365,6 +5388,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
                 (
                     service_version.clone(),
                     assignment.replica_slot,
+                    assignment.placement_incarnation,
                     assignment.validator_account_id,
                 )
             }));
@@ -5373,6 +5397,7 @@ pub(crate) fn write_soracloud_service_lease_usage(
             active_reporter_assignments.contains(&(
                 checkpoint.assignment.service_version.clone(),
                 checkpoint.assignment.placement.replica_slot,
+                checkpoint.assignment.placement.placement_incarnation,
                 checkpoint.assignment.placement.validator_account_id.clone(),
             ))
         }) {
@@ -5443,12 +5468,14 @@ pub(crate) fn write_soracloud_service_lease_usage(
             left.reporting_epoch,
             left.assignment.service_version.as_str(),
             left.assignment.placement.replica_slot,
+            left.assignment.placement.placement_incarnation,
             &left.assignment.placement.validator_account_id,
         )
             .cmp(&(
                 right.reporting_epoch,
                 right.assignment.service_version.as_str(),
                 right.assignment.placement.replica_slot,
+                right.assignment.placement.placement_incarnation,
                 &right.assignment.placement.validator_account_id,
             ))
     });
@@ -5962,8 +5989,8 @@ pub(crate) fn write_soracloud_runtime_receipt(
 /// write-back remains reconstructible from authoritative records without adding a parallel store.
 pub(crate) fn apply_soracloud_state_mutation(
     state_transaction: &mut StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     state_key: &str,
     operation: SoraStateMutationOperationV1,
     payload: Option<Vec<u8>>,
@@ -8062,8 +8089,8 @@ fn record_agent_apartment_audit_event(
 }
 fn binding_state_totals(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
 ) -> (u64, u32) {
     let total_bytes = state_transaction
         .world
@@ -8205,8 +8232,8 @@ struct LoadedSoracloudFheInput {
 fn load_soracloud_fhe_inputs(
     params: &BfvParameters,
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     job: &FheJobSpecV1,
     public_key: &BfvPublicKey,
     public_key_digest: Hash,
@@ -15649,6 +15676,8 @@ impl Execute for isi::SetSoracloudInrouReplicaRuntimeState {
             checkpoint.reporting_epoch == state.reporting_epoch
                 && checkpoint.assignment.service_version == state.service_version
                 && checkpoint.assignment.placement.replica_slot == state.replica_slot
+                && checkpoint.assignment.placement.placement_incarnation
+                    == state.placement_incarnation
                 && checkpoint.assignment.placement.validator_account_id == *authority
         });
         if matches!(
@@ -15791,9 +15820,10 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
             self.replica_slot,
             state_transaction.block_unix_timestamp_ms().max(1),
         )?;
-        let reporter_has_active_assignment = assignment
-            .as_ref()
-            .is_some_and(|assignment| assignment.validator_account_id == *authority);
+        let reporter_has_active_assignment = assignment.as_ref().is_some_and(|assignment| {
+            assignment.validator_account_id == *authority
+                && assignment.placement_incarnation == self.placement_incarnation
+        });
         if reporter_has_active_assignment {
             if self.finalize_reporter {
                 return Err(invalid_parameter(
@@ -15825,6 +15855,8 @@ impl Execute for isi::ReportSoracloudServiceLeaseUsage {
                         checkpoint.reporting_epoch == self.reporting_epoch
                             && checkpoint.assignment.service_version == self.active_service_version
                             && checkpoint.assignment.placement.replica_slot == self.replica_slot
+                            && checkpoint.assignment.placement.placement_incarnation
+                                == self.placement_incarnation
                             && checkpoint.assignment.placement.validator_account_id == *authority
                     })
                 });
@@ -16612,7 +16644,7 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_package_for_evaluation_ke
     expected_release_audit_package_digest: Hash,
     trusted_reviewer_id: &str,
     trusted_reviewer_public_key: &PublicKey,
-    required_refresh_mode: Option<BfvRefreshTranscriptModeV1>,
+    required_refresh_mode: BfvRefreshTranscriptModeV1,
 ) -> Result<(), InstructionExecutionError> {
     let bootstrap_key = evaluation_keys
         .bootstrap_key
@@ -16677,32 +16709,20 @@ fn validate_soracloud_fhe_full_bootstrap_release_audit_refresh_transcript_v1(
     params: &BfvParameters,
     evaluation_keys: &BfvEvaluationKeyBundle,
     transcript: &BfvEvaluationKeyRefreshTranscriptV1,
-    required_refresh_mode: Option<BfvRefreshTranscriptModeV1>,
+    required_refresh_mode: BfvRefreshTranscriptModeV1,
 ) -> Result<(), InstructionExecutionError> {
-    let validate_mode = |mode| {
-        let mode_label = match mode {
-            BfvRefreshTranscriptModeV1::ExactLift => "exact-lift",
-            BfvRefreshTranscriptModeV1::BoundedNoise => "bounded-noise",
-        };
-        transcript
-            .digest_for_evaluation_keys_with_mode(params, evaluation_keys, mode)
-            .map(|_| ())
-            .map_err(|err| {
-                format!("{context} refresh transcript failed {mode_label} validation: {err}")
-            })
+    let mode_label = match required_refresh_mode {
+        BfvRefreshTranscriptModeV1::ExactLift => "exact-lift",
+        BfvRefreshTranscriptModeV1::BoundedNoise => "bounded-noise",
     };
-    if let Some(mode) = required_refresh_mode {
-        return validate_mode(mode).map_err(invalid_parameter);
-    }
-    match validate_mode(BfvRefreshTranscriptModeV1::ExactLift) {
-        Ok(()) => Ok(()),
-        Err(exact_err) => match validate_mode(BfvRefreshTranscriptModeV1::BoundedNoise) {
-            Ok(()) => Ok(()),
-            Err(bounded_err) => Err(invalid_parameter(format!(
-                "{context} refresh transcript must validate in exact-lift or bounded-noise mode: exact-lift: {exact_err}; bounded-noise: {bounded_err}"
-            ))),
-        },
-    }
+    transcript
+        .digest_for_evaluation_keys_with_mode(params, evaluation_keys, required_refresh_mode)
+        .map(|_| ())
+        .map_err(|err| {
+            invalid_parameter(format!(
+                "{context} refresh transcript failed {mode_label} validation: {err}"
+            ))
+        })
 }
 /// Derive and prove the Soracloud FHE full-bootstrap material statement for evaluation keys.
 ///
@@ -17023,9 +17043,7 @@ pub fn prove_soracloud_fhe_full_bootstrap_execution_proofs_for_claims_with_relea
         expected_release_audit_package_digest,
         trusted_reviewer_id,
         trusted_reviewer_public_key,
-        Some(refresh_transcript_mode_for_ciphertext_bound_mode(
-            bound_mode,
-        )),
+        refresh_transcript_mode_for_ciphertext_bound_mode(bound_mode),
     )?;
     validate_soracloud_fhe_full_bootstrap_release_audited_execution_output_v1(
         params,

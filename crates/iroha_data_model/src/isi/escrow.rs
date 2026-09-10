@@ -320,7 +320,7 @@ isi! {
         /// Conditional escrow to update.
         pub escrow_id: crate::escrow::EscrowId,
         /// Exact immutable condition identifier.
-        pub condition_id: crate::name::Name,
+        pub condition_id: iroha_model_base::name::Name,
         /// Typed value evaluated by the ledger.
         pub value: crate::escrow::ConditionalEscrowValue,
         /// Optional external evidence digest.
@@ -332,7 +332,7 @@ impl AttestEscrowCondition {
     #[must_use]
     pub const fn new(
         escrow_id: crate::escrow::EscrowId,
-        condition_id: crate::name::Name,
+        condition_id: iroha_model_base::name::Name,
         value: crate::escrow::ConditionalEscrowValue,
         evidence_hash: Option<iroha_crypto::Hash>,
     ) -> Self {
@@ -522,7 +522,7 @@ impl_escrow_decode_from_slice!(OpenConditionalEscrow {
 });
 impl_escrow_decode_from_slice!(AttestEscrowCondition {
     escrow_id: crate::escrow::EscrowId,
-    condition_id: crate::name::Name,
+    condition_id: iroha_model_base::name::Name,
     value: crate::escrow::ConditionalEscrowValue,
     evidence_hash: Option<iroha_crypto::Hash>,
 });
@@ -544,12 +544,13 @@ impl_escrow_decode_from_slice!(ExpireAssetLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DomainId;
     use crate::isi::test_support::{
         assert_registry_decodes_registered_type as assert_registry_decodes, assert_slice_roundtrip,
     };
-    use crate::{domain::DomainId, name::Name};
     use core::num::{NonZeroU32, NonZeroU64};
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::name::Name;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::{codec::Encode, core::DecodeFromSlice};
     #[derive(Encode)]

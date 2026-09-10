@@ -33,6 +33,8 @@ const AUDIT_RETENTION_LIMITS_V1: AuditRetentionLimitsV1 = AuditRetentionLimitsV1
     max_records: AUDIT_MAX_RECORDS_V1,
     max_total_bytes: AUDIT_MAX_TOTAL_BYTES_V1,
 };
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::journal::SoftwareSignerAuditEventV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) enum SoftwareSignerAuditEventV1 {
     Genesis {

@@ -3668,6 +3668,97 @@ fn pending_queue_plan_admission_checks_historical_native_amx_participant_sources
 }
 
 #[test]
+fn pending_queue_plan_authentication_does_not_hold_the_publication_fence() {
+    let (state, validator_keypairs, _, parent) = configured_single_lane_queue_plan_state();
+    let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(
+        LaneId::SINGLE,
+        DataSpaceId::UNIVERSAL,
+    ));
+    let (_, certificate) = queue_plan_admission_certificate_for_state_test(
+        &state,
+        routing_plan,
+        &validator_keypairs,
+        parent.header().height().get(),
+        0x6D,
+    );
+    let state = Arc::new(state);
+    let calls = std::rc::Rc::new(std::cell::Cell::new(0_usize));
+    let observed_state = Arc::clone(&state);
+    let observed_calls = std::rc::Rc::clone(&calls);
+    crate::torii_proxy::observe_queue_plan_authentication_for_test(
+        move || {
+            assert!(
+                observed_state.state_commit_lock.try_lock().is_some(),
+                "signature verification must not exclude State publication"
+            );
+            observed_calls.set(observed_calls.get() + 1);
+        },
+        || {
+            let (_, disposition) = state
+                .classify_pending_queue_plan_admission(
+                    &certificate,
+                    parent.header().height().get() + 1,
+                )
+                .expect("authenticate and classify the current certificate");
+            assert_eq!(
+                disposition,
+                PendingQueuePlanAdmissionDisposition::EligibleAbsent
+            );
+            assert_eq!(
+                calls.replace(0),
+                1,
+                "classification authenticates immutable bytes once"
+            );
+            let first = state
+                .persist_classified_queue_plan_admission(&certificate)
+                .expect("retain the authenticated certificate at the exact durable frontier");
+            assert!(matches!(
+                first,
+                PendingQueuePlanAdmissionPersistenceOutcome::Durable { inserted: true, .. }
+            ));
+            assert_eq!(
+                calls.replace(0),
+                1,
+                "persistence must reuse authenticated bytes under its fence"
+            );
+            let repeated = state
+                .persist_classified_queue_plan_admission(&certificate)
+                .expect("idempotent admission retains the same durable certificate");
+            assert!(matches!(
+                repeated,
+                PendingQueuePlanAdmissionPersistenceOutcome::Durable {
+                    inserted: false,
+                    ..
+                }
+            ));
+            assert_eq!(
+                calls.replace(0),
+                1,
+                "an idempotent retry authenticates once before its fence"
+            );
+            assert!(
+                state
+                    .persist_classified_queue_plan_admission(b"malformed")
+                    .is_err()
+            );
+            assert_eq!(
+                calls.get(),
+                1,
+                "malformed input still passes through authentication"
+            );
+        },
+    );
+    assert_eq!(
+        state
+            .kura
+            .pending_queue_plan_admission_certificates()
+            .expect("retained inventory"),
+        vec![(Hash::new(&certificate), certificate)],
+        "failed input and exact retries must not change durable certificate ownership"
+    );
+}
+
+#[test]
 fn pending_queue_plan_persistence_serializes_alternate_quorum_subsets() {
     let (state, validator_keypairs, _, _) = configured_single_lane_queue_plan_state();
     let routing_plan = crate::queue::RoutingPlan::single(crate::queue::RoutingDecision::new(

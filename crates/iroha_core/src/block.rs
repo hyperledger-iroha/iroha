@@ -166,7 +166,7 @@ mod external_entrypoint_count_tests {
 #[cfg(feature = "bls")]
 fn bls_pop_from_metadata(
     metadata: &Metadata,
-    key: &iroha_data_model::name::Name,
+    key: &iroha_model_base::name::Name,
 ) -> Option<Vec<u8>> {
     let json = metadata.get(key)?;
     let val: JsonValue = norito::json::from_str(json.get()).ok()?;
@@ -178,7 +178,7 @@ fn bls_pop_from_metadata(
 #[cfg(feature = "bls")]
 fn bls_small_pop_from_metadata(
     metadata: &Metadata,
-    key: &iroha_data_model::name::Name,
+    key: &iroha_model_base::name::Name,
 ) -> Option<Vec<u8>> {
     bls_pop_from_metadata(metadata, key)
 }
@@ -1834,7 +1834,7 @@ const QUARANTINE_METADATA_KEY: &str = "quarantine";
 /// Missing values, `false`, and string or numeric lookalikes remain in the
 /// normal lane.
 fn is_quarantine_transaction(tx: &SignedTransaction) -> bool {
-    let Ok(key) = iroha_data_model::name::Name::from_str(QUARANTINE_METADATA_KEY) else {
+    let Ok(key) = iroha_model_base::name::Name::from_str(QUARANTINE_METADATA_KEY) else {
         return false;
     };
     tx.metadata()
@@ -2180,11 +2180,11 @@ mod prefetch_tests {
         block::BlockHeader,
         domain::{Domain, DomainId},
         isi::{InstructionBox, Log},
-        name::Name,
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         role::RoleId,
     };
     use iroha_logger::Level;
+    use iroha_model_base::name::Name;
     use iroha_test_samples::ALICE_ID;
     use nonzero_ext::nonzero;
     #[test]
@@ -10312,9 +10312,9 @@ pub(crate) mod valid {
                 msg: [u8; 32],
                 sig: Vec<u8>,
             }
-            static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
+            static BLS_POP_KEY: LazyLock<iroha_model_base::name::Name> =
                 LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
-            static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
+            static BLS_POP_SMALL_KEY: LazyLock<iroha_model_base::name::Name> =
                 LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
             let mut all_normal_have_pop = true;
             let mut all_small_have_pop = true;
@@ -12245,9 +12245,9 @@ pub(crate) mod valid {
                         msg: [u8; 32],
                         sig: Vec<u8>,
                     }
-                    static BLS_POP_KEY: LazyLock<iroha_data_model::name::Name> =
+                    static BLS_POP_KEY: LazyLock<iroha_model_base::name::Name> =
                         LazyLock::new(|| "bls_pop".parse().expect("valid metadata key"));
-                    static BLS_POP_SMALL_KEY: LazyLock<iroha_data_model::name::Name> =
+                    static BLS_POP_SMALL_KEY: LazyLock<iroha_model_base::name::Name> =
                         LazyLock::new(|| "bls_pop_small".parse().expect("valid metadata key"));
                     let mut all_normal_have_pop = true;
                     let mut all_small_have_pop = true;
@@ -15892,7 +15892,6 @@ pub(crate) mod valid {
             isi::{InstructionBox, Log, error::Mismatch},
             merge::MergeQuorumCertificate,
             metadata::Metadata,
-            name::Name,
             nexus::{
                 AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceCatalog, DataSpaceId,
                 DataSpaceMetadata, LaneCatalog, LaneConfig, LaneId,
@@ -15918,6 +15917,7 @@ pub(crate) mod valid {
             trigger::DataTriggerSequence,
         };
         use iroha_logger::Level;
+        use iroha_model_base::name::Name;
         use iroha_primitives::time::TimeSource;
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -28516,7 +28516,6 @@ pub(crate) mod tests {
         errors::AmxStage,
         events::pipeline::{BlockEventFilter, TransactionEventFilter},
         prelude::*,
-        state_path::StatePath,
         transaction::{
             ExecutableBatchItem,
             signed::{
@@ -28527,6 +28526,7 @@ pub(crate) mod tests {
         },
     };
     use iroha_genesis::GENESIS_DOMAIN_ID;
+    use iroha_model_base::state_path::StatePath;
     use iroha_primitives::json::Json;
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;

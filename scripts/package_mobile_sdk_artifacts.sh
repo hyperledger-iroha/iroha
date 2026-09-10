@@ -97,7 +97,7 @@ run_isolated_python() {
 usage() {
   cat <<'USAGE'
 Usage:
-  scripts/package_mobile_sdk_artifacts.sh [--root <repo-root>] [--version <version>] [--apple] [--android]
+  scripts/package_mobile_sdk_artifacts.sh [--root <repo-root>] [--lockfile-path <absolute-path>] [--version <version>] [--apple] [--android]
 
 Packages built mobile SDK artifacts into an explicit external cache directory:
   --apple    Package NoritoBridge.xcframework and its artifact manifest.
@@ -116,8 +116,8 @@ MOBILE_SDK_RUSTUP_BINARY may select the absolute canonical, non-symbolic rustup
 executable used by Apple source authentication.
 Source-authenticated packaging invokes scripts/check_mobile_sdk_artifacts.sh
 and therefore also requires exact Rust 1.93.1 RUSTC/RUSTDOC plus one canonical
-writable external CARGO_TARGET_DIR. Only the repository-root Cargo.lock is
-accepted.
+writable external CARGO_TARGET_DIR. Apple operations require an explicit
+--lockfile-path naming the root lock or the exact reviewed external release lock.
 Apple packaging additionally requires an explicit canonical SOURCE_DATE_EPOCH;
 the deterministic archive owner normalizes every ZIP entry to that instant.
 
@@ -126,12 +126,21 @@ USAGE
 }
 
 ROOT_ARG=""
+CARGO_LOCKFILE=""
 VERSION=""
 PACKAGE_APPLE=0
 PACKAGE_ANDROID=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --lockfile-path)
+      shift
+      if [[ -n "$CARGO_LOCKFILE" || -z "${1:-}" ]]; then
+        echo "error: --lockfile-path requires exactly one explicit value" >&2
+        exit 64
+      fi
+      CARGO_LOCKFILE="$1"
+      ;;
     --root)
       shift
       if [[ $# -eq 0 ]]; then
@@ -184,6 +193,13 @@ APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-}"
 if [[ "$PACKAGE_APPLE" == "0" && "$PACKAGE_ANDROID" == "0" ]]; then
   PACKAGE_APPLE=1
   PACKAGE_ANDROID=1
+fi
+
+if [[ "$PACKAGE_APPLE" == "1" ]]; then
+if [[ -z "$CARGO_LOCKFILE" ]]; then
+  echo "error: --lockfile-path is required; no implicit Cargo.lock selection" >&2
+  exit 64
+fi
 fi
 
 if [[ "$PACKAGE_APPLE" == "1" && -z "$APPLE_ARTIFACT_DIR" ]]; then
@@ -810,7 +826,7 @@ package_apple() {
 
   MOBILE_SDK_APPLE_ARTIFACT_DIR="$artifact_root" \
     MOBILE_SDK_RUSTUP_BINARY="$ARCHIVE_SEAL_RUSTUP" \
-    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --apple-only
+    bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --lockfile-path "$CARGO_LOCKFILE" --apple-only
   require_dir "$xcframework" "NoritoBridge XCFramework"
   require_file "$bridge_manifest" "NoritoBridge artifact manifest"
 
@@ -833,6 +849,7 @@ package_apple() {
     NORITO_BRIDGE_SEAL_RUSTUP="$ARCHIVE_SEAL_RUSTUP" \
     NORITO_BRIDGE_SEAL_DEVELOPER_DIR="$ARCHIVE_SEAL_DEVELOPER_DIR" \
     "$PYTHON_BINARY" -I -S -B "$APPLE_ARCHIVE_OWNER" \
+      --lockfile-path "$CARGO_LOCKFILE" \
       --xcframework "$xcframework" \
       --output "$apple_zip" \
       --scratch-dir "$OUT_PARENT"

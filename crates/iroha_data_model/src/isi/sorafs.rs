@@ -305,12 +305,12 @@ impl SorafsProviderGovernanceActionV1 {
     /// # Errors
     ///
     /// Returns an error for a zero provider identifier or a no-op rebind.
-    pub fn validate(&self) -> Result<(), crate::error::ParseError> {
+    pub fn validate(&self) -> Result<(), iroha_model_base::error::ParseError> {
         let provider_id = match self {
             Self::Establish(action) => action.provider_id,
             Self::Rebind(action) => {
                 if action.expected_owner == action.next_owner {
-                    return Err(crate::error::ParseError::new(
+                    return Err(iroha_model_base::error::ParseError::new(
                         "SoraFS provider-owner rebind must change the owner",
                     ));
                 }
@@ -319,7 +319,7 @@ impl SorafsProviderGovernanceActionV1 {
             Self::Remove(action) => action.provider_id,
         };
         if provider_id == ProviderId::default() {
-            return Err(crate::error::ParseError::new(
+            return Err(iroha_model_base::error::ParseError::new(
                 "SoraFS provider governance action requires a non-zero provider id",
             ));
         }
@@ -942,6 +942,8 @@ pub struct SorafsPotrProofOutcomeSubmissionV1 {
     pub admission_envelope_digest: [u8; 32],
 }
 /// Existing canonical proof material accepted by the chain-authoritative outcome journal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::sorafs::SorafsProofOutcomeSubmissionV1")]
 #[derive(
     Debug,
     Clone,
@@ -961,8 +963,7 @@ pub struct SorafsPotrProofOutcomeSubmissionV1 {
     rename_all = "snake_case",
     deny_unknown_fields
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::isi::sorafs::SorafsProofOutcomeSubmissionV1")]
+
 pub enum SorafsProofOutcomeSubmissionV1 {
     /// Exact canonical PDP terminal archive and authentication material.
     #[codec(index = 0)]

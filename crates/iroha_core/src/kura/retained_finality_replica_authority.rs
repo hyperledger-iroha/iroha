@@ -720,18 +720,22 @@ impl Kura {
         if let Some(parent) = directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.clone()]);
+        #[cfg(test)]
+        tests::run_retained_record_pre_noclobber_hook_for_test(&path);
         if !self.write_atomic_synced_noclobber(&path, &bytes)? {
             let Some(existing) = self.decode_retained_block_record_at(&path, &directory)? else {
                 return Err(Error::ConflictingRetainedBlockRecord { height });
             };
             let _ =
                 Self::validate_retained_block_record_at(&path, height, canonical_hash, &existing)?;
-            return if existing == *record {
-                Ok(())
-            } else {
-                Err(Error::ConflictingRetainedBlockRecord { height })
-            };
+            if existing != *record {
+                return Err(Error::ConflictingRetainedBlockRecord { height });
+            }
+            accounting_mutation.finish_resources_before_disk_rescan();
+            return Ok(());
         }
         self.add_total_disk_usage_bytes(u64::try_from(bytes.len())?);
         let Some(persisted) = self.decode_retained_block_record_at(&path, &directory)? else {
@@ -1003,16 +1007,17 @@ impl Kura {
         authority.validate_for(self)?;
         let directory = Self::retained_block_record_dir_for(blocks_dir);
         let durable_height = self.block_store.lock().read_durable_index_count()?;
-        let heights =
+        let mut heights =
             Self::retained_block_record_heights_for(&self.store_root, blocks_dir, durable_height)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        heights.retain(|height| *height >= first_removed_height);
+        let mut accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(heights.len());
         let mut removed = false;
         let mut removed_bytes = 0_u64;
-        for height in heights
-            .into_iter()
-            .filter(|height| *height >= first_removed_height)
-        {
+        for height in heights {
             let path = Self::retained_block_record_path_for(blocks_dir, height);
+            let resources = accounting_mutation.resource_child(vec![path.clone()]);
             self.regular_sidecar_metadata(&path, &directory)?
                 .ok_or_else(|| {
                     Error::IO(
@@ -1026,6 +1031,7 @@ impl Kura {
             removed_bytes = removed_bytes.saturating_add(Self::file_len_or_zero(&path)?);
             authority.validate_for(self)?;
             std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
+            resources.finish();
             removed = true;
         }
         if removed {
@@ -1139,13 +1145,19 @@ impl Kura {
                     staging_directory.clone(),
                 )
             })?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        // The batch owns no files itself. Every exact source/destination pair
+        // publishes once; a partial move or rollback failure stays unavailable.
+        let mut accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(entries.len());
         let mut moved = 0_usize;
         let move_result = (|| -> Result<()> {
             for entry in &entries {
                 let source = Self::retained_block_record_path_for(blocks_dir, entry.height);
                 let target =
                     Self::retained_block_rewrite_staging_path_for(blocks_dir, entry.height);
+                let resources =
+                    accounting_mutation.resource_child(vec![source.clone(), target.clone()]);
                 if std::fs::symlink_metadata(&target).is_ok() {
                     return Err(Error::IO(
                         std::io::Error::new(
@@ -1157,6 +1169,7 @@ impl Kura {
                 }
                 std::fs::rename(&source, &target)
                     .map_err(|error| Error::IO(error, source.clone()))?;
+                resources.finish();
                 moved = moved.saturating_add(1);
             }
             sync_dir(&retained_directory)
@@ -1170,9 +1183,13 @@ impl Kura {
                 let source =
                     Self::retained_block_rewrite_staging_path_for(blocks_dir, entry.height);
                 let target = Self::retained_block_record_path_for(blocks_dir, entry.height);
+                let restore_resources = self
+                    .begin_total_disk_usage_mutation()
+                    .with_resource_paths(vec![source.clone(), target.clone()]);
                 if let Err(restore_error) = std::fs::rename(&source, &target) {
                     return Err(Error::IO(restore_error, source));
                 }
+                restore_resources.finish();
             }
             let _ = sync_dir(&retained_directory);
             let _ = sync_dir(&staging_directory);
@@ -1225,18 +1242,22 @@ impl Kura {
                 removed_total_bytes = removed_total_bytes.saturating_add(entry.bytes_len);
             }
         }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(stage.entries.len());
         for (entry, restore) in stage.entries.iter().zip(restore) {
             let source =
                 Self::retained_block_rewrite_staging_path_for(&stage.blocks_dir, entry.height);
+            let destination = Self::retained_block_record_path_for(&stage.blocks_dir, entry.height);
+            let resources =
+                accounting_mutation.resource_child(vec![source.clone(), destination.clone()]);
             if restore {
-                let destination =
-                    Self::retained_block_record_path_for(&stage.blocks_dir, entry.height);
                 std::fs::rename(&source, &destination)
                     .map_err(|error| Error::IO(error, source.clone()))?;
             } else {
                 std::fs::remove_file(&source).map_err(|error| Error::IO(error, source.clone()))?;
             }
+            resources.finish();
         }
         sync_dir(&retained_directory)
             .map_err(|error| Error::IO(error, retained_directory.clone()))?;
@@ -1259,7 +1280,9 @@ impl Kura {
         for entry in &stage.entries {
             let _ = self.staged_retained_block_record(stage, entry)?;
         }
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .removing_resource_tree(&staging_directory);
         #[cfg(test)]
         let fail_after = self
             .fail_retained_rewrite_discard_after
@@ -1395,17 +1418,22 @@ impl Kura {
         if heights.is_empty() {
             if staging_directory.exists() {
                 authority.validate_for(self)?;
-                let _accounting_mutation = self.begin_total_disk_usage_mutation();
+                let accounting_mutation = self
+                    .begin_total_disk_usage_mutation()
+                    .removing_resource_tree(&staging_directory);
                 std::fs::remove_dir(&staging_directory)
                     .map_err(|error| Error::IO(error, staging_directory.clone()))?;
                 if let Some(parent) = staging_directory.parent() {
                     sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
                 }
+                accounting_mutation.finish_resources_before_disk_rescan();
             }
             return Ok(());
         }
         authority.validate_for(self)?;
-        let _accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_children(heights.len());
         let retained_directory = Self::retained_block_record_dir_for(blocks_dir);
         create_dir_all_with_context(&retained_directory)?;
         for height in heights {
@@ -1419,6 +1447,8 @@ impl Kura {
             let canonical_hash = NonZeroUsize::new(usize::try_from(height)?)
                 .and_then(|height| self.get_durable_block_hash(height));
             let destination = Self::retained_block_record_path_for(blocks_dir, height);
+            let resources =
+                accounting_mutation.resource_child(vec![path.clone(), destination.clone()]);
             authority.validate_for(self)?;
             if canonical_hash == Some(record.block_hash) {
                 if let Some(existing) =
@@ -1444,6 +1474,7 @@ impl Kura {
                 authority.validate_for(self)?;
                 std::fs::remove_file(&path).map_err(|error| Error::IO(error, path.clone()))?;
             }
+            resources.finish();
         }
         sync_dir(&retained_directory)
             .map_err(|error| Error::IO(error, retained_directory.clone()))?;
@@ -1455,6 +1486,7 @@ impl Kura {
         if let Some(parent) = staging_directory.parent() {
             sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
         }
+        accounting_mutation.finish_resources_before_disk_rescan();
         Ok(())
     }
     fn v2_finality_artifact_dir_for(blocks_dir: &Path) -> PathBuf {

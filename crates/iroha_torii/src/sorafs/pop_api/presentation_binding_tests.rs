@@ -2,6 +2,10 @@
 
 use super::*;
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::pop_api::presentation_binding_tests::MissingPresentationMembershipRequest"
+)]
 #[derive(NoritoSerialize)]
 struct MissingPresentationMembershipRequest {
     credential_commitment_hex: String,
@@ -9,6 +13,10 @@ struct MissingPresentationMembershipRequest {
     verifier_context: String,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::pop_api::presentation_binding_tests::MissingPresentationVerifyRequest"
+)]
 #[derive(NoritoSerialize)]
 struct MissingPresentationVerifyRequest {
     canonical_proof_base64url: String,

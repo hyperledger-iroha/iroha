@@ -4066,7 +4066,11 @@ public final class HttpClientTransportTests {
   }
 
   private static void callContractRequestParsesResponse() throws Exception {
-    final String authority = TestAccountIds.ed25519Authority(0x26);
+    final KeyPair contractKey = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final byte[] encodedPublicKey = contractKey.getPublic().getEncoded();
+    final String authority = AccountAddress.fromAccount(
+        Arrays.copyOfRange(encodedPublicKey, encodedPublicKey.length - 32, encodedPublicKey.length),
+        "ed25519").toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final String contractAddress =
         "irohac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9gg4yxgjw";
     final byte[] codeHash = new byte[32];
@@ -4089,6 +4093,7 @@ public final class HttpClientTransportTests {
     final long creationTimeMs = 1_712_345_678_901L;
     final TransactionPayload preparedPayload =
         TransactionPayload.builder()
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setNetworkId(VERIFYING_KEY_NETWORK_ID)
             .setAuthority(authority)
             .setCreationTimeMs(creationTimeMs)
@@ -4124,9 +4129,13 @@ public final class HttpClientTransportTests {
                 "router::universal",
                 "contribute",
                 contractPayload,
-                draftIntent)
+                draftIntent,
+                canonicalAuth(authority, contractKey, 1_700_000_000_030L, "contract-prepare-auth"))
             .join();
 
+    assertCanonicalSignature(executor.lastRequest, contractKey.getPublic(),
+        1_700_000_000_030L, "contract-prepare-auth");
+    assert executor.lastRequest.headers().containsKey(CanonicalRequestSigner.HEADER_ACCOUNT);
     assert response.ok() : "Call response should be successful";
     assert !response.submitted() : "Call draft must not be submitted";
     assert "router".equals(response.dataspace()) : "Call dataspace mismatch";
@@ -4206,6 +4215,7 @@ public final class HttpClientTransportTests {
             Map.of("input", 1L));
     final TransactionPayload canonical =
         TransactionPayload.builder()
+            .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
             .setNetworkId(VERIFYING_KEY_NETWORK_ID)
             .setAuthority(authority)
             .setCreationTimeMs(1_712_345_678_902L)
@@ -4240,7 +4250,7 @@ public final class HttpClientTransportTests {
             canonical.toBuilder().setNonce(9L).build(),
             canonical
                 .toBuilder()
-                .setAdmissionIntent(TransactionAdmissionIntent.QUEUE_PLAN_SYNCED)
+                .setAdmissionIntent(TransactionAdmissionIntent.ORDINARY)
                 .build(),
             canonical.toBuilder().setAttachments(Collections.emptyList()).build());
     for (final TransactionPayload substituted : rehashedSubstitutions) {
@@ -4573,7 +4583,8 @@ public final class HttpClientTransportTests {
               string(boundary, "contract_alias"),
               string(boundary, "entrypoint"),
               boundaryPayload,
-              new ContractCallDraftIntent(trustedInvocation, Map.of()))
+              new ContractCallDraftIntent(trustedInvocation, Map.of()),
+              applicationAuth(string(boundary, "authority"), "contract-prepare"))
           .join();
     } catch (final CompletionException expected) {
       failed = true;
@@ -4637,7 +4648,8 @@ public final class HttpClientTransportTests {
             string(boundary, "contract_alias"),
             string(boundary, "entrypoint"),
             payload,
-            new ContractCallDraftIntent(invocation, Map.of())).join();
+            new ContractCallDraftIntent(invocation, Map.of()),
+              applicationAuth(string(boundary, "authority"), "contract-prepare")).join();
       } catch (final CompletionException expected) {
         failed = true;
       }

@@ -29,6 +29,7 @@ fn owned_lane_reservation_test_state() -> (Arc<State>, TempDir) {
         max_disk_usage_bytes: kura_defaults::MAX_DISK_USAGE_BYTES,
         blocks_in_memory: kura_defaults::BLOCKS_IN_MEMORY,
         lane_history_retention: kura_defaults::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: kura_defaults::REPLICA_ADVERT_POLICY,
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: kura_defaults::MERGE_LEDGER_CACHE_CAPACITY,
@@ -133,6 +134,8 @@ fn lane_reservation_key_current_layout_roundtrips() {
 
 #[test]
 fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::queue::tests::lane_reservation_key_rejects_pre_release_duplicate_identity_layout::PreReleaseLaneQueueReservationKeyV1")]
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     #[norito(deny_unknown_fields)]
     struct PreReleaseLaneQueueReservationKeyV1 {

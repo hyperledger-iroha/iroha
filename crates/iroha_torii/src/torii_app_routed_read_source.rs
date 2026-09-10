@@ -25,7 +25,7 @@ impl<T: norito::NoritoSchema, const N: usize> norito::NoritoSchema
     fn nominal_name() -> String {
         norito::schema::identity::generic_name(
             "iroha_torii::ToriiBorrowedRoutedReadStruct",
-            &["'_".into(), T::nominal_name(), N.to_string()],
+            &["'_".to_owned(), T::nominal_name(), N.to_string()],
         )
     }
     fn frame_name() -> String {

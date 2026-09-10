@@ -36,7 +36,11 @@ pub(super) fn dependency_is_present(
             deps.sorafs_governance_dag_head_authenticator.is_some()
         }
         Slot::GovernanceDagCheckpointStore => deps.sorafs_governance_dag_checkpoint_store.is_some(),
-        Slot::StreamTokenSigner => deps.sorafs_stream_token_signer.is_some(),
+        // The independent approved anchor is checked by Torii after local history exists.
+        Slot::StreamTokenSigner => {
+            deps.sorafs_stream_token_hardware_client.is_some()
+                && deps.sorafs_stream_token_state_observer.is_some()
+        }
         Slot::StreamTokenGatewayAdmission => deps.sorafs_stream_token_gateway_admission.is_some(),
         Slot::AppealFinanceTransactionSigner => {
             deps.sorafs_appeal_finance_runtime_signers.is_some()
@@ -227,7 +231,9 @@ fn has_unrequested_storage_security_dependency(
     ) || dependency_is_unrequested(
         bindings,
         Slot::StreamTokenSigner,
-        dependencies.sorafs_stream_token_signer.is_some(),
+        dependencies.sorafs_stream_token_hardware_client.is_some()
+            || dependencies.sorafs_stream_token_state_observer.is_some()
+            || dependencies.sorafs_stream_token_approved_anchor.is_some(),
     ) || dependency_is_unrequested(
         bindings,
         Slot::StreamTokenGatewayAdmission,

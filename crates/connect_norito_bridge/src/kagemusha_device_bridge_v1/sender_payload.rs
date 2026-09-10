@@ -9,10 +9,8 @@
 //! native operation index and hardware service; never substitute a host map.
 
 use iroha_core::zk::kagemusha_v1_state::{
-    DigestV1, DurableOutgoingEnvelopeV1, HardwareTransitionStatementV1,
-    KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1, KagemushaRedemptionTerminalReceiptV1,
-    KagemushaTransitionKindV1, PreparedOutgoingCandidateV1, PreparedOutgoingRecoveryViewV1,
-    VerifiedKagemushaRedemptionReleaseV1,
+    DigestV1, HardwareTransitionStatementV1, KAGEMUSHA_OUTGOING_PUBLIC_INPUTS_DOMAIN_V1,
+    KagemushaRedemptionTerminalReceiptV1, KagemushaTransitionKindV1,
 };
 use iroha_data_model::{
     account::AccountId,
@@ -21,12 +19,11 @@ use iroha_data_model::{
         KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1, KAGEMUSHA_REDEMPTION_VOUCHER_MAX_BYTES_V1,
         KagemushaAcknowledgementV1, KagemushaDevicePublicKeyV1, KagemushaDeviceSignatureV1,
         KagemushaLifecycleBindingV1, KagemushaOperationKindV1, KagemushaPaymentRequestV1,
-        KagemushaPaymentV1, KagemushaRedemptionVoucherV1, kagemusha_ciphertext_digest_v1,
-        kagemusha_liability_pool_id_v1,
+        KagemushaPaymentV1, KagemushaRedemptionVoucherV1, kagemusha_liability_pool_id_v1,
     },
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
 };
 use sha2::{Digest as _, Sha256};
@@ -114,8 +111,11 @@ fn validate_context_lifecycle(
 }
 
 /// Only public inputs fixed before outgoing preparation. Variant order is wire order.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-public-inputs")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderPublicInputsV1",
+    frame = "iroha.kagemusha.device.v1.sender-public-inputs"
+)]
 pub enum SenderPublicInputsV1 {
     /// Peer payment with a fixed signed receiver exchange.
     SendSplit {
@@ -172,8 +172,11 @@ impl SenderPublicInputsV1 {
 
 /// Exactly one digest preimage, including the caller's independently generated ID.
 /// IDs must be persisted before the first native call, never derived from an amount/request.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-public-input-preimage")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderPublicInputPreimageV1",
+    frame = "iroha.kagemusha.device.v1.sender-public-input-preimage"
+)]
 pub struct SenderPublicInputPreimageV1 {
     /// Canonical payload version; currently one.
     pub version: u16,
@@ -199,8 +202,11 @@ impl SenderPublicInputPreimageV1 {
 }
 
 /// An existing native preparation; IDs select retained state, never private inputs.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-preparation-selector")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderPreparationSelectorV1",
+    frame = "iroha.kagemusha.device.v1.sender-preparation-selector"
+)]
 pub struct SenderPreparationSelectorV1 {
     /// Digest of the original caller ID, creation context and public inputs.
     pub inputs_digest: [u8; 32],
@@ -209,8 +215,11 @@ pub struct SenderPreparationSelectorV1 {
 }
 
 /// A page cursor is meaningful only under the exact pinned native index revision.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-recovery-selector")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderRecoverySelectorV1",
+    frame = "iroha.kagemusha.device.v1.sender-recovery-selector"
+)]
 pub enum SenderRecoverySelectorV1 {
     /// Recover one caller-known operation and its exact input binding.
     Lookup {
@@ -232,10 +241,13 @@ pub enum SenderRecoverySelectorV1 {
 ///
 /// A redemption projection is public binding material only. It cannot authorize
 /// release without a matching in-process
-/// [`VerifiedKagemushaRedemptionReleaseV1`] constructed by Core from the full
+/// [`VerifiedKagemushaRedemptionReleaseV1`](iroha_core::zk::kagemusha_v1_state::VerifiedKagemushaRedemptionReleaseV1) constructed by Core from the full
 /// finalized operation status and a caller-pinned trust anchor.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-terminal-receipt")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderTerminalReceiptV1",
+    frame = "iroha.kagemusha.device.v1.sender-terminal-receipt"
+)]
 pub enum SenderTerminalReceiptV1 {
     /// Exact durable acknowledgement for the installed peer payment.
     PaymentAcknowledgement(Vec<u8>),
@@ -244,8 +256,11 @@ pub enum SenderTerminalReceiptV1 {
 }
 
 /// Closed purpose of a release-pinned Core-to-hardware authorization.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-hardware-authorization-purpose")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderHardwareAuthorizationPurposeV1",
+    frame = "iroha.kagemusha.device.v1.sender-hardware-authorization-purpose"
+)]
 pub enum SenderHardwareAuthorizationPurposeV1 {
     /// Authorize exact-once commitment of one already verified candidate.
     Commit,
@@ -253,8 +268,11 @@ pub enum SenderHardwareAuthorizationPurposeV1 {
     Release,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-hardware-authorization-preimage")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderHardwareAuthorizationPreimageV1",
+    frame = "iroha.kagemusha.device.v1.sender-hardware-authorization-preimage"
+)]
 struct SenderHardwareAuthorizationPreimageV1 {
     version: u16,
     purpose: SenderHardwareAuthorizationPurposeV1,
@@ -279,8 +297,11 @@ struct SenderHardwareAuthorizationPreimageV1 {
 /// Publicly reproducing these fields grants no authority. Qualified hardware must authenticate
 /// `authenticator` under the release-pinned Core-to-hardware verifier and consume
 /// `authorization_nonce` exactly once before committing or releasing state.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-hardware-authorization")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderHardwareAuthorizationV1",
+    frame = "iroha.kagemusha.device.v1.sender-hardware-authorization"
+)]
 pub struct SenderHardwareAuthorizationV1 {
     /// Canonical authorization version.
     pub version: u16,
@@ -461,8 +482,11 @@ fn validate_hardware_authorization_statement(
 }
 
 /// Distinct sender bodies. Variant ordinal is not the ABI operation code.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-command-body")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderCommandBodyV1",
+    frame = "iroha.kagemusha.device.v1.sender-command-body"
+)]
 pub enum SenderCommandBodyV1 {
     /// Prepare one new exact outgoing transition under current native authority.
     Prepare {
@@ -538,8 +562,11 @@ impl SenderCommandBodyV1 {
 
 /// Every single-operation request repeats the outer caller-known operation ID.
 /// For a page it is a query ID, while each returned record retains its own ID.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderCommandV1",
+    frame = "iroha.kagemusha.device.v1.sender-command"
+)]
 pub struct SenderCommandV1 {
     /// Canonical payload version; currently one.
     pub version: u16,
@@ -567,6 +594,7 @@ impl SenderCommandV1 {
     }
 
     /// Validate and encode a bounded canonical body.
+    #[cfg(test)]
     pub fn encode_canonical(&self) -> Result<Vec<u8>> {
         self.validate_shape()?;
         encode(self, SENDER_COMMAND_MAX_BYTES_V1)
@@ -700,8 +728,11 @@ impl SenderCommandV1 {
 
 /// Observed native phase; Missing is represented only by an authenticated absent lookup.
 /// Ordinals are stable wire tags, not permission levels.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-phase")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderPhaseV1",
+    frame = "iroha.kagemusha.device.v1.sender-phase"
+)]
 pub enum SenderPhaseV1 {
     /// Exact preparation and outbox reservation are durably retained.
     Prepared,
@@ -717,8 +748,11 @@ pub enum SenderPhaseV1 {
 
 /// Public durable-index projection. It contains no sealed inputs or private proof state.
 /// Released records retain immutable replay anchors and discard input bytes.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-record")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderRecordV1",
+    frame = "iroha.kagemusha.device.v1.sender-record"
+)]
 pub struct SenderRecordV1 {
     /// Independently generated caller ID persisted before the first native call.
     pub operation_id: [u8; 32],
@@ -813,8 +847,11 @@ impl SenderRecordV1 {
 }
 
 /// Exact final bytes exist only in operation 10's Installed result.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-recovery-item")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderRecoveryItemV1",
+    frame = "iroha.kagemusha.device.v1.sender-recovery-item"
+)]
 pub struct SenderRecoveryItemV1 {
     /// Authenticated native operation-index projection.
     pub record: SenderRecordV1,
@@ -823,8 +860,11 @@ pub struct SenderRecoveryItemV1 {
 }
 
 /// A tombstone-aware native lookup or exact bounded index page.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-reply-body")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderReplyBodyV1",
+    frame = "iroha.kagemusha.device.v1.sender-reply-body"
+)]
 pub enum SenderReplyBodyV1 {
     /// None means an authenticated tombstone-aware native lookup found no operation.
     /// Empty transport output and transport errors must never be converted to None.
@@ -839,8 +879,11 @@ pub enum SenderReplyBodyV1 {
 }
 
 /// Canonical reply authenticated under the current native wallet session.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sender-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderReplyV1",
+    frame = "iroha.kagemusha.device.v1.sender-reply"
+)]
 pub struct SenderReplyV1 {
     /// Canonical payload version; currently one.
     pub version: u16,
@@ -857,18 +900,8 @@ pub struct SenderReplyV1 {
 }
 
 impl SenderReplyV1 {
-    /// Called only after authenticating the complete response and its native context.
-    pub fn decode_canonical_exact(
-        command: &SenderCommandV1,
-        native_context: &SenderWalletContextV1,
-        bytes: &[u8],
-    ) -> Result<Self> {
-        let value: Self = exact(bytes, SENDER_REPLY_MAX_BYTES_V1)?;
-        value.validate_against(command, native_context)?;
-        Ok(value)
-    }
-
     /// Validate and encode a bounded canonical body.
+    #[cfg(test)]
     pub fn encode_canonical(
         &self,
         command: &SenderCommandV1,
@@ -981,64 +1014,6 @@ impl SenderReplyV1 {
         } else {
             ensure(item.canonical_envelope.is_empty())
         }
-    }
-
-    /// Compare the response with the exact native index selection, including its
-    /// end marker. A self-consistent host page cannot prove absence of omitted
-    /// entries. The qualified index must select the bounded prefix atomically.
-    pub fn validate_native_page_selection(
-        &self,
-        command: &SenderCommandV1,
-        native_context: &SenderWalletContextV1,
-        native_revision: u128,
-        expected_entries: &[SenderRecoveryItemV1],
-        has_more: bool,
-    ) -> Result<()> {
-        self.validate_against(command, native_context)?;
-        if self.index_revision != native_revision {
-            return Err(SenderErrorV1::Snapshot);
-        }
-        let SenderReplyBodyV1::Page {
-            entries,
-            next_cursor,
-        } = &self.body
-        else {
-            return Err(SenderErrorV1::Snapshot);
-        };
-        let expected_cursor = if has_more {
-            Some(
-                expected_entries
-                    .last()
-                    .ok_or(SenderErrorV1::Snapshot)?
-                    .record
-                    .operation_id,
-            )
-        } else {
-            None
-        };
-        if entries != expected_entries || *next_cursor != expected_cursor {
-            return Err(SenderErrorV1::Snapshot);
-        }
-        Ok(())
-    }
-
-    /// Match an exact native tombstone-aware lookup at the authenticated revision.
-    /// In particular, an omitted installed record cannot become a Missing result.
-    pub fn validate_native_lookup_selection(
-        &self,
-        command: &SenderCommandV1,
-        native_context: &SenderWalletContextV1,
-        native_revision: u128,
-        expected: Option<&SenderRecoveryItemV1>,
-    ) -> Result<()> {
-        self.validate_against(command, native_context)?;
-        let SenderReplyBodyV1::Lookup(actual) = &self.body else {
-            return Err(SenderErrorV1::Snapshot);
-        };
-        if self.index_revision != native_revision || actual.as_ref() != expected {
-            return Err(SenderErrorV1::Snapshot);
-        }
-        Ok(())
     }
 }
 
@@ -1176,36 +1151,10 @@ pub fn validate_existing_operation_v1(
     }
 }
 
-/// Reject rollback of the stable-wallet index across recovery sessions or hardware
-/// rotations. Both contexts must already be authenticated by the native service.
-pub fn validate_index_progress_v1(
-    previous_context: &SenderWalletContextV1,
-    previous_revision: u128,
-    next_context: &SenderWalletContextV1,
-    next_revision: u128,
-) -> Result<()> {
-    previous_context
-        .validate_retained_against_native(next_context)
-        .map_err(context_error)?;
-    if next_revision < previous_revision {
-        return Err(SenderErrorV1::StateRegression);
-    }
-    Ok(())
-}
-
-/// A later authenticated lookup cannot forget an observed operation or tombstone.
-/// Validate the reply against its command/current context before calling this.
-pub fn validate_lookup_progress_v1(previous: &SenderRecordV1, reply: &SenderReplyV1) -> Result<()> {
-    let SenderReplyBodyV1::Lookup(Some(item)) = &reply.body else {
-        return Err(SenderErrorV1::StateRegression);
-    };
-    previous.validate_shape(&reply.context)?;
-    validate_record_progress_v1(previous, &item.record)
-}
-
 /// Validate monotonic observations across lost returns/restarts. Missing cannot
 /// follow any retained record; terminal tombstones cannot disappear or restart.
 /// This does not authorize any of the transitions it permits observing.
+#[cfg(test)]
 pub fn validate_record_progress_v1(previous: &SenderRecordV1, next: &SenderRecordV1) -> Result<()> {
     previous.validate_shape(&previous.context)?;
     next.validate_shape(&next.context)?;
@@ -1271,197 +1220,6 @@ pub fn validate_record_progress_v1(previous: &SenderRecordV1, next: &SenderRecor
         return Err(SenderErrorV1::Conflict);
     }
     Ok(())
-}
-
-/// Verify the public projection of an actual retained Core preparation.
-/// Credential authentication and the operation-ID index remain the native
-/// session's responsibility; this function never serializes private Core fields.
-pub fn validate_core_preparation_binding_v1(
-    record: &SenderRecordV1,
-    native_context: &SenderWalletContextV1,
-    prepared: &PreparedOutgoingCandidateV1,
-) -> Result<()> {
-    record.validate_shape(native_context)?;
-    ensure(
-        prepared.version == VERSION
-            && prepared.preparation_id == record.preparation_id
-            && prepared.outbox_reservation.reservation_id == record.outbox_reservation_id
-            && prepared.outbox_reservation.operation_kind == record.operation_kind,
-    )?;
-    let hardware = prepared.hardware_statement();
-    let creation = &record.context;
-    ensure(
-        hardware.lane == creation.lane
-            && hardware.predecessor_epoch == creation.hardware_epoch
-            && hardware.successor_epoch == creation.hardware_epoch
-            && hardware.predecessor_device_policy_binding == creation.device_policy_binding
-            && hardware.successor_device_policy_binding == creation.device_policy_binding,
-    )?;
-    validate_core_recovery_view_v1(record, native_context, prepared.recovery_view())
-}
-
-/// Bind an op7/op12 authorization body to the exact retained Core preparation.
-///
-/// This verifies the canonical body and all Core-visible bindings. It deliberately
-/// does not treat the public body or `authorization_id` as authority: qualified
-/// hardware must authenticate `authenticator` under the verifier configuration
-/// committed by `device_policy_binding.hardware_policy_id`, recompute the statement
-/// from its sealed durable record, and consume `authorization_nonce` atomically.
-pub fn validate_core_hardware_authorization_binding_v1(
-    command: &SenderCommandV1,
-    record: &SenderRecordV1,
-    prepared: &PreparedOutgoingCandidateV1,
-) -> Result<()> {
-    validate_existing_operation_v1(command, record)?;
-    validate_core_preparation_binding_v1(record, &command.context, prepared)?;
-    let authorization_bytes = match &command.body {
-        SenderCommandBodyV1::Commit {
-            hardware_authorization,
-            ..
-        }
-        | SenderCommandBodyV1::Release {
-            hardware_authorization,
-            ..
-        } => hardware_authorization,
-        _ => return Err(SenderErrorV1::Binding),
-    };
-    let authorization = SenderHardwareAuthorizationV1::decode_canonical_exact(authorization_bytes)?;
-    let (outcome_id, transition_nullifier) = match prepared.recovery_view() {
-        PreparedOutgoingRecoveryViewV1::Send { output, .. } => {
-            (output.credit_id, output.transition_nullifier)
-        }
-        PreparedOutgoingRecoveryViewV1::Redemption { statement, .. } => {
-            (statement.redemption_id, statement.terminal_nullifier)
-        }
-    };
-    let reservation_commitment = prepared
-        .outbox_reservation
-        .canonical_commitment()
-        .map_err(|_| SenderErrorV1::Binding)?;
-    ensure(
-        authorization.hardware_transition_statement == prepared.hardware_statement()
-            && authorization.prepared_one_use_authorization_digest
-                == prepared.prepared_one_use_authorization_digest
-            && authorization.outbox_reservation_commitment == reservation_commitment
-            && authorization.outcome_id == outcome_id
-            && authorization.outcome_id == record.outcome_id
-            && authorization.transition_nullifier == transition_nullifier,
-    )
-}
-
-/// Compare only retained public Core material; a recovery view is not proof authority.
-pub fn validate_core_recovery_view_v1(
-    record: &SenderRecordV1,
-    native_context: &SenderWalletContextV1,
-    view: PreparedOutgoingRecoveryViewV1<'_>,
-) -> Result<()> {
-    record.validate_shape(native_context)?;
-    let inputs = record.inputs.as_ref().ok_or(SenderErrorV1::Binding)?;
-    match (inputs, view) {
-        (
-            SenderPublicInputsV1::SendSplit { .. },
-            PreparedOutgoingRecoveryViewV1::Send {
-                request,
-                lifecycle,
-                output,
-                encrypted_credit,
-            },
-        ) => {
-            let r = inputs.send_request()?;
-            validate_context_lifecycle(&record.context, lifecycle)?;
-            output
-                .validate_shape_against(&r)
-                .map_err(|_| SenderErrorV1::PublicShape)?;
-            // Bind the retained exact ciphertext rather than trusting a host hash.
-            ensure(
-                lifecycle.ciphertext_digest == kagemusha_ciphertext_digest_v1(encrypted_credit),
-            )?;
-            ensure(
-                &r == request
-                    && lifecycle.operation_kind == record.operation_kind
-                    && lifecycle.request_id == r.request_id
-                    && lifecycle.receiver_lane_commitment == r.hardware_credential.lane_commitment
-                    && lifecycle.credit_id == record.outcome_id
-                    && output.credit_id == record.outcome_id,
-            )
-        }
-        (
-            SenderPublicInputsV1::RedeemSplit {
-                amount,
-                beneficiary,
-            },
-            PreparedOutgoingRecoveryViewV1::Redemption { statement, .. },
-        ) => {
-            validate_context_lifecycle(&record.context, &statement.lifecycle)?;
-            statement
-                .validate_shape()
-                .map_err(|_| SenderErrorV1::PublicShape)?;
-            ensure(
-                statement.lifecycle.operation_kind == record.operation_kind
-                    && statement.amount == *amount
-                    && &statement.beneficiary == beneficiary
-                    && statement.redemption_id == record.outcome_id,
-            )
-        }
-        _ => Err(SenderErrorV1::Binding),
-    }
-}
-
-/// Compare installed bytes and immutable selectors with the actual durable Core
-/// value. Core remains responsible for verification and atomic installation.
-pub fn validate_core_installed_binding_v1(
-    record: &SenderRecordV1,
-    native_context: &SenderWalletContextV1,
-    durable: &DurableOutgoingEnvelopeV1,
-) -> Result<()> {
-    ensure(record.phase == SenderPhaseV1::Installed)?;
-    validate_core_preparation_binding_v1(
-        record,
-        native_context,
-        &durable.committed.candidate.prepared,
-    )?;
-    ensure(
-        record.candidate_digest == Some(durable.committed.candidate.candidate_envelope_digest)
-            && record.commit_certificate_digest
-                == Some(durable.committed.commit_certificate_digest)
-            && record.envelope_digest == Some(durable.envelope_digest),
-    )?;
-    validate_installed_bytes(record, durable.retry_bytes())
-}
-
-/// Bind a public redemption-release selector to Core's sealed in-process authority.
-///
-/// This function deliberately requires a borrowed non-serializable capability.
-/// Decoding a matching terminal receipt or computing its digest is never enough
-/// to authorize operation 12. Core consumes the same capability when it
-/// atomically releases the indexed redemption outbox entry.
-pub fn validate_core_redemption_release_binding_v1(
-    command: &SenderCommandV1,
-    record: &SenderRecordV1,
-    verified: &VerifiedKagemushaRedemptionReleaseV1,
-) -> Result<[u8; 32]> {
-    validate_existing_operation_v1(command, record)?;
-    let SenderCommandBodyV1::Release {
-        terminal_receipt: SenderTerminalReceiptV1::RedemptionSettlement(receipt),
-        ..
-    } = &command.body
-    else {
-        return Err(SenderErrorV1::Binding);
-    };
-    ensure(record.operation_kind == KagemushaOperationKindV1::RedeemSplit)?;
-    if receipt != verified.terminal_receipt()
-        || command.operation_id != verified.operation_id()
-        || record.operation_id != verified.operation_id()
-        || record.outcome_id != verified.redemption_id()
-        || record.envelope_digest != Some(verified.envelope_digest())
-        || receipt
-            .canonical_digest()
-            .map_err(|_| SenderErrorV1::PublicShape)?
-            != verified.terminal_receipt_digest()
-    {
-        return Err(SenderErrorV1::Conflict);
-    }
-    Ok(verified.terminal_receipt_digest())
 }
 
 struct EnvelopeMetadata {
@@ -1897,6 +1655,40 @@ pub(crate) fn canonical_command_body_for_tests(operation: u8) -> Option<Vec<u8>>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sender_selector_frames_keep_root_projection_and_container_identity_distinct() {
+        let selector = SenderPreparationSelectorV1 {
+            inputs_digest: [7; 32],
+            preparation_id: [9; 32],
+        };
+        let frame = norito::to_bytes(&selector).unwrap();
+        let header = norito::core::Header::read(&mut &frame[..]).unwrap();
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name(
+                "iroha.kagemusha.device.v1.sender-preparation-selector"
+            )
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<SenderPreparationSelectorV1>(&frame).unwrap(),
+            selector
+        );
+
+        let selectors = vec![selector];
+        let frame = norito::to_bytes(&selectors).unwrap();
+        let header = norito::core::Header::read(&mut &frame[..]).unwrap();
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name(
+                "alloc::vec::Vec<connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderPreparationSelectorV1>"
+            )
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<Vec<SenderPreparationSelectorV1>>(&frame).unwrap(),
+            selectors
+        );
+    }
 
     #[test]
     fn sender_context_and_preimages_match_core_and_shared_archive() {

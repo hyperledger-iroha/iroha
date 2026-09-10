@@ -230,8 +230,6 @@ const MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1: usize =
     MAX_NATIVE_TRANSACTION_PAYLOAD_BYTES_V1 + 1024 * 1024;
 const MAX_NATIVE_TRANSACTION_FRAME_BYTES_V1: usize =
     MAX_NATIVE_SIGNED_TRANSACTION_BYTES_V1 + 128 * 1024;
-const MAX_STREAM_TOKEN_SIGNING_PAYLOAD_BYTES_V1: usize =
-    sorafs_manifest::STREAM_TOKEN_MAX_WIRE_BYTES_V1;
 const MAX_STREAM_TOKEN_FRAME_BYTES_V1: usize = 8 * 1024;
 const MAX_APPEAL_FINANCE_TRANSACTION_BYTES_V1: usize =
     sorafs_node::appeal_finance_transaction_forwarder::
@@ -997,7 +995,7 @@ impl ProviderBindingWireV1 {
                     authorization_lifetime_blocks: bindings.authorization_lifetime_blocks(),
                 },
             ),
-            stream_token_signer_public_key: binding.stream_token_signer_public_key(),
+            stream_token_hardware_binding: binding.stream_token_hardware_binding().cloned(),
             stream_token_gateway_admission_qualification: binding
                 .stream_token_gateway_admission_qualification(),
             stream_token_gateway_admission_max_pending: binding
@@ -1253,7 +1251,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             exact.authorization_lifetime_blocks,
         )
         .map_err(|_| BrokerError::BindingMismatch)?;
-        if binding.stream_token_signer_public_key.is_some()
+        if binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1307,7 +1305,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         || binding
             .stream_token_gateway_admission_reconcile_max_items
             .is_some();
-    let has_new_role_metadata = binding.stream_token_signer_public_key.is_some()
+    let has_new_role_metadata = binding.stream_token_hardware_binding.is_some()
         || has_stream_token_gateway_metadata
         || binding.appeal_finance_signer_binding.is_some()
         || binding.appeal_finance_checkpoint_binding.is_some()
@@ -1317,9 +1315,11 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         || binding.por_replay_archive_proof_limits.is_some()
         || binding.potr_runtime_binding.is_some();
     if stream_token {
-        let public_key = required_binding_value!(binding, stream_token_signer_public_key);
-        if public_key == [0; 32]
-            || iroha_crypto::ed25519_parse_public_key(&public_key).is_err()
+        let hardware = required_binding_ref!(binding, stream_token_hardware_binding);
+        if hardware.validate().is_err()
+            || hardware.custody().runtime_handle != binding.handle
+            || Some(hardware.custody().key_revision) != binding.revision
+            || Some(hardware.custody().policy_digest) != binding.policy_digest
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1346,7 +1346,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
                 binding.stream_token_gateway_admission_reconcile_max_items,
                 Some(1..=iroha_torii::sorafs::STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1)
             )
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1366,7 +1366,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || exact
                 .revoked_at_block_height
                 .is_some_and(|height| height <= exact.valid_from_block_height)
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
             || binding.pop_credential_runtime_binding.is_some()
@@ -1386,7 +1386,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || checkpoint_max_bytes
                 > u64::try_from(MAX_BROKER_APPEAL_FINANCE_CHECKPOINT_BYTES_V1)
                     .map_err(|_| BrokerError::Protocol)?
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.pop_credential_runtime_binding.is_some()
             || binding.por_replay_archive_binding.is_some()
@@ -1413,7 +1413,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || exact.wallet_recipient_public_key_digest == [0; 32]
             || exact.issuer_public_key == [0; 32]
             || iroha_crypto::ed25519_parse_public_key(&exact.issuer_public_key).is_err()
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1447,7 +1447,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
             || limits.max_successor_proof_bytes
                 > iroha_config::parameters::defaults::sorafs::storage::por_replay_archive::
                     MAX_SUCCESSOR_PROOF_BYTES_LIMIT
-            || binding.stream_token_signer_public_key.is_some()
+            || binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -1461,7 +1461,7 @@ fn validate_wire_binding(binding: &ProviderBindingWireV1) -> Result<(), BrokerEr
         let runtime = required_binding_ref!(binding, potr_runtime_binding);
         validate_potr_runtime_wire(runtime)?;
         potr_provider_binding_from_wire(binding)?;
-        if binding.stream_token_signer_public_key.is_some()
+        if binding.stream_token_hardware_binding.is_some()
             || binding.appeal_finance_signer_binding.is_some()
             || binding.appeal_finance_checkpoint_binding.is_some()
             || binding.appeal_finance_checkpoint_max_bytes.is_some()
@@ -3476,4 +3476,5 @@ impl_broker_debug_fields!(BillingCompareAndSwapEpochRequestWireV1 as value {
     "checkpoint_len" => value.next.checkpoint_bytes.len(),
 } => finish_non_exhaustive);
 include!("protocol_codec_and_bindings.rs");
+include!("stream_token_hardware_protocol.rs");
 include!("protocol_operation_validation.rs");

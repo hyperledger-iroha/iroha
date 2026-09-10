@@ -5,6 +5,7 @@ pub mod cache;
 mod cli;
 mod command;
 mod compiler;
+mod compiler_identity;
 mod graph;
 mod local_file;
 mod lockfile;

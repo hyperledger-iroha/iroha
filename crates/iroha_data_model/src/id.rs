@@ -1,5 +1,4 @@
 pub use self::model::*;
-use crate::error::ParseError;
 use crate::{
     account, asset, block::BlockHeader, domain, nexus, nft, parameter, peer, permission, repo,
     role, rwa, trigger,
@@ -8,6 +7,7 @@ use derive_more::Display;
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::{EnumRef, model};
 use iroha_macro::FromVariant;
+use iroha_model_base::error::ParseError;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use norito::core::{DecodeFromSlice, Error as NoritoError};

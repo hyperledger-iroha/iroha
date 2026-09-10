@@ -62,7 +62,6 @@ use iroha_data_model::{
     },
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
-    state_path::StatePath,
     transaction::{
         Executable, ExecutableBatchItem, FeeChargeKind, FeeChargeLimit, FeePaymentIntent,
         SignedTransaction, executable::ContractInvocation, signed::TransactionPayload,
@@ -73,6 +72,7 @@ use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
 };
 use iroha_logger::{debug, trace, warn};
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -7926,11 +7926,15 @@ where
     }
     Ok(ExecutorValidationReport { verdict, gas_used })
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::executor::MigrationResultPayload")]
 #[derive(Debug, Decode, Encode)]
 enum MigrationResultPayload {
     Ok(ExecutorDataModel),
     Err(ValidationFail),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::executor::MigrationUnitPayload")]
 #[derive(Debug, Decode, Encode)]
 enum MigrationUnitPayload {
     Ok(()),
@@ -11399,7 +11403,6 @@ mod tests {
             Grant, SetAssetTransferAvailability, SetAssetTransferControl,
             transfer::{TransferAssetBatch, TransferAssetBatchEntry},
         },
-        name::Name,
         parameter::{CustomParameter, CustomParameterId},
         prelude::*,
         query::{QueryRequest, SingularQueryBox, prelude::FindParameters},
@@ -11409,6 +11412,7 @@ mod tests {
     use iroha_executor_data_model::isi::multisig::{
         MultisigApprove, MultisigCancel, MultisigPropose, MultisigRegister, MultisigSpec,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,

@@ -4,6 +4,7 @@ use integration_tests::sandbox;
 use iroha::{client::QueryError, data_model::prelude::*};
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_executor_data_model::permission::account::CanRegisterAccount;
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use std::{collections::BTreeMap, str::FromStr};

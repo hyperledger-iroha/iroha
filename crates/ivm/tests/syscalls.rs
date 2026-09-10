@@ -5,7 +5,8 @@ use iroha_crypto::{
         digest::{Update as Blake2Update, VariableOutput},
     },
 };
-use iroha_data_model::{name::Name, prelude::AccountId};
+use iroha_data_model::prelude::AccountId;
+use iroha_model_base::name::Name;
 use ivm::{
     ExecutionSummary, IVM, IVMHost, PointerType, VMError, encoding, host::DefaultHost, instruction,
     syscalls,

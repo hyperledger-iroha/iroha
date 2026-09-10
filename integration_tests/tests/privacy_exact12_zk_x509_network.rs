@@ -16,7 +16,7 @@
 //! -- --exact --nocapture --test-threads=1
 //! ```
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::rebind_blocking_client};
 use iroha::{
     blocking::Client,
     crypto::HashOf,
@@ -35,7 +35,7 @@ use iroha::{
         metadata::Metadata,
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
-        prelude::{Name, QueryBuilderExt},
+        prelude::QueryBuilderExt,
         privacy::{
             IrohaZkX509StarkP256StatementV1, PrivacyActiveLifecycleV1,
             PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
@@ -67,7 +67,8 @@ use iroha_core::{
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_model_base::name::Name;
+use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
 use std::{
     fs,
     num::{NonZeroU32, NonZeroU64},
@@ -132,11 +133,15 @@ fn require_authoritative_network_mode() -> Result<()> {
     Ok(())
 }
 fn bounded_client(client: Client) -> Client {
-    integration_tests::sync::rebind_blocking_client(&client, |builder| {
-        builder.transaction_status_timeout = SUBMISSION_TIMEOUT;
-        builder.torii_request_timeout = Duration::from_secs(30);
-        builder.transaction_ttl = Some(ACTION_TTL);
+    rebind_blocking_client(&client, |client| {
+        client.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        client.torii_request_timeout = Duration::from_secs(30);
+        client.transaction_ttl = Some(ACTION_TTL);
     })
+}
+async fn privacy_capabilities(client: &Client) -> Result<PrivacyExact12CapabilityManifestV1> {
+    let client = client.clone();
+    read_on_dedicated_thread(move || client.client().get_privacy_capabilities()).await
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -201,11 +206,13 @@ fn authenticated_network_prover_timeout(
     );
     Ok(proof_timeout)
 }
-fn latest_committed_block_timestamp_ms(client: &Client) -> Result<u64> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query trusted block timestamp for native ZK-X509 action")?;
+async fn latest_committed_block_timestamp_ms(client: &Client) -> Result<u64> {
+    let read_client = client.clone();
+    let blocks = read_on_dedicated_thread(move || {
+        Ok(read_client.client().query(FindBlocks).execute_all()?)
+    })
+    .await
+    .wrap_err("query trusted block timestamp for native ZK-X509 action")?;
     let latest = blocks
         .iter()
         .max_by_key(|block| block.header().height().get())
@@ -213,12 +220,12 @@ fn latest_committed_block_timestamp_ms(client: &Client) -> Result<u64> {
     u64::try_from(latest.header().creation_time().as_millis())
         .map_err(|_| eyre!("trusted block timestamp does not fit u64 milliseconds"))
 }
-fn require_live_x509_submission_window(
+async fn require_live_x509_submission_window(
     client: &Client,
     statement: &IrohaZkX509StarkP256StatementV1,
     context: &str,
 ) -> Result<()> {
-    let current_millis = latest_committed_block_timestamp_ms(client)?;
+    let current_millis = latest_committed_block_timestamp_ms(client).await?;
     let not_before_millis = statement
         .presentation_not_before_unix_seconds
         .checked_mul(1_000)
@@ -269,11 +276,13 @@ fn single_zk_x509_proof_bytes<'a>(
         )),
     }
 }
-fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query committed blocks for canonical ZK-X509 genesis binding")?;
+async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
+    let read_client = client.clone();
+    let blocks = read_on_dedicated_thread(move || {
+        Ok(read_client.client().query(FindBlocks).execute_all()?)
+    })
+    .await
+    .wrap_err("query committed blocks for canonical ZK-X509 genesis binding")?;
     let genesis = blocks
         .iter()
         .filter(|block| block.header().prev_block_hash().is_none())
@@ -309,11 +318,16 @@ struct TipObservation {
     block: ExactCommittedBlock,
     contains_transaction: bool,
 }
-fn query_tip(client: &Client, transaction: Option<&SignedTransaction>) -> Result<TipObservation> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err_with(|| format!("query committed blocks from {}", client.client().endpoint()))?;
+async fn query_tip(
+    client: &Client,
+    transaction: Option<&SignedTransaction>,
+) -> Result<TipObservation> {
+    let read_client = client.clone();
+    let blocks = read_on_dedicated_thread(move || {
+        Ok(read_client.client().query(FindBlocks).execute_all()?)
+    })
+    .await
+    .wrap_err_with(|| format!("query committed blocks from {}", client.client().endpoint()))?;
     let tip = blocks
         .iter()
         .max_by_key(|block| block.header().height().get())
@@ -376,7 +390,7 @@ async fn wait_for_all_common_tip(
         let mut tips = Vec::with_capacity(clients.len());
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match query_tip(client, None) {
+            match query_tip(client, None).await {
                 Ok(observed) => {
                     tips.push((index, observed.block));
                     last_observed.push(format!("peer {index}: {:?}", observed.block));
@@ -426,7 +440,7 @@ async fn wait_for_all_signed_tip(
         let mut matching = 0_usize;
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match query_tip(client, Some(transaction)) {
+            match query_tip(client, Some(transaction)).await {
                 Ok(observed) => {
                     if observed.contains_transaction && canonical.is_none() {
                         canonical = Some(observed.block);
@@ -473,14 +487,14 @@ async fn wait_for_all_signed_tip(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn assert_all_exact_tip(
+async fn assert_all_exact_tip(
     clients: &[Client],
     expected: ExactCommittedBlock,
     context: &str,
 ) -> Result<()> {
     ensure!(!clients.is_empty(), "{context}: validator list is empty");
     for (index, client) in clients.iter().enumerate() {
-        let observed = query_tip(client, None)?.block;
+        let observed = query_tip(client, None).await?.block;
         ensure!(
             observed == expected,
             "{context}: peer {index} changed exact tip from {expected:?} to {observed:?}"
@@ -525,11 +539,12 @@ async fn submit_signed_transaction(
     let transaction = transaction.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_and_wait(&transaction)),
+        client
+            .account_client()
+            .submit_transaction_and_wait(&transaction),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
-    .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
 async fn submit_expecting_rejection(
@@ -557,71 +572,79 @@ async fn submit_instruction(
     );
     Ok((transaction, hash))
 }
-fn exact_committed_transaction(
+async fn exact_committed_transaction(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<Option<CommittedTransaction>> {
-    let expected_hash = transaction.hash_as_entrypoint();
-    let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let expected_entrypoint_bytes = norito::encode_canonical(&expected_entrypoint)
-        .wrap_err("encode expected finalized transaction entrypoint")?;
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
-    let mut matching = transactions
-        .iter()
-        .filter(|committed| committed.entrypoint_hash() == &expected_hash);
-    let Some(committed) = matching.next() else {
-        return Ok(None);
-    };
-    ensure!(
-        matching.next().is_none(),
-        "finalized transaction query returned the same entrypoint hash more than once"
-    );
-    ensure!(
-        committed.entrypoint() == &expected_entrypoint
-            && norito::encode_canonical(committed.entrypoint())
-                .wrap_err("encode observed finalized transaction entrypoint")?
-                == expected_entrypoint_bytes,
-        "entrypoint hash matched transaction bytes that differ from the exact signed entrypoint"
-    );
-    ensure!(
-        committed.result_hash() == &committed.result().hash(),
-        "finalized transaction result hash differs from its full typed result"
-    );
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query exact finalized transaction carrier block")?;
-    let mut carriers = blocks
-        .iter()
-        .filter(|block| block.hash() == *committed.block_hash());
-    let carrier: &SignedBlock = carriers
-        .next()
-        .ok_or_else(|| eyre!("exact finalized transaction carrier block is absent"))?;
-    ensure!(
-        carriers.next().is_none(),
-        "finalized block query returned the exact carrier hash more than once"
-    );
-    ensure!(
-        committed.verify_inclusion_in_block(carrier),
-        "finalized transaction entrypoint/result proofs do not match its exact carrier block"
-    );
-    Ok(Some(committed.clone()))
+    let client = client.clone();
+    let transaction = transaction.clone();
+    read_on_dedicated_thread(move || {
+        let expected_hash = transaction.hash_as_entrypoint();
+        let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
+        let expected_entrypoint_bytes = norito::encode_canonical(&expected_entrypoint)
+            .wrap_err("encode expected finalized transaction entrypoint")?;
+        let transactions = client
+            .client()
+            .query(FindTransactions::new())
+            .execute_all()
+            .wrap_err("query finalized transactions")?;
+        let mut matching = transactions
+            .iter()
+            .filter(|committed| committed.entrypoint_hash() == &expected_hash);
+        let Some(committed) = matching.next() else {
+            return Ok(None);
+        };
+        ensure!(
+            matching.next().is_none(),
+            "finalized transaction query returned the same entrypoint hash more than once"
+        );
+        ensure!(
+            committed.entrypoint() == &expected_entrypoint
+                && norito::encode_canonical(committed.entrypoint())
+                    .wrap_err("encode observed finalized transaction entrypoint")?
+                    == expected_entrypoint_bytes,
+            "entrypoint hash matched transaction bytes that differ from the exact signed entrypoint"
+        );
+        ensure!(
+            committed.result_hash() == &committed.result().hash(),
+            "finalized transaction result hash differs from its full typed result"
+        );
+        let blocks = client
+            .client()
+            .query(FindBlocks)
+            .execute_all()
+            .wrap_err("query exact finalized transaction carrier block")?;
+        let mut carriers = blocks
+            .iter()
+            .filter(|block| block.hash() == *committed.block_hash());
+        let carrier: &SignedBlock = carriers
+            .next()
+            .ok_or_else(|| eyre!("exact finalized transaction carrier block is absent"))?;
+        ensure!(
+            carriers.next().is_none(),
+            "finalized block query returned the exact carrier hash more than once"
+        );
+        ensure!(
+            committed.verify_inclusion_in_block(carrier),
+            "finalized transaction entrypoint/result proofs do not match its exact carrier block"
+        );
+        Ok(Some(committed.clone()))
+    })
+    .await
 }
-fn exact_transaction_result(
+async fn exact_transaction_result(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<Option<bool>> {
-    Ok(exact_committed_transaction(client, transaction)?
+    Ok(exact_committed_transaction(client, transaction)
+        .await?
         .map(|committed| committed.result().0.is_ok()))
 }
-fn exact_applied_transaction_visible(
+async fn exact_applied_transaction_visible(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<bool> {
-    match exact_transaction_result(client, transaction)? {
+    match exact_transaction_result(client, transaction).await? {
         Some(true) => Ok(true),
         Some(false) => Err(eyre!("expected applied transaction finalized as rejected")),
         None => Ok(false),
@@ -638,7 +661,7 @@ async fn wait_for_transaction_on_peers(
         let mut visible = 0_usize;
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match exact_applied_transaction_visible(client, transaction) {
+            match exact_applied_transaction_visible(client, transaction).await {
                 Ok(true) => {
                     visible += 1;
                     last_observed.push(format!("peer {index}: exact transaction visible"));
@@ -671,7 +694,7 @@ async fn wait_for_transaction_result_on_peers(
         let mut matching = 0_usize;
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match exact_transaction_result(client, transaction) {
+            match exact_transaction_result(client, transaction).await {
                 Ok(Some(success)) if success == expected_success => {
                     matching += 1;
                     last_observed.push(format!("peer {index}: expected result visible"));
@@ -696,7 +719,7 @@ async fn wait_for_transaction_result_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn assert_all_exact_duplicate_certificate_nullifier_results(
+async fn assert_all_exact_duplicate_certificate_nullifier_results(
     clients: &[Client],
     transaction: &SignedTransaction,
     context: &str,
@@ -704,9 +727,11 @@ fn assert_all_exact_duplicate_certificate_nullifier_results(
     ensure!(!clients.is_empty(), "{context}: validator list is empty");
     let mut canonical: Option<(HashOf<TransactionResult>, TransactionResult)> = None;
     for (index, client) in clients.iter().enumerate() {
-        let committed = exact_committed_transaction(client, transaction)?.ok_or_else(|| {
-            eyre!("{context}: peer {index} omitted the exact finalized transaction")
-        })?;
+        let committed = exact_committed_transaction(client, transaction)
+            .await?
+            .ok_or_else(|| {
+                eyre!("{context}: peer {index} omitted the exact finalized transaction")
+            })?;
         let observed_hash = committed.result_hash().clone();
         let observed_result = committed.result().clone();
         match &observed_result {
@@ -815,7 +840,7 @@ async fn wait_for_available_snapshots(
         let mut matching = Vec::with_capacity(clients.len());
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.get_privacy_capabilities() {
+            match privacy_capabilities(&client).await {
                 Ok(snapshot) => match assert_zk_x509_capability(
                     &snapshot,
                     expected_height,
@@ -870,17 +895,17 @@ async fn wait_for_available_snapshots(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn next_incoming_height(client: &Client) -> Result<u64> {
-    client
-        .get_privacy_capabilities()
+async fn next_incoming_height(client: &Client) -> Result<u64> {
+    privacy_capabilities(&client)
+        .await
         .wrap_err("query committed height before ZK-X509 governance transaction")?
         .committed_height
         .checked_add(1)
         .ok_or_else(|| eyre!("incoming ZK-X509 governance height overflowed"))
 }
 async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
-    let start = client
-        .get_privacy_capabilities()
+    let start = privacy_capabilities(&client)
+        .await
         .wrap_err("query height before deterministic ZK-X509 activation advance")?
         .committed_height;
     ensure!(
@@ -906,8 +931,8 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
             .await?;
         }
     }
-    let observed = client
-        .get_privacy_capabilities()
+    let observed = privacy_capabilities(&client)
+        .await
         .wrap_err("query height after deterministic ZK-X509 activation advance")?
         .committed_height;
     ensure!(
@@ -930,7 +955,8 @@ async fn advance_to_semantic_base_after_crl_second(
         clients,
         semantic_base,
         "native ZK-X509 semantic-time advance must start from one all-four exact tip",
-    )?;
+    )
+    .await?;
     if semantic_base.creation_time_ms / 1_000 > predecessor_this_update_unix_seconds {
         return Ok(semantic_base);
     }
@@ -1075,7 +1101,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
         let client = all_clients[0].clone();
-        let genesis_hash = canonical_genesis_hash(&client)?;
+        let genesis_hash = canonical_genesis_hash(&client).await?;
         ensure!(
             client.client().network_id().as_bytes() == &genesis_hash,
             "client network ID is not derived from the canonical genesis hash"
@@ -1093,7 +1119,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "native ZK-X509 governance permission convergence",
         )
         .await?;
-        let proposed_at_height = next_incoming_height(&client)?;
+        let proposed_at_height = next_incoming_height(&client).await?;
         let activate_at_height = proposed_at_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
             .ok_or_else(|| eyre!("native ZK-X509 activation height overflowed"))?;
@@ -1156,7 +1182,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             "exact active ZK-X509 capability row",
         )
         .await?;
-        let trusted_block_timestamp_ms = latest_committed_block_timestamp_ms(&client)?;
+        let trusted_block_timestamp_ms = latest_committed_block_timestamp_ms(&client).await?;
         let creation_time = now_duration()?;
         let action_context = PrivacyReleaseTransactionContextV1 {
             network_id: *client.client().network_id(),
@@ -1279,7 +1305,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &client,
             &actions.statement,
             "pre-submit malformed native ZK-X509 control",
-        )?;
+        ).await?;
         let malformed_error = submit_expecting_rejection(
             &client,
             &actions.malformed_transaction,
@@ -1328,7 +1354,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &client,
             &actions.statement,
             "pre-submit canonical native ZK-X509 action",
-        )?;
+        ).await?;
         let submitted_hash = submit_signed_transaction(
             &client,
             &actions.canonical_transaction,
@@ -1364,8 +1390,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         )
         .await?;
         for (index, replay_client) in healthy_clients.iter().enumerate() {
-            let replay_error = replay_client
-                .submit_transaction(&actions.canonical_transaction)
+            let replay_error = timeout(SUBMISSION_TIMEOUT, replay_client.account_client().submit_transaction(&actions.canonical_transaction)).await.map_err(|_| eyre!("pre-restart native ZK-X509 replay to peer {index} submission exceeded {SUBMISSION_TIMEOUT:?}"))?
                 .wrap_err_with(|| {
                     format!("submit exact native ZK-X509 replay to healthy peer {index}")
                 })
@@ -1379,7 +1404,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
                 &healthy_clients,
                 canonical_action_block,
                 &format!("pre-restart replay through peer {index} must not advance any validator"),
-            )?;
+            ).await?;
         }
         let (catch_up_transaction, _) = submit_instruction(
             &client,
@@ -1666,7 +1691,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &restarted_client,
             &semantic_replay.statement,
             "pre-submit fresh post-restart native ZK-X509 semantic replay",
-        )?;
+        ).await?;
         let semantic_replay_error = submit_expecting_rejection(
             &restarted_client,
             &semantic_replay.transaction,
@@ -1711,12 +1736,12 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
             &recovered_clients,
             &semantic_replay.transaction,
             "fresh native ZK-X509 duplicate-nullifier exact result identity",
-        )?;
+        ).await?;
         assert_all_exact_tip(
             &recovered_clients,
             semantic_rejection_block,
             "fresh semantic replay rejection must leave every validator at its one exact result tip",
-        )?;
+        ).await?;
         let (successor_transaction, _) = submit_instruction(
             &restarted_client,
             Log::new(
@@ -1768,8 +1793,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         )
         .await?;
         for (index, replay_client) in recovered_clients.iter().enumerate() {
-            let post_restart_replay_error = replay_client
-                .submit_transaction(&actions.canonical_transaction)
+            let post_restart_replay_error = timeout(SUBMISSION_TIMEOUT, replay_client.account_client().submit_transaction(&actions.canonical_transaction)).await.map_err(|_| eyre!("post-restart native ZK-X509 replay to peer {index} submission exceeded {SUBMISSION_TIMEOUT:?}"))?
                 .wrap_err_with(|| format!("submit exact native ZK-X509 replay to peer {index}"))
                 .expect_err("post-restart peer accepted exact native ZK-X509 replay");
             ensure!(
@@ -1783,7 +1807,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
                 &format!(
                     "post-restart replay through peer {index} must not advance any validator"
                 ),
-            )?;
+            ).await?;
         }
         wait_for_transaction_on_peers(
             &recovered_clients,
@@ -1793,7 +1817,7 @@ async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_resta
         .await?;
         for (index, recovered_client) in recovered_clients.iter().enumerate() {
             ensure!(
-                canonical_genesis_hash(recovered_client)? == genesis_hash,
+                canonical_genesis_hash(recovered_client).await? == genesis_hash,
                 "post-restart peer {index} derived a different canonical genesis hash"
             );
         }

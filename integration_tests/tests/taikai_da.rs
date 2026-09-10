@@ -24,7 +24,7 @@ use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
     canonical_network_request_signature_message, signature_header_value,
 };
-use norito::json::{self, Value};
+use norito::json;
 use reqwest::{Client, Response, StatusCode};
 use std::{
     path::Path,
@@ -51,14 +51,6 @@ const META_TAIKAI_INGEST_NODE_ID: &str = "taikai.instrumentation.ingest_node_id"
 const META_SSM: &str = "taikai.ssm";
 const TEST_RESOLUTION: &str = "1920x1080";
 const TEST_PAYLOAD: &[u8] = b"taikai-da-segment-fixture";
-fn value_for(metadata: &ExtraMetadata, key: &str) -> String {
-    let entry = metadata
-        .items
-        .iter()
-        .find(|entry| entry.key == key)
-        .unwrap_or_else(|| panic!("missing metadata entry `{key}`"));
-    String::from_utf8(entry.value.clone()).expect("utf8 metadata value")
-}
 #[tokio::test]
 async fn taikai_video_segments_require_resolution_metadata() -> Result<()> {
     let manifest_dir = tempdir()?;

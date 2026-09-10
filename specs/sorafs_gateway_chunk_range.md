@@ -55,64 +55,34 @@ Logs:
 
 ## Token Signing & Rotation
 
-- **Configuration and custody.** Enable issuance only in the node TOML and pin
-  the runtime signer by a non-secret handle and its exact Ed25519 public key:
+- **Configuration and custody.** Use the complete
+  [public-pin template](sorafs/snippets/stream_token_hardware_binding.toml) and
+  [hardware custody contract](sorafs/stream_token_hardware_custody.md). The nested
+  `hardware` group requires signer, independent attester and independent observer
+  pins; `hardware.key_revision` supplies the sole checked token generation.
+  There is no environment-variable enablement or signing-seed path. The key is
+  generated inside qualified hardware and must never be exportable or previously
+  exported. Credentials and sessions remain runtime-only.
+- **Startup and issuance.** Separate hardware and observer clients and an independent
+  approved full custody anchor are mandatory. Fresh signed current observations
+  bind the provider-scoped identity, phase, challenge and finalized floor; the
+  issuer retains the exact body association privately. Completed observations
+  additionally bind the exact body, original custody, durable operation and receipt.
+  Only final `BeforeRelease` evidence, local Core finality and current
+  expiry checks allow a token to leave. An ambiguous Sign permits one read-only
+  recovery of the retained operation and never another Sign.
+- **Distribution and pinning.** Each provider descriptor pins one strong Ed25519
+  public key from authenticated deployment inventory and verifies its token before
+  HTTP. Compare `X-SoraFS-Verifying-Key` with that approved key; a key returned
+  beside a token is not an independent trust anchor.
+- **Rotation and audit.** Follow the contract's governed hardware activation and
+  terminal revocation fences. Switch the descriptor's `gateway-key` and token
+  atomically. Preserve public fingerprints, generations and approved custody/policy
+  digests; do not retain key material or invent a multi-key fallback.
 
-  ```toml
-  [sorafs.storage.stream_tokens]
-  enabled = true
-  signer_handle = "signer://prod/stream-token/v4"
-  signer_public_key_hex = "<64-lowercase-hex-characters>"
-  signer_revision = 4
-  signer_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
-  admission_provider_handle = "sealed-cas:prod/stream-token/admission/v1"
-  admission_provider_revision = 7
-  admission_provider_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
-  key_version = 4
-  ```
-
-  There is no environment-variable enablement or signing-seed path. The private
-  key remains encrypted and runtime-only in the external software signer, and
-  its authenticated session is supplied only to the runtime-injected adapter. It must never
-  appear in configuration, files, logs, or readiness artefacts.
-- **Startup binding.** An enabled issuer requires all four configured public
-  signer fields and an injected signer. Startup probes twice and fails closed
-  unless the adapter reports the exact configured handle, public key, non-zero
-  revision, and non-zero public-policy digest without drift. It also rejects
-  malformed or weak Ed25519 keys and stale, substituted, revoked, or test-marked
-  providers. A handle is an identifier, not a place to embed credentials.
-  Disabling issuance in TOML does not permit an injected signer to activate it.
-- **Signing boundary.** Torii revalidates all four public identity fields before
-  and after sending the canonical domain-separated payload to the injected
-  signer and accepts only a raw 64-byte Ed25519 signature. It assembles
-  `StreamTokenV1` and strictly verifies the returned signature against
-  `signer_public_key_hex` before releasing the token. Qualification drift, an
-  unavailable/refusing signer, or any malformed, wrong-key, or non-verifying
-  output fails closed and must produce only a bounded, payload-free failure
-  class.
-- **Distribution.** Orchestrators receive the corresponding 32-byte public key
-  through authenticated provider deployment inventory and pass its 64-character
-  hex encoding as `gateway-key`. The issuance response also reports
-  `X-SoraFS-Verifying-Key`, but a key delivered beside the token it verifies is
-  not a trust anchor; compare that header with the approved inventory value.
-- **Pinning.** Each provider descriptor pins exactly one key. The client rejects
-  malformed/weak Ed25519 keys and verifies the token before making an HTTP
-  request. It never falls back to a key embedded in an untrusted response.
-- **Rotation.** Create the replacement key inside the independently administered software signer without
-  exporting it. In one controlled rollout, inject the adapter for its new
-  non-secret handle, update `signer_handle`, `signer_public_key_hex`,
-  `signer_revision`, `signer_policy_digest_hex`, and `key_version`, and restart
-  the issuer. Require both startup qualification probes and a
-  strictly verified probe token before publishing the new public key through
-  authenticated inventory. Atomically deploy a matching `gateway-key` and token.
-  For overlap, use separately named old/new provider descriptors; remove the old
-  descriptor by its final token expiry, then revoke the old software-signing key. There
-  is no implicit multi-key acceptance window or path-based fallback.
-- **Audit trail.** Record old/new public-key fingerprints, key versions,
-  non-secret signer handles, activation and final-expiry times, approver
-  identity, and negative-test evidence showing that old-key, cross-key, and
-  wrong-handle tokens fail after cutover. Never record signing material or
-  signer credentials.
+The source contract and signed simulations do not qualify physical devices,
+authoritative durable state or genuinely current observers. Those deployment
+qualifications and coherent native execution remain required.
 
 ## Canonical Token Schema
 

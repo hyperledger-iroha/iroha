@@ -1354,6 +1354,8 @@ impl Default for PorTrackerState {
     }
 }
 /// Canonical durable snapshot of PoR challenge replay-protection state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::por::PorTrackerCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PorTrackerCheckpointV1 {
     pending: Vec<ChallengeState>,
@@ -3917,7 +3919,8 @@ mod tests {
         sample_proof, sample_provider_key, sample_verdict,
     };
     use ed25519_dalek::{Signer, SigningKey};
-    use iroha_data_model::{metadata::Metadata, name::Name};
+    use iroha_data_model::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
     use std::{
         collections::BTreeMap,

@@ -1333,7 +1333,7 @@ ensure_swift_bridge_artifact() {
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
     run_cmd "$rustup_binary" target list --toolchain 1.93.1 --installed
-    run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
+    run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh" --lockfile-path "$ROOT/Cargo.lock"
     return 0
   fi
 
@@ -1397,7 +1397,7 @@ ensure_swift_bridge_artifact() {
     fi
   done
 
-  run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh"
+  run_cmd bash "$ROOT/scripts/build_norito_xcframework.sh" --lockfile-path "$ROOT/Cargo.lock"
 
   if [[ ! -f "$bridge_dir/Info.plist" || ! -f "$bridge_manifest" ]]; then
     echo "NoritoBridge.xcframework was not materialized at $bridge_dir." >&2

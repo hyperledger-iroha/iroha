@@ -1,7 +1,7 @@
 //! Module with [`SorafsUri`] and related impls.
 pub use self::model::*;
-use crate::error::ParseError;
 use iroha_data_model_derive::model;
+use iroha_model_base::error::ParseError;
 use iroha_primitives::conststr::ConstString;
 use norito::codec::{Decode, Encode};
 use std::{str::FromStr, string::String};

@@ -2780,7 +2780,9 @@ impl Kura {
             ));
         }
         let before_bytes = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self.begin_total_disk_usage_mutation().with_resource_paths(
+            Self::sidecar_physical_resource_paths(&data_path, &index_path),
+        );
         #[cfg(test)]
         if FAIL_NEXT_AUTONOMOUS_MERGE_BUNDLE_APPEND_DATA_SYNC.with(|flag| flag.replace(false)) {
             FAIL_NEXT_BOUND_PROGRESS_APPEND_DATA_SYNC.with(|flag| flag.set(true));

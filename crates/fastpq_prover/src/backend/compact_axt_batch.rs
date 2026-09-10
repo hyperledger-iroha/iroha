@@ -38,7 +38,11 @@ use crate::{
 #[cfg(test)]
 const IDENTITY: &str = <u64 as CompactTransferValue>::AXT_BATCH_IDENTITY;
 
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_axt_batch::BoundAxtBatchContext",
+    frame = "fastpq_prover::compact_v1::AxtTransferBatchContextV1"
+)]
 struct BoundAxtBatchContext {
     version: u16,
     segment_count: u32,
@@ -49,7 +53,11 @@ struct BoundAxtBatchContext {
     remote_spend_claims: Option<Vec<AxtRemoteSpendClaimV1>>,
 }
 
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_axt_batch::BoundAxtSegmentContext",
+    frame = "fastpq_prover::compact_v1::AxtTransferSegmentContextV1"
+)]
 struct BoundAxtSegmentContext {
     version: u16,
     segment_count: u32,

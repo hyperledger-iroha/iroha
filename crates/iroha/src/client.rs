@@ -94,7 +94,13 @@ use iroha_data_model::{
     soracloud::{CANONICAL_REQUEST_WITNESS_VERSION_V1, CanonicalRequestWitnessV1},
     sorafs::pin_registry::PinStatusKindV1,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_sccp::api::{
+    SccpCapabilities, SccpRecentMessage, SccpRecentMessages, SccpRegistryLimits, SccpResourceLimits,
+};
+#[cfg(test)]
+use iroha_sccp::api::{SccpRecentCursor, SccpRecentMessageLinks};
 pub use iroha_torii_shared::governance_proposal_api::{
     DeployContractProposalDraftRequestV1, DeployContractProposalDraftResponseV1,
     GovernanceProposalInstructionDraftV1, SccpRouteGovernanceProposalDraftRequestV1,
@@ -2744,155 +2750,7 @@ pub struct MultisigSpecResponse {
     /// Native multisig authority policy bound to the resolved account.
     pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Fixed SCCP V1 route-registry capacity limits.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::client::SccpRegistryLimits")]
-pub struct SccpRegistryLimits {
-    /// Maximum governed lanes retained by the registry.
-    #[norito(rename = "max_governed_lanes")]
-    pub governed_lanes: u32,
-    /// Maximum nonterminal route revisions across all lanes.
-    #[norito(rename = "max_live_governed_routes")]
-    pub live_governed_routes: u32,
-    /// Maximum nonterminal route revisions in one lane.
-    #[norito(rename = "max_live_routes_per_lane")]
-    pub live_routes_per_lane: u32,
-    /// Maximum retained route revisions in one lane, including retired revisions.
-    #[norito(rename = "max_retained_routes_per_lane")]
-    pub retained_routes_per_lane: u32,
-    /// Maximum retained native trust anchors in one lane.
-    #[norito(rename = "max_retained_native_trust_anchors_per_lane")]
-    pub retained_native_trust_anchors_per_lane: u32,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Consensus-critical SCCP proof and verifier-work limits.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::client::SccpResourceLimits")]
-pub struct SccpResourceLimits {
-    /// Maximum successful outbound SCCP messages committed by one block.
-    #[norito(rename = "max_outbound_messages_per_block")]
-    pub outbound_messages_per_block: u32,
-    /// Maximum canonical bytes retained for one outbound SCCP payload.
-    #[norito(rename = "max_outbound_message_payload_bytes")]
-    pub outbound_message_payload_bytes: u64,
-    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-    #[norito(rename = "max_pending_outbound_messages")]
-    pub pending_outbound_messages: u64,
-    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
-    #[norito(rename = "max_pending_outbound_payload_bytes")]
-    pub pending_outbound_payload_bytes: u64,
-    /// Maximum closed SCCP proofs in one transaction.
-    #[norito(rename = "max_proofs_per_transaction")]
-    pub proofs_per_transaction: u32,
-    /// Maximum closed SCCP proofs committed in one block.
-    #[norito(rename = "max_proofs_per_block")]
-    pub proofs_per_block: u32,
-    /// Maximum canonical bytes retained for one closed SCCP proof.
-    #[norito(rename = "max_proof_bytes_per_proof")]
-    pub proof_bytes_per_proof: u64,
-    /// Maximum aggregate SCCP proof bytes in one transaction.
-    #[norito(rename = "max_proof_bytes_per_transaction")]
-    pub proof_bytes_per_transaction: u64,
-    /// Maximum aggregate SCCP proof bytes committed in one block.
-    #[norito(rename = "max_proof_bytes_per_block")]
-    pub proof_bytes_per_block: u64,
-    /// Maximum native-finality continuation headers in one transaction.
-    #[norito(rename = "max_native_headers_per_transaction")]
-    pub native_headers_per_transaction: u32,
-    /// Maximum native-finality continuation headers committed in one block.
-    #[norito(rename = "max_native_headers_per_block")]
-    pub native_headers_per_block: u32,
-    /// Maximum Ethereum light-client updates in one transaction.
-    #[norito(rename = "max_ethereum_light_client_updates_per_transaction")]
-    pub ethereum_light_client_updates_per_transaction: u32,
-    /// Maximum Ethereum light-client updates committed in one block.
-    #[norito(rename = "max_ethereum_light_client_updates_per_block")]
-    pub ethereum_light_client_updates_per_block: u32,
-    /// Maximum framed native-finality header bytes in one transaction.
-    #[norito(rename = "max_native_header_bytes_per_transaction")]
-    pub native_header_bytes_per_transaction: u64,
-    /// Maximum framed native-finality header bytes committed in one block.
-    #[norito(rename = "max_native_header_bytes_per_block")]
-    pub native_header_bytes_per_block: u64,
-    /// Maximum secp256k1 recoveries in one transaction.
-    #[norito(rename = "max_secp256k1_recoveries_per_transaction")]
-    pub secp256k1_recoveries_per_transaction: u32,
-    /// Maximum secp256k1 recoveries committed in one block.
-    #[norito(rename = "max_secp256k1_recoveries_per_block")]
-    pub secp256k1_recoveries_per_block: u32,
-    /// Maximum BLS aggregate-signature checks in one transaction.
-    #[norito(rename = "max_bls_aggregate_checks_per_transaction")]
-    pub bls_aggregate_checks_per_transaction: u32,
-    /// Maximum BLS aggregate-signature checks committed in one block.
-    #[norito(rename = "max_bls_aggregate_checks_per_block")]
-    pub bls_aggregate_checks_per_block: u32,
-    /// Maximum BLS key-validation and signer-contribution work in one transaction.
-    #[norito(rename = "max_bls_signer_contributions_per_transaction")]
-    pub bls_signer_contributions_per_transaction: u32,
-    /// Maximum BLS key-validation and signer-contribution work committed in one block.
-    #[norito(rename = "max_bls_signer_contributions_per_block")]
-    pub bls_signer_contributions_per_block: u32,
-    /// Maximum Ed25519 signature checks in one transaction.
-    #[norito(rename = "max_ed25519_signature_checks_per_transaction")]
-    pub ed25519_signature_checks_per_transaction: u32,
-    /// Maximum Ed25519 signature checks committed in one block.
-    #[norito(rename = "max_ed25519_signature_checks_per_block")]
-    pub ed25519_signature_checks_per_block: u32,
-    /// Maximum TON Ed25519 validator-key checks in one transaction.
-    #[norito(rename = "max_ed25519_validator_key_checks_per_transaction")]
-    pub ed25519_validator_key_checks_per_transaction: u32,
-    /// Maximum TON Ed25519 validator-key checks committed in one block.
-    #[norito(rename = "max_ed25519_validator_key_checks_per_block")]
-    pub ed25519_validator_key_checks_per_block: u32,
-    /// Maximum BN254 pairing-product checks in one transaction.
-    #[norito(rename = "max_bn254_pairing_checks_per_transaction")]
-    pub bn254_pairing_checks_per_transaction: u32,
-    /// Maximum BN254 pairing-product checks committed in one block.
-    #[norito(rename = "max_bn254_pairing_checks_per_block")]
-    pub bn254_pairing_checks_per_block: u32,
-    /// Maximum BLS12-381 pairing-product checks in one transaction.
-    #[norito(rename = "max_bls12_381_pairing_checks_per_transaction")]
-    pub bls12_381_pairing_checks_per_transaction: u32,
-    /// Maximum BLS12-381 pairing-product checks committed in one block.
-    #[norito(rename = "max_bls12_381_pairing_checks_per_block")]
-    pub bls12_381_pairing_checks_per_block: u32,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Public SCCP capability snapshot advertised by the node.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::client::SccpCapabilities")]
-pub struct SccpCapabilities {
-    /// Capability schema version. First release is exactly `1`.
-    pub version: u8,
-    /// Hex-encoded digest of the authoritative typed route registry.
-    pub registry_revision: String,
-    /// Authoritative typed route-registry endpoint.
-    pub registry_path: String,
-    /// Finalized SORA message-bundle endpoint template.
-    pub message_bundle_path: String,
-    /// Query-free state-derived Groth16 request endpoint template.
-    pub proof_request_path: String,
-    /// Newest-first indexed outbound-message endpoint.
-    pub recent_messages_path: String,
-    /// Route-scoped SORA outbound contract-material endpoint template.
-    pub sora_outbound_material_path: String,
-    /// Fixed SCCP V1 route-registry capacity limits.
-    pub registry_limits: SccpRegistryLimits,
-    /// Consensus-critical proof and deterministic verifier-work limits.
-    pub resource_limits: SccpResourceLimits,
-    /// Closed destination-proof submission endpoint when the application API is enabled.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub proof_submit_path: Option<String>,
-    /// Protocol-native inbound proof endpoint when the application API is enabled.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub native_message_submit_path: Option<String>,
-}
+
 fn expected_sccp_registry_limits() -> SccpRegistryLimits {
     SccpRegistryLimits {
         governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
@@ -3157,84 +3015,7 @@ pub struct SccpBridgeSubmitResponse {
     /// Exact 32-byte transaction signing prehash, present only during preparation.
     pub signing_message_b64: Option<String>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Canonical readback and proof-request links for a recent SCCP message.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::client::SccpRecentMessageLinks")]
-pub struct SccpRecentMessageLinks {
-    /// Canonical SCCP bundle lookup path.
-    pub bundle_path: String,
-    /// Query-free canonical Groth16 request lookup path.
-    pub proof_request_path: String,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Compact newest-first SCCP outbound message discovery record.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::client::SccpRecentMessage")]
-pub struct SccpRecentMessage {
-    /// Height of the finalized SORA block that anchored the message.
-    pub height: u64,
-    /// Zero-based position in the finalized SCCP commitment tree.
-    pub commitment_index: u32,
-    /// Hex-encoded canonical lane-bound SCCP message id.
-    pub message_id_hex: String,
-    /// Stable logical SCCP payload kind.
-    pub kind: String,
-    /// Exact SORA source profile committed by the message.
-    pub source_profile: String,
-    /// Exact external destination profile committed by the message.
-    pub target_profile: String,
-    /// Hex-encoded destination binding committed when the message was recorded.
-    pub destination_binding_hash: String,
-    /// Hex-encoded immutable governed route configuration.
-    pub route_configuration_hash: String,
-    /// Numeric SCCP target domain.
-    pub target_domain: u32,
-    /// Decoded asset id when representable as text.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub asset_id: Option<String>,
-    /// Decoded route id when representable as text.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub route_id: Option<String>,
-    /// Decoded recipient when representable as text.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub recipient: Option<String>,
-    /// Exact non-negative transfer quantity projected from the fixed SCCP scalar.
-    pub amount: Quantity,
-    /// Required normalized decoded payload projection.
-    pub payload_projection: iroha_sccp::SccpPayloadProjectionV1,
-    /// Canonical bundle and proof-request links.
-    pub links: SccpRecentMessageLinks,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Compound continuation returned by recent SCCP discovery.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::client::SccpRecentCursor")]
-pub struct SccpRecentCursor {
-    /// Height of the last returned item.
-    pub from: u64,
-    /// Commitment index of the last returned item.
-    pub after_index: u32,
-}
-#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NSer, NDe)]
-#[norito(deny_unknown_fields)]
-/// Newest-first committed SCCP message discovery response.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha::client::SccpRecentMessages")]
-pub struct SccpRecentMessages {
-    /// Newest-first committed outbound SCCP messages.
-    pub items: Vec<SccpRecentMessage>,
-    /// Continuation for the next page when additional entries exist.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub next: Option<SccpRecentCursor>,
-}
+
 const fn is_final_v1_external_sccp_network(
     network: iroha_data_model::bridge::SccpNetworkV1,
 ) -> bool {
@@ -11608,6 +11389,7 @@ mod evidence_http_tests {
         );
         builder.set_creation_time(Duration::from_millis(123));
         let builder = builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .with_metadata(intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 intent.invocation.clone(),
@@ -12098,9 +11880,11 @@ mod evidence_http_tests {
         let mut builder =
             TransactionBuilder::new(client.network_id, authority.clone(), fee_payment.clone());
         builder.set_creation_time(Duration::from_millis(123));
-        let builder = builder.with_executable(
-            iroha_data_model::transaction::Executable::ContractCall(intent.invocation.clone()),
-        );
+        let builder = builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
+            .with_executable(iroha_data_model::transaction::Executable::ContractCall(
+                intent.invocation.clone(),
+            ));
         let prepared_response = json_response(
             StatusCode::OK,
             &norito::json::to_json(&prepared_contract_call_response(&intent, &builder))
@@ -12192,6 +11976,14 @@ mod evidence_http_tests {
                 Some(private_key.is_some())
             );
             if private_key.is_some() {
+                assert_eq!(
+                    expected_signed.admission_intent(),
+                    TransactionAdmissionIntent::QueuePlanSynced
+                );
+                assert!(
+                    response.get("pipeline_status").is_some_and(Value::is_null),
+                    "admission is not observed queue state"
+                );
                 assert_eq!(snapshots[1].url.path(), torii_uri::TRANSACTION);
                 assert_eq!(snapshots[1].body.as_slice(), expected_wire.as_bytes());
                 assert_eq!(
@@ -12303,6 +12095,49 @@ mod evidence_http_tests {
     #[test]
     fn post_contract_call_simulate_authenticates_exact_body_with_fresh_client_headers() {
         assert_contract_read_only_request_authentication(true);
+    }
+
+    #[test]
+    fn post_contract_call_rejects_ordinary_draft_before_signing_or_submission() {
+        let client = client_with_base_url(base_url());
+        let (address, intent, fee_payment, builder) = contract_call_fixture(&client);
+        let ordinary = builder.with_admission_intent(TransactionAdmissionIntent::Ordinary);
+        let response_value = prepared_contract_call_response(&intent, &ordinary);
+        let response = json_response(
+            StatusCode::OK,
+            &norito::json::to_json(&response_value).expect("response"),
+        );
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let result = with_mock_http(respond_with(&snapshots, response), |mock_transport| {
+            let client = client
+                .clone()
+                .with_test_http_transport(mock_transport.clone());
+            client.post_contract_call_json_for_test(
+                &client.account,
+                Some(client.key_pair.private_key()),
+                Some(&address),
+                None,
+                "ping",
+                None,
+                None,
+                Some(123),
+                None,
+                &fee_payment,
+                &intent,
+            )
+        });
+        let error = result.expect_err("Ordinary public draft must fail before signing or dispatch");
+        assert!(
+            format!("{error:#}").contains("must use QueuePlanSynced admission"),
+            "{error:#}"
+        );
+        let requests = snapshots.lock().expect("captured requests");
+        assert_eq!(
+            requests.len(),
+            1,
+            "no transaction submission after rejecting prepare"
+        );
+        assert_eq!(requests[0].url.path(), "/v1/contracts/call");
     }
 
     #[test]
@@ -21769,10 +21604,10 @@ impl AccountClient {
             fee_payment,
         )?;
         if builder.payload().admission_intent()
-            != iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary
+            != iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced
         {
             return Err(eyre!(
-                "contract call transaction payload must use Ordinary admission"
+                "contract call transaction payload must use QueuePlanSynced admission"
             ));
         }
         let mut expected_builder =
@@ -21782,6 +21617,7 @@ impl AccountClient {
             expected_builder.set_ttl(Duration::from_millis(transaction_ttl_ms));
         }
         let expected_builder = expected_builder
+            .with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced)
             .with_metadata(draft_intent.metadata.clone())
             .with_executable(iroha_data_model::transaction::Executable::ContractCall(
                 draft_intent.invocation.clone(),
@@ -21817,20 +21653,10 @@ impl AccountClient {
                 "entrypoint_hash_hex".to_owned(),
                 entrypoint_hash_hex.clone().into(),
             );
-            response_object.insert(
-                "pipeline_status".to_owned(),
-                norito::json::to_value(&PipelineTransactionStatusResponse::new(
-                    tx_hash_hex.clone(),
-                    iroha_torii_shared::PipelineTransactionStatus {
-                        kind: "Queued".to_owned(),
-                        block_height: None,
-                    },
-                    "local".to_owned(),
-                    "queue".to_owned(),
-                ))?,
-            );
-            response_object.remove("transaction_payload_b64");
-            response_object.remove("signing_message_b64");
+            // Successful QueuePlan submission is not an observation of local queue state.
+            response_object.insert("pipeline_status".to_owned(), JsonValue::Null);
+            response_object.insert("transaction_payload_b64".to_owned(), JsonValue::Null);
+            response_object.insert("signing_message_b64".to_owned(), JsonValue::Null);
             if let Some(receipt) = response_object
                 .get_mut("operation_receipt")
                 .and_then(norito::json::Value::as_object_mut)
@@ -25132,7 +24958,6 @@ mod tests {
         },
         domain::DomainId,
         isi::alias_setup::{ConfigureAliasAutoRenew, EnsureAlias, RenewAliasLease},
-        name::{MAX_NAME_BYTES, Name},
         nexus::{DataSpaceId, LaneCatalog, LaneId, LaneLifecycleStatusV1, LaneRelayEnvelope},
         parameter::system::Parameters,
         privacy::{
@@ -25152,6 +24977,7 @@ mod tests {
             pin_registry::ManifestDigest,
         },
     };
+    use iroha_model_base::{name::MAX_NAME_BYTES, name::Name};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use iroha_torii_shared::status::GovernanceStatus;
     use iroha_version::codec::DecodeVersioned;

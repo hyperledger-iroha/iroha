@@ -289,6 +289,9 @@ export class AccountAddress {
     expectedPrefix?: number | string | bigint,
   ): { address: AccountAddress; chainDiscriminant?: number };
   canonicalBytes(): Uint8Array;
+  controllerInfo():
+    | { tag: 0 | 2; curve: number; publicKey: Uint8Array }
+    | { tag: 1; version: number; threshold: number; members: Array<{ curve: number; publicKey: Uint8Array; weight: number }> };
   canonicalHex(): string;
   toI105(prefix?: number | string | bigint): string;
   toString(): string;
@@ -12094,7 +12097,7 @@ export declare class ToriiClient {
   ): Promise<SetContractAliasResponse>;
   prepareContractCall(
     request: ContractCallRequest,
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; canonicalAuth?: CanonicalRequestAuth },
   ): Promise<ContractCallResponse>;
   simulateContractCall(
     request: ContractCallSimulateRequest,

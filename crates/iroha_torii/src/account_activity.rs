@@ -287,12 +287,12 @@ mod tests {
         domain::DomainId,
         isi::{Burn, Grant, Mint, RemoveKeyValue, SetKeyValue, Transfer},
         metadata::Metadata,
-        name::Name,
         nft::{Nft, NftId},
         permission::Permission,
         prelude::Numeric,
         role::RoleId,
     };
+    use iroha_model_base::name::Name;
     fn account(seed: u8) -> AccountId {
         let keypair = KeyPair::try_from_seed(vec![seed; 32], iroha_crypto::Algorithm::Ed25519)
             .expect("fixture seed must derive a valid keypair");

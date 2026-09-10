@@ -571,8 +571,9 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::prelude::{
-        AccountId, AssetDefinition, AssetDefinitionId, AssetId, DomainId, Name, Registrable,
+        AccountId, AssetDefinition, AssetDefinitionId, AssetId, DomainId, Registrable,
     };
+    use iroha_model_base::name::Name;
     fn bare<T: SerializePayload>(value: &T) -> Vec<u8> {
         let mut bytes = Vec::new();
         norito::core::serialize_to_buffer(value, &mut bytes).expect("encode bare payload");

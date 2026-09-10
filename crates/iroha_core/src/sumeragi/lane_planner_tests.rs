@@ -513,9 +513,8 @@ mod tests {
                 .is_retryable_after_state_or_kura_progress()
         );
         assert!(
-            !AutonomousLaneReservationSlotPlanError::ConflictingPredecessor {
-                lane_id,
-                dataspace_id,
+            !AutonomousLaneReservationSlotPlanError::Storage {
+                reason: "corrupt occupied evidence".to_owned(),
             }
             .is_retryable_after_state_or_kura_progress()
         );

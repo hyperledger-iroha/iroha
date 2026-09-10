@@ -15,11 +15,11 @@ use iroha::data_model::{
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     metadata::Metadata,
-    name::Name,
     parameter::system::SumeragiNposParameters,
     prelude::*,
 };
 use iroha_config::parameters::defaults;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, genesis_factory_with_post_topology, init_instruction_registry,

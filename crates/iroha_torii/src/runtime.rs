@@ -54,10 +54,11 @@ const CURVE_REGISTRY_VERSION: u32 = 1;
 const QUERY_PROJECTION_SHARD_CATALOG_VERSION: u16 = 1;
 const QUERY_PROJECTION_SHARD_CATALOG_DEFAULT_LIMIT: u32 = 1024;
 const QUERY_PROJECTION_SHARD_CATALOG_MAX_LIMIT: u32 = 8192;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeCapabilitiesResponse")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Node capabilities advert (subset)
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::NodeCapabilitiesResponse")]
+
 pub struct NodeCapabilitiesResponse {
     /// ABI version accepted by this node.
     pub abi_version: u16,
@@ -70,6 +71,8 @@ pub struct NodeCapabilitiesResponse {
     /// Query DSL and projection-index capabilities.
     pub query: NodeQueryCapabilities,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeCryptoCapabilities")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Crypto capability advert (currently SM-focused).
 pub struct NodeCryptoCapabilities {
@@ -78,6 +81,8 @@ pub struct NodeCryptoCapabilities {
     /// Curve capability advert anchored to the registry.
     pub curves: NodeCurveCapabilities,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeSmCapabilities")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// SM capability manifest exported by the node.
 pub struct NodeSmCapabilities {
@@ -94,6 +99,8 @@ pub struct NodeSmCapabilities {
     /// Acceleration advert (scalar/NEON policy).
     pub acceleration: NodeSmAcceleration,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeSmAcceleration")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Hardware/software acceleration advert for SM algorithms.
 pub struct NodeSmAcceleration {
@@ -106,6 +113,8 @@ pub struct NodeSmAcceleration {
     /// Dispatch policy string (`auto`, `force-enable`, `force-disable`, `scalar-only`).
     pub policy: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeCurveCapabilities")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Curve capability advert emitted by `/v1/node/capabilities`.
 pub struct NodeCurveCapabilities {
@@ -118,6 +127,8 @@ pub struct NodeCurveCapabilities {
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub allowed_curve_bitmap: Vec<u64>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeQueryCapabilities")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Query capability advert emitted by `/v1/node/capabilities`.
 pub struct NodeQueryCapabilities {
@@ -130,6 +141,8 @@ pub struct NodeQueryCapabilities {
     /// Reserved DA-backed projection checkpoint contract.
     pub projection: NodeProjectionCapabilities,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeAggregateQueryCapabilities")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Aggregate DSL capability advert emitted by `/v1/node/capabilities`.
 pub struct NodeAggregateQueryCapabilities {
@@ -140,6 +153,8 @@ pub struct NodeAggregateQueryCapabilities {
     /// Resource families that currently accept aggregate mode.
     pub supported_resources: Vec<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionCapabilities")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Reserved DA query projection capability advert.
 pub struct NodeProjectionCapabilities {
@@ -174,10 +189,11 @@ pub struct NodeProjectionCapabilities {
     /// Latest indexed block hash covered by a persisted projection checkpoint, if any.
     pub latest_checkpoint_block_hash_hex: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionCheckpointResponse")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the latest persisted query projection checkpoint descriptor.
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::NodeProjectionCheckpointResponse")]
+
 pub struct NodeProjectionCheckpointResponse {
     /// Descriptor payload version.
     pub version: u16,
@@ -200,6 +216,8 @@ pub struct NodeProjectionCheckpointResponse {
     /// Immutable shard references that make up this checkpoint.
     pub shards: Vec<NodeProjectionCheckpointShardRef>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionCheckpointShardRef")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// JSON/Norito-friendly representation of one shard reference inside a checkpoint.
 pub struct NodeProjectionCheckpointShardRef {
@@ -216,10 +234,11 @@ pub struct NodeProjectionCheckpointShardRef {
     /// Compressed blob hash, lowercase hex.
     pub blob_hash_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionShardCatalogResponse")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response for the live projection shard catalog of one resource family.
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::NodeProjectionShardCatalogResponse")]
+
 pub struct NodeProjectionShardCatalogResponse {
     /// Catalog payload version.
     pub version: u16,
@@ -244,6 +263,8 @@ pub struct NodeProjectionShardCatalogResponse {
     /// Stable ordered non-empty shard entries for the selected resource family.
     pub entries: Vec<NodeProjectionShardCatalogEntry>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionShardCatalogEntry")]
 #[derive(Debug, Clone, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// One stable shard entry inside the live projection catalog.
 pub struct NodeProjectionShardCatalogEntry {
@@ -256,6 +277,8 @@ pub struct NodeProjectionShardCatalogEntry {
     /// Optional display alias for `asset_definition_id`.
     pub asset_alias: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionShardExportQuery")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, JsonDeserialize, NoritoDeserialize)]
 /// Query parameters for exporting one canonical query projection shard archive.
@@ -263,6 +286,8 @@ pub struct NodeProjectionShardExportQuery {
     /// Canonical or alias asset-definition selector required for `asset_holders`.
     pub asset_definition_id: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::NodeProjectionShardCatalogQuery")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, JsonDeserialize, NoritoDeserialize)]
 /// Query parameters for enumerating the live projection shard catalog of one resource family.
@@ -274,16 +299,19 @@ pub struct NodeProjectionShardCatalogQuery {
     /// Maximum number of entries to return.
     pub limit: Option<u32>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeMetricsResponse")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// JSON summary of runtime-related metrics of interest
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::RuntimeMetricsResponse")]
+
 pub struct RuntimeMetricsResponse {
     /// ABI version accepted by the runtime.
     pub abi_version: u16,
     /// Upgrade lifecycle event counters
     pub upgrade_events_total: UpgradeEventsCounters,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::UpgradeEventsCounters")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct UpgradeEventsCounters {
     pub proposed: u64,
@@ -291,21 +319,17 @@ pub struct UpgradeEventsCounters {
     pub canceled: u64,
 }
 #[derive(
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    NoritoSerialize,
-    NoritoDeserialize,
-    norito::derive::NoritoSchema,
+    Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_torii::runtime::RuntimeAbiActiveResponse")]
 pub struct RuntimeAbiActiveResponse {
     pub abi_version: u16,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeAbiHashResponse")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 /// Response with the node's canonical ABI hash for the active policy.
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::RuntimeAbiHashResponse")]
+
 pub struct RuntimeAbiHashResponse {
     /// Policy label (first release: always "V1").
     pub policy: String,
@@ -314,18 +338,15 @@ pub struct RuntimeAbiHashResponse {
 }
 // Tests omitted to keep feature-gating friction low; behavior is trivial (hash compute) and
 // exercised by doc-sync tests in the ivm crate.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeUpgradeListItem")]
 #[derive(Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct RuntimeUpgradeListItem {
     pub id_hex: String,
     pub record: iroha_data_model::runtime::RuntimeUpgradeRecord,
 }
 #[derive(
-    Debug,
-    JsonSerialize,
-    JsonDeserialize,
-    NoritoSerialize,
-    NoritoDeserialize,
-    norito::derive::NoritoSchema,
+    Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
 )]
 #[norito_schema(name = "iroha_torii::runtime::RuntimeUpgradesListResponse")]
 pub struct RuntimeUpgradesListResponse {
@@ -1405,11 +1426,11 @@ pub async fn handle_runtime_upgrades_list(
     });
     Ok(RuntimeUpgradesListResponse { items })
 }
-#[derive(
-    Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize, norito::derive::NoritoSchema,
-)]
+#[derive(Debug, JsonDeserialize, NoritoDeserialize, NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::runtime::ProposeUpgradeDto")]
 pub struct ProposeUpgradeDto(pub iroha_data_model::runtime::RuntimeUpgradeManifest);
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::TxInstr")]
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 pub struct TxInstr {
     pub wire_id: String,
@@ -1423,7 +1444,7 @@ fn instruction_box_to_tx_instr(boxed: iroha_data_model::isi::InstructionBox) -> 
         payload_hex: hex::encode(framed),
     }
 }
-#[derive(Debug, JsonSerialize, NoritoSerialize, norito::derive::NoritoSchema)]
+#[derive(Debug, JsonSerialize, NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::runtime::ProposeUpgradeResponse")]
 pub struct ProposeUpgradeResponse {
     pub ok: bool,
@@ -1448,10 +1469,11 @@ pub async fn handle_runtime_propose_upgrade(
         tx_instructions,
     })
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::runtime::ActivateCancelResponse")]
 #[derive(Debug, JsonSerialize, NoritoSerialize)]
 /// Response payload describing the outcome of runtime activation/cancellation helpers.
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::runtime::ActivateCancelResponse")]
+
 pub struct ActivateCancelResponse {
     /// Indicates whether the operation succeeded.
     pub ok: bool,

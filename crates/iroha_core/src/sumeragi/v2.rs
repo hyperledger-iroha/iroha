@@ -63,8 +63,8 @@ use super::{
     v2_lifecycle_coordinator::{
         AdapterEffectAdmissionError, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
         AuthenticatedRecoveredReleasedValidateNoSuccessorV1,
-        AuthenticatedRecoveredWalControlProjection,
         AuthenticatedRecoveredWalDecisionFetchProjection,
+        AuthenticatedRecoveredWalStandaloneSignProjection,
         AuthenticatedRecoveredWalValidateLifecycleRepair, CandidateAdmission,
         DurableValidateReplayEvidenceV1, ExactStoreRecoveredWalPersistError,
         ExactStoreRecoveredWalSignInstallError, InstalledRecoveredWalSignStorage,
@@ -209,6 +209,8 @@ impl RecoveredWalFrameIdentity {
 /// Decoding this value establishes only a structural locator. It is never
 /// accepted as runtime WAL authority; the executable recovery seal remains
 /// [`RecoveredWalFrameIdentity`] and has no decoding implementation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2::PersistedWalFrameLocatorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct PersistedWalFrameLocatorV1 {
@@ -273,6 +275,59 @@ pub(crate) struct RecoveredWalDecisionFetch {
     replay_evidence: RecoveredWalDecisionFetchReplayEvidenceV1,
     effect: AdapterEffect,
 }
+impl RecoveredWalVoteSign {
+    /// Consume the sole recovered vote into a standalone owner. The old
+    /// terminal remains an immutable result source, never a linked parent.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn into_resolved_lifecycle_projection(
+        self,
+        pending_permit: super::v2_runtime::RecoveredLifecycleNextWalVoteCandidateProjectionPermitV1,
+        candidate_permit: RecoveredWalCandidateProjectionPermit,
+        verified: &VerifiedHeightContext,
+        terminal: std::sync::Arc<
+            super::v2_lifecycle_coordinator::ResolvedLifecycleValidateOutcomeV1,
+        >,
+    ) -> Result<AuthenticatedRecoveredWalStandaloneSignProjection, Self> {
+        let effect = AdapterEffect::Sign {
+            tag: self.tag,
+            request: SignRequest::Vote(self.vote.clone()),
+        };
+        if !self.wal_identity.is_exact() || !self.replay_evidence_is_exact() {
+            return Err(self);
+        }
+        let Some(pending) = PendingRuntimeEffectBinding::from_exact_recovered_next_wal_vote(
+            &pending_permit,
+            self.wal_identity,
+            &effect,
+        ) else {
+            return Err(self);
+        };
+        let Some(candidate) = self.replay_evidence.project_recovered_vote_candidate(
+            candidate_permit,
+            verified,
+            self.wal_identity,
+            &effect,
+            &pending,
+        ) else {
+            return Err(self);
+        };
+        let projection =
+            AuthenticatedRecoveredWalStandaloneSignProjection::from_resolved_phase_vote(
+                pending_permit,
+                self.wal_identity,
+                self.replay_evidence.clone(),
+                effect,
+                pending,
+                candidate,
+                terminal,
+                self.prepare_certificate.clone(),
+            );
+        if !projection.is_exact(verified) {
+            return Err(self);
+        }
+        Ok(projection)
+    }
+}
 impl RecoveredWalControlSign {
     /// Consume both runtime one-shot permits into the sealed lifecycle projection.
     #[allow(clippy::result_large_err)]
@@ -281,7 +336,7 @@ impl RecoveredWalControlSign {
         pending_permit: RecoveredWalControlPendingMintPermit,
         candidate_permit: RecoveredWalCandidateProjectionPermit,
         verified: &VerifiedHeightContext,
-    ) -> Result<AuthenticatedRecoveredWalControlProjection, Self> {
+    ) -> Result<AuthenticatedRecoveredWalStandaloneSignProjection, Self> {
         if !self
             .replay_evidence
             .exactly_matches_recovered_control(self.wal_identity, &self.effect)
@@ -305,7 +360,7 @@ impl RecoveredWalControlSign {
             return Err(self);
         };
         Ok(
-            AuthenticatedRecoveredWalControlProjection::from_runtime_projection(
+            AuthenticatedRecoveredWalStandaloneSignProjection::from_runtime_projection(
                 self.wal_identity,
                 self.replay_evidence,
                 self.effect,
@@ -10096,6 +10151,13 @@ impl SumeragiV2Adapter {
     pub(crate) const fn wire_context(&self) -> &wire::HeightContext {
         &self.wire_context
     }
+    /// Return the context identity sealed by this adapter's verified registry.
+    /// Registry transitions clone the same frozen context; none retarget it.
+    fn frozen_wire_context_id(&self) -> wire::HeightContextId {
+        self.registry
+            .context_id
+            .expect("adapter registry retains its verified height context")
+    }
     /// Return the reducer body state for one wire identity in seam tests.
     #[cfg(test)]
     pub(crate) fn body_state_for_test(
@@ -15131,7 +15193,7 @@ impl SumeragiV2Adapter {
             build_fingerprint: self.fingerprints.build,
             config_fingerprint: self.fingerprints.config,
             restart_required: self.fail_closed || output_guard_restart_required,
-            height_context_id: self.wire_context.id(),
+            height_context_id: self.frozen_wire_context_id(),
             height: self.wire_context.height,
             view,
             phase,
@@ -15555,7 +15617,7 @@ impl SumeragiV2Adapter {
         let leader = self.wire_context.leader(source_view);
         let owner: [u8; 32] = self.fingerprints.node.into();
         let mut projection = Vec::new();
-        append_deferred_projection_field(&mut projection, &self.wire_context.id().encode());
+        append_deferred_projection_field(&mut projection, &self.frozen_wire_context_id().encode());
         append_deferred_projection_u64(&mut projection, self.wire_context.height);
         append_deferred_projection_field(&mut projection, &owner);
         append_deferred_projection_field(&mut projection, &leader.encode());
@@ -16833,7 +16895,7 @@ impl SumeragiV2Adapter {
         &self,
     ) -> LifecycleReducerFenceObservationV1 {
         let mut context_id = [0_u8; 32];
-        context_id.copy_from_slice(self.wire_context.id().0.as_ref());
+        context_id.copy_from_slice(self.frozen_wire_context_id().0.as_ref());
         let context =
             LifecycleContext::new(LifecycleDigest::new(context_id), self.wire_context.height);
         LifecycleReducerFenceObservationV1 {
@@ -18719,12 +18781,16 @@ fn progress_rank(event: &reducer::Event) -> u8 {
         | reducer::Event::ApplicationCompleted { .. } => 0,
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2::WalEnvelopeV2")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct WalEnvelopeV2 {
     protocol_version: u16,
     persistence_id: u64,
     record: WalRecordV2,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2::WalRecordV2")]
 #[derive(Clone, Debug, Decode, Encode)]
 enum WalRecordV2 {
     ProposalIntent(wire::Proposal),

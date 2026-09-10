@@ -71,7 +71,6 @@ use iroha_data_model::{
         MusubiPinLocationReferenceV1, MusubiProviderLocationKeyV1,
         MusubiReplicationOrderLocationReferenceV1,
     },
-    name::Name,
     nexus::{
         AssetHandle, AssetHandleDraft, AssetPermissionManifest, AxtAssetIncarnationV1, AxtBinding,
         AxtDescriptor, AxtEnvelopeRecord, AxtFastpqBinding, AxtHandleBudgetKey,
@@ -100,6 +99,7 @@ use iroha_data_model::{
     },
     transaction::ExecutionStep,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -5309,6 +5309,7 @@ fn strict_kura_config_for_testing(store_root: std::path::PathBuf) -> KuraConfig 
         fsync_mode: iroha_config::kura::FsyncMode::Batched,
         fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }
@@ -7771,6 +7772,8 @@ state_test! { sync native_amx_participant_diagnostics_report_same_height_conflic
     assert_eq!(forward.application_block_hash, None);
 }
 state_test! { sync native_amx_participant_frontier_rejects_legacy_hash_only_layout
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::state::tests::LegacyNativeAmxParticipantFrontierMarkerV1")]
     #[derive(Encode)]
     struct LegacyNativeAmxParticipantFrontierMarkerV1 {
         version: u8,
@@ -16480,7 +16483,7 @@ state_test! { sync apply_lane_geometry_updates_relabels_kura_storage
     let_row! { initial_catalog = LaneCatalog::new( lane_count, vec![LaneConfig { alias: "Alpha Lane".to_string(), ..LaneConfig::default() }], ) .expect("initial catalog") };
     let initial_config = RuntimeLaneConfig::from_catalog(&initial_catalog);
     let_row! { lane_entry = initial_config .entry(LaneId::SINGLE) .expect("lane entry exists") };
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.clone()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.clone()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &initial_config).expect("init kura");
     let query_handle = LiveQueryStore::start_test();
     let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -29424,7 +29427,7 @@ state_test! { sync missing_insert_block_does_not_hydrate_staged_verified_lane_re
 fn state_journal_test_kura(store_root: &std::path::Path) -> Arc<Kura> {
     let_row! { catalog = LaneCatalog::new(nonzero!(1_u32), vec![LaneConfig::default()]).expect("lane catalog") };
     let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
-    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
+    let_row! { kura_cfg = KuraConfig { init_mode: iroha_config::kura::InitMode::Strict, store_dir: WithOrigin::inline(store_root.to_path_buf()), max_disk_usage_bytes: iroha_config::parameters::defaults::kura::MAX_DISK_USAGE_BYTES, blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY, debug_output_new_blocks: false, merge_ledger_cache_capacity: iroha_config::parameters::defaults::kura::MERGE_LEDGER_CACHE_CAPACITY, fsync_mode: iroha_config::kura::FsyncMode::Batched, fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL, lane_history_retention: iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION, fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY, replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY, } };
     Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &lane_config)
         .expect("initialize journal test Kura")
         .0
@@ -34338,6 +34341,8 @@ state_test! { sync state_transaction_reports_confidential_digest
 }
 state_test! { sync governance_lock_record_rejects_missing_custody_on_wire_and_json
     use norito::codec::DecodeAll as _;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::state::tests::LegacyGovernanceLockRecord")]
     #[derive(Encode)]
     struct LegacyGovernanceLockRecord {
         owner: AccountId,
@@ -43271,5 +43276,204 @@ state_test! { sync certified_snapshot_corruption_cannot_become_an_empty_lane
         assert!(state.unapplied_certified_lane_block_height(lane_id, DataSpaceId::UNIVERSAL).is_err());
         assert_eq!(std::fs::read(&path).expect("retained corruption"), damaged);
         std::fs::write(&path, healthy).expect("restore fixture evidence");
+    }
+}
+
+// The fixed Family enum places every physical owner after the eight resident owners.
+// Check every component individually; this never qualifies a complete resident snapshot.
+fn assert_state_query_physical_families_available(kura: &Kura) {
+    use crate::kura::resource_inventory::{ALL_FAMILIES, Family};
+    let mut checked = 0;
+    for family in ALL_FAMILIES
+        .into_iter()
+        .skip(Family::CanonicalIndex as usize)
+    {
+        kura.resource_inventory_component_for_tests(family)
+            .unwrap_or_else(|error| {
+                panic!("valid physical baseline required for {family:?}: {error:?}")
+            });
+        checked += 1;
+    }
+    assert_eq!(
+        checked, 15,
+        "the entire fixed physical-family baseline is required"
+    );
+}
+
+fn assert_state_query_physical_families_unavailable(kura: &Kura) {
+    use crate::kura::resource_inventory::{ALL_FAMILIES, Family};
+    for family in ALL_FAMILIES
+        .into_iter()
+        .skip(Family::CanonicalIndex as usize)
+    {
+        assert!(
+            kura.resource_inventory_component_for_tests(family).is_err(),
+            "failed query recovery cannot publish {family:?}"
+        );
+    }
+}
+
+state_test! { sync query_resource_inventory_tracks_real_marker_replacement_bytes
+    use crate::kura::resource_inventory::Family;
+    let temp_dir = tempfile::tempdir().expect("temporary journal root");
+    let kura = state_journal_test_kura(&temp_dir.path().join("kura"));
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), LiveQueryStore::start_test());
+    let empty = kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords)
+        .expect("initialized empty marker family");
+    assert_eq!(empty.persisted_entries, 0);
+    assert_eq!(empty.index_bytes, 0);
+    for (seed, shards) in [(1, 1), (2, 5), (3, 0), (4, 2)] {
+        state.persist_query_index_status(u64::from(seed), None);
+        state.persist_query_projection_checkpoint(Some(state_journal_test_projection_checkpoint(seed, shards)));
+        let index_path = state.query_index_journal_path();
+        let projection_path = state.query_projection_checkpoint_journal_path();
+        let actual_bytes = std::fs::metadata(&index_path).expect("index metadata").len()
+            .checked_add(std::fs::metadata(&projection_path).expect("projection metadata").len())
+            .expect("bounded journal byte sum");
+        let measured = kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords)
+            .expect("completed marker publication");
+        assert_eq!(measured.persisted_entries, 2);
+        assert_eq!(measured.index_bytes, actual_bytes);
+        assert_eq!(measured.temporary_index_bytes, 0);
+        assert_eq!(measured.resident_associations, 0);
+        assert!(!index_path.with_extension("norito.tmp").exists());
+        assert!(!projection_path.with_extension("norito.tmp").exists());
+    }
+}
+
+state_test! { sync query_resource_inventory_recovers_both_main_temp_pairs_without_undercounting
+    use crate::kura::resource_inventory::Family;
+    let temp_dir = tempfile::tempdir().expect("temporary journal root");
+    let root = temp_dir.path().join("kura");
+    let seeded = state_journal_test_kura(&root);
+    let expected = seed_distinct_state_journal_main_and_temp_files(&seeded);
+    drop(seeded);
+    // Crash fixtures are inventoried by the real opener before State recovers them.
+    let kura = state_journal_test_kura(&root);
+    let before = kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords)
+        .expect("four physical marker records");
+    assert_eq!(before.persisted_entries, 4);
+    assert!(before.index_bytes > 0);
+    assert!(before.temporary_index_bytes > 0);
+    let state = State::new_for_testing(World::default(), Arc::clone(&kura), LiveQueryStore::start_test());
+    assert_eq!(state.query_index_status_snapshot(), expected.query_index);
+    assert_eq!(state.query_projection_checkpoint_snapshot(), Some(expected.projection));
+    let expected_bytes = [state.query_index_journal_path(), state.query_projection_checkpoint_journal_path()]
+        .iter().map(|path| std::fs::metadata(path).expect("recovered marker metadata").len()).sum::<u64>();
+    let after = kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords)
+        .expect("fully recovered marker family");
+    assert_eq!(after.persisted_entries, 2);
+    assert_eq!(after.index_bytes, expected_bytes);
+    assert_eq!(after.temporary_index_bytes, 0);
+    let usage = kura.disk_usage_accounting_snapshot_for_tests().expect("raw disk accounting");
+    assert!(usage.enforced_initialized && usage.total_initialized);
+    assert_eq!(usage.cached_enforced_bytes, usage.exact_enforced_bytes);
+    assert_eq!(usage.cached_total_bytes, usage.exact_total_bytes);
+}
+
+state_test! { sync failed_query_journal_publication_keeps_resource_inventory_unavailable
+    use crate::kura::resource_inventory::Family;
+    for projection in [false, true] {
+        let temp_dir = tempfile::tempdir().expect("temporary journal root");
+        let kura = state_journal_test_kura(&temp_dir.path().join("kura"));
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), LiveQueryStore::start_test());
+        let path = if projection { state.query_projection_checkpoint_journal_path() } else { state.query_index_journal_path() };
+        let temporary = path.with_extension("norito.tmp");
+        assert_state_query_physical_families_available(&kura);
+        assert_eq!(kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords)
+            .expect("valid empty marker baseline").persisted_entries, 0);
+        std::fs::create_dir(&temporary).expect("inject blocked temporary-file publication");
+        if projection {
+            state.persist_query_projection_checkpoint(Some(state_journal_test_projection_checkpoint(1, 1)));
+        } else {
+            state.persist_query_index_status(1, None);
+        }
+        assert!(!path.exists());
+        assert!(temporary.is_dir());
+        assert!(kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords).is_err());
+        std::fs::remove_dir(&temporary).expect("remove injected publication obstruction");
+        kura.refresh_disk_usage_bytes().expect("refresh physical disk bytes");
+        assert!(kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords).is_err(),
+            "a disk byte rescan cannot authenticate an interrupted marker inventory");
+    }
+}
+
+state_test! { sync corrupt_query_journal_load_cannot_publish_a_complete_resource_inventory
+    use crate::kura::resource_inventory::Family;
+    for projection in [false, true] {
+        let temp_dir = tempfile::tempdir().expect("temporary journal root");
+        let root = temp_dir.path().join("kura");
+        drop(state_journal_test_kura(&root));
+        let path = if projection { QueryProjectionCheckpointJournal::journal_path(&root) } else { QueryIndexJournal::journal_path(&root) };
+        let damaged = b"bounded malformed marker";
+        std::fs::write(&path, damaged).expect("write malformed crash fixture");
+        let kura = state_journal_test_kura(&root);
+        assert_state_query_physical_families_available(&kura);
+        let before = kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords)
+            .expect("bounded malformed record remains physically measurable before decode");
+        assert_eq!(before.persisted_entries, 1);
+        assert_eq!(before.index_bytes, u64::try_from(damaged.len()).expect("bounded damaged marker"));
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), LiveQueryStore::start_test());
+        assert!(kura.resource_inventory_component_for_tests(Family::QueryMarkerRecords).is_err());
+        assert_eq!(std::fs::read(&path).expect("retained malformed marker"), damaged);
+        if projection {
+            assert!(state.query_projection_checkpoint_snapshot().is_none());
+        } else {
+            assert_eq!(state.query_index_status_snapshot().indexed_height, 0);
+        }
+    }
+}
+
+state_test! { sync query_recovery_promotion_failures_never_publish_measurable_physical_inventory
+    use crate::query::{index_status, projection_checkpoint_journal};
+    assert_eq!(index_status::PROMOTION_FAILURES.len(), projection_checkpoint_journal::PROMOTION_FAILURES.len());
+    for projection in [false, true] {
+        for case in 0..index_status::PROMOTION_FAILURES.len() {
+            let temp_dir = tempfile::tempdir().expect("promotion failure journal root");
+            let root = temp_dir.path().join("kura");
+            let seeded = state_journal_test_kura(&root);
+            seed_distinct_state_journal_main_and_temp_files(&seeded);
+            let path = if projection { QueryProjectionCheckpointJournal::journal_path(&root) }
+                else { QueryIndexJournal::journal_path(&root) };
+            let temporary = path.with_extension("norito.tmp");
+            let original = std::fs::read(&path).expect("valid original marker");
+            let recovered = std::fs::read(&temporary).expect("valid staged marker");
+            if case == 0 { std::fs::remove_file(&path).expect("initial rename has no fallback destination"); }
+            drop(seeded);
+            let kura = state_journal_test_kura(&root);
+            assert_state_query_physical_families_available(&kura);
+            if projection {
+                QueryProjectionCheckpointJournal::fail_next_promotion_for_tests(
+                    projection_checkpoint_journal::PROMOTION_FAILURES[case]);
+            } else {
+                QueryIndexJournal::fail_next_promotion_for_tests(index_status::PROMOTION_FAILURES[case]);
+            }
+            let state = State::new_for_testing(World::default(), Arc::clone(&kura), LiveQueryStore::start_test());
+            assert_state_query_physical_families_unavailable(&kura);
+            if projection {
+                assert!(!QueryProjectionCheckpointJournal::promotion_failure_pending_for_tests());
+                assert!(state.query_projection_checkpoint_snapshot().is_none());
+            } else {
+                assert!(!QueryIndexJournal::promotion_failure_pending_for_tests());
+                assert_eq!(state.query_index_status_snapshot().indexed_height, 0);
+            }
+            match case {
+                0 | 2 => {
+                    assert!(!path.exists());
+                    assert_eq!(std::fs::read(&temporary).expect("retained recovery marker"), recovered);
+                }
+                1 => {
+                    assert_eq!(std::fs::read(&path).expect("original marker not removed"), original);
+                    assert_eq!(std::fs::read(&temporary).expect("retained recovery marker"), recovered);
+                }
+                3 | 4 => {
+                    assert_eq!(std::fs::read(&path).expect("renamed marker awaiting directory durability"), recovered);
+                    assert!(!temporary.exists());
+                }
+                _ => unreachable!("closed promotion failure cases"),
+            }
+            kura.refresh_disk_usage_bytes().expect("measurable residue can be rescanned");
+            assert_state_query_physical_families_unavailable(&kura);
+        }
     }
 }

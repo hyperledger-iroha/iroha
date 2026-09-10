@@ -144,6 +144,8 @@ pub struct GlobalThresholdBeaconSessionBindingV1 {
 /// The cursor is not part of any later pulse's signed message or seed. It only
 /// records the latest admitted slot so persistence can reject late insertion
 /// while permitting intentionally skipped optional heights.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::beacon::GlobalThresholdBeaconPulseLinkV1")]
 #[derive(
     Debug,
     Clone,

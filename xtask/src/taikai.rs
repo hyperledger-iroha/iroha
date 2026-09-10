@@ -898,13 +898,11 @@ fn print_digest(label: &str, digest: &DigestCheck) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{
-        name::Name,
-        taikai::{
-            CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1,
-            REPLICATION_PROOF_TOKEN_VERSION_V1, TaikaiEventId, TaikaiRenditionId, TaikaiStreamId,
-        },
+    use iroha_data_model::taikai::{
+        CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, REPLICATION_PROOF_TOKEN_VERSION_V1,
+        TaikaiEventId, TaikaiRenditionId, TaikaiStreamId,
     };
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
     use tempfile::tempdir;
     fn sample_name(raw: &str) -> Name {

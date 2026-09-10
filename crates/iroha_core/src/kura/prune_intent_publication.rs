@@ -104,7 +104,12 @@ impl Kura {
         // `block_data`; repeating that pending-block snapshot here would invert
         // the canonical lock order. Track cleanup/publication itself under the
         // aggregate disk-usage mutation guard.
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![
+                Self::prune_intent_path_for(&self.store_root),
+                Self::prune_intent_temp_path_for(&self.store_root),
+            ]);
         let before =
             Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?;
         if Self::recover_canonical_prune_intent_artifacts(&self.store_root)?.is_some() {
@@ -137,7 +142,12 @@ impl Kura {
         Ok(())
     }
     fn clear_prune_intent(&self) -> Result<()> {
-        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let accounting_mutation = self
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![
+                Self::prune_intent_path_for(&self.store_root),
+                Self::prune_intent_temp_path_for(&self.store_root),
+            ]);
         let before =
             Self::canonical_prune_intent_artifact_inventory(&self.store_root)?.tracked_bytes()?;
         let _ = Self::recover_canonical_prune_intent_artifacts(&self.store_root)?;

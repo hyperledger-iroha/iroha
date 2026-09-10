@@ -2,7 +2,7 @@
 
 Run either `python3 scripts/taira_release.py check` or
 `python3 scripts/taira_release_check.py` before the Taira four-binary Linux
-release build. Both compile focused CLI, Core, proof, Torii and consensus
+release build. Both compile focused configuration, crypto, P2P, CLI, Core, proof, Torii and consensus
 harnesses plus native network binaries with six Cargo jobs
 and report build, stage and test durations. Python 3.11+, the repository Rust
 toolchain, and previously fetched dependencies are required; Cargo runs offline.
@@ -16,11 +16,77 @@ hash and ledger time remain the anchor for state and lease observations. These
 contract tests use real route and ledger code with disposable inputs; they do
 not replace the deployed four-validator consensus and public application checks.
 
-The Core gate exercises the real candidate provider with multiple routable lanes.
+The first gate compiles the dependency-free production consensus FSM directly
+with the selected Rust compiler. It lists and runs every reducer test without
+Cargo, rejecting missing, ignored, duplicated or failed cases. The four-reducer
+traces exercise reordered messages, duplicates, loss and recovery, including
+durable append before acknowledgement; they simulate authenticated I/O and do
+not replace cryptographic or network execution.
+
+After the standalone FSM and lifecycle source checks, the dedicated
+`iroha_config --test taira_config_contracts` target checks production descriptor
+defaults, malformed collection values and the maintained Taira Nexus profile.
+It loads no runtime signers and has no Core or test-network dependency. These
+four unchanged contracts execute before the shared Core/library build, so schema
+failures stop before that compilation. Storage-budget and ambient-client isolation
+checks remain in the test-network harness. The complete native census stays at
+263 cases. The configuration target uses the same source capture, Cargo environment,
+warm target, profile and inherited locks; it retains all package defaults. Its real
+model/crypto/codec dependency graph may require a separate first warm compilation
+when its feature union differs from the later node graph. No first-run or total
+runtime improvement is claimed without measurement.
+
+The same library batch includes Rust SDK envelope verification and Torii's exact
+retained-payload, detached-signature and canonical response checks. The public
+HTTP contract fixture then runs before node compilation and the four-validator
+gate. It prepares and signs the exact QueuePlan payload through real routes;
+its synthetic ledger has no certified committee, so submission must fail without
+local enqueue. Separate execution overlays retain contract state assertions.
+Only the four-validator and deployed checks establish canonical Applied state.
+
+Every Cargo-produced harness and native executable is copied under Cargo's
+profile locks into a private read-only directory before execution. Captured
+release checks verify source fingerprints while holding those locks; foreign
+checkout fingerprints fail the check. Later stages and CLI capture use the
+copies, preserving the original Cargo metadata. Another build cannot replace
+the selected executable between compilation and execution. Keep concurrent
+development builds in their own stable Cargo target slots to avoid lock waits
+and source-fingerprint conflicts; the warm release target remains reusable.
+
+The crypto and P2P gates check authentication deadlines, puzzle cancellation,
+memory ownership during in-flight work, exact solution verification and validator
+dial/retry ownership. Dial plus preauth bounds outbound authentication and standby
+takeover independently of established-session idle. Dev/test profiles optimize
+Argon2 and Blake2 arithmetic while retaining the production puzzle policy.
+
+The Core gate then exercises bounded worker backpressure, durable-sidecar retry
+ownership, QueuePlan handoff across view changes and inventory changes, and
+participant predecessor recovery with the exact reservation retained. It also
+exercises the real candidate provider with multiple routable lanes.
 Ordinary transactions remain eligible for global proposals; `QueuePlanSynced`
 transactions require their autonomous reservations, and actual reservation
 conflicts still defer ordinary work. A regression in any of these paths stops
 preparation before the Linux release build.
+
+QueuePlan admission authenticates immutable certificate bytes before opening a
+State view or acquiring the publication fence. Fresh history, committee, route,
+incarnation, registry and application checks remain under the coherent view.
+The regression observes the real decoder and fails if signature authentication
+holds the publication lock or repeats during classification, first persistence
+or exact replay. Companion cases retain historical authority, future-frontier,
+conflicting certificate and bounded one-ahead publication behavior.
+
+Finalization regressions keep a recipient permanently backpressured and require
+the exact durable output handoff to release its retained work. Foreign finality
+authority must fail without retiring output. Live and already-applied restart
+recovery drain their finite ingress prefix before reaching this handoff; remote
+delivery cannot block the local durable boundary that reconstructs that output.
+Before lane preflight, committed global finality and exact Kura sources can
+already release independently reconstructible fanouts. This frees shared
+capacity for pending historical responses and lane certification, including when
+older output owns an actor ticket, a parked route or an unfinished writer flush.
+The partial handoff preserves unresolved lane evidence, exact surviving FIFO
+ownership and sidecar receipts; it does not fabricate network delivery.
 
 The proof gate produces and verifies fully witnessed eight- and sixteen-row
 transfers with the default resource limits, checks the maximum admitted proof
@@ -28,15 +94,37 @@ shape against its canonical frame, and rejects proofs beyond explicit limits.
 Payload accounting and framed persistence use separate ceilings derived from
 the same canonical geometry. The CLI confirmation gate follows a queued hash
 through its exact Applied wire proof, retaining ambiguous expiry as pending and
-rejecting malformed or failed status responses without resubmission.
+retaining the last observation when a status read times out under the remaining
+confirmation budget. It continues polling within that deadline;
+shorter configured request timeouts, malformed responses and other lookup
+failures remain errors. Confirmation never resubmits the transaction.
 
-The final native gate launches four validators from the freshly emitted native
+The next gate launches four validators from the freshly emitted native
 `iroha3d` binary using the same three-route fixture as the consensus integration
-suite. It requires one exact ordinary transaction to reach Applied on every
-validator. Cargo emits both node and client paths explicitly; fallback builds and
+suite. It submits a signature-bound `QueuePlanSynced` public transaction, as
+required by public Torii admission, and requires state-resolved Applied
+in both local and global status on every validator at the same committed height.
+The CLI gate also checks that prepared Inrou pin operations preserve sponsored
+fees and the public QueuePlanSynced intent through signing and replay validation.
+Dedicated service-owned Ordinary admission remains a separate contract.
+Global status can query other peers, so only the additional local observation
+establishes each validator's own application. Peer clients ignore ambient client
+identity and endpoint overrides; status observations have five-second requests.
+Public submission retains the SDK's routed request budget and reconciles its
+original hash before the separate 90-second all-peer observation phase.
+Cargo emits both node and client paths explicitly; fallback builds and
 sandbox skips are disabled. The focused `taira_consensus_contracts` harness avoids
 compiling the full consensus suite, and keeps private fixture logs in the warm
-target for failure diagnosis.
+target for failure diagnosis. Test ports use lifetime-held OS leases in an
+owner-private host runtime directory. A reserved but unbound port remains
+exclusive; process exit releases its lease without writing into the source
+tree or deleting shared lock files.
+
+Each temporary peer has an explicit 1 GiB storage budget on the shared host.
+The gate requires 8 GiB free before compilation and checks again before peer
+startup: 4 GiB for the four budgets and 4 GiB for scratch files and logs.
+Production filesystem auto-sizing remains unchanged. Codec table fixtures are
+embedded, materialized without source permissions, and reused across restarts.
 
 For a testnet attempt stuck on an unresolved canary before edge staging,
 `iroha taira public-reset abandon` takes the original signed inventory,
@@ -53,6 +141,8 @@ existing development lane; both must agree if supplied. Ambient
 a Cargo target. Keep a stable lane for repeated checks.
 
 The focused native gate enables incremental compilation in that existing lane.
+Incremental native runs bypass sccache, which rejects `CARGO_INCREMENTAL=1`.
+Nonincremental native and Linux release builds retain the persistent sccache.
 An explicit `CARGO_INCREMENTAL=0` preserves a constrained or CI build policy;
 only `0` and `1` are admitted. This preference is passed only to native builds
 and tests, and preparation records it with the native-check checkpoint. Linux
@@ -60,7 +150,7 @@ release compilation retains its original sanitized environment and release
 profile. Each feature graph keeps its own Cargo cache; no test features are
 added or removed to force reuse. The first incremental run populates those
 caches, so a speed improvement must be measured on subsequent focused changes.
-The four-validator runtime check runs first, so source-staging or consensus
+The FSM and focused Core regressions precede the four-validator runtime check, so source-staging or consensus
 failures stop before compiling the independent contract harnesses. Its log
 records the actual Cargo-selected native binary paths and profiles separately
 from the later Linux release artifacts.
@@ -138,7 +228,9 @@ Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test
 must exist and execute exactly once. Missing,
-ignored, failed or empty selections fail the command. Fix the named failure and
+ignored, failed or empty selections fail the command. All independent cases in
+a harness run before reporting their combined failures, so one bad fixture cannot
+hide another defect until the next build. Fix the named failures and
 rerun the same command to reuse compiled dependencies.
 
 The selected toolchain's Cargo executes this command from `/` with the isolated

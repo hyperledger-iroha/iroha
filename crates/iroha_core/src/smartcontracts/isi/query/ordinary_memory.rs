@@ -13,8 +13,8 @@ use iroha_data_model::{
         parameters::QueryParams,
     },
     sns::{NameSelectorV1, SuffixId},
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly as _;
 use norito::core::{DecodeFlagsGuard, SerializePayload};
 use std::{

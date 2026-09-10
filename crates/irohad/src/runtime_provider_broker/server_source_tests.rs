@@ -1677,7 +1677,7 @@ fn test_source_authorization(
         [0x88; 32],
         [0x66; 32],
         iroha_data_model::sorafs::pin_registry::ManifestRootCid::from_blake3_digest([0x55; 32])
-            .expect("construct test manifest root CID")
+            .expect("canonical non-zero test manifest root digest")
             .as_bytes()
             .to_vec(),
         "sorafs.sf1@1.0.0".to_owned(),
@@ -2285,7 +2285,7 @@ fn source_protocol_rejects_oversize_metadata_frame_count_and_total_without_alloc
         revision: Some(5),
         policy_digest: Some([0xB1; 32]),
         bootle_lantern_issuance_bindings: None,
-        stream_token_signer_public_key: None,
+        stream_token_hardware_binding: None,
         stream_token_gateway_admission_qualification: None,
         stream_token_gateway_admission_max_pending: None,
         stream_token_gateway_admission_max_tracked_tokens: None,
@@ -2466,34 +2466,59 @@ fn stream_token_gateway_admission_qualification_roundtrips_through_dispatch() {
         Some(qualification.max_tracked_tokens);
     binding.stream_token_gateway_admission_reconcile_max_items = Some(16);
     validate_wire_binding(&binding).expect("valid stream-token gateway binding");
-    // This role must pass its own exact policy, while rejecting every unrelated
-    // metadata family checked by the terminal role branch.
-    let mut confused = binding.clone();
-    confused.governance_request_ingress_binding = Some(governance_request_ingress_binding_to_wire(
-        ingress_fixture(TEST_SIGNER_KEY),
-    ));
-    assert_eq!(
-        validate_wire_binding(&confused),
-        Err(BrokerError::BindingMismatch)
-    );
-    let mut confused = binding.clone();
-    confused.provider_ingest_checkpoint_max_bytes = Some(64);
-    assert_eq!(
-        validate_wire_binding(&confused),
-        Err(BrokerError::BindingMismatch)
-    );
-    let mut confused = binding.clone();
-    confused.evidence_viewer_grant_ttl_ms = Some(1);
-    assert_eq!(
-        validate_wire_binding(&confused),
-        Err(BrokerError::BindingMismatch)
-    );
-    let mut confused = binding.clone();
-    confused.stream_token_gateway_admission_max_pending = Some(qualification.max_pending + 1);
-    assert_eq!(
-        validate_wire_binding(&confused),
-        Err(BrokerError::BindingMismatch)
-    );
+    let mutations: [(&str, fn(&mut ProviderBindingWireV1)); 13] = [
+        ("outer revision", |binding| binding.revision = Some(8)),
+        ("outer policy", |binding| {
+            binding.policy_digest = Some([0x91; 32])
+        }),
+        ("missing qualification", |binding| {
+            binding.stream_token_gateway_admission_qualification = None;
+        }),
+        ("pending ceiling", |binding| {
+            binding.stream_token_gateway_admission_max_pending = Some(65);
+        }),
+        ("token ceiling", |binding| {
+            binding.stream_token_gateway_admission_max_tracked_tokens = Some(33);
+        }),
+        ("zero reconciliation", |binding| {
+            binding.stream_token_gateway_admission_reconcile_max_items = Some(0);
+        }),
+        ("oversized reconciliation", |binding| {
+            binding.stream_token_gateway_admission_reconcile_max_items =
+                Some(iroha_torii::sorafs::STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1 + 1);
+        }),
+        ("foreign governance ingress", |binding| {
+            binding.governance_request_ingress_binding = Some(
+                governance_request_ingress_binding_to_wire(ingress_fixture(TEST_SIGNER_KEY)),
+            );
+        }),
+        ("foreign hardware role", |binding| {
+            binding.stream_token_hardware_binding =
+                token_signer_binding().stream_token_hardware_binding;
+        }),
+        ("foreign evidence role", |binding| {
+            binding.evidence_viewer_grant_ttl_ms = Some(1_000);
+        }),
+        ("foreign provider checkpoint", |binding| {
+            binding.provider_ingest_checkpoint_max_bytes = Some(1_024);
+        }),
+        ("foreign moderation checkpoint", |binding| {
+            binding.moderation_checkpoint_max_bytes = Some(1_024);
+        }),
+        ("foreign governance key", |binding| {
+            binding.governance_dag_publisher_public_key = Some(TEST_SIGNER_KEY);
+        }),
+    ];
+    for (label, mutate) in mutations {
+        let mut changed = binding.clone();
+        mutate(&mut changed);
+        assert_ne!(changed, binding, "{label} must change the fixture");
+        assert_eq!(
+            validate_wire_binding(&changed),
+            Err(BrokerError::BindingMismatch),
+            "{label} must remain rejected after the canonical positive is accepted"
+        );
+    }
     let backends = RuntimeProviderBrokerBackendsV1::new()
         .with_stream_token_gateway_admission(Arc::new(QualificationOnlyProvider { qualification }));
     validate_exact_backend_set(std::slice::from_ref(&binding), &backends)

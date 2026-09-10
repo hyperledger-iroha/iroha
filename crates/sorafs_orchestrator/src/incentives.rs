@@ -8,13 +8,13 @@ use hex::encode as hex_encode;
 use iroha_data_model::{
     account::AccountId,
     metadata::Metadata,
-    name::Name,
     soranet::{
         RelayId,
         incentives::RelayRewardInstructionV1,
         prelude::{Digest32, RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayEpochMetricsV1},
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use soranet_incentives::{
     RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
@@ -430,167 +430,16 @@ impl<'a> MetricsLogOutcome<'a> {
         }
     }
 }
-#[derive(Debug, Error)]
-pub enum MetricsLogError {
-    #[error("failed to create metrics log directory {path:?}: {source}")]
-    CreateDir { path: PathBuf, source: io::Error },
-    #[error("failed to open metrics log at {path:?}: {source}")]
-    Open { path: PathBuf, source: io::Error },
-    #[error("failed to write metrics log at {path:?}: {source}")]
-    Write { path: PathBuf, source: io::Error },
-    #[error("failed to encode relay metrics entry: {0}")]
-    Encode(#[from] norito::Error),
-    #[error("failed to decode metrics log at {path:?}: {source}")]
-    Decode {
-        path: PathBuf,
-        source: norito::Error,
-    },
-    #[error("failed to read metrics log at {path:?}: {source}")]
-    Read { path: PathBuf, source: io::Error },
-}
-#[derive(Debug)]
-struct MetricsLog {
-    path: PathBuf,
-    writer: Mutex<File>,
-}
-impl MetricsLog {
-    fn open(path: PathBuf) -> Result<Self, MetricsLogError> {
-        if let Some(parent) = path.parent()
-            && !parent.as_os_str().is_empty()
-        {
-            std::fs::create_dir_all(parent).map_err(|source| MetricsLogError::CreateDir {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)
-            .map_err(|source| MetricsLogError::Open {
-                path: path.clone(),
-                source,
-            })?;
-        Ok(Self {
-            path,
-            writer: Mutex::new(file),
-        })
-    }
-    fn append(&self, entry: &RelayEpochMetricsV1) -> Result<(), MetricsLogError> {
-        let framed = norito::encode_canonical(entry)?;
-        let mut guard = self.writer.lock().expect("metrics log mutex poisoned");
-        guard
-            .write_all(&framed)
-            .map_err(|source| MetricsLogError::Write {
-                path: self.path.clone(),
-                source,
-            })?;
-        guard.flush().map_err(|source| MetricsLogError::Write {
-            path: self.path.clone(),
-            source,
-        })?;
-        Ok(())
-    }
-}
-/// Read complete canonical relay-metrics frames from a concatenated Norito log.
-///
-/// Reject malformed or truncated records, including an incomplete final append.
-pub fn read_metrics_log(
-    path: impl AsRef<Path>,
-) -> Result<Vec<RelayEpochMetricsV1>, MetricsLogError> {
-    let path = path.as_ref();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let file = File::open(path).map_err(|source| MetricsLogError::Open {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    let mut reader = BufReader::new(file);
-    let mut entries = Vec::new();
-    loop {
-        {
-            let buffer = reader.fill_buf().map_err(|source| MetricsLogError::Read {
-                path: path.to_path_buf(),
-                source,
-            })?;
-            if buffer.is_empty() {
-                break;
-            }
-        }
-        // Each log entry is one exact canonical frame. The exact-stream decoder
-        // intentionally rejects a following frame, so bound this record first.
-        let decode_error = |source| MetricsLogError::Decode {
-            path: path.to_path_buf(),
-            source,
-        };
-        let read_error = |source| MetricsLogError::Read {
-            path: path.to_path_buf(),
-            source,
-        };
-        let mut header_bytes = [0; norito::core::Header::SIZE];
-        reader.read_exact(&mut header_bytes).map_err(read_error)?;
-        let header = norito::core::Header::read(header_bytes.as_slice()).map_err(decode_error)?;
-        if header.schema != norito::schema::identity::frame_hash::<RelayEpochMetricsV1>() {
-            return Err(decode_error(norito::Error::SchemaMismatch));
-        }
-        if header.compression != norito::Compression::None {
-            return Err(decode_error(norito::Error::NonCanonicalEncoding));
-        }
-        let limit = norito::core::max_archive_len();
-        if header.length > limit {
-            return Err(decode_error(norito::Error::ArchiveLengthExceeded {
-                length: header.length,
-                limit,
-            }));
-        }
-        let payload_len = usize::try_from(header.length)
-            .map_err(|_| decode_error(norito::Error::LengthMismatch))?;
-        let alignment = norito::core::archived_payload_align::<RelayEpochMetricsV1>();
-        let padding = (alignment - norito::core::Header::SIZE % alignment) % alignment;
-        let body_len = payload_len
-            .checked_add(padding)
-            .ok_or_else(|| decode_error(norito::Error::LengthMismatch))?;
-        let frame_len = norito::core::Header::SIZE
-            .checked_add(body_len)
-            .ok_or_else(|| decode_error(norito::Error::LengthMismatch))?;
-        let mut frame = header_bytes.to_vec();
-        // Grow only for bytes actually present, never preallocate from an untrusted length.
-        let mut bounded = reader.by_ref().take(
-            u64::try_from(body_len).map_err(|_| decode_error(norito::Error::LengthMismatch))?,
-        );
-        let mut chunk = [0; 8 * 1024];
-        loop {
-            let read = bounded.read(&mut chunk).map_err(read_error)?;
-            if read == 0 {
-                break;
-            }
-            let needed = frame
-                .len()
-                .checked_add(read)
-                .ok_or_else(|| decode_error(norito::Error::LengthMismatch))?;
-            frame.try_reserve(read).map_err(|_| {
-                decode_error(norito::Error::AllocationFailed {
-                    bytes: u64::try_from(needed).unwrap_or(u64::MAX),
-                })
-            })?;
-            frame.extend_from_slice(&chunk[..read]);
-        }
-        if frame.len() != frame_len {
-            return Err(decode_error(norito::Error::LengthMismatch));
-        }
-        entries.push(norito::decode_canonical(&frame).map_err(decode_error)?);
-    }
-    Ok(entries)
-}
+include!("incentives/metrics_log.rs");
 #[cfg(test)]
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        asset::AssetDefinitionId, domain::DomainId, metadata::Metadata, name::Name,
+        asset::AssetDefinitionId, domain::DomainId, metadata::Metadata,
         soranet::incentives::RelayComplianceStatusV1,
     };
+    use iroha_model_base::name::Name;
     use std::convert::TryFrom;
     use tempfile::tempdir;
     fn quantity(value: u32) -> Quantity {
@@ -804,7 +653,10 @@ mod tests {
         drop(log);
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(bytes, canonical.repeat(count));
-        assert_eq!(read_metrics_log(&path).unwrap(), vec![entry; count]);
+        assert_eq!(
+            read_metrics_log(&path, log_test_limits()).unwrap(),
+            vec![entry; count]
+        );
         for length in [
             1,
             norito::core::Header::SIZE - 1,
@@ -813,7 +665,7 @@ mod tests {
         ] {
             std::fs::write(&path, &bytes[..length]).unwrap();
             assert!(
-                read_metrics_log(&path).is_err(),
+                read_metrics_log(&path, log_test_limits()).is_err(),
                 "partial log at {length} accepted"
             );
         }
@@ -828,7 +680,7 @@ mod tests {
         );
         std::fs::write(&path, header).unwrap();
         assert!(
-            read_metrics_log(&path).is_err(),
+            read_metrics_log(&path, log_test_limits()).is_err(),
             "unbacked declared size accepted"
         );
     }
@@ -862,7 +714,7 @@ mod tests {
             sample_account(),
             Metadata::default(),
         );
-        let records = read_metrics_log(&log_path).expect("read metrics log");
+        let records = read_metrics_log(&log_path, log_test_limits()).expect("read metrics log");
         assert_eq!(records.len(), 2);
         let recorded_bytes = std::fs::read(&log_path).expect("read actual producer bytes");
         assert_eq!(
@@ -876,7 +728,7 @@ mod tests {
         let corrupt_path = dir.path().join("wrong-owner.log");
         std::fs::write(&corrupt_path, wrong_owner).expect("write owner substitution");
         assert!(matches!(
-            read_metrics_log(&corrupt_path),
+            read_metrics_log(&corrupt_path, log_test_limits()),
             Err(MetricsLogError::Decode {
                 source: norito::Error::SchemaMismatch,
                 ..
@@ -903,4 +755,5 @@ mod tests {
             Some(&Json::new("epoch-1"))
         );
     }
+    include!("incentives/metrics_log_tests.rs");
 }

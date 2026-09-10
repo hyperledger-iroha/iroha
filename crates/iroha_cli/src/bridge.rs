@@ -5,11 +5,12 @@ use clap::Subcommand;
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     client::{
-        SccpBridgeSubmitResponse, SccpCapabilities, SccpDestinationProofSubmitRequest,
-        SccpNativeMessageSubmitRequest, SccpRecentMessages, SccpRecentMessagesQuery,
+        SccpBridgeSubmitResponse, SccpDestinationProofSubmitRequest,
+        SccpNativeMessageSubmitRequest, SccpRecentMessagesQuery,
     },
     data_model::{bridge::SccpRegistryV1, prelude::*},
 };
+use iroha_sccp::api::{SccpCapabilities, SccpRecentMessages};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -810,8 +811,8 @@ fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecVal
 mod tests {
     use super::*;
     use clap::Parser as _;
-    use iroha::client::{SccpRegistryLimits, SccpResourceLimits};
     use iroha_crypto::{Algorithm, KeyPair, Signature};
+    use iroha_sccp::api::{SccpRegistryLimits, SccpResourceLimits};
     use std::{cell::Cell, path::PathBuf};
     use tempfile::tempdir;
     #[derive(clap::Parser)]
@@ -1333,7 +1334,7 @@ mod tests {
     #[test]
     fn recent_summary_includes_both_governed_hash_roles() {
         let summary = render_sccp_recent_messages_summary(&SccpRecentMessages {
-            items: vec![iroha::client::SccpRecentMessage {
+            items: vec![iroha_sccp::api::SccpRecentMessage {
                 height: 9,
                 commitment_index: 0,
                 message_id_hex: "11".repeat(32),
@@ -1370,7 +1371,7 @@ mod tests {
                         },
                     },
                 ),
-                links: iroha::client::SccpRecentMessageLinks {
+                links: iroha_sccp::api::SccpRecentMessageLinks {
                     bundle_path: "/v1/sccp/proofs/message/id".to_owned(),
                     proof_request_path: "/v1/sccp/proof-requests/id".to_owned(),
                 },

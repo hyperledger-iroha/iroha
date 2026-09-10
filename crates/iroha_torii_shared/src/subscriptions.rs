@@ -314,7 +314,7 @@ pub struct SubscriptionUsageRequest {
     /// Account authorizing the transaction (usage reporter).
     pub authority: iroha_data_model::account::AccountId,
     /// Usage counter key to update.
-    pub unit_key: iroha_data_model::name::Name,
+    pub unit_key: iroha_model_base::name::Name,
     /// Non-negative usage increment.
     pub delta: iroha_primitives::numeric::Quantity,
     /// Optional usage trigger id; derived when omitted.

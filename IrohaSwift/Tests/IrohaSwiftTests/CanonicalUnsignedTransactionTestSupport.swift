@@ -66,7 +66,7 @@ enum CanonicalUnsignedTransactionTestSupport {
     codeHashHex: String,
     networkId: NetworkId,
     feePayment: FeePaymentIntent? = nil,
-    admissionIntent: TransactionAdmissionIntentV1 = .ordinary,
+    admissionIntent: TransactionAdmissionIntentV1 = .queuePlanSynced,
     additionalMetadata: [String: ToriiJSONValue] = [:]
   ) throws -> Data {
     var invocation = CompactNoritoWriter()

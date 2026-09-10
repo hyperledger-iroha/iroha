@@ -143,6 +143,11 @@ report and an unpublished marker; it records the publication acknowledgement
 after success, retries exact bytes after crashes, refuses to skip a pending
 cycle, and catches up one missing week at a time.
 
+The canonical status and export page DTOs are `sorafs_manifest::por::PorStatusPageV1`
+and `sorafs_manifest::por::PorStatusExportPageV1`. Torii, the orchestrator CLI, and
+its fixtures use these definitions directly. Each type declares one protocol
+frame identity independently of its Rust module path.
+
 ## Torii API Extensions
 | Method | Path | Description |
 |--------|------|-------------|

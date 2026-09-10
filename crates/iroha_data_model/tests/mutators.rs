@@ -3,6 +3,7 @@
 //! Verifies that new/modified mutators behave correctly and keep state coherent.
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
+use iroha_model_base::name::Name;
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()

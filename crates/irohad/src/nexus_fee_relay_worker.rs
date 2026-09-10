@@ -31,7 +31,6 @@ use iroha_data_model::{
         nexus::{RegisterVerifiedFeeSponsorVaultAllocation, RegisterVerifiedLaneRelay},
     },
     metadata::Metadata,
-    name::Name,
     nexus::{
         AxtEffectBinding, AxtFastpqBinding, DataSpaceId, FeeSponsorAssetBudget,
         FeeSponsorEligibility, FeeSponsorProgramId, FeeSponsorProgramLifecycle,
@@ -44,10 +43,10 @@ use iroha_data_model::{
         fee_sponsor_vault_policy_commitment, fee_sponsor_vault_source_state_root,
         lane_relay_fastpq_claim_digest,
     },
-    state_path::StatePath,
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,
     numeric::{MAX_DECIMAL_SCALE, Numeric, Quantity, RoundingMode},
@@ -82,6 +81,8 @@ struct DurableWorkerState {
     relays: BTreeMap<String, DurableRelayWork>,
     allocations: BTreeMap<String, DurableAllocationWork>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableRelayWork")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableRelayWork {
     envelope: LaneRelayEnvelope,
@@ -94,6 +95,8 @@ enum RelayAttemptDecision {
     Rejected,
     Ready(Box<LaneRelayEnvelope>),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableAllocationWork")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DurableAllocationWork {
     program_id: FeeSponsorProgramId,
@@ -130,6 +133,8 @@ struct FeeSponsorVaultLeaseBinding {
     source_state_root: Hash,
     expires_at_height: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::nexus_fee_relay_worker::DurableWorkStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 enum DurableWorkStatus {
     Pending,

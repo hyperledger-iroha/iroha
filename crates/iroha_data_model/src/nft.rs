@@ -3,19 +3,20 @@ pub use self::model::*;
 use crate::{
     IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref, split_nonempty},
-    error::ParseError,
     metadata::Metadata,
     prelude::AccountId,
 };
 use iroha_data_model_derive::model;
+use iroha_model_base::error::ParseError;
 use std::{format, str::FromStr, string::String, vec::Vec};
 #[model]
 mod model {
     use super::*;
-    use crate::{Identifiable, Name, account::prelude::*, domain::prelude::*};
+    use crate::{Identifiable, account::prelude::*, domain::prelude::*};
     use derive_more::Constructor;
     use getset::{CopyGetters, Getters};
     use iroha_data_model_derive::{IdEqOrdHash, RegistrableBuilder};
+    use iroha_model_base::name::Name;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     /// Identification of an Non Fungible Asset. Consists of Asset name and Domain name.
@@ -118,7 +119,10 @@ impl Nft {
 }
 impl NftId {
     /// Convenience alias for [`Self::new`]
-    pub fn of(domain: crate::domain::prelude::DomainId, name: crate::Name) -> Self {
+    pub fn of(
+        domain: crate::domain::prelude::DomainId,
+        name: iroha_model_base::name::Name,
+    ) -> Self {
         Self::new(domain, name)
     }
 }
@@ -165,7 +169,8 @@ impl IntoKeyValue for Nft {
 #[cfg(test)]
 mod json_tests {
     use super::*;
-    use crate::{Name, domain::prelude::DomainId, metadata::Metadata};
+    use crate::{domain::prelude::DomainId, metadata::Metadata};
+    use iroha_model_base::name::Name;
     #[test]
     fn new_nft_json_roundtrip() {
         let domain = DomainId::try_new("art", "universal").expect("domain id");
@@ -185,7 +190,8 @@ mod json_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Name, domain::prelude::DomainId};
+    use crate::domain::prelude::DomainId;
+    use iroha_model_base::name::Name;
 
     #[test]
     fn registration_builder_schema_identity_matches_capture() {

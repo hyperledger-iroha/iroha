@@ -13,18 +13,16 @@ use iroha_data_model::{
     account::AccountId,
     kagemusha::{
         KAGEMUSHA_ACKNOWLEDGEMENT_MAX_BYTES_V1, KAGEMUSHA_AGGREGATE_STATE_MAX_BYTES_V1,
-        KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, KAGEMUSHA_HARDWARE_CREDENTIAL_MAX_BYTES_V1,
-        KAGEMUSHA_HARDWARE_PROFILE_MAX_BYTES_V1, KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1,
+        KAGEMUSHA_ENCRYPTED_CREDIT_MAX_BYTES_V1, KAGEMUSHA_MINT_AUTHORIZATION_MAX_BYTES_V1,
         KAGEMUSHA_PAYMENT_MAX_BYTES_V1, KAGEMUSHA_PAYMENT_REQUEST_MAX_BYTES_V1,
         KAGEMUSHA_REQUEST_MAX_TTL_MS_V1, KAGEMUSHA_WIRE_VERSION_V1, KagemushaAcknowledgementV1,
         KagemushaAggregateStateCommitmentV1, KagemushaCommitEvidenceV1, KagemushaDevicePublicKeyV1,
-        KagemushaEncryptedCreditEnvelopeV1, KagemushaHardwareCredentialV1,
-        KagemushaHardwareProfileV1, KagemushaInboxReceiptV1, KagemushaMintAuthorizationV1,
+        KagemushaEncryptedCreditEnvelopeV1, KagemushaInboxReceiptV1, KagemushaMintAuthorizationV1,
         KagemushaPaymentRequestV1, KagemushaPaymentV1, kagemusha_ciphertext_digest_v1,
     },
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
 };
 
@@ -104,8 +102,11 @@ use iroha_data_model::kagemusha::{
     KagemushaDeviceReadCredentialCommandV1 as ReadCredentialPayloadV1,
 };
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.sign-receive-acknowledgement-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::SignAcknowledgementPayloadV1",
+    frame = "iroha.kagemusha.device.v1.sign-receive-acknowledgement-command"
+)]
 struct SignAcknowledgementPayloadV1 {
     version: u16,
     operation: u8,
@@ -114,15 +115,21 @@ struct SignAcknowledgementPayloadV1 {
     inbox_receipt: KagemushaInboxReceiptV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.read-trusted-time-or-lease-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::ReadTimeOrLeasePayloadV1",
+    frame = "iroha.kagemusha.device.v1.read-trusted-time-or-lease-command"
+)]
 struct ReadTimeOrLeasePayloadV1 {
     version: u16,
     operation: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.prepare-mint-authorization-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PrepareMintPayloadV1",
+    frame = "iroha.kagemusha.device.v1.prepare-mint-authorization-command"
+)]
 struct PrepareMintPayloadV1 {
     version: u16,
     operation: u8,
@@ -132,16 +139,22 @@ struct PrepareMintPayloadV1 {
     recipient: AccountId,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.recover-mint-authorization-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RecoverMintPayloadV1",
+    frame = "iroha.kagemusha.device.v1.recover-mint-authorization-command"
+)]
 struct RecoverMintPayloadV1 {
     version: u16,
     operation: u8,
     operation_id: [u8; 32],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.fold-receive-credit-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::FoldReceiveCreditPayloadV1",
+    frame = "iroha.kagemusha.device.v1.fold-receive-credit-command"
+)]
 struct FoldReceiveCreditPayloadV1 {
     version: u16,
     operation: u8,
@@ -151,8 +164,11 @@ struct FoldReceiveCreditPayloadV1 {
 }
 
 /// The authenticated inbox holding one pending monetary credit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-kind")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PendingCreditKindV1",
+    frame = "iroha.kagemusha.device.v1.pending-credit-kind"
+)]
 pub(super) enum PendingCreditKindV1 {
     /// A finalized reserve-backed mint awaiting `MintFold`.
     Mint,
@@ -161,16 +177,22 @@ pub(super) enum PendingCreditKindV1 {
 }
 
 /// One deterministic pending-credit selection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-selector")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PendingCreditSelectorV1",
+    frame = "iroha.kagemusha.device.v1.pending-credit-selector"
+)]
 pub(super) struct PendingCreditSelectorV1 {
     kind: PendingCreditKindV1,
     credit_id: [u8; 32],
 }
 
 /// Epoch-qualified inclusive inbox boundary retained for one selection pass.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-watermark")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PendingCreditWatermarkV1",
+    frame = "iroha.kagemusha.device.v1.pending-credit-watermark"
+)]
 pub(super) struct PendingCreditWatermarkV1 {
     hardware_epoch_generation: u128,
     hardware_epoch_id: [u8; 32],
@@ -178,8 +200,11 @@ pub(super) struct PendingCreditWatermarkV1 {
 }
 
 /// The amount-aware objective for one pending-credit selection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-target")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PendingCreditTargetV1",
+    frame = "iroha.kagemusha.device.v1.pending-credit-target"
+)]
 pub(super) enum PendingCreditTargetV1 {
     /// Select the next credit regardless of the current aggregate balance.
     DrainAll,
@@ -187,8 +212,11 @@ pub(super) enum PendingCreditTargetV1 {
     RequiredBalance(u128),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.read-pending-credit-watermark-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::ReadPendingWatermarkPayloadV1",
+    frame = "iroha.kagemusha.device.v1.read-pending-credit-watermark-command"
+)]
 struct ReadPendingWatermarkPayloadV1 {
     version: u16,
     operation: u8,
@@ -196,31 +224,43 @@ struct ReadPendingWatermarkPayloadV1 {
     target: PendingCreditTargetV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.rotate-hardware-epoch-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RotateHardwareEpochPayloadV1",
+    frame = "iroha.kagemusha.device.v1.rotate-hardware-epoch-command"
+)]
 struct RotateHardwareEpochPayloadV1 {
     version: u16,
     operation: u8,
     operation_id: [u8; 32],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.bootstrap-aggregate-state-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::BootstrapAggregateStatePayloadV1",
+    frame = "iroha.kagemusha.device.v1.bootstrap-aggregate-state-command"
+)]
 struct BootstrapAggregateStatePayloadV1 {
     version: u16,
     operation: u8,
     operation_id: [u8; 32],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.recover-wallet-snapshot-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RecoverWalletSnapshotPayloadV1",
+    frame = "iroha.kagemusha.device.v1.recover-wallet-snapshot-command"
+)]
 struct RecoverWalletSnapshotPayloadV1 {
     version: u16,
     operation: u8,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.create-signed-payment-request-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::CreateSignedPaymentRequestPayloadV1",
+    frame = "iroha.kagemusha.device.v1.create-signed-payment-request-command"
+)]
 struct CreateSignedPaymentRequestPayloadV1 {
     version: u16,
     operation: u8,
@@ -340,6 +380,7 @@ where
     .map_err(|_| ControlErrorV1::CanonicalEncoding)
 }
 
+#[cfg(test)]
 fn encode<T: NoritoSerialize>(value: &T, maximum: usize) -> Result<Vec<u8>> {
     let bytes = norito::encode_canonical(value).map_err(|_| ControlErrorV1::CanonicalEncoding)?;
     bound(&bytes, maximum)?;
@@ -518,6 +559,7 @@ pub(super) fn decode_control_command_v1(
 }
 
 /// Decode the exact operation-1 projection for the native startup owner.
+#[cfg(test)]
 pub(super) fn qualification_projection_v1(
     bytes: &[u8],
 ) -> Result<super::QualificationProjectionV1> {
@@ -532,24 +574,33 @@ pub(super) fn qualification_projection_v1(
     })
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.receive-acknowledgement-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::AcknowledgementReplyV1",
+    frame = "iroha.kagemusha.device.v1.receive-acknowledgement-reply"
+)]
 struct AcknowledgementReplyV1 {
     version: u16,
     operation: u8,
     canonical_acknowledgement: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.trusted-time-or-lease-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::TimeOrLeaseReplyV1",
+    frame = "iroha.kagemusha.device.v1.trusted-time-or-lease-reply"
+)]
 struct TimeOrLeaseReplyV1 {
     version: u16,
     operation: u8,
     evidence: KagemushaCommitEvidenceV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.mint-construction-bundle-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::MintConstructionBundleReplyV1",
+    frame = "iroha.kagemusha.device.v1.mint-construction-bundle-reply"
+)]
 struct MintConstructionBundleReplyV1 {
     version: u16,
     operation: u8,
@@ -557,8 +608,11 @@ struct MintConstructionBundleReplyV1 {
     encrypted_credit: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.fold-receive-credit-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::FoldReceiveCreditReplyV1",
+    frame = "iroha.kagemusha.device.v1.fold-receive-credit-reply"
+)]
 struct FoldReceiveCreditReplyV1 {
     version: u16,
     operation: u8,
@@ -567,8 +621,11 @@ struct FoldReceiveCreditReplyV1 {
     canonical_aggregate_state: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-watermark-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PendingWatermarkReplyV1",
+    frame = "iroha.kagemusha.device.v1.pending-credit-watermark-reply"
+)]
 struct PendingWatermarkReplyV1 {
     version: u16,
     operation: u8,
@@ -576,24 +633,33 @@ struct PendingWatermarkReplyV1 {
     next_pending: Option<PendingCreditSelectorV1>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.rotate-hardware-epoch-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RotationReplyV1",
+    frame = "iroha.kagemusha.device.v1.rotate-hardware-epoch-reply"
+)]
 struct RotationReplyV1 {
     version: u16,
     operation: u8,
     canonical_aggregate_state: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.bootstrap-aggregate-state-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::BootstrapAggregateStateReplyV1",
+    frame = "iroha.kagemusha.device.v1.bootstrap-aggregate-state-reply"
+)]
 struct BootstrapAggregateStateReplyV1 {
     version: u16,
     operation: u8,
     canonical_aggregate_state: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::WalletRecoverySnapshotReplyV1",
+    frame = "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply"
+)]
 struct WalletRecoverySnapshotReplyV1 {
     version: u16,
     operation: u8,
@@ -603,8 +669,11 @@ struct WalletRecoverySnapshotReplyV1 {
     retry_outbox_count: u128,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.signed-payment-request-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::SignedPaymentRequestReplyV1",
+    frame = "iroha.kagemusha.device.v1.signed-payment-request-reply"
+)]
 struct SignedPaymentRequestReplyV1 {
     version: u16,
     operation: u8,
@@ -614,6 +683,7 @@ struct SignedPaymentRequestReplyV1 {
 /// Correlate signed reads with independently pinned native wallet and credential selectors.
 /// This still does not authenticate a recursive aggregate witness, a revocation decision or a
 /// private clock/lease opening; the state backend must establish those before a transition.
+#[cfg(test)]
 pub(super) fn validate_observation_reply_context_v1(
     operation: u8,
     bytes: &[u8],

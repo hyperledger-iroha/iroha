@@ -2,17 +2,14 @@
 //! Runs the privileged Sora VPN helper and its authenticated control protocol.
 use blake3::{Hasher as Blake3Hasher, hash as blake3_hash};
 use hex::FromHexError;
+#[cfg(test)]
+use iroha_crypto::soranet::constant_rate::{ConstantRateReceivePacer, MuxFrame};
 use iroha_crypto::{
     Algorithm, KeyPair, PublicKey,
     soranet::{
         certificate::{
             is_public_relay_ip, leaf_certificate_spki_sha256, validate_quic_multiaddr,
             validate_tls_server_name,
-        },
-        constant_rate::{
-            CONSTANT_RATE_CELL_BYTES, CONSTANT_RATE_MAX_PAYLOAD_BYTES,
-            CellClass as ConstantRateCellClass, ConstantRateReceivePacer, FixedRateScheduler,
-            MuxChannel, MuxFlags, MuxFrame, MuxLifecycle, codec as constant_rate_codec,
         },
         handshake::{
             DEFAULT_CLIENT_CAPABILITIES, DEFAULT_RELAY_CAPABILITIES, RelayAuthenticationVerifierV1,
@@ -50,6 +47,8 @@ use std::{
     os::unix::ffi::OsStrExt as _,
     process::{Child, ExitStatus},
 };
+#[cfg(test)]
+use tokio::sync::mpsc;
 iroha_crypto::define_soranet_record_io_adapters!(soranet_record_io);
 use iroha_data_model::soranet::vpn::{
     VPN_DEFAULT_TUNNEL_MTU_BYTES, VPN_HELPER_TICKET_LEN, VPN_RELAY_MLDSA65_PUBLIC_KEY_BYTES_V1,
@@ -83,8 +82,8 @@ use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::lookup_host,
     signal::unix::{Signal, SignalKind, signal},
-    sync::{Notify, mpsc},
-    time::{MissedTickBehavior, interval, timeout},
+    sync::Notify,
+    time::timeout,
 };
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -98,10 +97,10 @@ const CONNECT_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const CONNECT_READY_TIMEOUT: Duration = Duration::from_secs(5 * 60);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+#[cfg(test)]
 const STRICT_CONSTANT_RATE_TICK: Duration = Duration::from_millis(5);
+#[cfg(test)]
 const STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS: u32 = 8;
-const STRICT_CONSTANT_RATE_QUEUE_CAPACITY: usize = 16;
-const STRICT_CONSTANT_RATE_CLOSE_CODE: u32 = 0x534e_01;
 const QUIC_DEPENDENCY_BLOCK_REASON: &str = "Sora VPN helper QUIC is unavailable with locked quinn-proto 0.11.15: released 0.11.17 fixes unauthenticated remote memory exhaustion in stream reassembly, connection-ID retirement, and zero-length DATAGRAM accounting; upgrade the lockfile to 0.11.17 or later and requalify QUIC before re-enabling it";
 const VPN_STREAM_FINISH_TIMEOUT: Duration = Duration::from_secs(10);
 const SYSTEM_COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
@@ -4820,6 +4819,7 @@ fn record_stream_context(stream_id: StreamId) -> RecordStreamContext {
     RecordStreamContext::new(initiator, kind, stream_id.index())
 }
 
+#[cfg(test)]
 fn strict_vpn_lane_id(session_id: [u8; 16]) -> u64 {
     let first = u64::from_be_bytes(
         session_id[..8]
@@ -4837,89 +4837,7 @@ fn strict_vpn_lane_id(session_id: [u8; 16]) -> u64 {
     .max(1)
 }
 
-fn spawn_strict_vpn_transport(
-    connection: &Connection,
-    record_layer: &RecordLayer,
-    session_id: [u8; 16],
-) -> Result<(tokio::io::DuplexStream, tokio::task::JoinHandle<()>), ControllerError> {
-    if connection
-        .max_datagram_size()
-        .is_none_or(|maximum| maximum < CONSTANT_RATE_CELL_BYTES)
-    {
-        return Err(ControllerError::Handshake(
-            "strict SoraNet VPN requires QUIC DATAGRAM support for 1024-byte cells".to_owned(),
-        ));
-    }
-    let (sealer, opener) = constant_rate_codec(record_layer)
-        .map_err(|error| ControllerError::Handshake(error.to_string()))?;
-    let lane_id = strict_vpn_lane_id(session_id);
-    let (application_io, transport_io) =
-        tokio::io::duplex(CONSTANT_RATE_CELL_BYTES.saturating_mul(64));
-    let (source, sink) = tokio::io::split(transport_io);
-    let (outbound_tx, outbound_rx) = mpsc::channel(STRICT_CONSTANT_RATE_QUEUE_CAPACITY);
-    let task_connection = connection.clone();
-    let task = tokio::spawn(async move {
-        let producer = strict_vpn_producer(source, outbound_tx, task_connection.clone(), lane_id);
-        let sender = strict_vpn_sender(task_connection.clone(), sealer, outbound_rx);
-        let receiver = strict_vpn_receiver(task_connection.clone(), opener, sink, lane_id);
-        tokio::pin!(producer);
-        tokio::pin!(sender);
-        tokio::pin!(receiver);
-        let _failure = tokio::select! {
-            result = &mut producer => result.err(),
-            result = &mut sender => result.err(),
-            result = &mut receiver => result.err(),
-        };
-        task_connection.close(
-            VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE),
-            b"strict constant-rate VPN transport stopped",
-        );
-    });
-    Ok((application_io, task))
-}
-
-async fn strict_vpn_producer(
-    mut source: tokio::io::ReadHalf<tokio::io::DuplexStream>,
-    outbound: mpsc::Sender<MuxFrame>,
-    connection: Connection,
-    lane_id: u64,
-) -> Result<(), String> {
-    let mut buffer = vec![0_u8; CONSTANT_RATE_MAX_PAYLOAD_BYTES];
-    let mut first = true;
-    loop {
-        let read = source
-            .read(&mut buffer)
-            .await
-            .map_err(|error| format!("strict VPN producer read failed: {error}"))?;
-        let bits = if read == 0 {
-            if first {
-                MuxFlags::OPEN | MuxFlags::FIN
-            } else {
-                MuxFlags::FIN
-            }
-        } else if first {
-            MuxFlags::OPEN
-        } else {
-            0
-        };
-        let flags = MuxFlags::new(bits).map_err(|error| error.to_string())?;
-        let frame = MuxFrame::new(
-            MuxChannel::Vpn,
-            ConstantRateCellClass::Interactive,
-            lane_id,
-            flags,
-            buffer[..read].to_vec(),
-        )
-        .map_err(|error| error.to_string())?;
-        try_enqueue_strict_vpn_frame(&outbound, frame)?;
-        first = false;
-        if read == 0 {
-            let _ = connection.closed().await;
-            return Ok(());
-        }
-    }
-}
-
+#[cfg(test)]
 fn try_enqueue_strict_vpn_frame(
     outbound: &mpsc::Sender<MuxFrame>,
     frame: MuxFrame,
@@ -4929,116 +4847,11 @@ fn try_enqueue_strict_vpn_frame(
         .map_err(|_| "strict VPN producer queue is full or closed".to_owned())
 }
 
-async fn strict_vpn_sender(
-    connection: Connection,
-    mut sealer: iroha_crypto::soranet::constant_rate::ConstantRateSealer,
-    mut outbound: mpsc::Receiver<MuxFrame>,
-) -> Result<(), String> {
-    let mut scheduler = FixedRateScheduler::new(STRICT_CONSTANT_RATE_QUEUE_CAPACITY, 1);
-    let mut ticker = interval(STRICT_CONSTANT_RATE_TICK);
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            biased;
-            scheduled = ticker.tick() => {
-                let lateness = tokio::time::Instant::now().saturating_duration_since(scheduled);
-                if lateness >= STRICT_CONSTANT_RATE_TICK {
-                    return Err(format!(
-                        "strict VPN sender missed a fixed-rate tick by {lateness:?}"
-                    ));
-                }
-                if connection.datagram_send_buffer_space() < CONSTANT_RATE_CELL_BYTES {
-                    return Err("strict VPN DATAGRAM send buffer cannot accept one cell".to_owned());
-                }
-                let frame = scheduler.next_frame();
-                let encoded = sealer
-                    .seal(&frame)
-                    .map_err(|error| error.to_string())?
-                    .encode();
-                connection
-                    .send_datagram(encoded.to_vec().into())
-                    .map_err(|error| format!("strict VPN DATAGRAM send failed: {error}"))?;
-            }
-            frame = outbound.recv() => {
-                let frame = frame.ok_or_else(|| "strict VPN producer queue closed".to_owned())?;
-                scheduler.enqueue(frame).map_err(|error| error.to_string())?;
-            }
-        }
-    }
-}
-
-async fn strict_vpn_receiver(
-    connection: Connection,
-    mut opener: iroha_crypto::soranet::constant_rate::ConstantRateOpener,
-    mut sink: tokio::io::WriteHalf<tokio::io::DuplexStream>,
-    lane_id: u64,
-) -> Result<(), String> {
-    let mut lifecycle = MuxLifecycle::new(1);
-    let receive_deadline = strict_constant_rate_receive_deadline(STRICT_CONSTANT_RATE_TICK);
-    let mut pacing = ConstantRateReceivePacer::new(STRICT_CONSTANT_RATE_TICK)
-        .expect("the strict VPN tick is non-zero");
-    let mut first_cell_at = None;
-    loop {
-        let datagram = strict_vpn_receive_with_deadline(receive_deadline, async {
-            tokio::select! {
-                datagram = connection.read_datagram() => {
-                    datagram.map_err(|error| format!("strict VPN DATAGRAM receive failed: {error}"))
-                }
-                stream = connection.accept_bi() => {
-                    if let Ok((mut send, mut recv)) = stream {
-                        let _ = send.reset(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
-                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
-                    }
-                    Err("relay attempted an unscheduled bidirectional stream in strict mode".to_owned())
-                }
-                stream = connection.accept_uni() => {
-                    if let Ok(mut recv) = stream {
-                        let _ = recv.stop(VarInt::from_u32(STRICT_CONSTANT_RATE_CLOSE_CODE));
-                    }
-                    Err("relay attempted an unscheduled unidirectional stream in strict mode".to_owned())
-                }
-            }
-        })
-        .await?;
-        let arrived_at = Instant::now();
-        let first_cell_at = *first_cell_at.get_or_insert(arrived_at);
-        if !pacing.admit(arrived_at.saturating_duration_since(first_cell_at)) {
-            return Err(
-                "relay sent a cell ahead of the negotiated strict VPN pacing envelope".to_owned(),
-            );
-        }
-        let frame = opener.open(&datagram).map_err(|error| error.to_string())?;
-        lifecycle
-            .accept(&frame)
-            .map_err(|error| error.to_string())?;
-        if frame.channel == MuxChannel::Cover {
-            continue;
-        }
-        if frame.channel != MuxChannel::Vpn
-            || frame.class != ConstantRateCellClass::Interactive
-            || frame.lane_id != lane_id
-        {
-            return Err("relay sent a strict cell for an unauthorized VPN mux lane".to_owned());
-        }
-        if !frame.payload.is_empty() {
-            sink.write_all(&frame.payload)
-                .await
-                .map_err(|error| format!("strict VPN consumer write failed: {error}"))?;
-        }
-        if frame.flags.is_fin() {
-            sink.shutdown()
-                .await
-                .map_err(|error| format!("strict VPN consumer shutdown failed: {error}"))?;
-            return Ok(());
-        }
-        if frame.flags.is_reset() {
-            return Err("relay reset the strict VPN mux lane".to_owned());
-        }
-    }
-}
+#[cfg(test)]
 fn strict_constant_rate_receive_deadline(tick_duration: Duration) -> Duration {
     tick_duration.saturating_mul(STRICT_CONSTANT_RATE_RECEIVE_GRACE_TICKS)
 }
+#[cfg(test)]
 async fn strict_vpn_receive_with_deadline<T>(
     deadline: Duration,
     receive: impl Future<Output = Result<T, String>>,
@@ -10282,22 +10095,6 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, ControllerError> {
         ));
     }
     Ok(hex::decode(normalized)?)
-}
-fn parse_fixed_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
-    let trimmed = value.trim();
-    let normalized = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-        .unwrap_or(trimmed);
-    if normalized.len() != 64 {
-        return Err(ControllerError::InvalidPayload(format!(
-            "{label} must decode to 32 bytes (got {} hexadecimal characters)",
-            normalized.len()
-        )));
-    }
-    let mut bytes = [0_u8; 32];
-    hex::decode_to_slice(normalized, &mut bytes)?;
-    Ok(bytes)
 }
 fn parse_canonical_nonzero_hex_32(value: &str, label: &str) -> Result<[u8; 32], ControllerError> {
     if value.len() != 64

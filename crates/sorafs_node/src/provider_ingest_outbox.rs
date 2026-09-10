@@ -4,8 +4,6 @@
 //! signer material. It retains the immutable ledger binding, source-delivery crash state, and the
 //! exact signed completion transaction required for reconciliation.
 
-mod completion_codec;
-
 use crate::provider_ingest_runtime::{
     ProviderIngestVerifiedMusubiBundleReceiptV1, StoredProviderIngestVerifiedMusubiBundleReceiptV1,
 };
@@ -502,6 +500,10 @@ impl ProviderIngestClaimOwnerV1 {
     }
 }
 /// Exact finalized network and archive identity retained for one Musubi ingest job.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::FinalizedProviderIngestMusubiContextV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestMusubiContextV1 {
     network_id: NetworkId,
@@ -547,6 +549,10 @@ impl FinalizedProviderIngestMusubiContextV1 {
     }
 }
 /// Immutable authorization derived from exact finalized ledger state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::FinalizedProviderIngestAuthorizationV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct FinalizedProviderIngestAuthorizationV1 {
     job_id: [u8; 32],
@@ -1185,6 +1191,8 @@ pub struct ProviderIngestFinalizedCancellationV1 {
     /// Authoritative cancellation class.
     pub reason: ProviderIngestCancellationReasonV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::StoredCompletionDeliveryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredCompletionDeliveryV1 {
     state: StoredDeliveryStateV1,
@@ -1261,34 +1269,6 @@ impl DeliveryRecord for StoredCompletionDeliveryV1 {
         self.signed_transaction = transaction;
     }
 }
-/// Pointer-sized completion storage with a transparent nested payload codec.
-///
-/// The checkpoint supplies the frame identity. This indirection limits the enum's
-/// in-memory size while encoding exactly the completion fields.
-#[repr(transparent)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct BoxedStoredCompletionDeliveryV1(Box<StoredCompletionDeliveryV1>);
-impl BoxedStoredCompletionDeliveryV1 {
-    fn new(completion: StoredCompletionDeliveryV1) -> Self {
-        Self(Box::new(completion))
-    }
-}
-impl AsRef<StoredCompletionDeliveryV1> for BoxedStoredCompletionDeliveryV1 {
-    fn as_ref(&self) -> &StoredCompletionDeliveryV1 {
-        self.0.as_ref()
-    }
-}
-impl std::ops::Deref for BoxedStoredCompletionDeliveryV1 {
-    type Target = StoredCompletionDeliveryV1;
-    fn deref(&self) -> &Self::Target {
-        self.0.as_ref()
-    }
-}
-impl std::ops::DerefMut for BoxedStoredCompletionDeliveryV1 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.0.as_mut()
-    }
-}
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestStateV1 {
     PendingSource,
@@ -1305,9 +1285,11 @@ enum StoredProviderIngestStateV1 {
     LocalStored {
         manifest_id: String,
         musubi_bundle: Option<Box<StoredProviderIngestVerifiedMusubiBundleReceiptV1>>,
-        completion: BoxedStoredCompletionDeliveryV1,
+        completion: Box<StoredCompletionDeliveryV1>,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::StoredActiveProviderIngestV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredActiveProviderIngestV1 {
     sequence: u64,
@@ -1316,6 +1298,10 @@ struct StoredActiveProviderIngestV1 {
     claim_generation: u64,
     state: StoredProviderIngestStateV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::provider_ingest_outbox::StoredProviderIngestTerminalOutcomeV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 enum StoredProviderIngestTerminalOutcomeV1 {
     FinalizedCompleted {
@@ -1337,6 +1323,8 @@ enum StoredProviderIngestTerminalOutcomeV1 {
         observed_finalized_cursor: ProviderIngestFinalizedCursorV1,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_outbox::StoredTerminalProviderIngestV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredTerminalProviderIngestV1 {
     sequence: u64,
@@ -2758,7 +2746,7 @@ impl ProviderIngestOutbox {
         candidate.active[position].state = StoredProviderIngestStateV1::LocalStored {
             manifest_id,
             musubi_bundle,
-            completion: BoxedStoredCompletionDeliveryV1::new(StoredCompletionDeliveryV1::default()),
+            completion: Box::default(),
         };
         self.persist_candidate(&mut state, candidate)
     }
@@ -6330,35 +6318,8 @@ mod tests {
             max_status_page_size: 4,
         }
     }
-    #[test]
-    fn boxed_completion_codec_delegates_exact_nested_payload() {
-        use norito::codec::Encode as _;
-        let completion = StoredCompletionDeliveryV1 {
-            attempts: 2,
-            signing_generation: 7,
-            next_attempt_at_ms: 19,
-            ..StoredCompletionDeliveryV1::default()
-        };
-        let boxed = BoxedStoredCompletionDeliveryV1::new(completion.clone());
-        let expected = completion.encode();
-        let actual = boxed.encode();
-        assert_eq!(actual, expected);
-        let decoded: BoxedStoredCompletionDeliveryV1 =
-            norito::codec::decode_adaptive(&actual).expect("exact nested completion payload");
-        assert_eq!(decoded.as_ref(), &completion);
-        assert_eq!(decoded.encode(), actual);
-        assert!(
-            norito::codec::decode_adaptive::<BoxedStoredCompletionDeliveryV1>(
-                &actual[..actual.len() - 1]
-            )
-            .is_err()
-        );
-        let mut trailing = actual;
-        trailing.push(0);
-        assert!(
-            norito::codec::decode_adaptive::<BoxedStoredCompletionDeliveryV1>(&trailing).is_err()
-        );
-    }
+    include!("provider_ingest_outbox/tests/canonical_completion.rs");
+
     fn assert_ingest_frame<T>(value: &T, name: &str) -> Vec<u8>
     where
         T: norito::NoritoSerialize
@@ -8360,6 +8321,10 @@ mod tests {
     }
     #[test]
     fn malformed_corrupt_noncanonical_and_retired_checkpoints_fail_closed() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "sorafs_node::provider_ingest_outbox::tests::malformed_corrupt_noncanonical_and_retired_checkpoints_fail_closed::RetiredPreReleaseCheckpointV1"
+        )]
         #[derive(Debug, NoritoSerialize, NoritoDeserialize)]
         struct RetiredPreReleaseCheckpointV1 {
             version: u8,

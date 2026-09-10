@@ -90,10 +90,24 @@ def child_environment(inherited: dict[str, str], target_dir: Path) -> dict[str, 
 
 
 def native_check_environment(environment: dict[str, str], inherited: dict[str, str]) -> dict[str, str]:
-    """Admit one native cache preference without changing the release environment."""
+    """Align native dependency metadata without changing the release environment."""
     incremental = inherited.get("CARGO_INCREMENTAL", "1")
     require(incremental in ("0", "1"), "native CARGO_INCREMENTAL must be 0 or 1")
-    return environment | {"CARGO_INCREMENTAL": incremental}
+    # Both native profiles have debug=0. Keep their split setting identical so
+    # building the daemon between test harnesses does not create a second
+    # dependency graph solely for packed versus unpacked debug metadata.
+    # Keep deliberate per-package test optimization (notably FASTPQ) intact.
+    native = environment | {
+        "CARGO_INCREMENTAL": incremental,
+        "CARGO_PROFILE_DEV_SPLIT_DEBUGINFO": "unpacked",
+        "CARGO_PROFILE_TEST_SPLIT_DEBUGINFO": "unpacked",
+    }
+    # sccache rejects CARGO_INCREMENTAL=1 before invoking rustc. Cargo's warm
+    # incremental artifacts own this lane; retain sccache for nonincremental
+    # native checks and the separate sanitized Linux release environment.
+    if incremental == "1" and Path(native.get("RUSTC_WRAPPER", "")).name == "sccache":
+        native.pop("RUSTC_WRAPPER")
+    return native
 
 def git(root: Path, *args: str) -> bytes:
     result = subprocess.run(["git", "--no-replace-objects", *args], cwd=root, stdin=subprocess.DEVNULL,

@@ -19,7 +19,6 @@ use iroha_data_model::{
         decode_instruction_from_pair, framed_instruction_payload,
     },
     metadata::Metadata,
-    name::Name,
     peer::PeerId,
     sns::{NameControllerV1, NameRecordV1, NameSelectorV1, NameStatus, SuffixPolicyV1},
     transaction::{
@@ -28,9 +27,9 @@ use iroha_data_model::{
         signed::TransactionPayload,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use norito::{
-    NoritoSerialize, SerializePayload,
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
@@ -410,8 +409,8 @@ impl SchemaHashManifest {
             entries: schema_targets()
                 .into_iter()
                 .map(|target| SchemaHashEntry {
-                    type_name: target.type_name.to_string(),
-                    alias: target.alias.to_string(),
+                    type_name: target.type_name,
+                    alias: target.alias,
                     schema_hash: format_schema_hash(target.schema_hash),
                 })
                 .collect(),
@@ -429,18 +428,22 @@ struct SchemaHashEntry {
     schema_hash: String,
 }
 struct SchemaTarget {
-    type_name: &'static str,
-    alias: &'static str,
+    type_name: String,
+    alias: String,
     schema_hash: [u8; 16],
 }
 impl SchemaTarget {
-    fn of<T: NoritoSerialize>() -> Self {
-        let type_name = std::any::type_name::<T>();
-        let alias = type_name.rsplit("::").next().unwrap_or(type_name);
+    fn of<T: norito::NoritoSchema>() -> Self {
+        let type_name = T::nominal_name();
+        let alias = type_name
+            .rsplit("::")
+            .next()
+            .unwrap_or(&type_name)
+            .to_owned();
         Self {
             type_name,
             alias,
-            schema_hash: T::schema_hash(),
+            schema_hash: norito::schema::identity::frame_hash::<T>(),
         }
     }
 }
@@ -454,7 +457,7 @@ fn schema_targets() -> Vec<SchemaTarget> {
         SchemaTarget::of::<NameStatus>(),
         SchemaTarget::of::<SuffixPolicyV1>(),
     ];
-    targets.sort_by(|a, b| a.alias.cmp(b.alias));
+    targets.sort_by(|a, b| a.alias.cmp(&b.alias));
     targets
 }
 fn write_schema_hash_manifest(path: &Path) -> Result<()> {
@@ -4155,7 +4158,7 @@ mod tests {
         let mut seen = HashSet::new();
         for target in &targets {
             assert!(
-                seen.insert(target.type_name),
+                seen.insert(&target.type_name),
                 "duplicate schema target `{}` detected",
                 target.type_name
             );

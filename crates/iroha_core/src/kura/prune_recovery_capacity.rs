@@ -78,13 +78,13 @@ impl Kura {
         {
             let _guard = self.sidecar_lock.lock();
             let wsv_dir = self.wsv_checkpoint_dir();
-            Self::prune_wsv_checkpoints_above_in_dir(&wsv_dir, intent.target_height)?;
+            self.prune_wsv_checkpoints_above_in_dir(&wsv_dir, intent.target_height)?;
             let manifest_dir = self.commit_manifest_dir();
-            Self::prune_commit_manifests_above_in_dir(&manifest_dir, intent.target_height)?;
+            self.prune_commit_manifests_above_in_dir(&manifest_dir, intent.target_height)?;
             let finality_dir = self.v2_finality_artifact_dir();
-            Self::prune_v2_finality_artifacts_above_in_dir(&finality_dir, intent.target_height)?;
+            self.prune_v2_finality_artifacts_above_in_dir(&finality_dir, intent.target_height)?;
             for directory in Self::kagemusha_finality_sidecar_dirs_for(&blocks_dir) {
-                Self::prune_commit_manifests_above_in_dir(&directory, intent.target_height)?;
+                self.prune_commit_manifests_above_in_dir(&directory, intent.target_height)?;
             }
             self.truncate_pipeline_sidecars_for_prune(intent)?;
         }

@@ -331,6 +331,8 @@ impl DaShardCursorIndex {
     }
 }
 /// Persisted cursor for a `(shard_id, lane_id)` pair.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::da::shard_cursor::LaneShardCursor")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub struct LaneShardCursor {
     /// Shard identifier associated with the lane.
@@ -1230,6 +1232,8 @@ mod tests {
         path::{Path, PathBuf},
     };
     use tempfile::tempdir;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::da::shard_cursor::tests::PreReleaseLaneShardCursor")]
     #[derive(Encode)]
     struct PreReleaseLaneShardCursor {
         shard_id: ShardId,
@@ -1237,12 +1241,20 @@ mod tests {
         epoch: u64,
         sequence: u64,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::da::shard_cursor::tests::PreReleaseJournalWithoutCursorHeight"
+    )]
     #[derive(Encode)]
     struct PreReleaseJournalWithoutCursorHeight {
         version: u32,
         canonical_reset_heights: BTreeMap<LaneId, u64>,
         entries: Vec<PreReleaseLaneShardCursor>,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::da::shard_cursor::tests::PreReleaseJournalWithoutResetHeights"
+    )]
     #[derive(Encode)]
     struct PreReleaseJournalWithoutResetHeights {
         version: u32,

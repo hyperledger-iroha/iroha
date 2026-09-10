@@ -10,9 +10,9 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     account::{AccountId, rekey::AccountAliasDomain},
     domain::DomainId,
-    error::ParseError,
     nexus::{AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, UniversalAccountId},
 };
+use iroha_model_base::error::ParseError;
 use iroha_schema::IntoSchema;
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
@@ -415,6 +415,8 @@ impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
     }
 }
 /// Manifest record tracked by the Space Directory host.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRecord {
     /// Canonical manifest payload (UAID + dataspace scope).
@@ -452,6 +454,8 @@ impl SpaceDirectoryManifestRecord {
     }
 }
 /// Lifecycle metadata recorded for a manifest.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestLifecycle")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 pub struct SpaceDirectoryManifestLifecycle {
     /// Epoch (inclusive) when the manifest actually became active, if known.
@@ -462,6 +466,8 @@ pub struct SpaceDirectoryManifestLifecycle {
     pub revocation: Option<SpaceDirectoryManifestRevocation>,
 }
 /// Metadata describing a manifest revocation event.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestRevocation")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRevocation {
     /// Epoch when the revocation took effect.
@@ -491,6 +497,8 @@ impl SpaceDirectoryManifestLifecycle {
     }
 }
 /// Deterministic mapping from dataspace id to manifest record for a UAID.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::nexus::space_directory::SpaceDirectoryManifestSet")]
 #[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestSet {
     entries: BTreeMap<DataSpaceId, SpaceDirectoryManifestRecord>,

@@ -626,7 +626,7 @@ pub mod da {
 }
 pub mod settlement {
     //! Native settlement query definitions.
-    use crate::name::Name;
+    use iroha_model_base::name::Name;
     queries! {
         /// Fetch the complete protected native FX corridor policy registry.
         #[derive(Copy)]

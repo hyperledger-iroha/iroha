@@ -357,7 +357,7 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
+            "$ref": "#/components/schemas/PreparedFaucetOperationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
@@ -396,7 +396,7 @@
             "type": "string"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetFaucetMutationBinding"
+            "$ref": "#/components/schemas/PreparedFaucetOperationBinding"
           },
           "claim": {
             "$ref": "#/components/schemas/AccountFaucetClaim"
@@ -409,7 +409,7 @@
             "type": "string"
           },
           "schema": {
-            "const": "iroha.taira.prepared-transaction.v1",
+            "const": "iroha.prepared-transaction.v1",
             "type": "string"
           },
           "semantic_hash_hex": {
@@ -793,7 +793,7 @@
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+            "$ref": "#/components/schemas/PreparedOnboardingOperationBinding"
           },
           "fee_payment": {
             "$ref": "#/components/schemas/FeePaymentIntent"
@@ -824,7 +824,7 @@
             "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+            "$ref": "#/components/schemas/PreparedOnboardingOperationBinding"
           },
           "disposition": {
             "$ref": "#/components/schemas/AliasPlanDispositionV1"
@@ -840,7 +840,7 @@
             "$ref": "#/components/schemas/AccountOnboardingPlanReceipt"
           },
           "schema": {
-            "const": "iroha.taira.prepared-transaction.v1",
+            "const": "iroha.prepared-transaction.v1",
             "type": "string"
           },
           "semantic_hash_hex": {
@@ -907,7 +907,7 @@
             "$ref": "#/components/schemas/CanonicalAccountAliasLiteral"
           },
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetOnboardingMutationBinding"
+            "$ref": "#/components/schemas/PreparedOnboardingOperationBinding"
           },
           "disposition": {
             "$ref": "#/components/schemas/AliasPlanDispositionV1"
@@ -6272,73 +6272,516 @@
         ],
         "type": "object"
       },
+      "ContractCallOperationReceipt": {
+        "additionalProperties": false,
+        "description": "Normalized evidence for preparation or durable certified admission. Submitted is not Applied finality; no local queue presence or execution gas use is asserted.",
+        "properties": {
+          "abi_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "code_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "contract_address": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "contract_alias": {
+            "minLength": 1,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "dataspace": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "entrypoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fee_payment": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeePaymentIntent"
+              },
+              {
+                "properties": {
+                  "value": {
+                    "properties": {
+                      "gas_limit": {
+                        "format": "uint64",
+                        "maximum": 18446744073709551615,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "gas_limit": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "gas_used": {
+            "type": "null"
+          },
+          "operation_kind": {
+            "const": "contract_call",
+            "type": "string"
+          },
+          "payload_digest_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending_signature",
+              "submitted"
+            ],
+            "type": "string"
+          },
+          "transport": {
+            "const": "torii",
+            "type": "string"
+          },
+          "tx_hash_hex": {
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "operation_kind",
+          "status",
+          "transport",
+          "dataspace",
+          "contract_alias",
+          "contract_address",
+          "code_hash_hex",
+          "abi_hash_hex",
+          "tx_hash_hex",
+          "entrypoint",
+          "entrypoint_hash_hex",
+          "gas_limit",
+          "gas_used",
+          "fee_payment",
+          "payload_digest_hex"
+        ],
+        "type": "object"
+      },
       "ContractCallRequest": {
         "additionalProperties": false,
-        "oneOf": [
+        "allOf": [
           {
-            "not": {
-              "required": [
-                "contract_alias"
-              ]
-            },
-            "required": [
-              "contract_address"
+            "oneOf": [
+              {
+                "properties": {
+                  "contract_address": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "contract_alias": {
+                    "type": "null"
+                  }
+                },
+                "required": [
+                  "contract_address"
+                ]
+              },
+              {
+                "properties": {
+                  "contract_address": {
+                    "type": "null"
+                  },
+                  "contract_alias": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "contract_alias"
+                ]
+              }
             ]
           },
           {
-            "not": {
-              "required": [
-                "contract_address"
-              ]
-            },
-            "required": [
-              "contract_alias"
+            "oneOf": [
+              {
+                "properties": {
+                  "public_key_hex": {
+                    "type": "null"
+                  },
+                  "signature_b64": {
+                    "type": "null"
+                  },
+                  "transaction_payload_b64": {
+                    "type": "null"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "creation_time_ms": {
+                    "format": "uint64",
+                    "maximum": 18446744073709551615,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "public_key_hex": {
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "signature_b64": {
+                    "contentEncoding": "base64",
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                    "type": "string"
+                  },
+                  "transaction_payload_b64": {
+                    "contentEncoding": "base64",
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "public_key_hex",
+                  "signature_b64",
+                  "transaction_payload_b64",
+                  "creation_time_ms"
+                ]
+              }
             ]
           }
         ],
+        "description": "Prepare an exact QueuePlanSynced contract transaction or submit its complete detached signature envelope. Both operations require canonical account HTTP authentication. Preparation quotes once after fixing admission intent; submission preserves and validates the retained payload and quoted fee without re-quoting.",
         "properties": {
           "authority": {
             "description": "Canonical transaction authority.",
             "type": "string"
           },
           "contract_address": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "contract_alias": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "creation_time_ms": {
+            "description": "Optional fixed creation timestamp. Detached submit requires the exact non-null value returned by preparation.",
             "format": "uint64",
-            "type": "integer"
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
           },
           "entrypoint": {
             "minLength": 1,
             "type": "string"
           },
           "fee_payment": {
-            "$ref": "#/components/schemas/FeePaymentIntent"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/FeePaymentIntent"
+              },
+              {
+                "properties": {
+                  "value": {
+                    "properties": {
+                      "gas_limit": {
+                        "format": "uint64",
+                        "maximum": 18446744073709551615,
+                        "minimum": 1,
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "description": "Caller-owned business metadata. Consensus-owned contract_ and validation_fee_ namespaces and retired fee selectors are rejected.",
+            "propertyNames": {
+              "not": {
+                "anyOf": [
+                  {
+                    "pattern": "^(contract_|validation_fee_)"
+                  },
+                  {
+                    "enum": [
+                      "fee_sponsor",
+                      "fee_sponsor_account",
+                      "gas_asset_id",
+                      "gas_limit"
+                    ]
+                  }
+                ]
+              }
+            },
+            "type": "object"
           },
           "payload": {
             "$ref": "#/components/schemas/JsonValue"
           },
           "public_key_hex": {
             "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "signature_b64": {
+            "contentEncoding": "base64",
+            "description": "Detached Ed25519 signature over the exact returned signing_message_b64; never over reconstructed JSON.",
             "minLength": 1,
-            "type": "string"
+            "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transaction_payload_b64": {
+            "contentEncoding": "base64",
+            "description": "Exact canonical TransactionPayload bytes returned by preparation. Required with both signature fields; QueuePlanSynced intent, invocation, network, authority, timestamp, TTL, metadata and exact quoted fee must remain unchanged.",
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "transaction_ttl_ms": {
+            "description": "Omission or null selects the TransactionBuilder default of 100000ms. Retain this exact optional selection on detached submit; the payload still carries the default TTL.",
             "format": "uint64",
+            "maximum": 18446744073709551615,
             "minimum": 1,
-            "type": "integer"
+            "type": [
+              "integer",
+              "null"
+            ]
           }
         },
         "required": [
           "authority",
           "entrypoint",
           "fee_payment"
+        ],
+        "type": "object"
+      },
+      "ContractCallResponse": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "entrypoint_hash_hex": {
+                "type": "null"
+              },
+              "operation_receipt": {
+                "properties": {
+                  "entrypoint_hash_hex": {
+                    "type": "null"
+                  },
+                  "status": {
+                    "const": "pending_signature"
+                  },
+                  "tx_hash_hex": {
+                    "type": "null"
+                  }
+                }
+              },
+              "signing_message_b64": {
+                "contentEncoding": "base64",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                "type": "string"
+              },
+              "submitted": {
+                "const": false
+              },
+              "transaction_payload_b64": {
+                "contentEncoding": "base64",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                "type": "string"
+              },
+              "tx_hash_hex": {
+                "type": "null"
+              }
+            }
+          },
+          {
+            "properties": {
+              "entrypoint_hash_hex": {
+                "pattern": "^[0-9a-f]{63}[13579bdf]$",
+                "type": "string"
+              },
+              "operation_receipt": {
+                "properties": {
+                  "entrypoint_hash_hex": {
+                    "pattern": "^[0-9a-f]{63}[13579bdf]$",
+                    "type": "string"
+                  },
+                  "status": {
+                    "const": "submitted"
+                  },
+                  "tx_hash_hex": {
+                    "pattern": "^[0-9a-f]{63}[13579bdf]$",
+                    "type": "string"
+                  }
+                }
+              },
+              "signing_message_b64": {
+                "type": "null"
+              },
+              "submitted": {
+                "const": true
+              },
+              "transaction_payload_b64": {
+                "type": "null"
+              },
+              "tx_hash_hex": {
+                "pattern": "^[0-9a-f]{63}[13579bdf]$",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "abi_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "code_hash_hex": {
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "contract_address": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "creation_time_ms": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dataspace": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "entrypoint": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "entrypoint_hash_hex": {
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "operation_receipt": {
+            "$ref": "#/components/schemas/ContractCallOperationReceipt"
+          },
+          "pipeline_status": {
+            "description": "Durable certified admission does not manufacture a local Queued status. Observe authenticated global Applied finality separately.",
+            "type": "null"
+          },
+          "signing_message_b64": {
+            "anyOf": [
+              {
+                "contentEncoding": "base64",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "submitted": {
+            "type": "boolean"
+          },
+          "transaction_payload_b64": {
+            "anyOf": [
+              {
+                "contentEncoding": "base64",
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "transaction_ttl_ms": {
+            "description": "Echoes the optional request selection. Null means the default 100000ms TTL is encoded in the payload; it does not mean an unbounded payload.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "tx_hash_hex": {
+            "pattern": "^[0-9a-f]{63}[13579bdf]$",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "submitted",
+          "dataspace",
+          "contract_address",
+          "code_hash_hex",
+          "abi_hash_hex",
+          "creation_time_ms",
+          "transaction_ttl_ms",
+          "tx_hash_hex",
+          "pipeline_status",
+          "entrypoint_hash_hex",
+          "transaction_payload_b64",
+          "signing_message_b64",
+          "entrypoint",
+          "operation_receipt"
         ],
         "type": "object"
       },
@@ -23877,17 +24320,41 @@
       },
       "NativeAmxParticipantSettlement": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "participant_lane_block_height": {
+                  "const": 1
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "previous_native_settlement_hash": {
+                  "type": "null"
+                }
+              }
+            }
+          }
+        ],
         "description": "Nonrecursive Native AMX participant control commitment. Source IDs are unique and retain candidate order; this type has no economic or nested fields.",
         "properties": {
-          "lane_id": {
-            "format": "uint32",
-            "maximum": 4294967295,
-            "minimum": 0,
+          "authority_context_height": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
             "type": "integer"
           },
           "dataspace_id": {
             "format": "uint64",
             "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "lane_id": {
+            "format": "uint32",
+            "maximum": 4294967295,
             "minimum": 0,
             "type": "integer"
           },
@@ -23904,12 +24371,6 @@
             ]
           },
           "participant_lane_block_height": {
-            "format": "uint64",
-            "maximum": 18446744073709551615,
-            "minimum": 1,
-            "type": "integer"
-          },
-          "authority_context_height": {
             "format": "uint64",
             "maximum": 18446744073709551615,
             "minimum": 1,
@@ -23940,10 +24401,10 @@
               "pattern": "^(?!0{64}$)[0-9A-F]{64}$",
               "type": "string"
             },
-            "minItems": 1,
             "maxItems": 4096,
-            "uniqueItems": true,
-            "type": "array"
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
@@ -23955,25 +24416,7 @@
           "previous_native_settlement_hash",
           "source_ids"
         ],
-        "type": "object",
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "participant_lane_block_height": {
-                  "const": 1
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "previous_native_settlement_hash": {
-                  "type": "null"
-                }
-              }
-            }
-          }
-        ]
+        "type": "object"
       },
       "NativeAmxPhase": {
         "additionalProperties": false,
@@ -25369,11 +25812,83 @@
         ],
         "description": "Canonical exact XOR quantity which must be strictly positive."
       },
+      "PreparedFaucetOperationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PreparedOperationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "faucet",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public operation binding specialized to the faucet operation."
+      },
+      "PreparedOnboardingOperationBinding": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/PreparedOperationBinding"
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "onboarding",
+                "type": "string"
+              }
+            }
+          }
+        ],
+        "description": "Canonical public operation binding specialized to the onboarding operation."
+      },
+      "PreparedOperationBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "execution_expires_at_unix_ms": {
+            "description": "Positive absolute deadline; onboarding cannot outlive its signed receipt.",
+            "format": "uint64",
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "enum": [
+              "onboarding",
+              "faucet"
+            ],
+            "type": "string"
+          },
+          "request_id": {
+            "description": "Caller-owned 64-hex operation identity, persisted across retries; not a server deduplication guarantee.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "schema": {
+            "const": "iroha.prepared-operation.binding.v1",
+            "type": "string"
+          },
+          "semantic_hash_hex": {
+            "description": "Hash of the exact signed onboarding receipt or solved faucet claim.",
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema",
+          "semantic_hash_hex",
+          "kind",
+          "request_id",
+          "execution_expires_at_unix_ms"
+        ],
+        "type": "object"
+      },
       "PreparedTransactionSubmitResponse": {
         "additionalProperties": false,
         "properties": {
           "binding": {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
+            "$ref": "#/components/schemas/PreparedOperationBinding"
           },
           "operation": {
             "enum": [
@@ -25391,7 +25906,7 @@
             "type": "string"
           },
           "schema": {
-            "const": "iroha.taira.prepared-transaction-submit.v1",
+            "const": "iroha.prepared-transaction-submit.v1",
             "type": "string"
           },
           "transaction_hash_hex": {
@@ -47582,89 +48097,6 @@
         ],
         "type": "object"
       },
-      "TairaPublicResetFaucetMutationBinding": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
-          },
-          {
-            "properties": {
-              "kind": {
-                "const": "faucet",
-                "type": "string"
-              }
-            }
-          }
-        ],
-        "description": "Canonical public-reset mutation binding specialized to the faucet operation."
-      },
-      "TairaPublicResetMutationBinding": {
-        "additionalProperties": false,
-        "properties": {
-          "authorization_nonce": {
-            "maxLength": 32,
-            "minLength": 32,
-            "pattern": "^[a-z0-9_-]{32}$",
-            "type": "string"
-          },
-          "authorization_sha256": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "execution_expires_at_unix_ms": {
-            "format": "uint64",
-            "minimum": 1,
-            "type": "integer"
-          },
-          "idempotency_key": {
-            "pattern": "^[0-9a-f]{64}$",
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "onboarding",
-              "faucet"
-            ],
-            "type": "string"
-          },
-          "phase": {
-            "maxLength": 128,
-            "minLength": 1,
-            "pattern": "^[a-z0-9_-]+$",
-            "type": "string"
-          },
-          "schema": {
-            "const": "iroha.taira.public-reset.mutation-binding.v1",
-            "type": "string"
-          }
-        },
-        "required": [
-          "schema",
-          "authorization_sha256",
-          "authorization_nonce",
-          "kind",
-          "phase",
-          "idempotency_key",
-          "execution_expires_at_unix_ms"
-        ],
-        "type": "object"
-      },
-      "TairaPublicResetOnboardingMutationBinding": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/TairaPublicResetMutationBinding"
-          },
-          {
-            "properties": {
-              "kind": {
-                "const": "onboarding",
-                "type": "string"
-              }
-            }
-          }
-        ],
-        "description": "Canonical public-reset mutation binding specialized to the onboarding operation."
-      },
       "TimeHealth": {
         "additionalProperties": false,
         "properties": {
@@ -58012,7 +58444,7 @@
     },
     "/v1/contracts/call": {
       "post": {
-        "description": "Prepare or submit a contract entrypoint by canonical address or on-chain alias. Requests carry a typed fee_payment intent; retired fee_sponsor, gas_asset_id, and metadata gas_limit fields are rejected. SDK clients quote the exact prepared payload before signing.",
+        "description": "Prepare or submit a deployed contract call through canonical account HTTP authentication. Preparation fixes QueuePlanSynced admission before quoting and returns the exact payload plus signing message. For detached submit, retain the prepared transaction_payload_b64, creation_time_ms, optional TTL selection, original target, payload, metadata and quoted fee_payment; send public_key_hex and signature_b64 together. Signed submissions are checked byte-for-byte and never re-quoted. HTTP 200 with submitted=true is returned only after strict durable certified admission; it does not prove local queue presence or Applied finality. Missing committee/P2P authority fails without local enqueue. Omitted/null TTL selects a 100000ms payload TTL while the response echoes null.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -58028,11 +58460,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/ContractCallResponse"
                 }
               }
             },
-            "description": "Successful response",
+            "description": "Exact unsigned preparation or durable certified-admission receipt; pipeline_status is explicitly null.",
             "headers": {
               "Cache-Control": {
                 "description": "Authenticated responses which must never be retained.",
@@ -58043,6 +58475,24 @@
                 }
               }
             }
+          },
+          "400": {
+            "description": "Malformed request, partial detached envelope, reserved metadata, invalid signature, or retained payload mismatch."
+          },
+          "401": {
+            "description": "Missing or invalid canonical account HTTP authentication."
+          },
+          "403": {
+            "description": "Authenticated authority lacks the required permission."
+          },
+          "409": {
+            "description": "Contract lifecycle or certified admission conflict."
+          },
+          "429": {
+            "description": "Contract request rate limit exceeded."
+          },
+          "503": {
+            "description": "Durable certified admission is unavailable; no local enqueue or submitted success is asserted."
           }
         },
         "security": [

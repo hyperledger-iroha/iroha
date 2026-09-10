@@ -1127,12 +1127,16 @@ pub struct PeersGossip {
     pub peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
 }
 /// Wire representation for peers gossip.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::PeersGossipWire")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PeersGossipWire {
     peers: Vec<Peer>,
     peer_capabilities: BTreeMap<PeerId, PeerTransportCapabilities>,
 }
 /// Signed trust gossip payload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::PeerTrustGossip")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct PeerTrustGossip {
     /// Exact genesis-derived network identity bound by every enclosed signature.
@@ -1141,6 +1145,8 @@ pub struct PeerTrustGossip {
     pub trust: Vec<SignedPeerTrust>,
 }
 /// Trust information about a peer as reported by the sender.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::PeerTrustInfo")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct PeerTrustInfo {
     /// Id of the peer the trust info is about.
@@ -1151,6 +1157,8 @@ pub struct PeerTrustInfo {
     pub score: i32,
 }
 /// Trust report bundled with a signature from the sender.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::peers_gossiper::SignedPeerTrust")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 pub struct SignedPeerTrust {
     /// Reported trust values.

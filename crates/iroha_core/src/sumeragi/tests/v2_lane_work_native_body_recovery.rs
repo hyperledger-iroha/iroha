@@ -11,7 +11,7 @@ struct NativeBodyRecoveryPayload {
 fn native_coordinator_successor_waits_for_missing_applied_half_without_losing_owner() {
     for missing_half in ["receipt", "manifest"] {
         let (mut adapter, _, lane_id, dataspace_id, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let request =
             native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
         let previous_hash = request
@@ -253,7 +253,7 @@ fn assert_shared_lane_predecessor_is_applied(
 fn shared_lane_predecessor_rejects_corrupt_native_application_evidence() {
     for corrupt_half in ["receipt", "manifest"] {
         let (adapter, _, lane_id, dataspace_id, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let request =
             native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
         assert_shared_lane_predecessor_is_applied(
@@ -347,12 +347,14 @@ struct NativeBodyRecoveryFixture {
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 }
 fn native_body_recovery_adapter() -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
-    native_body_recovery_adapter_with_kura(locked_lane_work_test_kura(
-        NonZeroUsize::new(1).expect("retain one carrier body"),
-    ))
+    native_body_recovery_adapter_with_kura(
+        locked_lane_work_test_kura(NonZeroUsize::new(1).expect("retain one carrier body")),
+        None,
+    )
 }
 fn native_body_recovery_adapter_with_kura(
     kura: Arc<Kura>,
+    local_validator_index: Option<usize>,
 ) -> (V2LaneWorkAdapter, Vec<KeyPair>, LaneId, DataSpaceId) {
     let capacity = NonZeroUsize::new(8).expect("non-zero fixture capacity");
     let limits = V2LaneWorkLimits::new(
@@ -393,7 +395,7 @@ fn native_body_recovery_adapter_with_kura(
         true,
         limits,
         kura,
-        None,
+        local_validator_index,
         true,
         wire::recommended_data_availability_layout(),
     );
@@ -547,6 +549,9 @@ fn native_apply_candidate_body(
             Ok(controls) => controls,
             Err(NativeParticipantControlPreparationError::Storage(error)) => {
                 panic!("Native control storage failed: {error}")
+            }
+            Err(NativeParticipantControlPreparationError::PendingPredecessor(indices)) => {
+                panic!("Native control predecessor unexpectedly pending: {indices:?}")
             }
             Err(NativeParticipantControlPreparationError::Unavailable(indices)) => {
                 panic!("Native controls unexpectedly unavailable: {indices:?}")
@@ -718,7 +723,7 @@ fn grouped_native_candidate_fixture_with_adapter(
             .set_pending_control_sidecar_validation_bytes_for_testing(aggregate_bytes);
     }
     let (mut adapter, keys, participant_lane, participant_dataspace) =
-        native_body_recovery_adapter_with_kura(kura);
+        native_body_recovery_adapter_with_kura(kura, None);
     let mut finality_manifest_root = [0_u8; Hash::LENGTH];
     finality_manifest_root
         .copy_from_slice(Hash::new(b"grouped Native coordinator finality manifest").as_ref());
@@ -1048,7 +1053,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
     let mut first_native_hash = None;
     let mut shared_predecessor = None;
     let mut expected_effects = Vec::new();
-    let effect_key: iroha_data_model::name::Name =
+    let effect_key: iroha_model_base::name::Name =
         "native_apply_effect".parse().expect("effect metadata key");
     let mut first_native_receipt = None;
     let mut historical_ordinary_session = None;
@@ -2745,7 +2750,7 @@ fn shared_lane_first_slot_authenticates_native_publication_before_empty_predeces
         "corrupt manifest",
     ] {
         let (adapter, _, lane_id, _, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let first = &previous.request.participant_proposal;
         assert_eq!(first.descriptor.lane_block_height, 1);
         assert_eq!(first.descriptor.previous_lane_block_height, 0);
@@ -2800,7 +2805,7 @@ fn shared_lane_first_slot_authenticates_native_publication_before_empty_predeces
 #[test]
 fn native_applied_first_slot_cannot_be_reused_at_lane_signing_or_progress() {
     let (mut adapter, _, lane_id, dataspace_id, previous) =
-        native_coordinator_after_applied_participant_fixture();
+        native_coordinator_after_applied_participant_fixture(None);
     let request = native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
     let successor = request.participant_proposal;
     assert!(
@@ -2896,11 +2901,11 @@ fn native_application_rejects_valid_but_contradictory_shared_frontier() {
     );
     for fault in ["different descriptor", "missing shared marker"] {
         let (mut adapter, _, lane_id, dataspace_id, previous) =
-            native_coordinator_after_applied_participant_fixture();
+            native_coordinator_after_applied_participant_fixture(None);
         let request =
             native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
         let native = &previous.request.participant_proposal.descriptor;
-        let key: iroha_data_model::state_path::StatePath = format!(
+        let key: iroha_model_base::state_path::StatePath = format!(
             "merge_lane_frontier_v1_{}_{}_{}",
             lane_id.as_u32(),
             dataspace_id.as_u64(),
@@ -3122,4 +3127,379 @@ fn assert_later_pending_native_preserves_historical_ordinary_application(
                 .is_empty()
         );
     }
+}
+
+#[test]
+fn autonomous_producer_retains_reservations_until_participant_predecessor_repair() {
+    #[derive(Clone)]
+    struct NativeRetryRouter(RoutingPlan);
+    impl crate::queue::LaneRouter for NativeRetryRouter {
+        fn try_route(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+        ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+            Ok(self.0.coordinator_route())
+        }
+        fn try_route_plan(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+        ) -> Result<RoutingPlan, crate::queue::RoutingResolveError> {
+            Ok(self.0.clone())
+        }
+        fn try_route_plan_with_view(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+            _: &crate::state::StateView<'_>,
+        ) -> Result<RoutingPlan, crate::queue::RoutingResolveError> {
+            Ok(self.0.clone())
+        }
+        fn try_route_plan_without_state(
+            &self,
+            _: &dyn crate::queue::TransactionRoutingView,
+        ) -> Result<Option<RoutingPlan>, crate::queue::RoutingResolveError> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    for missing_half in ["receipt", "manifest"] {
+        let (mut previous_adapter, keys, participant_lane, participant_dataspace, previous) =
+            native_coordinator_after_applied_participant_fixture(Some(0));
+        let parent_height = NonZeroUsize::new(previous_adapter.state.committed_height()).unwrap();
+        let parent = previous_adapter.kura.get_block(parent_height).unwrap();
+        complete_applied_ordinary_lane_sessions(&mut previous_adapter, &keys, &parent);
+        let route = previous.routing_plan.coordinator_route();
+        let slot = plan_autonomous_lane_reservation_slot(
+            previous_adapter.state.as_ref(),
+            previous_adapter.kura.as_ref(),
+            &previous_adapter.context,
+            route.lane_id,
+            route.dataspace_id,
+        )
+        .expect("coordinator predecessor is fully applied before participant interruption");
+        assert_eq!(
+            slot.lane_block_height, 1,
+            "the coordinator has not yet produced a lane block"
+        );
+        assert_eq!(
+            slot.author, previous_adapter.local_peer,
+            "the storage owner must be the deterministic first-slot author from initial construction"
+        );
+        let mut adapter = previous_adapter;
+        let active_view = (0..2 * adapter
+            .state
+            .consensus_lane_routes_at_height(adapter.context.height)
+            .len() as u64)
+            .find(|view| {
+                adapter.autonomous_native_coordinator_for_view(*view)
+                    == Some((route.lane_id, route.dataspace_id))
+            })
+            .expect("the deterministic Native coordinator rotation selects this route");
+        adapter
+            .retain_merge_sidecars_for_global_view(active_view, None, None)
+            .expect("install the selected global view before owning a production batch");
+        let queue = Arc::new(Queue::test_with_router_for_routes(
+            iroha_config::parameters::actual::Queue::default(),
+            &iroha_primitives::time::TimeSource::new_system(),
+            Arc::new(NativeRetryRouter(previous.routing_plan.clone())),
+            &[
+                (route.lane_id, route.dataspace_id),
+                (participant_lane, participant_dataspace),
+            ],
+        ));
+        queue.install_lane_manifests(&adapter.state.lane_manifests.read().clone());
+        queue.install_test_router_metadata_for_nexus(&adapter.state.nexus_snapshot());
+        let journals = tempfile::tempdir().unwrap();
+        queue
+            .install_lane_reservation_journal(
+                &journals.path().join("reservations.norito"),
+                1024 * 1024,
+            )
+            .unwrap();
+        queue
+            .install_plan_journal(&journals.path().join("plans.norito"), 1024 * 1024, true)
+            .unwrap();
+        queue.replay_plan_journal(adapter.state.as_ref()).unwrap();
+        adapter
+            .install_lane_drain_queue(Arc::clone(&queue))
+            .unwrap();
+        enqueue_autonomous_test_transactions(
+            &adapter,
+            &queue,
+            route.lane_id,
+            route.dataspace_id,
+            1,
+        );
+        let reservations = queue
+            .reserve_transactions_for_lane_bounded(
+                adapter.state.as_ref(),
+                slot.selection_authorization().unwrap(),
+                LaneQueueReservationSelectionLimits {
+                    max_transactions: NonZeroUsize::new(1).unwrap(),
+                    max_scan: NonZeroUsize::new(1).unwrap(),
+                    max_encoded_bytes: NonZeroU64::new(u64::MAX).unwrap(),
+                    max_gas: NonZeroU64::new(u64::MAX).unwrap(),
+                },
+                &BTreeSet::new(),
+                LaneQueueReservationRoutingMode::AnyCoordinatorPlan,
+            )
+            .unwrap();
+        assert_eq!(reservations.len(), 1);
+        assert!(matches!(
+            reservations[0].routing_plan(),
+            RoutingPlan::NativeAmx(_)
+        ));
+        let owned = queue.live_lane_reservations();
+        adapter.pending_autonomous_reservation_batches.insert(
+            (route.lane_id, route.dataspace_id),
+            PendingAutonomousReservationBatch {
+                slot,
+                reservations,
+                envelope_byte_limit: 4 * 1024 * 1024,
+            },
+        );
+        let artifact_path = adapter
+            .state
+            .nexus_snapshot()
+            .lane_config
+            .entry(participant_lane)
+            .unwrap()
+            .blocks_dir(adapter.kura.store_root())
+            .join("lane_artifacts")
+            .join(format!(
+                "native_amx_{missing_half}_v1_00000000000000000001.norito"
+            ));
+        let artifact = std::fs::read(&artifact_path).unwrap();
+        std::fs::remove_file(&artifact_path).unwrap();
+        adapter.next_autonomous_producer_tick = Instant::now();
+        adapter
+            .schedule_autonomous_lane_production(
+                active_view,
+                autonomous_test_candidate_limits(1, 1),
+            )
+            .unwrap();
+        assert_eq!(queue.live_lane_reservations(), owned);
+        assert!(
+            adapter
+                .pending_autonomous_reservation_batches
+                .contains_key(&(route.lane_id, route.dataspace_id))
+        );
+        assert!(
+            !adapter
+                .autonomous_production_attempted_routes
+                .contains(&(route.lane_id, route.dataspace_id))
+        );
+        assert!(
+            adapter.native_requests.is_empty(),
+            "no participant request precedes its exact predecessor"
+        );
+        assert!(!adapter.output_guard.restart_required());
+
+        let pending = adapter
+            .state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+            .expect("exact incomplete participant marker remains repairable");
+        assert_eq!(pending.len(), 1);
+        adapter
+            .kura
+            .repair_native_amx_participant_application_evidence_for_markers(&parent, &pending)
+            .expect("the production repair owner completes the exact missing half");
+        assert_eq!(std::fs::read(&artifact_path).unwrap(), artifact);
+        adapter.next_autonomous_producer_tick = Instant::now();
+        adapter
+            .schedule_autonomous_lane_production(
+                active_view,
+                autonomous_test_candidate_limits(1, 1),
+            )
+            .unwrap();
+        assert_eq!(queue.live_lane_reservations(), owned);
+        assert!(
+            adapter
+                .pending_autonomous_reservation_batches
+                .contains_key(&(route.lane_id, route.dataspace_id))
+        );
+        assert!(
+            !adapter.native_requests.is_empty(),
+            "the retained batch resumes actual Native request production after repair"
+        );
+        assert!(
+            !adapter
+                .autonomous_production_attempted_routes
+                .contains(&(route.lane_id, route.dataspace_id))
+        );
+        assert!(!adapter.output_guard.restart_required());
+
+        let request_ids = adapter
+            .native_requests
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>();
+        std::fs::write(
+            &artifact_path,
+            b"corrupt occupied Native application evidence",
+        )
+        .unwrap();
+        adapter.next_autonomous_producer_tick = Instant::now();
+        assert!(
+            adapter
+                .schedule_autonomous_lane_production(
+                    active_view,
+                    autonomous_test_candidate_limits(1, 1)
+                )
+                .is_err(),
+            "occupied corruption must never be classified as pending repair"
+        );
+        assert!(adapter.output_guard.restart_required());
+        assert_eq!(queue.live_lane_reservations(), owned);
+        assert!(
+            adapter
+                .pending_autonomous_reservation_batches
+                .contains_key(&(route.lane_id, route.dataspace_id))
+        );
+        assert_eq!(
+            adapter
+                .native_requests
+                .keys()
+                .copied()
+                .collect::<BTreeSet<_>>(),
+            request_ids
+        );
+    }
+}
+
+#[test]
+fn autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair() {
+    let (mut adapter, keys, lane_id, dataspace_id, _) =
+        native_coordinator_after_applied_participant_fixture(Some(1));
+    let parent_height = NonZeroUsize::new(adapter.state.committed_height()).unwrap();
+    let parent = adapter.kura.get_block(parent_height).unwrap();
+    complete_applied_ordinary_lane_sessions(&mut adapter, &keys, &parent);
+    let slot = plan_autonomous_lane_reservation_slot(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        lane_id,
+        dataspace_id,
+    )
+    .expect("the exact applied Native predecessor permits a coordinator reservation");
+    assert_eq!(slot.lane_block_height, 2);
+    assert_eq!(slot.author, adapter.local_peer);
+    adapter
+        .retain_merge_sidecars_for_global_view(0, None, None)
+        .expect("bind the active view before reserving the producer batch");
+    let journals = tempfile::tempdir().unwrap();
+    let queue = install_autonomous_test_queue(
+        &mut adapter,
+        lane_id,
+        dataspace_id,
+        &journals.path().join("reservations.norito"),
+    );
+    enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
+    let reservations = queue
+        .reserve_transactions_for_lane_bounded(
+            adapter.state.as_ref(),
+            slot.selection_authorization().unwrap(),
+            LaneQueueReservationSelectionLimits {
+                max_transactions: NonZeroUsize::new(1).unwrap(),
+                max_scan: NonZeroUsize::new(1).unwrap(),
+                max_encoded_bytes: NonZeroU64::new(u64::MAX).unwrap(),
+                max_gas: NonZeroU64::new(u64::MAX).unwrap(),
+            },
+            &BTreeSet::new(),
+            LaneQueueReservationRoutingMode::AnyCoordinatorPlan,
+        )
+        .unwrap();
+    assert_eq!(reservations.len(), 1);
+    assert!(matches!(
+        reservations[0].routing_plan(),
+        RoutingPlan::Single(_)
+    ));
+    let entrypoint_hash = Hash::from(reservations[0].clone_accepted().hash_as_entrypoint());
+    let owned = queue.live_lane_reservations();
+    let route = (lane_id, dataspace_id);
+    adapter.pending_autonomous_reservation_batches.insert(
+        route,
+        PendingAutonomousReservationBatch {
+            slot,
+            reservations,
+            envelope_byte_limit: 4 * 1024 * 1024,
+        },
+    );
+    let receipt_path = adapter
+        .state
+        .nexus_snapshot()
+        .lane_config
+        .entry(lane_id)
+        .unwrap()
+        .blocks_dir(adapter.kura.store_root())
+        .join("lane_artifacts")
+        .join("native_amx_receipt_v1_00000000000000000001.norito");
+    let receipt = std::fs::read(&receipt_path).unwrap();
+    std::fs::remove_file(&receipt_path).unwrap();
+    let blocked_plan = prepare_v2_lane_payload_plan(
+        adapter.state.as_ref(),
+        adapter.kura.as_ref(),
+        &adapter.context,
+        0,
+        &adapter.local_peer,
+        &[RoutingDecision::new(lane_id, dataspace_id)],
+        &[entrypoint_hash],
+    )
+    .expect("authenticated coordinator publication debt is not a storage failure");
+    assert_eq!(blocked_plan.unavailable_indices, BTreeSet::from([0]));
+    assert!(blocked_plan.proposals.is_empty());
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(1, 1))
+        .expect("the owned coordinator batch waits for predecessor repair");
+    assert_eq!(queue.live_lane_reservations(), owned);
+    assert!(
+        adapter
+            .pending_autonomous_reservation_batches
+            .contains_key(&route)
+    );
+    assert!(
+        !adapter
+            .autonomous_production_attempted_routes
+            .contains(&route)
+    );
+    assert!(adapter.pending_autonomous_anchor_payloads.is_empty());
+    assert!(!adapter.output_guard.restart_required());
+
+    let pending = adapter
+        .state
+        .native_amx_participant_frontiers_pending_durable_evidence_snapshot()
+        .expect("the exact coordinator predecessor has a repair owner");
+    assert_eq!(pending.len(), 1);
+    assert_eq!((pending[0].lane_id, pending[0].dataspace_id), route);
+    adapter
+        .kura
+        .repair_native_amx_participant_application_evidence_for_markers(&parent, &pending)
+        .expect("the production owner restores the exact coordinator predecessor");
+    assert_eq!(std::fs::read(&receipt_path).unwrap(), receipt);
+    adapter.next_autonomous_producer_tick = Instant::now();
+    adapter
+        .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(1, 1))
+        .expect("the same reserved batch resumes durable payload publication");
+    let payload = adapter
+        .pending_autonomous_anchor_payloads
+        .values()
+        .find(|payload| {
+            payload.origin_proposal.descriptor.lane_id == lane_id
+                && payload.origin_proposal.descriptor.dataspace_id == dataspace_id
+        })
+        .expect("the retained coordinator batch publishes its durable hint-free payload");
+    assert_eq!(payload.origin_proposal.descriptor.lane_block_height, 2);
+    assert_eq!(payload.reservation_keys, owned);
+    assert_eq!(queue.live_lane_reservations(), owned);
+    assert!(
+        !adapter
+            .pending_autonomous_reservation_batches
+            .contains_key(&route)
+    );
+    assert!(
+        adapter
+            .autonomous_production_attempted_routes
+            .contains(&route)
+    );
+    assert!(!adapter.output_guard.restart_required());
 }

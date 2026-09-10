@@ -106,6 +106,8 @@ impl QueuePlanJournalLivePosition {
     }
 }
 /// One exact removal carried by an atomic queue-plan journal batch tombstone.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::journal::QueuePlanJournalRemovalV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct QueuePlanJournalRemovalV1 {

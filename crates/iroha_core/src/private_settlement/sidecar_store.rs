@@ -279,6 +279,10 @@ impl Default for PrivateSettlementSidecarStoreConfigV1 {
 }
 
 /// Durable lifecycle of one encrypted restricted sidecar.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::PrivateSettlementSidecarLifecycleV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum PrivateSettlementSidecarLifecycleV1 {
     /// Authenticated bytes are durable while auditor approvals are collected.

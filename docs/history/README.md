@@ -11,6 +11,8 @@ labelled active or release-ready; it never attests the current candidate.
 | [2026-09-07 Norito helper compaction](2026-09-07/norito-helper-compaction.json) | Exact retired source guard and original measurements; known preimages are verifiable, while missing postimage identities remain unverified. Current codec contracts use `scripts/check_norito_codec_contracts.py`; source-size budgets remain separate. |
 | [2026-09-08 architecture merge checkpoints](2026-09-08/index.md) | Two distinct earlier dirty-status paragraphs, retained verbatim with source ranges and hashes; later current findings remain in status. |
 | [2026-09-09 broker stack correction](2026-09-09/index.md) | Measured dispatcher frames, removed stack overrides, ordinary-stack regressions and separate concurrency/lint failures. |
+| [2026-09-09 merge checkpoints](2026-09-09/merge-checkpoints.md) | Verbatim branch merge and privacy observations with source and excerpt hashes; qualification remains scoped to their recorded inputs. |
+| [2026-09-10 Musubi SDK and resolver](2026-09-10/index.md) | Canonical account queries, persistence identities and ordinary-stack resolver repair, with passing and failed source-bound checks retained. |
 
 The [current roadmap coverage map](current-roadmap-coverage.json) accounts for
 every original roadmap area using stable current outcome IDs. It is maintained

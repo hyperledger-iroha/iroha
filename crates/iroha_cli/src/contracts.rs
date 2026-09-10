@@ -5527,7 +5527,7 @@ mod tests {
     }
     #[test]
     fn debug_durable_state_fixture_enforces_canonical_state_path_boundaries() {
-        let maximum = "x".repeat(iroha::data_model::state_path::MAX_STATE_PATH_BYTES);
+        let maximum = "x".repeat(iroha_model_base::state_path::MAX_STATE_PATH_BYTES);
         let fixture = format!(r#"{{"{maximum}":"0x00"}}"#);
         let state = parse_debug_durable_state_fixture(&fixture).expect("maximum StatePath fixture");
         assert_eq!(

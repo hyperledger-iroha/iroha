@@ -1,7 +1,7 @@
 //! Benchmarks for phase-separated Kotodama compilation and execution in IVM.
 use criterion::{BatchSize, Criterion};
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::Name;
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity, RoundingMode},

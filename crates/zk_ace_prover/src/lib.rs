@@ -837,12 +837,12 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         domain::DomainId,
-        name::Name,
         privacy::{
             PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyDigestV1,
             PrivacyZkAceIdentityCommitmentV1, PrivacyZkAcePolicyRecordDigestV1,
         },
     };
+    use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

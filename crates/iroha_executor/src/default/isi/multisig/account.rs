@@ -1,8 +1,9 @@
 //! Validation and execution logic of instructions for multisig accounts
 use super::*;
 use crate::data_model::{
-    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata, name::Name,
+    domain::DomainId, isi::error::InstructionExecutionError, metadata::Metadata,
 };
+use iroha_model_base::name::Name;
 use iroha_smart_contract::data_model::{
     prelude::{FindAccounts, Grant, Register},
     query::prelude::{FindDomains, FindRoles, FindRolesByAccountId},

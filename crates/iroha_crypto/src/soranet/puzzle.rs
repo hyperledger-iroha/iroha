@@ -265,6 +265,9 @@ pub enum SignedTicketVerifyError {
 /// Errors surfaced while minting puzzle tickets (used for tests and fixtures).
 #[derive(Debug, Error)]
 pub enum MintError {
+    /// The owner cancelled the search before a ticket could be published.
+    #[error("puzzle ticket minting was cancelled")]
+    Cancelled,
     /// Requested TTL does not leave time to solve the puzzle before the policy
     /// minimum remaining lifetime is enforced.
     #[error("requested ttl {requested:?} must exceed required minimum {required:?}")]
@@ -521,6 +524,33 @@ pub fn mint_ticket<R: TryCryptoRng>(
 ) -> Result<Ticket, MintError> {
     mint_ticket_with_clock(params, binding, ttl, rng, SystemTime::now)
 }
+
+/// Mint a ticket while the caller retains ownership of the search.
+///
+/// `continue_work` is checked before and after each Argon2 evaluation. One
+/// evaluation is not interrupted, and a solution obtained after cancellation
+/// is discarded without changing the required puzzle predicate.
+///
+/// # Errors
+/// Returns [`MintError::Cancelled`] when the owner stops the search, or the
+/// same policy, entropy, clock and hashing errors as [`mint_ticket`].
+pub fn mint_ticket_while<R: TryCryptoRng>(
+    params: &Parameters,
+    binding: &ChallengeBinding<'_>,
+    ttl: Duration,
+    rng: &mut R,
+    continue_work: impl FnMut() -> bool,
+) -> Result<Ticket, MintError> {
+    mint_ticket_with_control(
+        params,
+        binding,
+        ttl,
+        rng,
+        SystemTime::now,
+        derive_solution_digest,
+        continue_work,
+    )
+}
 fn mint_ticket_with_clock<R, F>(
     params: &Parameters,
     binding: &ChallengeBinding<'_>,
@@ -539,8 +569,25 @@ fn mint_ticket_with_clock_and_digest<R, F, D>(
     binding: &ChallengeBinding<'_>,
     ttl: Duration,
     rng: &mut R,
+    now: F,
+    derive_digest: D,
+) -> Result<Ticket, MintError>
+where
+    R: TryCryptoRng,
+    F: FnMut() -> SystemTime,
+    D: FnMut(&blake3::Hash, &[u8; 32], &Parameters) -> Result<[u8; OUTPUT_LEN], DigestError>,
+{
+    mint_ticket_with_control(params, binding, ttl, rng, now, derive_digest, || true)
+}
+
+fn mint_ticket_with_control<R, F, D>(
+    params: &Parameters,
+    binding: &ChallengeBinding<'_>,
+    ttl: Duration,
+    rng: &mut R,
     mut now: F,
     mut derive_digest: D,
+    mut continue_work: impl FnMut() -> bool,
 ) -> Result<Ticket, MintError>
 where
     R: TryCryptoRng,
@@ -567,6 +614,9 @@ where
     ));
     let mut previous_solution: Option<Zeroizing<[u8; 32]>> = None;
     loop {
+        if !continue_work() {
+            return Err(MintError::Cancelled);
+        }
         let minted_at = now();
         let expires_at = minted_at
             .checked_add(ttl)
@@ -584,6 +634,9 @@ where
                 DigestError::Hash(msg) => MintError::Hash(msg),
             },
         )?);
+        if !continue_work() {
+            return Err(MintError::Cancelled);
+        }
         let solved_at = now();
         if solved_at < minted_at {
             return Err(MintError::ClockMovedBackwards);
@@ -1000,6 +1053,50 @@ mod tests {
             other => panic!("expected all-zero nonce RandomBytes error, got {other:?}"),
         }
     }
+    #[test]
+    fn mint_cancellation_stops_before_first_evaluation() {
+        let mut rng = ChaCha20Rng::from_seed([0x5A; 32]);
+        let error = mint_ticket_with_control(
+            &test_parameters(),
+            &binding(),
+            Duration::from_secs(10),
+            &mut rng,
+            SystemTime::now,
+            |_, _, _| panic!("cancelled searches must not evaluate Argon2"),
+            || false,
+        )
+        .expect_err("cancelled mint");
+        assert!(matches!(error, MintError::Cancelled));
+    }
+
+    #[test]
+    fn mint_cancellation_discards_inflight_solutions_and_stops_search() {
+        use std::cell::Cell;
+        // Exercise both a failed nonce and a nonce satisfying the full predicate:
+        // neither may cause another evaluation or publish after owner cancellation.
+        for digest in [[0xFF; OUTPUT_LEN], [0; OUTPUT_LEN]] {
+            let cancelled = Cell::new(false);
+            let evaluations = Cell::new(0);
+            let mut rng = ChaCha20Rng::from_seed([0x5B; 32]);
+            let error = mint_ticket_with_control(
+                &test_parameters(),
+                &binding(),
+                Duration::from_secs(10),
+                &mut rng,
+                SystemTime::now,
+                |_, _, _| {
+                    evaluations.set(evaluations.get() + 1);
+                    cancelled.set(true);
+                    Ok(digest)
+                },
+                || !cancelled.get(),
+            )
+            .expect_err("the owner cancelled during an evaluation");
+            assert!(matches!(error, MintError::Cancelled));
+            assert_eq!(evaluations.get(), 1);
+        }
+    }
+
     #[test]
     fn mint_ticket_rejects_repeated_nonzero_rng_material() {
         let mut rng = FixedTryRng { byte: 0xA5 };

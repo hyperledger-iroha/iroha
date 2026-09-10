@@ -26,7 +26,6 @@ use iroha_data_model::{
             RegisterSmartContractCode,
         },
     },
-    name::Name,
     permission,
     prelude::*,
     smart_contract::manifest::{
@@ -37,6 +36,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

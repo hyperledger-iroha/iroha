@@ -646,33 +646,46 @@ mod tests {
             // present, without making published tests depend on external files.
             return;
         }
-        let mut sources = Vec::new();
-        collect_rust_sources(&data_model_root.join("src"), &mut sources);
-        for entry in fs::read_dir(&data_model_root).expect("read data-model crate root") {
-            let entry = entry.expect("read data-model crate-root entry");
-            let file_type = entry
-                .file_type()
-                .expect("inspect data-model crate-root entry");
-            assert!(
-                !file_type.is_symlink(),
-                "data-model production source entry must not be a symlink: {}",
-                entry.path().display()
-            );
-            if file_type.is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") {
-                sources.push(entry.path());
-            }
-        }
-        sources.sort();
+        let base_model_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_model_base");
+        assert!(
+            base_model_root.join("Cargo.toml").is_file(),
+            "the monorepo FFI audit requires the canonical foundational model owner"
+        );
         let mut direct_derives = Vec::new();
-        for path in sources {
-            let source = fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
-            let file = syn::parse_file(&source)
-                .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
-            let relative = path
-                .strip_prefix(&data_model_root)
-                .expect("data-model source");
-            audit_standalone_ffi_predicates(relative, &file.items, false, "", &mut direct_derives);
+        for (owner_root, inventory_prefix) in [
+            (&data_model_root, Path::new("")),
+            (&base_model_root, Path::new("iroha_model_base")),
+        ] {
+            let mut sources = Vec::new();
+            collect_rust_sources(&owner_root.join("src"), &mut sources);
+            for entry in fs::read_dir(owner_root).expect("read model crate root") {
+                let entry = entry.expect("read model crate-root entry");
+                let file_type = entry.file_type().expect("inspect model crate-root entry");
+                assert!(
+                    !file_type.is_symlink(),
+                    "model production source entry must not be a symlink: {}",
+                    entry.path().display()
+                );
+                if file_type.is_file() && entry.path().extension().is_some_and(|ext| ext == "rs") {
+                    sources.push(entry.path());
+                }
+            }
+            sources.sort();
+            for path in sources {
+                let source = fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()));
+                let file = syn::parse_file(&source)
+                    .unwrap_or_else(|error| panic!("failed to parse {}: {error}", path.display()));
+                let relative = path.strip_prefix(owner_root).expect("model owner source");
+                let inventory_path = inventory_prefix.join(relative);
+                audit_standalone_ffi_predicates(
+                    &inventory_path,
+                    &file.items,
+                    false,
+                    "",
+                    &mut direct_derives,
+                );
+            }
         }
         direct_derives.sort();
         let expected: Vec<_> = include_str!("../tests/fixtures/direct_ffi_exports.txt")
@@ -682,7 +695,7 @@ mod tests {
             .collect();
         assert_eq!(
             direct_derives, expected,
-            "the direct data-model FFI surface changed; review every new or removed type explicitly"
+            "the direct model FFI surface changed; review every new or removed type explicitly"
         );
     }
     #[test]
@@ -706,6 +719,23 @@ mod tests {
         assert_eq!(
             inventory,
             ["src/test.rs::SharedName", "src/test.rs::nested::SharedName"]
+        );
+        audit_standalone_ffi_predicates(
+            Path::new("iroha_model_base/src/test.rs"),
+            &file.items,
+            false,
+            "",
+            &mut inventory,
+        );
+        assert_eq!(
+            inventory,
+            [
+                "src/test.rs::SharedName",
+                "src/test.rs::nested::SharedName",
+                "iroha_model_base/src/test.rs::SharedName",
+                "iroha_model_base/src/test.rs::nested::SharedName",
+            ],
+            "the owning crate must distinguish identical module and type names"
         );
     }
     fn collect_rust_sources(directory: &Path, sources: &mut Vec<PathBuf>) {

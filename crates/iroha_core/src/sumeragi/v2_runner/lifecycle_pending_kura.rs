@@ -513,15 +513,14 @@ fn run_pending_active_height(
                 .map_err(V2RunnerError::LaneWork)
             },
         )?;
-        let terminal_exact_output_pending = reconcile_pending_kura_terminal_lane_output_handoffs(
+        let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
             &mut activated,
             &mut active_runner,
             control_queue_capacity,
         )?;
-        if terminal_exact_output_pending {
-            let _ = wake_rx.recv_timeout(IDLE_POLL);
-            continue;
-        }
+        // Activation proves local Apply is complete. Retained network output
+        // must not block the recovery/preflight that authenticates its durable
+        // reconstruction owner; exact actor capacity still bounds admission.
         match activated
             .settle_recovered_lifecycle_output_for_no_clock_recovery(&mut active_runner)?
         {
@@ -544,7 +543,7 @@ fn run_pending_active_height(
                 }
             };
 
-        let (ready_to_finish, terminal_exact_output_pending) = match activated.with_runner_runtime(
+        let ready_to_finish = match activated.with_runner_runtime(
             &mut active_runner,
             |executor, services, lane_work| -> Result<_, V2RunnerError> {
                 retry_recovered_decision_fetch_if_due(
@@ -598,13 +597,12 @@ fn run_pending_active_height(
                     next_lane_retransmit = deadline_after(now, retransmit_interval);
                 }
                 dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
-                let terminal_exact_output_pending =
-                    retry_exact_output_and_apply_sidecar_admissions(
-                        lane_work,
-                        services,
-                        control_queue_capacity,
-                    )?;
-                Ok((executor.ready_to_finish(), terminal_exact_output_pending))
+                let _ = retry_exact_output_and_apply_sidecar_admissions(
+                    lane_work,
+                    services,
+                    control_queue_capacity,
+                )?;
+                Ok(executor.ready_to_finish())
             },
         ) {
             Ok(readiness) => readiness,
@@ -614,9 +612,7 @@ fn run_pending_active_height(
                 return Err(error);
             }
         };
-        let ready = ready_to_finish
-            && !terminal_exact_output_pending
-            && !block_sync_server.has_pending_historical_body_serve();
+        let ready = ready_to_finish && !block_sync_server.has_pending_historical_body_serve();
         if let Some(claimed) = producer_turn {
             let attempted =
                 claimed.into_attempted(super::producer_turn_attempt_permit(&mut active_runner));
@@ -701,16 +697,14 @@ fn run_pending_active_height(
                     dispatch_lane_work_effects(lane_work, services, control_queue_capacity)?;
                     Ok::<_, V2RunnerError>((drained.is_some(), drained_relay))
                 })?;
-            let terminal_exact_output_pending =
-                reconcile_pending_kura_terminal_lane_output_handoffs(
-                    &mut activated,
-                    &mut active_runner,
-                    control_queue_capacity,
-                )?;
-            if terminal_exact_output_pending {
-                let _ = wake_rx.recv_timeout(IDLE_POLL);
-                continue;
-            }
+            let _ = reconcile_pending_kura_terminal_lane_output_handoffs(
+                &mut activated,
+                &mut active_runner,
+                control_queue_capacity,
+            )?;
+            // Rollover authenticates and hands off this exact retained output.
+            // Waiting for every remote recipient here would deadlock the local
+            // durable boundary after the finite ingress prefix has emptied.
             if block_sync_server.has_pending_historical_body_serve() {
                 let _ = wake_rx.recv_timeout(IDLE_POLL);
                 continue;

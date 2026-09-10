@@ -41,8 +41,8 @@ use crate::{
     },
     registry::{
         PlatformConfigProvenanceV1, PublicationPollPolicyV1, RegistryErrorV1,
-        RegistryPublicationBackendV1, RegistryReadClientV1, RegistrySigningClientV1,
-        resume_with_bounded_polling,
+        RegistryPublicConfigImageV1, RegistryPublicationBackendV1, RegistryReadClientV1,
+        RegistrySigningClientV1, resume_with_bounded_polling,
     },
     registry_cache::{CachedResolverSourceV1, ResolverIndexCacheV1},
     resolver::{ConflictReasonV1, ResolveModeV1, ResolverError},
@@ -70,8 +70,8 @@ use iroha_data_model::{
         MusubiReleaseIdV1, MusubiSearchPageRequestV1, MusubiSearchQueryV1,
         MusubiStorageAvailabilityV1, MusubiVersionReqV1, MusubiVersionV1,
     },
-    name::Name,
 };
+use iroha_model_base::name::Name;
 use norito::json::{Map, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -205,7 +205,8 @@ struct PackageTemplateArgs {
     /// Library source directory relative to the package root.
     #[arg(long, default_value = "src")]
     source_dir: PortablePath,
-    /// Explicit exported Kotodama interface name; repeat as needed.
+    /// Exported interface name; new source starts with a no-op TODO function.
+    /// Repeat as needed, then replace placeholders with the intended functions or types.
     #[arg(long = "export", value_name = "NAME")]
     exports: Vec<Name>,
     /// Bounded package description.
@@ -741,9 +742,16 @@ fn run_new(args: &NewArgs) -> CommandResult {
     }
     let name = package_name_for_root(&args.path, args.package.name.as_ref())?;
     let manifest = render_package_manifest(&args.package, &name)?;
+    let library_source =
+        PackageLibrarySource::Scaffold(render_package_library(&args.package.exports)?);
     fs::create_dir(&args.path)
         .map_err(|error| io_diagnostic("create package directory", &args.path, &error))?;
-    initialize_package_files(&args.path, &args.package.source_dir, &manifest, false)?;
+    initialize_package_files(
+        &args.path,
+        &args.package.source_dir,
+        &manifest,
+        &library_source,
+    )?;
     Ok(Success {
         message: format!("created {}", args.path.display()),
         data: object([
@@ -779,7 +787,17 @@ fn run_init(args: &InitArgs) -> CommandResult {
     }
     let name = package_name_for_root(&args.path, args.package.name.as_ref())?;
     let manifest = render_package_manifest(&args.package, &name)?;
-    initialize_package_files(&args.path, &args.package.source_dir, &manifest, true)?;
+    let library_source = prepare_existing_package_library(
+        &args.path,
+        &args.package.source_dir,
+        &args.package.exports,
+    )?;
+    initialize_package_files(
+        &args.path,
+        &args.package.source_dir,
+        &manifest,
+        &library_source,
+    )?;
     Ok(Success {
         message: format!("initialized {}", args.path.display()),
         data: object([
@@ -903,11 +921,82 @@ fn toml_quote(value: &str) -> String {
     quoted.push('"');
     quoted
 }
+enum PackageLibrarySource {
+    Existing,
+    Scaffold(String),
+}
+
+fn package_export_names(
+    exports: &[Name],
+    for_function: bool,
+) -> Result<BTreeSet<&str>, Diagnostic> {
+    let mut names = BTreeSet::new();
+    for name in exports {
+        let name = name.as_ref();
+        if !iroha_data_model::smart_contract::entrypoint::is_canonical_kotodama_identifier(name)
+            || ivm::kotodama::semantic::is_reserved_source_declaration(name, for_function)
+        {
+            return Err(Diagnostic::new(
+                ErrorCode::Usage,
+                "export name cannot declare the requested Kotodama interface",
+            )
+            .with_context("export", name)
+            .with_help("use a canonical, non-reserved Kotodama identifier"));
+        }
+        names.insert(name);
+    }
+    Ok(names)
+}
+
+fn render_package_library(exports: &[Name]) -> Result<String, Diagnostic> {
+    let names = package_export_names(exports, true)?;
+    let mut source = String::from(
+        "// Musubi V1 library source.\n\
+         // TODO: Define the library interface and implement its behavior.\n\
+         module Library {\n",
+    );
+    for name in names {
+        source.push_str(
+            "    // TODO: Replace this no-op function with the intended function or type.\n",
+        );
+        source.push_str("    fn ");
+        source.push_str(name);
+        source.push_str("() {}\n");
+    }
+    source.push_str("}\n");
+    Ok(source)
+}
+
+fn prepare_existing_package_library(
+    root: &Path,
+    source_dir: &PortablePath,
+    exports: &[Name],
+) -> Result<PackageLibrarySource, Diagnostic> {
+    let library = root.join(source_dir.to_path_buf()).join("lib.ko");
+    match fs::symlink_metadata(&library) {
+        Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {
+            // Existing exports can be functions or types. Only newly generated function
+            // placeholders must avoid names reserved exclusively for functions.
+            package_export_names(exports, false)?;
+            Ok(PackageLibrarySource::Existing)
+        }
+        Ok(_) => Err(Diagnostic::new(
+            ErrorCode::Io,
+            "existing library target is not a regular non-symlink file",
+        )
+        .with_context("path", library.display().to_string())),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            render_package_library(exports).map(PackageLibrarySource::Scaffold)
+        }
+        Err(error) => Err(io_diagnostic("inspect library source", &library, &error)),
+    }
+}
+
 fn initialize_package_files(
     root: &Path,
     source_dir: &PortablePath,
     manifest: &str,
-    preserve_source: bool,
+    library_source: &PackageLibrarySource,
 ) -> Result<(), Diagnostic> {
     let source_path = root.join(source_dir.to_path_buf());
     fs::create_dir_all(&source_path)
@@ -915,8 +1004,8 @@ fn initialize_package_files(
     let writer = AtomicWriteRoot::new(root).map_err(atomic_diagnostic)?;
     let library = source_dir.to_path_buf().join("lib.ko");
     let library_path = root.join(&library);
-    if preserve_source {
-        match fs::symlink_metadata(&library_path) {
+    match library_source {
+        PackageLibrarySource::Existing => match fs::symlink_metadata(&library_path) {
             Ok(metadata) if metadata.is_file() && !metadata.file_type().is_symlink() => {}
             Ok(_) => {
                 return Err(Diagnostic::new(
@@ -925,9 +1014,6 @@ fn initialize_package_files(
                 )
                 .with_context("path", library_path.display().to_string()));
             }
-            Err(error) if error.kind() == io::ErrorKind::NotFound => writer
-                .replace(&library, b"// Musubi V1 library source.\n")
-                .map_err(atomic_diagnostic)?,
             Err(error) => {
                 return Err(io_diagnostic(
                     "inspect library source",
@@ -935,11 +1021,12 @@ fn initialize_package_files(
                     &error,
                 ));
             }
+        },
+        PackageLibrarySource::Scaffold(source) => {
+            writer
+                .install_immutable(&library, source.as_bytes())
+                .map_err(atomic_diagnostic)?;
         }
-    } else {
-        writer
-            .replace(&library, b"// Musubi V1 library source.\n")
-            .map_err(atomic_diagnostic)?;
     }
     writer
         .replace(Path::new(MANIFEST_FILE_NAME), manifest.as_bytes())
@@ -2829,18 +2916,16 @@ fn recover_publication_sidecars_at(
     let layout = package_layout_for_member(workspace.root(), member);
     let plan = plan_package(&layout, &manifest, &verification_lock)
         .map_err(|error| package_diagnostic(&error))?;
-    let (registry, config_image) =
-        RegistryReadClientV1::load_with_config_image(args.network.config.as_deref())
-            .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
-    let prepared_archive_fetch =
-        prepare_production_archive_transport_v1(config_image.path(), config_image.bytes());
-    drop(config_image);
-    let account_chain_discriminant = registry.account_chain_discriminant();
-    let graph = ResolvedWorkspaceGraphV1 {
+    let config_image = RegistryPublicConfigImageV1::load(args.network.config.as_deref())
+        .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
+    let account_chain_discriminant = config_image
+        .account_chain_discriminant()
+        .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?;
+    let mut graph = ResolvedWorkspaceGraphV1 {
         lock: graph_lock,
-        registry: Some(registry),
+        registry: None,
         cached_source: None,
-        prepared_archive_fetch: Some(prepared_archive_fetch),
+        prepared_archive_fetch: None,
         platform_config_provenance: None,
         account_chain_discriminant,
     };
@@ -2851,7 +2936,30 @@ fn recover_publication_sidecars_at(
         platform_cache = open_user_cache()?;
         &platform_cache
     };
-    ensure_graph_archives(cache, &graph, args.mode)?;
+    // The immutable journal and authenticated cache are sufficient for local reconstruction.
+    // Only an online cache miss authorizes materializing credentials from this exact image.
+    if let Err(error) = ensure_graph_archives(
+        cache,
+        &graph,
+        GraphModeArgs {
+            offline: true,
+            ..args.mode
+        },
+    ) {
+        if args.mode.effective_offline() || error.code() != ErrorCode::OfflineMiss {
+            return Err(error);
+        }
+        graph.registry = Some(
+            RegistryReadClientV1::load_from_config_bytes(config_image.path(), config_image.bytes())
+                .map_err(|error| registry_diagnostic(error, ErrorCode::Publish))?,
+        );
+        graph.prepared_archive_fetch = Some(prepare_production_archive_transport_v1(
+            config_image.path(),
+            config_image.bytes(),
+        ));
+        ensure_graph_archives(cache, &graph, args.mode)?;
+    }
+    drop(config_image);
     let interface_digest = validate_packaged_plan(
         cache,
         &plan,

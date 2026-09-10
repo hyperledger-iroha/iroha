@@ -89,7 +89,14 @@ impl Kura {
             // again as projected headroom, so a tight-cap startup can refuse
             // the very promotion needed to make retirement drainable.
             let before_recovery = Self::sidecar_tracked_bytes(data_path, index_path)?;
-            let recovery_accounting = self.begin_total_disk_usage_mutation();
+            let recovery_accounting =
+                self.begin_total_disk_usage_mutation()
+                    .with_resource_paths(vec![
+                        data_path.to_path_buf(),
+                        index_path.to_path_buf(),
+                        data_path.with_extension("norito.tmp"),
+                        index_path.with_extension("index.tmp"),
+                    ]);
             if !Self::recover_indexed_sidecar_artifacts_with_required_heights(
                 data_path,
                 index_path,
@@ -115,9 +122,11 @@ impl Kura {
         // configured-capacity refusal is byte-exact and cannot leave an early
         // pair compacted while a later pair is rejected.
         if self.max_disk_usage_bytes != 0 {
-            let temp_peak = pairs.iter().try_fold(0_u64, |peak, ((data, index), _, _)| {
-                Self::sidecar_tracked_bytes(data, index).map(|bytes| peak.max(bytes))
-            })?;
+            let temp_peak = pairs
+                .iter()
+                .try_fold(0_u64, |peak, ((data, index), _, _)| {
+                    Self::sidecar_tracked_bytes(data, index).map(|bytes| peak.max(bytes))
+                })?;
             let post_wsv_reservations = self.post_wsv_lane_artifact_budget_reserved_bytes()?;
             let certified_bundle_reservations = self.certified_bundle_capacity_reserved_bytes()?;
             let terminal_reservations =
@@ -160,7 +169,14 @@ impl Kura {
                 }
             };
             let before = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
-            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            let accounting_mutation =
+                self.begin_total_disk_usage_mutation()
+                    .with_resource_paths(vec![
+                        data_path.to_path_buf(),
+                        index_path.to_path_buf(),
+                        data_path.with_extension("norito.tmp"),
+                        index_path.with_extension("index.tmp"),
+                    ]);
             if !Self::prune_indexed_sidecars_through_terminal_frontier_with_required_heights(
                 &data_path,
                 &index_path,

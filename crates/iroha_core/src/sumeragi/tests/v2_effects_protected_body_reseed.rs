@@ -45,7 +45,7 @@ fn protected_commit_validate_reseeds_missing_replay_without_applying() {
             &executor.durable_validate_retry_seals[&key],
             DurableValidateRetrySealV1::Live {
                 store_terminal: Some(_),
-                lifecycle_ordinal: None,
+                lifecycle_state: DurableValidateRetryLifecycleStateV1::PendingAdmission,
                 ..
             }
         ));

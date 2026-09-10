@@ -3156,8 +3156,9 @@ unsigned transaction draft. The request contains the authority,
 `contract_address` or `contract_alias`, the explicit entrypoint, optional
 payload and metadata, typed `feePayment`, and an off-wire `draftIntent` built
 from the locally verified contract artifact. Private signing material and the
-intent are never sent to Torii. The client rejects the returned draft unless
-its exact network, authority, executable, metadata, quoted fee, creation time,
+intent are never sent to Torii. Contract drafts require `QueuePlanSynced`
+admission and canonical account HTTP authentication. The client rejects the
+returned draft unless its exact network, authority, executable, metadata, quoted fee, creation time,
 TTL, admission mode, nonce, and attachments match caller-trusted state. Sign
 only after that validation succeeds, then submit the finalized transaction
 through the normal transaction route.
@@ -3166,6 +3167,7 @@ through the normal transaction route.
 import { LocalSigningContext, NetworkId, ToriiClient } from "@iroha/iroha-js";
 
 const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
+  canonicalRequestAuth: { accountId: AUTHORITY_ACCOUNT_ID, privateKey: runtimePrivateKey },
   authToken: process.env.IROHA_TORII_AUTH_TOKEN,
   localSigningContext: new LocalSigningContext(
     NetworkId.parse(EXACT_NETWORK_ID_LITERAL),

@@ -1656,6 +1656,8 @@ pub enum MusubiProviderAttestationJournalErrorV1 {
     #[error("Musubi provider-attestation journal counter overflowed")]
     ArithmeticOverflow,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::StoredApprovalIntentV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredApprovalIntentV1 {
     approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -1734,6 +1736,8 @@ enum StoredJournalStateV1 {
         dead_lettered_at_unix_ms: u64,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::StoredJournalEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredJournalEntryV1 {
     intent: StoredApprovalIntentV1,

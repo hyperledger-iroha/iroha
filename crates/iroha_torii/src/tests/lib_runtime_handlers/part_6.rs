@@ -1447,7 +1447,7 @@ fn sample_soracloud_runtime_snapshot(
 }
 fn seed_public_soracloud_world() -> World {
     let mut world = World::new();
-    let service_name: iroha_data_model::name::Name = "web_portal".parse().expect("service");
+    let service_name: iroha_model_base::name::Name = "web_portal".parse().expect("service");
     let bundle = iroha_data_model::soracloud::SoraDeploymentBundleV1 {
         schema_version: iroha_data_model::soracloud::SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
         container: iroha_data_model::soracloud::SoraContainerManifestV1 {

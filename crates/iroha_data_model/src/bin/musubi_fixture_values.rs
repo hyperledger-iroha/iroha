@@ -44,7 +44,6 @@ use iroha_data_model::{
         MusubiTakedownArtifactActionV1, MusubiVerificationLockV1, MusubiVerificationNodeV1,
         MusubiVersionReqV1, MusubiVersionV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
-    name::Name,
     nexus::DataSpaceId,
     sorafs::{
         capacity::ProviderId,
@@ -55,6 +54,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::name::Name;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     core::{DecodeFlagsGuard, DecodeFromSlice},

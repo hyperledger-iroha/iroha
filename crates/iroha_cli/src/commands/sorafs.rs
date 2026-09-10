@@ -55,7 +55,6 @@ use iroha_data_model::{
         },
     },
     metadata::Metadata,
-    name::Name,
     prelude::ChainId,
     sorafs::{
         gar::{GarEnforcementActionV1, GarEnforcementReceiptV1},
@@ -78,6 +77,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity};
 use iroha_service_model::soranet::{AnonymityPolicy, TransportPolicy, WriteModeHint};
 use iroha_storage_client::client::{

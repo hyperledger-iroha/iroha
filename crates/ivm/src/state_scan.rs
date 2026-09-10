@@ -7,14 +7,11 @@
 use std::ops::{Bound, ControlFlow};
 
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    name::Name,
-    smart_contract::{
-        entrypoint::EntrypointValueKindV1,
-        state_cursor::{MAX_STATE_CURSOR_BYTES_V1, StateCursorV1},
-    },
-    state_path::StatePath,
+use iroha_data_model::smart_contract::{
+    entrypoint::EntrypointValueKindV1,
+    state_cursor::{MAX_STATE_CURSOR_BYTES_V1, StateCursorV1},
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use ivm_abi::codec::{decode_canonical_norito, encode_canonical_norito};
 
 use crate::{

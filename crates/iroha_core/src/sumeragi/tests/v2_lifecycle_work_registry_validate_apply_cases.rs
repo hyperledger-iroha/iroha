@@ -855,7 +855,7 @@ fn ready_validate_apply_publishes_at_actor_global_child_coordinates() {
         .name("ready-validate-apply-actor-global-child".to_owned())
         .stack_size(32 * 1024 * 1024)
         .spawn(|| {
-            ready_validate_apply_actor_global_child_fixture(false, false, ObserverApplyCase::None)
+            ready_validate_apply_actor_global_child_fixture(false, false, ApplySuccessorCase::None)
         })
         .expect("spawn Ready Validate Apply actor-global child fixture");
     if let Err(payload) = handle.join() {
@@ -870,7 +870,7 @@ fn ready_validate_apply_rejects_a_tampered_body_frame_before_publication() {
         .name("ready-validate-apply-tampered-body-frame".to_owned())
         .stack_size(32 * 1024 * 1024)
         .spawn(|| {
-            ready_validate_apply_actor_global_child_fixture(true, false, ObserverApplyCase::None)
+            ready_validate_apply_actor_global_child_fixture(true, false, ApplySuccessorCase::None)
         })
         .expect("spawn tampered Ready Validate Apply body-frame fixture");
     if let Err(payload) = handle.join() {
@@ -885,7 +885,7 @@ fn lifecycle_decision_apply_live_recovered_substitution_matrix_is_inert() {
         .name("lifecycle-apply-live-recovered-substitution".to_owned())
         .stack_size(32 * 1024 * 1024)
         .spawn(|| {
-            ready_validate_apply_actor_global_child_fixture(false, true, ObserverApplyCase::None)
+            ready_validate_apply_actor_global_child_fixture(false, true, ApplySuccessorCase::None)
         })
         .expect("spawn lifecycle Decision Apply lineage substitution fixture");
     if let Err(payload) = handle.join() {
@@ -903,7 +903,7 @@ fn observer_apply_defers_missing_pre_apply_commit_qc_to_delayed_successor() {
             ready_validate_apply_actor_global_child_fixture(
                 false,
                 false,
-                ObserverApplyCase::PendingOnly,
+                ApplySuccessorCase::PendingOnly,
             )
         })
         .expect("spawn observer Apply parked-predecessor fixture");
@@ -922,10 +922,29 @@ fn observer_apply_dispatches_after_delayed_commit_qc_with_retained_periodic_appl
             ready_validate_apply_actor_global_child_fixture(
                 false,
                 false,
-                ObserverApplyCase::Retained,
+                ApplySuccessorCase::Retained,
             )
         })
         .expect("spawn observer Apply with its actual retained periodic suffix");
+    if let Err(payload) = handle.join() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
+#[cfg(feature = "bls")]
+#[test]
+fn validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission() {
+    let handle = std::thread::Builder::new()
+        .name("validator-apply-delayed-successor".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            ready_validate_apply_actor_global_child_fixture(
+                false,
+                false,
+                ApplySuccessorCase::ValidatorRetained,
+            )
+        })
+        .expect("spawn validator Apply with its actual retained periodic suffix");
     if let Err(payload) = handle.join() {
         std::panic::resume_unwind(payload);
     }
@@ -939,9 +958,9 @@ fn observer_apply_drains_finite_pre_apply_fifo_with_delayed_retained_periodic_ap
         .stack_size(32 * 1024 * 1024)
         .spawn(|| {
             for case in [
-                ObserverApplyCase::PendingOnlyWithPredecessors,
-                ObserverApplyCase::RetainedWithPostApplyCommand,
-                ObserverApplyCase::RetainedWithPredecessors,
+                ApplySuccessorCase::PendingOnlyWithPredecessors,
+                ApplySuccessorCase::RetainedWithPostApplyCommand,
+                ApplySuccessorCase::RetainedWithPredecessors,
             ] {
                 ready_validate_apply_actor_global_child_fixture(false, false, case);
             }
@@ -954,10 +973,11 @@ fn observer_apply_drains_finite_pre_apply_fifo_with_delayed_retained_periodic_ap
 
 #[cfg(feature = "bls")]
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum ObserverApplyCase {
+enum ApplySuccessorCase {
     None,
     PendingOnly,
     Retained,
+    ValidatorRetained,
     PendingOnlyWithPredecessors,
     RetainedWithPostApplyCommand,
     RetainedWithPredecessors,
@@ -981,20 +1001,25 @@ fn recovered_decision_apply_finality_retires_authenticated_validate_retry_seal()
 fn ready_validate_apply_actor_global_child_fixture(
     tamper_apply_frame: bool,
     exercise_lineage_matrix: bool,
-    observer_case: ObserverApplyCase,
+    successor_case: ApplySuccessorCase,
 ) {
-    let exercise_observer_predecessor = observer_case != ObserverApplyCase::None;
+    let exercise_validator_predecessor = successor_case == ApplySuccessorCase::ValidatorRetained;
+    let exercise_observer_predecessor = !matches!(
+        successor_case,
+        ApplySuccessorCase::None | ApplySuccessorCase::ValidatorRetained
+    );
     let retain_periodic_apply_suffix = matches!(
-        observer_case,
-        ObserverApplyCase::Retained
-            | ObserverApplyCase::RetainedWithPredecessors
-            | ObserverApplyCase::RetainedWithPostApplyCommand
+        successor_case,
+        ApplySuccessorCase::Retained
+            | ApplySuccessorCase::ValidatorRetained
+            | ApplySuccessorCase::RetainedWithPredecessors
+            | ApplySuccessorCase::RetainedWithPostApplyCommand
     );
     let retain_runtime_predecessors = matches!(
-        observer_case,
-        ObserverApplyCase::PendingOnlyWithPredecessors
-            | ObserverApplyCase::RetainedWithPredecessors
-            | ObserverApplyCase::RetainedWithPostApplyCommand
+        successor_case,
+        ApplySuccessorCase::PendingOnlyWithPredecessors
+            | ApplySuccessorCase::RetainedWithPredecessors
+            | ApplySuccessorCase::RetainedWithPostApplyCommand
     );
     let marker = 0xE0;
     let ReadyDurableValidateFixture {
@@ -1630,7 +1655,7 @@ fn ready_validate_apply_actor_global_child_fixture(
             .contains(&"durable-validate-retry-seal")
     );
 
-    if observer_case == ObserverApplyCase::RetainedWithPostApplyCommand {
+    if successor_case == ApplySuccessorCase::RetainedWithPostApplyCommand {
         let late_ordinal = runtime_ordinals
             .next_ordinal_for_test()
             .expect("inspect the authentic late admission ordinal")
@@ -1650,8 +1675,10 @@ fn ready_validate_apply_actor_global_child_fixture(
     }
 
     let mut observer_output_ordinal = None;
-    if exercise_observer_predecessor {
-        executor.enter_observer_completion_mode_for_test();
+    if exercise_observer_predecessor || exercise_validator_predecessor {
+        if exercise_observer_predecessor {
+            executor.enter_observer_completion_mode_for_test();
+        }
 
         let mut foreign_decision = decision.clone();
         foreign_decision.subject.payload_hash = Hash::new(b"foreign observer CommitQC");
@@ -1724,6 +1751,24 @@ fn ready_validate_apply_actor_global_child_fixture(
             "foreign runtime-owner substitution must fail before delayed admission"
         );
 
+        let malformed_broadcast = AdapterEffect::Broadcast(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
+        ));
+        let malformed_effects = vec![malformed_broadcast; 3];
+        let malformed_owners = bind_adapter_effect_batch_ownership(
+            &malformed_effects,
+            (0..3)
+                .map(|_| RuntimeEffectOwnership::periodic_retransmit_for_test(tag, local_prediction))
+                .collect(),
+        )
+        .expect("bind a real but unsupported three-Broadcast periodic batch");
+        for (effect, ownership) in malformed_effects.into_iter().zip(malformed_owners) {
+            let malformed = PendingLifecycleOutputAdmissionV1::seal_exact(effect, ownership)
+                .unwrap_or_else(|_| panic!("seal unsupported periodic batch shape"));
+            assert!(!malformed.binds_periodic_retransmit_apply_prefix());
+            assert!(!malformed.binds_single_periodic_retransmit_broadcast());
+        }
+
         let fence = executor.lifecycle_reducer_fence_observation();
         if retain_periodic_apply_suffix {
             executor
@@ -1757,6 +1802,10 @@ fn ready_validate_apply_actor_global_child_fixture(
             );
             assert!(executor.install_pending_lifecycle_output_for_test(pending));
         }
+        let pending = executor.pending_lifecycle_output_admission_census().next()
+            .expect("one exact periodic output is pending");
+        assert_eq!(pending.binds_periodic_retransmit_apply_prefix(), retain_periodic_apply_suffix);
+        assert_eq!(pending.binds_single_periodic_retransmit_broadcast(), !retain_periodic_apply_suffix);
         assert_eq!(
             owner.classify_completion_ready_work(fence),
             super::super::ProductionCompletionReadyWorkV1::CompletionIo
@@ -1775,9 +1824,11 @@ fn ready_validate_apply_actor_global_child_fixture(
 
         let outer_ingress = crate::sumeragi::FairV2Ingress::new(1, 1024 * 1024, 1024 * 1024, 0, 0);
         if retain_runtime_predecessors {
-            executor
+            let settlement = executor
                 .settle_pending_lifecycle_output_admissions(&mut owner, &mut services)
                 .expect("admit delayed output before inspecting the complete FIFO bound");
+            assert_eq!(settlement.newly_completed(), 0);
+            assert_eq!(settlement.already_completed(), 0);
         } else {
             let admission_slice = crate::sumeragi::v2_runner::advance_executor(
                 &outer_ingress,
@@ -1819,6 +1870,23 @@ fn ready_validate_apply_actor_global_child_fixture(
                 .collect::<Vec<_>>(),
             vec![child_ordinal, output_ordinal]
         );
+        let attestation = owner
+            .attest_ready_live_decision_apply_runtime_predecessor(
+                child_ordinal,
+                executor.pending_lifecycle_output_admission_census(),
+            )
+            .expect("attest the delayed periodic output")
+            .expect("exact output remains the adjacent successor");
+        let expected_mode = if retain_periodic_apply_suffix {
+            super::super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {
+                runtime_ordinal: local_prediction,
+            }
+        } else {
+            super::super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
+                runtime_ordinal: local_prediction,
+            }
+        };
+        assert_eq!(attestation.mode(), expected_mode);
         observer_output_ordinal = Some(output_ordinal);
         let original_output_digest = *output_record
             .physical_slots
@@ -1871,7 +1939,7 @@ fn ready_validate_apply_actor_global_child_fixture(
                 .expect("the exact delayed pair retains one successor attestation");
             assert!(matches!(
                 attestation.mode(),
-                super::super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
+                super::super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix { .. }
             ));
             executor.assert_retained_apply_suffix_substitutions_rejected_for_test(&attestation);
             assert_eq!(planner_io.queued_lifecycle_decision_apply_count(), 0);
@@ -1901,15 +1969,13 @@ fn ready_validate_apply_actor_global_child_fixture(
             )
             .expect("attest the complete queued delayed-output census")
             .expect("the queued case retains one exact delayed successor");
-        assert!(matches!(attestation.mode(),
-            super::super::LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-        ));
+        assert_eq!(attestation.mode().retains_apply_suffix(), retain_periodic_apply_suffix);
         let outer_ingress = &queued_ingress;
         let captured_at = std::time::Instant::now();
         let before = executor.runtime_queue_snapshot_for_test(captured_at);
         assert_eq!(
             before.normal.depth,
-            if observer_case == ObserverApplyCase::RetainedWithPostApplyCommand {
+            if successor_case == ApplySuccessorCase::RetainedWithPostApplyCommand {
                 3
             } else {
                 2
@@ -1933,7 +1999,7 @@ fn ready_validate_apply_actor_global_child_fixture(
             wire::ConsensusMessageV2Payload::QuorumCertificate(decision.clone()),
         );
         assert_eq!(services.consensus_broadcast_count_for_test(&output), 0);
-        if observer_case != ObserverApplyCase::RetainedWithPredecessors {
+        if successor_case != ApplySuccessorCase::RetainedWithPredecessors {
             assert!(
                 !executor
                     .lifecycle_decision_apply_runtime_predecessor_drain_available(&attestation)

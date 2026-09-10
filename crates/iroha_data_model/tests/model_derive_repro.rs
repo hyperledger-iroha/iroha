@@ -6,7 +6,8 @@
 //!
 //! They are ignored by default to keep the suite green; run them explicitly to
 //! inspect differences while iterating on derives and/or Norito flags.
-use iroha_data_model::{events::time::TimeInterval, prelude::*};
+use iroha_data_model::events::time::TimeInterval;
+use iroha_model_base::name::Name;
 #[test]
 fn repro_name_bare_vs_header_valid() {
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {

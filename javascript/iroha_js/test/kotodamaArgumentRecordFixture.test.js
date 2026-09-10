@@ -43,6 +43,7 @@ test("contract call preserves the shared Rust argument-record fixture at the Tor
   const client = new ToriiClient("https://fixture.invalid", {
     fetchImpl,
     localSigningContext: new LocalSigningContext(networkId),
+    canonicalRequestAuth: { accountId: boundary.authority, privateKey: Buffer.alloc(32, 0x5a) },
   });
 
   await assert.rejects(

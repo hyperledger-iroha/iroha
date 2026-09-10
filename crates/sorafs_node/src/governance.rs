@@ -2400,6 +2400,8 @@ struct RuntimeDagQualificationTransitionV1 {
     body: RuntimeDagQualificationTransitionBodyV1,
     key_transition: RuntimeDagKeyTransitionEnvelopeV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance::RuntimeDagQualificationHistoryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct RuntimeDagQualificationHistoryV1 {
     version: u8,

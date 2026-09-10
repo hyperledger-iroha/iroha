@@ -17,8 +17,14 @@ accept no live configuration, credentials, SSH, deployment or signing inputs.
 from __future__ import annotations
 
 import argparse
+import contextlib
+import fcntl
+import hashlib
 import json
 import os
+import re
+import shutil
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -94,6 +100,7 @@ STAGES = (
     ("generated stage through frozen consumer", (
         "soracloud::tests::taira_inrou_workspace_generator_emits_exact_private_deploy_layout",
         "soracloud::tests::taira_stage_reads_require_private_custody_for_prepared_and_frozen_files",
+        "soracloud::tests::prepared_inrou_pin_preserves_exact_sponsor_fee_identity",
     )),
     ("preseed receipt ordering", (
         "taira_public_reset::host::tests::preseed_receipt_targets_follow_receipt_order_for_reversed_stores",
@@ -174,6 +181,9 @@ STAGES = (
     ("server-prepared transaction confirmation", (
         "taira::tests::prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire",
         "taira::tests::prepared_server_confirmation_preserves_fixed_failure_and_deadline",
+        "taira::tests::prepared_server_confirmation_retries_deadline_timeout_until_fixed_failure",
+        "taira::tests::prepared_server_confirmation_preserves_configured_timeout_errors",
+        "taira::tests::prepared_server_confirmation_preserves_other_transport_errors",
         "taira::tests::prepared_server_confirmation_rejects_malformed_status_without_resubmission",
     )),
     ("stopped owner runtime cleanup", (
@@ -220,10 +230,186 @@ TORII_STAGES = (("routed onboarding and faucet contracts", (
     "accounts_onboard::sponsored_onboarding_submit_rejects_old_and_tampered_envelopes",
 )),)
 
-CORE_STAGES = (("multi-route ordinary transaction progress", (
+CRYPTO_STAGES = (("puzzle cancellation and exact solution predicate", (
+    "soranet::puzzle::tests::mint_cancellation_stops_before_first_evaluation",
+    "soranet::puzzle::tests::mint_cancellation_discards_inflight_solutions_and_stops_search",
+    "soranet::puzzle::tests::mint_and_verify_ticket",
+    "soranet::puzzle::tests::invalid_solution_rejected",
+    "soranet::puzzle::tests::mint_reanchors_each_candidate_across_long_search",
+    "soranet::puzzle::tests::mint_discards_valid_candidate_that_completed_below_ttl_floor",
+)),)
+
+CRYPTO_STAGES += (("optimized BLS arithmetic preserves verification boundaries", (
+    "signature::bls::tests::normal::signature_verification",
+    "signature::bls::tests::normal::aggregate_same_message_roundtrip",
+    "signature::bls::tests::normal::parse_public_key_rejects_non_subgroup_point",
+    "signature::bls::tests::normal::verify_cache_rejects_variable_length_tuple_splice",
+    "signature::bls::tests::small::signature_verification",
+    "signature::bls::tests::small::signature_verification_different_keys",
+    "signature::bls::tests::small::parse_public_key_rejects_non_subgroup_point",
+    "signature::bls::tests::small::verify_cache_rejects_variable_length_tuple_splice",
+)),)
+
+P2P_STAGES = (("bounded peer authentication and validator retry ownership", (
+    "peer::run::tests::peer_run_authentication_deadline_precedes_long_idle_and_retires_exact_connection",
+    "peer::handshake_config_tests::puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellation",
+    "peer::handshake_config_tests::authentication_deadline_cancels_puzzle_work_without_releasing_inflight_memory",
+    "peer::handshake_config_tests::puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_responsive",
+    "peer::handshake_config_tests::inbound_puzzle_pressure_cannot_consume_outbound_recovery_capacity",
+    "peer::handshake_config_tests::closed_puzzle_work_gate_fails_closed_without_running_work",
+    "peer::handshake_config_tests::inbound_puzzle_verification_accepts_a_fresh_valid_ticket",
+    "peer::handshake_config_tests::inbound_puzzle_verification_rejects_an_invalid_ticket",
+    "peer::handshake_config_tests::inbound_puzzle_ticket_expiring_while_queued_is_rejected",
+    "network::accept_stream_tests::tls_listener_closes_silent_transport_at_absolute_preauth_deadline",
+    "network::accept_stream_tests::tls_source_gate_precedes_global_capacity_and_deadline_releases_it",
+    "network::tests::outbound_authentication_lifetime_rejects_unrepresentable_budgets",
+    "network::tests::four_validator_full_mesh_has_exactly_six_balanced_initial_dial_owners",
+    "network::tests::validator_standby_dials_after_authentication_tenure_despite_long_idle_timeout",
+    "network::tests::failed_pre_handshake_dial_retains_exact_backoff_retry_owner",
+    "network::tests::authenticated_session_restart_has_one_immediate_reconnector_and_stable_backup_deadline",
+    "network::tests::authenticated_session_cancels_obsolete_standby_attempt_without_reschedule_loop",
+)),)
+
+P2P_STAGES += (("immutable reply identity and exact dynamic history", (
+    "network::tests::dependent_test_fixture_mints_opaque_tenures_and_delivery_ordinals",
+    "network::tests::reply_route_pruning_retains_equal_ordinal_tenure_tombstone",
+    "network::tests::reply_route_binding_rejects_evicted_tombstone_collision",
+    "network::tests::reply_route_set_isolates_sources_preserves_cursors_and_prunes_retired_capacity",
+    "network::tests::reply_route_history_projection_tracks_live_and_retired_transitions",
+)),)
+
+CORE_STAGES = (("consensus scheduling and multi-route progress", (
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_canonical_wire_seals_only_complete_classified_messages",
+    "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
+    "sumeragi::v2::tests::adapter_hot_context_projections_retain_the_verified_registry_identity",
+    "sumeragi::v2_runner::tests::finalized_rollover_drains_source_effects_after_handoff_reopens_capacity",
+    "sumeragi::v2_runner::tests::terminal_finalization_limits_open_ingress_to_lane_preflight_before_the_finite_closed_drain",
+    "sumeragi::v2_lifecycle_coordinator::launch::tests::pending_kura_actor_backpressure_reaches_durable_rollover_after_closed_prefix",
+    "sumeragi::v2_lifecycle_coordinator::launch::tests::pending_kura_mixed_decision_fetch_services_older_cold_output_before_producer_turn",
+    "sumeragi::lane_planner::tests::autonomous_reservation_retries_only_transient_planning_failures",
+    "sumeragi::v2_effects::tests::decided_apply_retries_after_exact_merge_sidecar_recovery",
+    "sumeragi::v2_worker::tests::deferred_apply_retry_full_queue_preserves_output_and_exact_task",
+    "sumeragi::v2_worker::tests::deferred_apply_retry_disconnected_or_conflicting_queue_fails_closed",
+    "sumeragi::v2_lane_work::tests::completed_merge_sidecar_stays_ready_until_retry_admission_acknowledged",
+    "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reservations_until_participant_predecessor_repair",
+    "sumeragi::v2_lane_work::tests::autonomous_producer_retains_reserved_batch_until_coordinator_predecessor_repair",
+    "sumeragi::v2_lane_work::tests::queue_plan_nonleader_handoff_targets_frozen_leader_with_exact_bytes",
+    "sumeragi::v2_lane_work::tests::queue_plan_leader_stages_exact_handoff_idempotently",
+    "sumeragi::v2_lane_work::tests::queue_plan_exact_marker_retains_certificate_until_transaction_application",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_future_but_rejects_nonleader_stale_conflict_and_corrupt",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retires_future_after_current_source_incarnation_drifts",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_cursor_rotates_under_effect_pressure",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_fresh_admission_before_height_adapter_rollover",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_preserves_materialized_fifo_before_height_adapter_rollover",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_retains_new_admission_while_worker_height_is_obsolete",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_rearms_for_new_view_without_an_arrival_notification",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_new_inventory_preserves_prior_exact_transfers",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_stale_generation_cannot_complete_a_new_destination",
+    "sumeragi::v2_lane_work::tests::queue_plan_handoff_is_not_retired_by_unrelated_merge_broadcast_cleanup",
     "sumeragi::v2_lane_work::tests::candidate_provider_admits_ordinary_work_in_multiroute_world_and_excludes_queue_plan_synced",
     "sumeragi::v2_lane_work::tests::candidate_provider_anchors_pending_autonomous_payload_and_defers_queue_conflict",
     "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
+)),)
+
+CORE_STAGES += (("durable output capacity and strict handoff", (
+    "sumeragi::v2_worker::tests::final_exact_output_seal_is_one_shot_and_blocks_late_enqueue",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor",
+    "sumeragi::v2_worker::tests::applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically",
+    "sumeragi::v2_worker::tests::independent_applied_handoff_releases_covered_states_and_retains_lane_owners",
+    "sumeragi::v2_worker::tests::independent_applied_handoff_retains_active_historical_recovery_request",
+    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_unbound_lane_output_atomically",
+    "sumeragi::v2_worker::tests::autonomous_payload_carrier_comparison_promotes_only_a_missing_advisory_hint",
+    "sumeragi::v2_worker::tests::applied_height_handoff_retires_only_exact_same_finality_nonwinning_autonomous_outputs_atomically",
+    "sumeragi::v2_worker::tests::applied_height_handoff_rejects_wrong_height_global_output",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_historical_kura_global_responses_atomically",
+    "sumeragi::v2_worker::tests::prepared_historical_body_retries_after_exact_output_capacity_rejection",
+    "sumeragi::v2_worker::tests::prepared_historical_body_capacity_recovers_from_applied_finality_without_peer_delivery",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_kura_applied_ordinary_historical_lane_output",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_record_backed_autonomous_historical_lane_certificate",
+    "sumeragi::v2_worker::tests::applied_height_handoff_accepts_only_exact_historical_kura_lane_certificate",
+    "sumeragi::v2_worker::tests::applied_height_handoff_authenticates_exact_payload_chunk_fanout",
+    "sumeragi::v2_worker::tests::production_exact_output_observes_finality_only_after_state_commit",
+    "sumeragi::v2_worker::tests::applied_height_finality_releases_only_ticketless_global_topology_target",
+    "sumeragi::v2_worker::tests::applied_height_finality_releases_only_covered_ticketless_payload_chunks",
+    "sumeragi::v2_worker::tests::terminal_retry_revalidates_exact_kura_advert_before_retiring_ranked_output",
+    "sumeragi::v2_worker::tests::terminal_retry_revalidates_exact_kura_queue_plan_admission_before_retiring_ranked_output",
+    "sumeragi::v2_worker::tests::closed_flush_racing_final_receiver_retirement_is_nonfatal",
+)),)
+
+CORE_STAGES += (("resolved validation and exact application ownership", (
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_live_validate_retained_terminal_publishes_one_current_commit_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_recovered_validate_retained_terminal_publishes_one_current_commit_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_retained_terminal_rejects_changed_outcome_digest_before_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_historical_prepare_repair_then_same_tag_commit_publishes_once",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::physical_validate_busy_retains_exact_result_until_timeout_quorum_then_commit",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_rejected_validate_replays_report_once_without_revalidation_or_apply",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_published_validate_retained_terminal_publishes_one_current_commit_apply",
+    "sumeragi::v2_runtime::tests::historical_prepare_rejection_retains_exact_report_authority",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::already_terminal_validate_cold_reopen_preserves_success_and_rejection",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::rejected_terminal_and_published_report_cold_reopen_preserves_one_output_owner",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_recovery_accepts_standalone_report_with_exact_terminal_rejection",
+    "sumeragi::v2_lifecycle_coordinator::open::output_recovery_tests::cold_output_recovery_rejects_standalone_report_without_exact_terminal_authority",
+    "sumeragi::v2_lifecycle_coordinator::ledger::tests::committed_standalone_prepare_pair_preserves_inert_validate_without_a_link",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_owner",
+    "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_survives_unprotected_view_until_current_commit",
+    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks",
+    "sumeragi::v2_effects::tests::active_validate_retry_owners_preserve_single_admission",
+    "sumeragi::v2_effects::tests::bound_validate_retry_rejects_stale_and_conflicting_authority",
+    "sumeragi::v2_effects::tests::validate_retry_lifecycle_transitions_require_exact_owner",
+    "sumeragi::v2_effects::tests::later_decision_apply_uses_its_runtime_owner_after_validate_successor_release",
+    "sumeragi::v2_effects::tests::protected_prepare_validate_reseeds_missing_replay_from_exact_recovered_body",
+    "sumeragi::v2_effects::tests::protected_prepare_bound_retry_rolls_back_with_a_malformed_later_effect",
+    "sumeragi::v2_effects::tests::admitted_validate_retry_seal_coalesces_exact_authority_upgrade_without_replay_reuse",
+    "sumeragi::v2_effects::tests::cold_active_rejection_denies_local_adoption_without_live_pipeline_owner",
+    "sumeragi::v2_effects::tests::recovered_apply_releases_only_its_authenticated_validate_retry_predecessor",
+    "sumeragi::v2_effects::tests::decision_cleanup_defers_live_validate_authority_retirement_until_exact_resolution",
+    "sumeragi::v2_effects::tests::durable_decision_preserves_stored_proposal_replay_for_commit_refined_validate",
+    "sumeragi::v2_effects::tests::protected_commit_validate_reseeds_missing_replay_without_applying",
+    "sumeragi::v2_effects::tests::missing_replay_commit_rejects_foreign_decision_and_commitment",
+    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::validator_apply_drains_exact_suffix_after_delayed_commit_qc_admission",
+    "sumeragi::v2_lane_work::tests::durable_merge_refresh_retains_journal_across_real_parent_publication",
+    "sumeragi::v2_lane_work::tests::merge_signing_fence_refuses_private_key_after_parent_publication",
+    "sumeragi::v2_lane_work::tests::autonomous_fixture_binds_final_lane_context_before_opening_signing_guards",
+)),)
+
+CLIENT_STAGES = (("public contract SDK envelope", (
+    "client::evidence_http_tests::post_contract_call_accepts_only_the_caller_trusted_draft_intent",
+    "client::evidence_http_tests::post_contract_call_authenticates_bound_account_and_rejects_foreign_authority",
+    "client::evidence_http_tests::post_contract_call_rejects_ordinary_draft_before_signing_or_submission",
+    "client::evidence_http_tests::post_contract_call_rejects_substituted_operation_receipt",
+    "client::evidence_http_tests::post_contract_call_rejects_omitted_operation_receipt_fields",
+    "client::evidence_http_tests::post_contract_call_rejects_unsupported_response_root_fields",
+    "client::evidence_http_tests::post_contract_call_rejects_omitted_response_root_fields",
+)),)
+
+TORII_UNIT_STAGES = (("public contract retained payload and certified ingress", (
+    "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
+    "routing::multisig_selector_tests::contract_call_detached_submission_preserves_retained_fee_limits_without_requote",
+    "routing::multisig_selector_tests::contract_call_detached_submission_rejects_changed_or_noncanonical_payload",
+    "routing::multisig_selector_tests::contract_call_detached_handler_requires_certified_public_admission",
+    "routing::multisig_selector_tests::contract_call_detached_submission_requires_complete_retained_envelope",
+    "routing::multisig_selector_tests::contract_call_prepare_serializes_complete_canonical_response",
+    "openapi::tests::public_contract_call_schema_matches_exact_queue_plan_handoff",
+    "openapi::tests::checked_openapi_assets_match_package_authority",
+)),)
+
+TORII_STAGES += (("public contract HTTP preparation and strict admission", (
+    "contracts_call_integration::contracts_call_prepares_exact_payload_and_requires_certified_admission",
+)),)
+
+CORE_STAGES += (("authenticated admission and coherent State publication", (
+    "state::tests::pending_queue_plan_authentication_does_not_hold_the_publication_fence",
+    "state::tests::pending_queue_plan_admission_accepts_unchanged_source_after_height_only_advance",
+    "state::tests::pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives",
+    "state::tests::pending_queue_plan_admission_checks_historical_predecessor_roster_and_incarnation",
+    "state::tests::pending_queue_plan_admission_checks_historical_native_amx_participant_sources",
+    "state::tests::pending_queue_plan_persistence_serializes_alternate_quorum_subsets",
+    "state::tests::pending_queue_plan_persistence_yields_to_one_ahead_state_publication",
+    "state::tests::pending_queue_plan_persistence_bounds_one_ahead_wait_and_rejects_larger_skew",
+    "state::tests::pending_queue_plan_old_carrier_retains_only_valid_current_sources",
+    "state::tests::pending_queue_plan_admission_defers_obsolete_carrier_without_rejecting_current_source",
+    "state::tests::queue_plan_conflict_requires_pending_or_applied_owner_evidence",
+    "state::tests::queue_plan_carrier_validation_uses_one_generation_coherent_state_view",
 )),)
 
 PROOF_STAGES = (("canonical proof resource bounds", (
@@ -238,17 +424,40 @@ PROOF_FLOW_STAGES = (("default proof production and verification", (
     "resource_profile::public_transfer_default_profile_accepts_sixteen_rows",
 )),)
 
-NETWORK_STAGES = (("four-validator multi-route transaction commit", (
-    "four_peer_multiroute_ordinary_transaction_reaches_applied",
+CONFIG_STAGES = (("production configuration schema", (
+    "lane_descriptor_collection_defaults_match_config_defaults",
+    "lane_descriptor_collection_defaults_reject_malformed_values",
+    "taira_profile_nexus_collections_deserialize_without_runtime_inputs",
+    "nexus_routing_and_governance_collection_defaults_match_config_defaults",
 )),)
 
+TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
+    "config::tests::base_config_applies_bounded_storage_caps",
+    "config::tests::base_config_preserves_caller_storage_budget_and_smaller_component_cap",
+    "tests::peer_client_ignores_ambient_identity_and_endpoint_overrides",
+)),)
+
+NETWORK_STAGES = (("four-validator multi-route transaction commit", (
+    "four_peer_multiroute_public_transaction_reaches_applied",
+)),)
+
+# Four peers use the shared test-network 1 GiB/node cap. Keep another 4 GiB
+# available for fixture logs, temporary files and concurrent build output.
+NETWORK_FIXTURE_FREE_BYTES = 8 * 1024**3
+
 HARNESS_TARGETS = {
+    "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
     "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
+    "crypto": ("native puzzle cryptography", "iroha_crypto", "lib", ["-p", "iroha_crypto", "--lib"]),
+    "p2p": ("native peer transport", "iroha_p2p", "lib", ["-p", "iroha_p2p", "--lib"]),
     "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
+    "client": ("native Rust SDK", "iroha", "lib", ["-p", "iroha", "--lib"]),
+    "torii-unit": ("native Torii envelope contracts", "iroha_torii", "lib", ["-p", "iroha_torii", "--lib"]),
     "core": ("native Core", "iroha_core", "lib", ["-p", "iroha_core", "--lib"]),
     "proof": ("native proof bounds", "fastpq_prover", "lib", ["-p", "fastpq_prover", "--lib"]),
     "proof-flows": ("native proof flows", "fastpq_integration", "test", ["-p", "fastpq_prover", "--test", "fastpq_integration"]),
-    "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "integration_tests", "--test", "taira_consensus_contracts"]),
+    "test-network": ("native validator fixture configuration", "iroha_test_network", "lib", ["-p", "iroha_test_network", "--lib"]),
+    "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "iroha_test_network", "--test", "taira_consensus_contracts"]),
 }
 
 
@@ -256,10 +465,22 @@ class CheckError(Exception):
     """A build or selected regression did not pass."""
 
 
+def selected_regression_count() -> int:
+    """Return the complete native census shared by execution and result capture."""
+    return sum(len(names)
+               for stages in (STAGES, CONFIG_STAGES, CRYPTO_STAGES, P2P_STAGES, CORE_STAGES,
+                              TEST_NETWORK_STAGES, NETWORK_STAGES, PROOF_STAGES,
+                              PROOF_FLOW_STAGES, TORII_STAGES, CLIENT_STAGES, TORII_UNIT_STAGES)
+               for _, names in stages)
+
+
 def compile_command(root: Path, env: dict[str, str], *, harness: str = "cli") -> list[str]:
     if harness not in HARNESS_TARGETS:
         raise CheckError("invalid native regression harness selection")
-    selection = HARNESS_TARGETS[harness][3]
+    return _compile_command(root, env, HARNESS_TARGETS[harness][3])
+
+
+def _compile_command(root: Path, env: dict[str, str], selection: list[str]) -> list[str]:
     return [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "test",
             "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
             *selection, "--no-run",
@@ -302,26 +523,205 @@ def show_build_diagnostic(line: str) -> None:
 def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (),
                     harness: str = "cli") -> str:
     command = compile_command(root, env, harness=harness)
-    label = HARNESS_TARGETS[harness][0]
+    return _build_harnesses(root, command, env, (harness,), lock_fds)[harness]
+
+
+def compile_test_harnesses(root: Path, env: dict[str, str], *,
+                          harnesses: tuple[str, ...],
+                          lock_fds: tuple[int, ...] = ()) -> dict[str, str]:
+    """Build selected library and integration harnesses with one feature graph."""
+    if not harnesses or len(harnesses) != len(set(harnesses)):
+        raise CheckError("native test batch requires distinct harness selections")
+    packages: list[str] = []
+    targets: list[str] = []
+    for harness in harnesses:
+        target = HARNESS_TARGETS.get(harness)
+        if target is None:
+            raise CheckError("invalid native regression harness selection")
+        _, name, kind, arguments = target
+        if kind == "lib" and len(arguments) == 3 and arguments == ["-p", arguments[1], "--lib"]:
+            if "--lib" not in targets:
+                targets.append("--lib")
+        elif kind == "test" and len(arguments) == 4 and arguments == ["-p", arguments[1], "--test", name]:
+            targets.extend(["--test", name])
+        else:
+            raise CheckError("native test batch requires explicit library or integration targets")
+        if arguments[1] not in packages:
+            packages.append(arguments[1])
+    selection = [argument for package in packages for argument in ("-p", package)]
+    command = _compile_command(root, env, [*selection, *targets])
+    return _build_harnesses(root, command, env, harnesses, lock_fds)
+
+
+def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
+                     harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> dict[str, str]:
+    label = "; ".join(HARNESS_TARGETS[harness][0] for harness in harnesses)
     print(f"[taira-check] build {label} test harness", flush=True)
     started = time.monotonic()
-    artifacts: set[str] = set()
+    artifacts: dict[str, set[str]] = {harness: set() for harness in harnesses}
+    records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
         for line in child.stdout:
             show_build_diagnostic(line)
-            artifact = test_artifact(line, harness=harness)
-            if artifact is not None:
-                artifacts.add(artifact)
+            for harness in harnesses:
+                artifact = test_artifact(line, harness=harness)
+                if artifact is not None:
+                    artifacts[harness].add(artifact)
+                    record = native_artifact_record(json.loads(line))
+                    if (harness in records and records[harness]["executable"] == artifact
+                            and records[harness] != record):
+                        raise CheckError("native harness has conflicting Cargo metadata")
+                    records[harness] = record
         code = child.wait()
     elapsed = time.monotonic() - started
     if code:
         raise CheckError(f"{label} build failed (exit {code}, {elapsed:.1f}s)")
-    if len(artifacts) != 1:
-        raise CheckError(f"{label} build reported {len(artifacts)} test executables; expected one")
+    for harness, executables in artifacts.items():
+        if len(executables) != 1:
+            raise CheckError(f"{HARNESS_TARGETS[harness][0]} build reported "
+                             f"{len(executables)} test executables; expected one")
+    result = {harness: next(iter(executables)) for harness, executables in artifacts.items()}
+    if len(set(result.values())) != len(result):
+        raise CheckError("native build reused one executable for distinct test harnesses")
     print(f"[taira-check] {label} build passed in {elapsed:.1f}s", flush=True)
-    return artifacts.pop()
+    return isolate_native_artifacts(root, env, records)
+
+
+NATIVE_ARTIFACT_MAX_BYTES = 4 * 1024**3
+
+
+def native_artifact_record(event: dict[str, object]) -> dict[str, object]:
+    """Retain Cargo metadata independently from the immutable execution path."""
+    return {"name": event["target"]["name"], "executable": event["executable"],
+            "profile": event["profile"], "manifest_path": event.get("manifest_path")}
+
+
+@contextlib.contextmanager
+def native_artifact_guard(root: Path, target: Path, env: dict[str, str]):
+    """Lock actual Cargo outputs only after Cargo exits, through source validation and copy."""
+    if root.is_relative_to(target):
+        from taira_cargo_cache import local_package_names, source_fingerprints
+        # Metadata has no artifact authority and must run before acquiring Cargo's locks.
+        packages = local_package_names(root, env)
+        with source_fingerprints(root, target, "aarch64-unknown-linux-gnu", packages, repair=False):
+            yield
+        return
+    # Mutable development checks cannot claim captured-source fingerprint authority.
+    # They still execute private copies and exclude Cargo writers while copying.
+    profile = target / "debug"
+    if profile.resolve(strict=True) != profile:
+        raise CheckError("native Cargo profile must not traverse symlinks")
+    fd = os.open(profile / ".cargo-lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        info = os.fstat(fd)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_nlink != 1 or info.st_mode & 0o022):
+            raise CheckError("unsafe native Cargo profile lock")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
+
+
+def isolate_native_artifacts(root: Path, env: dict[str, str],
+                             records: dict[str, dict[str, object]]) -> dict[str, str]:
+    """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
+    from release_artifact_contract import ReleaseArtifactError, stable_hash_path, stable_open_relative
+    target = Path(env["CARGO_TARGET_DIR"])
+    try:
+        if not records or any(key not in HARNESS_TARGETS and key not in {"iroha3d", "iroha"} for key in records):
+            raise CheckError("native artifact isolation requires known nonempty selections")
+        for directory in (root, target):
+            info = directory.stat()
+            if (not directory.is_absolute() or directory.resolve(strict=True) != directory
+                    or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o022):
+                raise CheckError("native artifact source and target must be direct owner-held directories")
+        paths = {}
+        for selection, record in records.items():
+            package = {"iroha3d": "irohad", "iroha": "iroha_cli"}.get(selection)
+            if package is None:
+                package = HARNESS_TARGETS[selection][3][1]
+            if record["manifest_path"] != str(root / "crates" / package / "Cargo.toml"):
+                raise CheckError("native Cargo artifact manifest differs from the selected source")
+            path = Path(record["executable"])
+            if (not path.is_absolute() or path.resolve(strict=True) != path
+                    or not path.is_relative_to(target / "debug")):
+                raise CheckError("native Cargo artifact must be a direct path below the selected debug target")
+            paths[selection] = path
+        with native_artifact_guard(root, target, env):
+            identities = {}
+            for selection, path in paths.items():
+                info = path.lstat()
+                if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                        or not info.st_mode & stat.S_IXUSR or info.st_mode & 0o022
+                        or info.st_nlink != 1 or not 0 < info.st_size <= NATIVE_ARTIFACT_MAX_BYTES):
+                    raise CheckError("native Cargo artifact must be a bounded owner-held executable without hardlinks")
+                identities[selection] = stable_hash_path(path, max_size=NATIVE_ARTIFACT_MAX_BYTES)
+            required = sum(info.size for info in identities.values()) + NETWORK_FIXTURE_FREE_BYTES
+            if shutil.disk_usage(target).free < required:
+                raise CheckError("native artifact copies would consume the required working-space reserve")
+            output = Path(tempfile.mkdtemp(prefix="taira-native-artifacts-", dir=target))
+            copied, observations, published = {}, [], {}
+            for selection, path in paths.items():
+                expected = identities[selection]
+                destination = output / selection
+                digest, size = hashlib.sha256(), 0
+                with stable_open_relative(target, str(path.relative_to(target)), expected=expected) as source:
+                    fd = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+                    try:
+                        while block := os.read(source, 1024 * 1024):
+                            size += len(block)
+                            if size > expected.size:
+                                raise CheckError("native artifact grew during descriptor copy")
+                            digest.update(block)
+                            view = memoryview(block)
+                            while view:
+                                written = os.write(fd, view)
+                                if written <= 0:
+                                    raise CheckError("native artifact copy made no progress")
+                                view = view[written:]
+                        if size != expected.size or digest.hexdigest() != expected.sha256:
+                            raise CheckError("native artifact changed during descriptor copy")
+                        os.fchmod(fd, 0o500)
+                        os.fsync(fd)
+                        opened, named = os.fstat(fd), destination.lstat()
+                        if ((opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)
+                                or opened.st_size != expected.size or named.st_size != expected.size
+                                or named.st_uid != os.geteuid() or named.st_nlink != 1
+                                or stat.S_IMODE(named.st_mode) != 0o500):
+                            raise CheckError("native artifact destination changed during copy")
+                        published[destination] = (named.st_dev, named.st_ino, named.st_size,
+                            named.st_mode, named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns)
+                    finally:
+                        os.close(fd)
+                copied[selection] = str(destination)
+                observations.append({"selection": selection, "path": str(destination),
+                    "sha256": expected.sha256, "size": expected.size, "cargo_artifact": records[selection]})
+            for destination, expected_identity in published.items():
+                named = destination.lstat()
+                if expected_identity != (named.st_dev, named.st_ino, named.st_size, named.st_mode,
+                        named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns):
+                    raise CheckError("native artifact destination changed before publication")
+            directory_fd = os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fchmod(directory_fd, 0o500)
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+            parent_fd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            try:
+                os.fsync(parent_fd)
+            finally:
+                os.close(parent_fd)
+        # Publish observations only when the complete batch is frozen and the locks released.
+        for observation in observations:
+            print("[taira-check] isolated native artifact " + json.dumps(observation, sort_keys=True), flush=True)
+        return copied
+    except (OSError, ValueError, ReleaseArtifactError, subprocess.SubprocessError) as error:
+        raise CheckError(f"native artifact isolation failed: {error}") from error
 
 
 def require_tests(listing: str, stages=None) -> None:
@@ -349,7 +749,9 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
     if listing.returncode:
         raise CheckError(f"cannot list native harness tests (exit {listing.returncode})")
     require_tests(listing.stdout, stages)
+    failures = []
     for label, names in stages:
+        failed_before = len(failures)
         stage_start = time.monotonic()
         print(f"[taira-check] start {label} ({len(names)} tests)", flush=True)
         for name in names:
@@ -358,9 +760,17 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
             result = subprocess.run([harness, name, "--exact", "--color", "never"],
                                     cwd=fixture_root, env=env, stdin=subprocess.DEVNULL,
                                     text=True, capture_output=True, check=False, pass_fds=lock_fds)
-            require_one_pass(name, result)
-            print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
-        print(f"[taira-check] passed {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
+            try:
+                require_one_pass(name, result)
+            except CheckError as error:
+                failures.append(str(error))
+                print(f"[taira-check] failed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
+            else:
+                print(f"[taira-check] passed {name} ({time.monotonic() - test_start:.1f}s)", flush=True)
+        outcome = "passed" if len(failures) == failed_before else "failed"
+        print(f"[taira-check] {outcome} {label} ({time.monotonic() - stage_start:.1f}s)", flush=True)
+    if failures:
+        raise CheckError(f"{len(failures)} selected regressions failed: " + "; ".join(failures))
 
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> dict[str, str]:
@@ -372,6 +782,7 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     print("[taira-check] build native network binaries", flush=True)
     started = time.monotonic()
     artifacts: dict[str, str] = {}
+    records: dict[str, dict[str, object]] = {}
     with subprocess.Popen(command, cwd="/", env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                           text=True, encoding="utf-8", errors="replace", pass_fds=lock_fds) as child:
         assert child.stdout is not None
@@ -391,21 +802,31 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
                     and isinstance(executable, str) and executable):
                 if name in artifacts and artifacts[name] != executable:
                     raise CheckError("native network binary has conflicting Cargo artifacts")
+                record = native_artifact_record(event)
+                if name in records and records[name] != record:
+                    raise CheckError("native network binary has conflicting Cargo metadata")
                 artifacts[name] = executable
-                print("[taira-check] native network artifact " + json.dumps({
-                    "name": name, "executable": executable, "profile": event["profile"],
-                    "manifest_path": event.get("manifest_path"),
-                }, sort_keys=True), flush=True)
+                records[name] = record
+                print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
         code = child.wait()
     if code or set(artifacts) != {"iroha3d", "iroha"}:
         raise CheckError(f"native network build did not produce both executable artifacts (exit {code})")
     print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
-    return artifacts
+    return isolate_native_artifacts(root, env, records)
 
 
-def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+def run_config_checks(root: Path, fixture_root: Path, env: dict[str, str],
+                      lock_fds: tuple[int, ...]) -> None:
+    """Reject schema failures before compiling the Core and network harnesses."""
+    if CONFIG_STAGES:
+        harness = compile_harness(root, env, lock_fds=lock_fds, harness="config")
+        run_stages(harness, fixture_root, env, CONFIG_STAGES, lock_fds)
+
+
+def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
+                       *, harness: str) -> None:
     binaries = compile_network_binaries(root, env, lock_fds)
-    harness = compile_harness(root, env, lock_fds=lock_fds, harness="network")
+    require_network_fixture_capacity(fixture_root)
     # Keep attempt-owned fixtures and logs for diagnosis; they contain no live inputs.
     directory = Path(tempfile.mkdtemp(prefix="taira-consensus-check-", dir=fixture_root))
     network_env = env | {
@@ -413,6 +834,7 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
         "TEST_NETWORK_BIN_IROHA": binaries["iroha"],
         "IROHA_TEST_TARGET_DIR": env["CARGO_TARGET_DIR"],
         "TEST_NETWORK_TMP_DIR": str(directory),
+        "IROHA_TEST_NETWORK_KEEP_DIRS": "1",
         "IROHA_TEST_SKIP_BUILD": "1",
         "IROHA_FAIL_ON_SANDBOX_SKIP": "1",
         "IROHA_TEST_REQUIRE_NETWORK": "1",
@@ -420,6 +842,73 @@ def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock
     }
     print(f"[taira-check] consensus fixture logs: {directory}", flush=True)
     run_stages(harness, fixture_root, network_env, NETWORK_STAGES, lock_fds)
+
+
+def require_network_fixture_capacity(directory: Path) -> None:
+    """Reject an undersized shared test volume before building or starting peers."""
+    available = shutil.disk_usage(directory).free
+    if available < NETWORK_FIXTURE_FREE_BYTES:
+        raise CheckError(
+            f"four-peer fixtures require {NETWORK_FIXTURE_FREE_BYTES} free bytes "
+            f"for bounded storage and scratch space; {available} available at {directory}")
+
+
+def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+    """Run every production reducer test without Cargo or adapter dependencies."""
+    _run_standalone_checks(root, env, lock_fds,
+        source="crates/iroha_sumeragi_core/src/lib.rs", output_name="sumeragi-core-tests",
+        label="pure FSM", description="pure consensus FSM (exact production reducer)")
+
+
+def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
+    """Check the same lifecycle source contracts before compiling Core dependencies."""
+    _run_standalone_checks(root, env, lock_fds,
+        source="crates/iroha_core/src/sumeragi/v2_lifecycle_source_contract_harness.rs",
+        output_name="lifecycle-source-tests", label="lifecycle source contracts",
+        description="lifecycle source contracts (shared Core assertions)")
+
+
+def _run_standalone_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...], *,
+                           source: str, output_name: str, label: str, description: str) -> None:
+    compiler = env.get("RUSTC")
+    if not compiler or not Path(compiler).is_absolute():
+        raise CheckError(f"{label} checks require the coordinated pinned RUSTC")
+    target = Path(env["CARGO_TARGET_DIR"])
+    output = target / "taira-consensus-fsm-check"
+    output.mkdir(mode=0o700, exist_ok=True)
+    if output.is_symlink() or not output.is_dir():
+        raise CheckError(f"{label} output must be a direct directory in the existing target")
+    executable = output / output_name
+    if executable.is_symlink():
+        raise CheckError(f"{label} executable cannot be a symlink")
+    started = time.monotonic()
+    print(f"[taira-check] start {description}", flush=True)
+    common = dict(cwd="/", env=env, stdin=subprocess.DEVNULL, text=True,
+                  capture_output=True, check=False, pass_fds=lock_fds, timeout=120)
+    compiled = subprocess.run([compiler, "--edition=2024", "--test",
+        str(root / source), "-o", str(executable)], **common)
+    if compiled.returncode:
+        sys.stderr.write(compiled.stdout + compiled.stderr)
+        raise CheckError(f"{label} compilation failed (exit {compiled.returncode})")
+    listing = subprocess.run([str(executable), "--list", "--format", "terse"], **common)
+    lines = listing.stdout.splitlines()
+    names = [line.removesuffix(": test") for line in lines if line.endswith(": test")]
+    if (listing.returncode or not names or len(names) != len(set(names))
+            or len(names) != len(lines) or any(not name for name in names)):
+        raise CheckError(f"{label} test census is missing, duplicated, or malformed")
+    result = subprocess.run([str(executable), "--color", "never", "--test-threads=6"], **common)
+    passed = [line.removeprefix("test ").removesuffix(" ... ok")
+              for line in result.stdout.splitlines()
+              if line.startswith("test ") and line.endswith(" ... ok")]
+    summaries = re.findall(
+        r"^test result: ok\. (\d+) passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in [^\n]+$",
+        result.stdout, re.MULTILINE)
+    if (result.returncode or len(passed) != len(names) or set(passed) != set(names)
+            or summaries != [str(len(names))]):
+        sys.stderr.write(result.stdout + result.stderr)
+        raise CheckError(f"{label} suite did not execute every listed test successfully without skips")
+    print(f"[taira-check] {label} PASS: {len(names)} listed, {len(passed)} passed, 0 ignored "
+          f"in {time.monotonic() - started:.1f}s", flush=True)
 
 
 def run_checks(root: Path, *, environment: dict[str, str] | None = None,
@@ -438,22 +927,40 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     env["IROHA_GIT_COMMIT_HASH"] = head
     print(f"[taira-check] source {head}; {root}", flush=True)
     fixture_root = Path(env["CARGO_TARGET_DIR"]) if source_commit is not None else root
-    # Exercise the composed runtime before the independent contract harnesses:
-    # source staging and consensus defects must not wait behind their full builds.
     if NETWORK_STAGES:
-        run_network_checks(root, fixture_root, env, lock_fds)
+        require_network_fixture_capacity(fixture_root)
+    run_pure_fsm_checks(root, env, lock_fds)
+    run_lifecycle_source_checks(root, env, lock_fds)
+    run_config_checks(root, fixture_root, env, lock_fds)
+    # Build all early library/HTTP checks and the network harness in one graph.
+    # Adding named test targets from these same packages preserves default and
+    # dev-dependency feature unification. Node/CLI binaries wait for early checks.
+    early_stages = tuple((name, stages) for name, stages in (
+        ("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES), ("core", CORE_STAGES),
+        ("test-network", TEST_NETWORK_STAGES),
+        ("client", CLIENT_STAGES), ("torii-unit", TORII_UNIT_STAGES),
+        ("torii", TORII_STAGES)) if stages)
+    selections = tuple(name for name, _ in early_stages)
+    if NETWORK_STAGES:
+        selections += ("network",)
+    if selections:
+        harnesses = compile_test_harnesses(root, env, lock_fds=lock_fds,
+                                          harnesses=selections)
+        for name, stages in early_stages:
+            run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+        if NETWORK_STAGES:
+            run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
     harness = compile_harness(root, env, lock_fds=lock_fds)
     run_stages(harness, fixture_root, env, STAGES, lock_fds)
-    for name, stages in (("core", CORE_STAGES), ("proof", PROOF_STAGES),
-                         ("proof-flows", PROOF_FLOW_STAGES), ("torii", TORII_STAGES)):
+    for name, stages in (("proof", PROOF_STAGES),
+                         ("proof-flows", PROOF_FLOW_STAGES)):
         if stages:
             selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
             run_stages(selected_harness, fixture_root, env, stages, lock_fds)
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")
-    count = sum(len(names) for _, names in STAGES + CORE_STAGES + PROOF_STAGES + PROOF_FLOW_STAGES + TORII_STAGES + NETWORK_STAGES)
-    print(f"[taira-check] PASS: {count} regressions in {time.monotonic() - started:.1f}s", flush=True)
+    print(f"[taira-check] PASS: {selected_regression_count()} regressions in {time.monotonic() - started:.1f}s", flush=True)
 
 
 def main() -> int:

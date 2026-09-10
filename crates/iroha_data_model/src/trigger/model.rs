@@ -2,7 +2,8 @@
 // If editing this file, consider updating `iroha_core/src/smartcontracts/isi/triggers/specialized.rs`
 // It mirrors structures from this file.
 pub use self::model::*;
-use crate::{Identifiable, Name, Registered, metadata::Metadata, transaction::Executable};
+use crate::{Identifiable, Registered, metadata::Metadata, transaction::Executable};
+use iroha_model_base::name::Name;
 
 use base64::Engine as _;
 

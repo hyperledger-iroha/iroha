@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-09-09.
+Last updated: 2026-09-10.
 
 Iroha 3 is under active first-release implementation and qualification. The release is not qualified. Signed source checkpoints do not establish runtime readiness. This page records current findings and bounded local evidence; it is not a substitute for the release gates in [the roadmap](roadmap.md).
 
@@ -8,17 +8,21 @@ The previous dirty working copies are preserved in the [dated historical archive
 
 ## Current implementation and local evidence
 
-The latest Taira rollout failed before public cutover: daemon startup treated the QEMU executable as a directory during minimal-root attestation, so Torii never bound. A service stop during initialization also left a live nested QEMU outside its systemd unit cgroup. The exact orphan was stopped through a pidfd and native rollback completed with all four validators stopped. The directory/file fix and exact daemon-pidfd/cgroup watchdog are written. Host topology confirms bubblewrap’s retained PID1 reaper and QEMU share the private root and namespaces; compiled startup and supervisor-death validation remain pending. Prior standalone host probes did not exercise the complete daemon attestation path. No live finality, workload canary or application rollout is qualified.
+The September 10 resolution of 145 conflicted paths preserves canonical shared DTOs and frame identities, typed lifecycle continuation ownership, and hardware-backed broker custody without compatibility shims. The affected Core, Torii, daemon, CLI, SoraFS node/orchestrator and Musubi production/test targets pass `cargo check --locked --tests`; compiler warnings remain. Dependency-free execution passes 206 consensus FSM tests, six shared lifecycle checks, all 55 source-contract cases and five source-asset bookkeeping tests. Workspace formatting, conflict/diff checks, codec-retirement guards and historical-archive verification pass. These checks do not qualify full Core/daemon runtime tests, the workspace suite or four-validator operation.
 
-Candidate convergence, canaries and restart proofs precede public cutover. The preceding CLI gate passed 81 tests; that evidence predates the current runtime edits. The [previous Taira checkpoint](docs/history/2026-09-08/taira-release78-checkpoint.md) retains its exact source-era results.
+The current Taira rollout remains unqualified. Native preparation 18 passed 205 dependency-free FSM checks, six shared lifecycle checks, four configuration checks, six crypto, 17 P2P, 81 Core, three validator-fixture, seven Rust SDK, eight Torii unit and 22 HTTP regressions, then built the production node and CLI. Its four-validator public transaction did not reach state-resolved Applied within the fixed 75-second deadline. All four peers applied height 3 before waiting for lane completion and successor activation; lane certificates were still arriving late in the test. Two five-second CPU samples found repeated Norito ownership projection and unoptimized BLS arithmetic. The reviewed correction decodes each immutable ingress allocation once, seals reply-route identities at construction, reuses the adapter’s verified context identity, and optimizes the concrete BLS arithmetic packages consistently in dev/test profiles; current tests and timing remain pending. A separate integration audit found that resolved Validate retries collide with retained terminal registry keys, and that released Apply matching used a pending digest where real completion retains an outcome-bound digest. The executor-only retry matrix omitted this registry boundary. The corrected handoff retains the actual immutable terminal result, and real completion-to-registry tests now cover current Commit, historical Prepare, Busy deferral and deterministic rejection; execution remains pending. Historical rejection report authority now permits the current view to follow its unchanged Prepare certificate. Cold startup now retains authenticated terminal results, and standalone rejection reports rejoin their actual rejection without rewriting the old terminal row. Source review also found that standalone votes used different live and recovered owner roots, and that their Prepare-to-Broadcast continuation was classified as Proposal-only; those vote/restart joins now retain the actual WAL root and reuse the bounded standalone continuation. A real signed-proposal/RS16/physical-validation regression covers the same-view generation change through a Ready Commit Sign and cold reopening; execution is pending. The source-contract literal check passes all 55 cases and 4,179 assertions; the release, cache and selection helpers pass 118 tests. A redacted scan of 120 worktree/index source versions across 60 paths found no new credential patterns; runtime secret paths are untracked and ignored. These source checks do not establish Rust or network correctness. Preparation 19 passes all 206 FSM, six shared lifecycle and four configuration checks, then stops at two Core type/import errors and two mutable test bindings. Those caller defects and the unused validation service parameter are corrected; the warm rerun remains pending. Fresh Linux preparation and public rollout remain pending.
+
+SoraCloud lease usage and snapshot replay bind placement incarnation, and FHE preflight respects distinct AIR/FRI Merkle domains. Fresh Core execution passes the proxy and three lease regressions, including the decomposed default-stack lifecycle case. Pre-merge validation of the declared-identity Norito migration built all workspace test targets without warnings; focused codec and service regressions passed. The resolved merge passes Core API and Nexus/STARK harness checks, seven focused Rust regressions and 48 JavaScript tests; full workspace and four-validator execution remain pending. [Compilation validation](docs/cargo_test_compile_validation.md) and [SoraCloud validation](docs/soracloud_validation.md) distinguish these checks from full runtime/feature qualification and retain existing source-contract failures.
+
+Source-first integration review found repeated certificate authentication under the State publication fence. The corrected path authenticates immutable bytes once before the fence and retains fresh history, committee, route, incarnation and application checks under the coherent view; its focused Core checks now pass. Public contract drafts, detached payload retention, explicit response nulls and Rust SDK execution also pass their focused native checks. JavaScript passes 92 focused cases, Kotlin/JVM passes 24 including a Java caller and real request signatures, and C# passes 291 with the existing ABI-23 bridge. Three isolated Python checks pass; full Python HTTP and Swift runtime validation still need missing ABI-23 native artifacts.
+
+The unsigned OpenAPI metadata generator now reads the clean authored authority through Node without rebuilding Rust. It checks all three specification copies, records actual source provenance and states that runtime projection was not executed. Its tooling passes 154 Node and 77 Python tests; native Torii schema checks pass separately. Actual unsigned metadata generation and publication completed in 2.36 seconds without Rust; the next changed source requires a fresh metadata result. The native runner now builds library, HTTP and consensus test harnesses with one shared package/feature graph; separate graph resolution had repeated expensive dependency compilation. The maintained runner and release helper checks pass 113 tests and 85 subtests. The first combined eight-harness build took 330.1 seconds; the production binary build took 326.1 seconds. CPU-only FASTPQ builds now exclude GPU tool and kernel invalidation inputs; eight direct build-script executions pass without Cargo compilation. Production configuration checks still run first, and selected executables remain immutable under Cargo profile locks. The next candidate must pass exact public application on all four peers, Linux preparation, reset and restart canaries, public health and application connectivity.
 
 [Executable build identity](docs/build_identity.md) removes revision stamping from shared Core, Torii and telemetry libraries. The earlier controlled revision-only warm build completed in 25.073 seconds with six shared production/test artifacts cached. Diagnostic and release commands now use separate persistent Cargo targets and the same isolated registry paths; 61 helper tests and 65 CI workflow tests pass. The [retry command](docs/source/taira_retry.md) reclaims closed public payload copies before fresh deployment-capacity admission, reuses unchanged binaries, and accepts recovered native rollback history only at the completed boundary. Its 51 focused tests pass. These are scoped local checks; no new full-build timing or live release qualification is claimed.
 
 The 110-path merge resolution retains the final StateScan/cursor ABI, validated seven-field Native AMX control, immutable asynchronous account contexts and shared signer custody. Current source bindings are checked before deferred-carrier classification. Fresh custody tests pass 23, snapshot resource tests pass 4, JavaScript selections pass 59 and all 55 consensus source contracts pass. Workspace formatting, scoped conflict-diff checks and codec retirement checks pass. Current IVM ABI/artifact/gas/pointer selections pass 17/58/2/4, including exact SDK fixture reproduction. SDK/Core/Torii/JS-host/CLI/Kagami/daemon production checks pass; workspace, native SDK and four-validator qualification remain open.
 
-Earlier merge checkpoints are preserved in the [dated merge record](docs/history/2026-09-08/architecture-merge-checkpoints.md).
-Their remaining limits include the ABI-23 Swift bridge, the macOS Python
-framework-copy assertion and clean-candidate artifact/provenance replay.
+Earlier merge checkpoints are preserved in the [dated merge record](docs/history/2026-09-08/architecture-merge-checkpoints.md). Their remaining limits include the ABI-23 Swift bridge, the macOS Python framework-copy assertion and clean-candidate artifact/provenance replay.
 
 Core validation retains its staged state on the heap through event delivery;
 the former stack-overflow regression and all 163 block-validation tests pass on
@@ -35,42 +39,30 @@ accounting. Daemon, Kagami and test-network consumer checks, formatting, codec
 guards and historical-archive verification pass. Full Core/workspace and network
 execution remain unverified by this scoped run.
 
-The [broker stack correction](docs/history/2026-09-09/runtime-provider-broker-stack.md)
-removes all three enlarged-stack workarounds. All 211 broker tests pass with four
-workers on ordinary stacks, including maximum-committee and pool-ownership cases.
-This qualifies the preserved source-stable artifact; current broker bytes match,
-but concurrent Core edits, strict lint and full release qualification remain open.
+The [broker stack correction](docs/history/2026-09-09/runtime-provider-broker-stack.md) removes all three enlarged-stack workarounds. All 211 broker tests pass with four workers on ordinary stacks, including maximum-committee and pool-ownership cases. This qualifies the preserved source-stable artifact; current broker bytes match, but concurrent Core edits, strict lint and full release qualification remain open.
 
-Kaigi's final model passes 33 tests, its proof circuits pass 20, and the fresh
-JS-host native proof suite passes 21, including every 31/25-row mutation. All
-three real Core Kaigi integration tests pass; its unit selection passes 96/97,
-with a typed capacity-error assertion corrected for the next capture. Strict
-Rust account decoding passes 42 cases across all ten Norito layouts. Updated
-Kotlin/Java sources compile with JDK 8 API enforcement; three decoder/absence
-tests pass. Earlier managed full-controller passes predate mandatory native
-key admission. Python's separate native-owner test-target check passes, but
-installed SDK wheels/addon/JNI/XCFramework execution remains pending. Fresh
-Metal digest/Merkle/runtime tests pass 68 cases; complete GPU proofs, relay
-transport and four-validator deployment remain unqualified.
-See the [current privacy evidence](specs/privacy_first_release_closure.md).
+The [Musubi resolver and SDK checkpoint](docs/history/2026-09-10/musubi-sdk-and-resolver.md) removes native recursion per dependency edge and passes all 34 resolver regressions on ordinary stacks. The merged Musubi library passes 385 tests; its one ignored abrupt-exit worker is exercised by its parent. SDK qualification passes 802 library tests, ten doctests and strict library Clippy. Canonical compiler identities, explicit pinned NFC conversion, typed status binding, compilable scaffolds and cache-first signer-free recovery are included. Strict Musubi library Clippy also passes; whole-workspace/release qualification remains pending.
+
+Kaigi's final model passes 33 tests, its proof circuits pass 20, and the fresh JS-host native proof suite passes 21, including every 31/25-row mutation. All three real Core Kaigi integration tests pass; its unit selection passes 96/97, with a typed capacity-error assertion corrected for the next capture. Strict Rust account decoding passes 42 cases across all ten Norito layouts. Updated Kotlin/Java sources compile with JDK 8 API enforcement; three decoder/absence tests pass. Earlier managed full-controller passes predate mandatory native key admission. Python's separate native-owner test-target check passes, but installed SDK wheels/addon/JNI/XCFramework execution remains pending. Fresh Metal digest/Merkle/runtime tests pass 68 cases; complete GPU proofs, relay transport and four-validator deployment remain unqualified. See the [current privacy evidence](specs/privacy_first_release_closure.md).
+
+The merged candidate retains one compact V1 protocol, explicit codec identities, checked allocation and custody, and the canonical SDK API. Its earlier merge and privacy observations are preserved in the [dated merge record](docs/history/2026-09-09/merge-checkpoints.md). Privacy retry 23 reached genesis on all four validators, then failed at the SDK status barrier before any Kaigi lifecycle operation. The merged async SDK addresses that call path; fresh network execution remains pending. SDK20 built all five Apple targets, but its full Swift suite failed and crashed before the privacy tests. The reviewed Swift/BFV corrections and exact earlier outcomes are in the [privacy checkpoint](docs/history/2026-09-09/privacy-validation-checkpoint.md).
+
+The earlier merge selection passed 11 metadata, 58 FASTPQ, 100 JavaScript and 51 source-helper tests; one expensive FASTPQ diagnostic remains ignored. The FASTPQ build has zero warnings. Formatting and retired-codec checks pass. The broader multilane audit still reports source-binding drift; its full gate and the merged workspace/network suites remain unqualified.
 
 Production multilane work has [six implementation milestones under an active goal](specs/sumeragi_v2_multilane_completion_goals.md).
-No milestone or release gate is closed. The current source adds authenticated
-terminal replay, bounded atomic cache retirement, a real second autonomous
-application fixture and mandatory move-only authority for shipping Queue release.
-G-UNIT registers 531 tests; production registers 881 across 43 modules. The
-shared Core build passed with all 22 captured multilane inputs unchanged.
-Its first 89 direct runtime tests finished with 39 passes and 50 failures. The
-production witness still minted an old model identity and rejected otherwise
-valid transitions. That constant is corrected; the real wrapper test now covers
-25 producer/committee combinations and rejects altered witnesses. Nonzero BLS
-fixture seeds, matching network context and manifest-backed Queue initialization
-also repair distinct setup failures. All original assertions remain. Four changed
-files were captured for a second build, which failed on unrelated SoraFS/Torii
-compile errors before producing a Core executable. No post-fix runtime pass is
-claimed. The production trace audit also found an unwrapped 28th replica-release
-action; its witness wrapper and exhaustive registration are being repaired for
-the next batch. Evidence is under ignored `dist/multilane-validation-20260907/`.
+No milestone or release gate is closed. The composed Kura resource inventory and
+telemetry are published. Retry 19's 205-Core/three-configuration selection finishes
+206 passed and two failed, with all 8,812 source paths and original/retained
+binary hashes unchanged during execution. Both direct reservation guards pass.
+The remaining signed-snapshot bootstrap fixture was corrected; retry 20 then
+passes both affected tests and the related signature-rejection control, with
+8,820 source records and binary identities unchanged. These are separate scopes;
+the combined retry-19 and retry-20 builds both exited 101. Earlier 197-pass/11-fail,
+96-Core, 24-SDK, 17-CLI and five disk-writer results retain their own receipts.
+The 28-action witness mapping is present. Exact evidence is linked from the goals
+under ignored `dist/multilane-validation-20260907/`.
+After the reviewed CLI repairs, retry 22's build and exact 61 CLI tests pass
+with all 8,821 source paths and original/retained CLI binary hashes unchanged.
 
 A fresh formal audit reproduced direct FIFO release with active Kura custody,
 then lane Commit and WSV application, in the former model and shared predicate.
@@ -79,13 +71,21 @@ activation and excludes Commit/application from every release disposition.
 Exhaustive TLC passes all 20 configured invariants over 280,818 distinct states;
 all 25 exact mutation controls produce their named counterexamples, including
 the new 4/19/4-action failures. Four explicit replica/application and release
-paths also pass. Verus reports zero proof errors (1,690 and 221 verified), but
-its evidence driver rejects a changed input and the stale expected proof count.
-The scope audit and clean rerun remain open, as does current-model Apalache.
+paths also pass. Fresh-target Verus verified 1,690 library and 221 project queries
+with zero errors and the exact 19 current compiler sources. Its strict driver
+remains unqualified because the whole-checkout digest changed outside the
+declared input scope. The corrected sealed-source diagnostic passes with zero
+errors and all 19,328 captured entries unchanged; 36 current anchor controls also
+pass. Neither result qualifies the full release proof ledger. Current-model
+Apalache has no terminal result.
 The current model has its own 18-step Apalache run; the separate earlier-model
 run cannot qualify this repair. These results do not establish a live exploit.
+A private contract successor passes 65 tests and 17 subtests on the exact
+348-owner retry-19 capture plus dependencies (1,840 files, 31 absent paths), with
+source/mode/private-index stability. Its 39 unqualified live Git providers remain
+explicit; the private result does not qualify the live checkout or full proof ledger.
 
-Fresh source evidence passes 69 terminal controls, 21 merge-cache semantic
+Retained pre-merge source evidence passes 69 terminal controls, 21 merge-cache semantic
 negatives with copied positives, all eight cache owners, and the complete
 QueuePlan contract with 14 release-authority negatives. The terminal baseline
 also passes after the custody correction. The repaired model/source registration
@@ -95,24 +95,24 @@ owner contract. Configuration geometry passes 24 rehashed controls; decided-body
 serving passes 72 copied baselines and 72 rehashed controls across 19 owners.
 Lifecycle certified serving passes all 46 selected checks; the four lane-output
 owners pass 43 rehashed controls before and after their seal updates. Ingress
-effects and tombstones pass 81 copied positives and 81 rehashed negatives. The last
-broader diagnostic reported 71 errors before these corrections; remaining worker
-ownership and finalization contracts are under review.
-Four inputs changed during that run, so it is development evidence. Four
-retired-codec guards pass.
+effects and tombstones pass 81 copied positives and 81 rehashed negatives. The earlier
+71-error broader diagnostic and its four input changes remain retained; subsequent
+worker/finalization corrections and the newer private checks remain scoped source
+evidence. Four retired-codec guards pass.
 
-The strict scaling evidence contract now requires fixed-schedule transaction
-identities, authoritative Applied results, drained warmup and complete-cohort
-latency including the drain tail. Validator checks pass 56 tests/86 subcases;
-runner integration passes 13 tests/nine subcases, preserving all old assertions.
-The production collector, exact routing/resource observations and real paired
-trials remain open.
+The corrected private resource package passes 1,324 component cases with all
+20 source inputs unchanged; independent composition review passes. These are
+synthetic/local checks plus the process suite's own Python RSS/image smoke.
+Retry 22 passes all 61 CLI tests, including 31 resource Clock/IPC/parent controls
+and four new workload regressions. Retry 21's 41-pass/16-fail receipt is retained.
+Canonical routing/effects, complete writer-budget and launcher/main-validator
+integration, the admission handshake and all five pinned paired trials stay open.
 
 The host restart deleted temporary raw artifacts and unfinished Core/Apple
 builds. Earlier SDK/formal/source observations are recorded in the linked goals
 and closure ledger but cannot supply current retained release artifacts. New
 checks retain exact inputs, commands and logs in durable ignored `dist/`.
-Full SwiftPM needs the real ABI-23 bridge; grouped fixtures need two fresh
+Full SwiftPM needs a fresh source-matched ABI-23 bridge; grouped fixtures need two fresh
 Rust-owned regenerations. Source-contract reconciliation, current Rust/SDK
 execution, four-peer suites, 10 corridor seeds, the two-hour soak, scaling and
 workspace qualification remain open.
@@ -127,7 +127,8 @@ verification and all 145 Node tooling tests are recorded as passing.
 | Kotodama V1 redesign | Fresh compiler library tests pass 1,090/1,090, compiler integration 77/77 and Koto/LSP 37/37. ABI values pass 172/172; Core completion/recovery 107/107 includes both actual cold-restart worker completions. Scoped Core contract tests pass 60/60; VM runtime/lists 50/50, ABI/artifacts 72/72, values/scan/test-driver 57/57, numeric/pointers 40/40, data-model contracts 57/57 and Torii public-state 5/5 pass. Offline record consumers pass Python 220, JavaScript 18, Kotlin/Java 17 and C# 21 tests. | C9 remains open. Local debug passes 9/9, including strict NFC keys and exact duplicate-JSON rejection. All ten scaffold tests and the complete actual offline project workflow pass, including three standalone success/exact-failure tests. Tutorials build and link-check with 12 GiB; immutable docs HEAD also exhausts the default 6 GiB heap. Native SDKs, final artifact admission, normal-release four-validator execution/restart and workspace qualification remain open. The failed formal checker has static attribution for 242 diagnostics against HEAD and 34 against the earliest retained resumed snapshot; these distinct limits remain explicit in [the execution ledger](specs/kotodama_v1_redesign.md). |
 | Taira reset and startup | Cold-start snapshot handling now treats an owned root with no CURRENT pointer as a fresh chain; all three regressions pass. Validator convergence and restart wait for HTTP readiness inside the existing authorization deadline; all 55 focused release checks pass. Cargo cache retirement preserves the opposite profile family; four focused checks pass. The same approved VM is now 80 GB, with 55.5 GB guest and 41.2 GB host space available after closed public-payload cleanup. | Public Taira remains unavailable pending deployment of these corrections. Release75 passed preseed and process startup, then rolled back completely after an early doctor check; the actual cold-start snapshot error is fixed in source. The complete capacity plan includes all four writable Inrou runtimes and passes 18 helper tests. Finality, signed canaries and test.inori.co.il connectivity remain pending; no release GO is claimed. |
 | KAGEMUSHA release work | R5 passed 1,490 full JVM tests, 12 wallet and 108 client managed Android tests; separate host JNI, 13 Kotlin and 24 JS/TypeScript tests also pass. Vendor memory checks pass 138 executions; Base passes 14 tests and two map benchmarks. Core passes 92 tests plus two row benchmarks; journal/recovery passes 54 tests. The real-proof API check passes after a profiling-helper cfg fix. Row-generation RSS falls from 189.6 to 28.3 MB with identical output. | Full aggregate proofs/resource limits, canonical Swift/native release artifacts, governed physical profiles and independent review remain unqualified. Focused host benchmarks do not qualify full-proof/device RSS or strict Clippy. Swift parity source is restored; complete native artifact qualification remains pending. See [current readiness](specs/kagemusha_v1_production_readiness.md). |
-| Privacy V1 admission and field carriers | Canonical 48-byte digest and 32-byte Fp4 carriers; complete signed synthetic qualification passes bounded decoding. Rust capability FFI passes 2 tests; corrected Exact12 fixtures pass JS 23, Python 94, Kotlin 16 and C# 13. SDK admission source checks pass 86 regressions; model privacy selection passes 127 tests and the final intent KAT is independently reproduced. Shared six-lane framing passes 39 primitive tests and the ACE selection passes 26; AXT binding passes 76 FASTPQ and 7 Core regressions. | Core native selection passes all 63 tests; the corrected complete proof crate passes 1,299 with zero failures and 13 ignored. Current SDK origin/network checks pass JS 37, Python 103, Kotlin 63, C# 17 and Swift source-only 35. Apple duplicate archive ownership is corrected and three target link controls pass; the previous full XCFramework build was lost during host restart and has no final artifact; complete GPU proof dispatch, AXT authoritative state/execution binding, independent review and four-validator qualification remain open in the [closure ledger](specs/privacy_first_release_closure.md). Synthetic signatures are validator tests only. |
+| Privacy V1 admission and field carriers | Canonical 48-byte digest and 32-byte Fp4 carriers; complete signed synthetic qualification passes bounded decoding. Rust capability FFI passes 2 tests; corrected Exact12 fixtures pass JS 23, Python 94, Kotlin 16 and C# 13. SDK admission source checks pass 86 regressions; model privacy selection passes 127 tests and the final intent KAT is independently reproduced. Shared six-lane framing passes 39 primitive tests and the ACE selection passes 26; AXT binding passes 76 FASTPQ and 7 Core regressions. | Core native selection passes all 63 tests; the corrected complete proof crate passes 1,299 with zero failures and 13 ignored. Current SDK origin/network checks pass JS 37, Python 103, Kotlin 63, C# 17 and Swift source-only 35. SDK20 passes its five-target Apple build and exact pin checks, but the whole Swift suite records 46 passes, one failure and one unfinished crash; all six privacy-witness tests remain unexecuted. The reviewed controller correction needs a fresh artifact and whole-suite execution. Complete GPU proof dispatch, AXT authoritative state/execution binding, independent review and four-validator qualification remain open in the [closure ledger](specs/privacy_first_release_closure.md). Synthetic signatures are validator tests only. |
+| FASTPQ compact V1 recovery | The single offline six-lane owner compiles in the coordinated 16-target build with zero source drift. All 27 exact pre-proof checks pass; the primitive library passes 60 tests and the offline consumer passes eight. The compact SHAKE/prototype selectors are removed. | Actual ordinary and AXT full-domain single proofs pass with retained 3,994,619-byte and 4,015,551-byte artifacts; both two-segment bundles also pass with 7,986,384 and 8,011,999 bytes. Production replay replacement, proof-size and witness-privacy design, fresh artifacts, hardware parity and independent qualification remain open; see the [closure ledger](specs/privacy_first_release_closure.md). The production byte/decode limits remain unchanged. |
 | SCCP TON scoped audit | [Validated fixes and evidence](docs/source/sccp_ton_security_audit_2026_09.md): ordinary transfer funding, bounded replay work, native TL-B parsing, exact checkpoint identity, complete breaker readbacks, builder Git/verifier/attribute isolation, and canonical wire identifiers across Rust/SDKs, circuits and contracts. Earlier focused Rust/Core/model/production compile checks pass. Fresh validation: 459 Python tests with zero skips, 45 TON contract tests, authenticated StateInit write/check, and pinned EVM/TRON compiler plus EVM runtime smoke pass. Rust validator suites pass 22/27 tests, and the compiled Rust wire fixture passes. Policy/proof negatives have positive controls and precise rejection checks. All 8 R1CS identities are freshly measured, with a verified source closure and no pending profiles. | Full Core/workspace and Torii runtime tests are unclaimed. Production keys/proofs, trusted release signatures and authenticated deployment readbacks remain separate release artifacts. |
 | Rust SDK dependency separation | Relay accounting moved to `soranet_incentives`; SoraNet policies and shared defaults have one `iroha_service_model` owner. Archive construction, filesystem persistence, orchestrated fetch and DA workflows now live in `iroha_storage_client`. The earlier shipping SDK dependency checkpoint had 29 local packages, 87 external packages and 272 edges; its boundary checks passed without node, CAR or orchestrator dependencies. Storage-client tests pass 41 cases. Protocol capability probes are isolated per context and shared by clones. Immutable account/operator transaction contexts, signed multisig submission and the explicit blocking runtime pass eight focused tests. CLI-owned queue/witness paths preserve source-relative resolution and scoped authority binding; 15 SDK and 13 CLI config/authentication tests pass. All development binaries and integration-library tests compile; the three development-bin suites pass 40 tests. AccountTransactionDraft and AccountClient::prepare_transaction/sign_transaction now replace all generic helpers and the quote-and-sign composite, with crate-level typed errors; ten focused tests preserve exact bytes, defaults, attachments and context isolation. SDK examples and all CLI/Musubi/Izanami/test-network and integration test targets compile. Four specialized SoraFS wrappers are removed; five focused tests preserve exact instructions, moderation TTL and invariant checks. | Client configuration is now private and validated by fallible builders. Clones share compatibility state; every rebuild creates a fresh cache/probe coordinator. The pre-merge SDK candidate passes all 783 tests on the default stack; six fresh doctests cover authority/access compile-fail guards and owned event/block streams. Twenty-one capability and ten loopback tests cover signed upgrades, bounds, cancellation, close errors and sibling blocking-stream progress; pending I/O no longer holds a runtime mutex. Bounded subscription encoding returns nesting errors before dispatch and preserves exact valid frames. All five rebuilt CLI stream helpers and six integration replay/deadline/close helpers pass; these tests do not run node scenarios. All eight selected SDK/consumer packages compile; both CLI constructor runtime tests pass. Strict SDK library Clippy passes with dependencies excluded; typed validation ownership preserves signed payloads and uncertain-submission handling. The latest source budget reports 237 findings/171 exceptions; the earlier five manifest budgets and 16 dependency boundaries passed before the concurrent merge, with SDK/model limits unchanged. Mochi uses the generation-bound genesis reader and canonical SDK streams. Its rebuilt candidate passes 449 core, 181 GUI and 12 readiness tests plus mock/stream and real-Kagami checks. All-target and default-production Core strict Mochi Clippy pass. The snapshot restore owner brings the supervisor to 4,379 lines and removes its size exception; the GUI ratchet tightens to 11,900. See the [current Mochi checkpoint](docs/history/2026-09-08/mochi-snapshot-owner.md). The [prior stream checkpoint](docs/history/2026-09-08/mochi-sdk-streams.md) retains pre-merge artifact evidence. Full merged SDK/workspace qualification remains open. Remaining authority ownership, synchronous capabilities, specialized preparation and release qualification remain unfinished. |
 | Configuration and status HTTP contracts | Shared configuration DTOs retain 22 wire, 3 node-conversion and 14 Core tests; shared status retains 32 named frame/hash/JSON fixtures and 93 telemetry tests. Canonical async status/version capabilities now enforce deadlines, response bounds, content negotiation and structured I/O errors. Operator-only configuration reads now use one asynchronous capability and an independent blocking operator context; both CLI authority tests pass. The 783 SDK tests and the preceding 45 helper tests pass on the default stack; all eight selected SDK/consumer packages compile. Async startup and peer polling preserve the applied-height barrier without constructing blocking runtimes. | The earlier URL-assertion failure is retained and corrected using parsed URLs. Source captures remain unchanged during each scoped runtime run. Generic-envelope identity cutover, remaining capability migration, and four-validator/release qualification remain open; see the [status capability record](specs/first_release_architecture_redesign.md#asynchronous-public-node-diagnostics). |

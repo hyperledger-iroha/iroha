@@ -221,8 +221,12 @@ mod certified_body_fence_supersession {
         protect_body: bool,
     ) -> wire::TimeoutCertificate {
         let highest_prepare_qc = protect_body.then(|| fixture.certificate.clone());
+        let round = wire::ConsensusRound {
+            view: fixture.transport.executor.current_tag().view(),
+            ..fixture.transport.round
+        };
         let preimage = wire::TimeoutVote {
-            round: fixture.transport.round,
+            round,
             highest_prepare_qc: highest_prepare_qc.clone(),
             signer: 0,
             signature: Vec::new(),
@@ -237,7 +241,7 @@ mod certified_body_fence_supersession {
             })
             .collect::<Vec<_>>();
         wire::TimeoutCertificate {
-            round: fixture.transport.round,
+            round,
             groups: vec![wire::TimeoutVoteGroup {
                 highest_prepare_qc,
                 signers: vec![0, 1, 2],
@@ -265,13 +269,24 @@ mod certified_body_fence_supersession {
         now: Instant,
     ) -> Vec<AdapterEffect> {
         let timeout = signed_timeout_certificate(fixture, protect_body);
+        install_timeout_certificate(fixture, timeout, services, now)
+    }
+
+    fn install_timeout_certificate(
+        fixture: &mut ReadyBodyFixture,
+        timeout: wire::TimeoutCertificate,
+        services: &mut FakeServices,
+        now: Instant,
+    ) -> Vec<AdapterEffect> {
         let executor = &mut fixture.transport.executor;
-        executor
-            .arm_live_clocks(
-                ProductionLifecycleLiveClockActivationPermitV1::for_test(),
-                now,
-            )
-            .expect("arm the ordinary runtime clocks after body startup");
+        if executor.lifecycle_live_clocks_are_unarmed() {
+            executor
+                .arm_live_clocks(
+                    ProductionLifecycleLiveClockActivationPermitV1::for_test(),
+                    now,
+                )
+                .expect("arm the ordinary runtime clocks after body startup");
+        }
         executor
             .enqueue_network(wire::ConsensusMessageV2::new(
                 wire::ConsensusMessageV2Payload::TimeoutCertificate(timeout),
@@ -1045,4 +1060,6 @@ mod certified_body_fence_supersession {
         None,
         true
     );
+    include!("v2_effects_resolved_validate_owner_cases.rs");
+    include!("v2_effects_terminal_sign_cold_owner_cases.rs");
 }

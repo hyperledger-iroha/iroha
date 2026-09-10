@@ -81,9 +81,7 @@ pub use por::{
     DrandHttpRandomnessProvider, PorAutomationError, PorCoordinatorRuntime, PorStorage,
     RandomnessProvider, VerifiedVrfProvider, VrfError, VrfProvider,
 };
-pub use por::{
-    PorCoordinator, PorCoordinatorError, PorStatusExportPageV1, PorStatusFilter, PorStatusPageV1,
-};
+pub use por::{PorCoordinator, PorCoordinatorError, PorStatusFilter};
 #[cfg(feature = "app_api")]
 pub use potr_signing::{
     PotrAdmissionMaterialResolverV1, PotrAdmissionReaderError, PotrAdmissionReaderV1,
@@ -117,13 +115,15 @@ pub use stream_token_admission::{
     StreamTokenGatewayAdmissionRecordV1, StreamTokenGatewayAdmissionRequestV1,
     StreamTokenGatewayAdmissionResultV1, StreamTokenGatewayQuotaRequestV1,
 };
+#[cfg(test)]
+pub(crate) use token::hardware_test_support;
 pub(crate) use token::{
     MAX_CLIENT_ID_BYTES, MAX_NONCE_BYTES, MAX_STREAM_TOKEN_BASE64_BYTES,
     MAX_TOKEN_FUTURE_SKEW_SECS, StreamTokenQuotaSubject,
 };
 pub use token::{
-    StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, StreamTokenRuntimeSigner,
-    StreamTokenRuntimeSignerProbeErrorV1, StreamTokenRuntimeSignerQualificationV1,
-    StreamTokenRuntimeSignerQualificationValueErrorV1, StreamTokenSigningError, TokenOverrides,
-    decode_token_base64, encode_token_base64,
+    StreamTokenApprovedCustodyAnchorV1, StreamTokenHardwareCallErrorV1,
+    StreamTokenHardwareClientV1, StreamTokenHardwarePinsV1, StreamTokenHardwareReceiptV1,
+    StreamTokenHeaderError, StreamTokenIssuer, StreamTokenIssuerError, StreamTokenObserverReplyV1,
+    StreamTokenStateObserverClientV1, TokenOverrides, decode_token_base64, encode_token_base64,
 };

@@ -768,6 +768,8 @@ fn pipeline_sidecar_exact_candidate_read_preserves_canonical_authority() {
 }
 #[test]
 fn pipeline_sidecar_canonical_boundary_rejects_missing_current_fields() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::pipeline_sidecar_canonical_boundary_rejects_missing_current_fields::PreReleasePipelineRecoverySidecar")]
     #[derive(Debug, Clone, Encode, Decode)]
     struct PreReleasePipelineRecoverySidecar {
         format: PipelineRecoveryFormat,
@@ -836,6 +838,8 @@ fn pipeline_tx_snapshot_counts_are_explicit_not_inferred_from_samples() {
 }
 #[test]
 fn pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::pipeline_tx_snapshot_rejects_pre_release_bytes_without_counts::PreReleasePipelineTxSnapshot")]
     #[derive(Debug, Clone, Encode, Decode)]
     struct PreReleasePipelineTxSnapshot {
         hash: HashOf<TransactionEntrypoint>,

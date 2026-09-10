@@ -5959,7 +5959,6 @@ mod tests {
         asset::{AssetDefinition, AssetDefinitionId},
         block::BlockHeader,
         domain::{Domain, DomainId},
-        name::Name,
         privacy::{
             AnonymousPgcActivationLimitsV1, AnonymousPgcKOutOfNStatementV1,
             BOOTLE_LANTERN_ATTRIBUTE_COUNT_V1, BOOTLE_LANTERN_RING_DEGREE_V1,
@@ -5986,6 +5985,7 @@ mod tests {
             TAIRA_PRIVACY_MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,
         },
     };
+    use iroha_model_base::name::Name;
     use iroha_test_samples::ALICE_ID;
     use mv::storage::Storage;
     use rand_core_06::{CryptoRng, Error as RngError, RngCore};

@@ -5,7 +5,8 @@
 //! submits a transaction. Signing and submission are explicit account operations.
 
 pub use crate::client::subscriptions::{AccountSubscriptions, Subscriptions};
-use iroha_data_model::{asset::AssetDefinitionId, name::Name, nft::NftId, trigger::TriggerId};
+use iroha_data_model::{asset::AssetDefinitionId, nft::NftId, trigger::TriggerId};
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::subscriptions::SubscriptionCancelMode;
 

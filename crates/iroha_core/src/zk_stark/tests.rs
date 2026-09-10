@@ -2,6 +2,8 @@
 //
 // Included by `zk_stark::tests` to preserve exact libtest names.
 use super::*;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::tests::RetiredSelectorParamsV0")]
 #[derive(norito::NoritoSerialize)]
 struct RetiredSelectorParamsV0 {
     version: u16,
@@ -179,6 +181,8 @@ fn fp4_wire_rejects_every_noncanonical_coefficient() {
 }
 #[test]
 fn fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::zk_stark::tests::fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema::RetiredStructFrame", frame = "iroha_core::zk_stark::GoldilocksFp4V1")]
     #[derive(norito::NoritoSerialize)]
     struct RetiredStructFrame {
         c0: u64,
@@ -186,6 +190,11 @@ fn fp4_wire_rejects_the_retired_struct_frame_under_the_same_schema() {
         c2: u64,
         c3: u64,
     }
+    assert_eq!(
+        norito::schema::identity::frame_hash::<RetiredStructFrame>(),
+        norito::schema::identity::frame_hash::<GoldilocksFp4V1>(),
+        "payload rejection must not depend on a changed schema name"
+    );
     let retired = RetiredStructFrame {
         c0: 1,
         c1: 2,

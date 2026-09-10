@@ -110,7 +110,6 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     ministry::AgendaProposalV1,
-    name::Name,
     nexus::{
         AxtDescriptor, AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId,
         LaneRelayEnvelope, TouchManifest, compute_descriptor_binding, compute_settlement_hash,
@@ -148,6 +147,7 @@ use iroha_data_model::{
     },
     validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
+use iroha_model_base::name::Name;
 use iroha_storage_client::da::{
     DaProofConfig as IrohaDaProofConfig,
     generate_da_proof_summary as iroha_generate_da_proof_summary,
@@ -12931,7 +12931,6 @@ mod tests {
             AgendaEvidenceAttachment, AgendaEvidenceKind, AgendaProposalAction,
             AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget, AgendaProposalV1,
         },
-        name::Name,
         nft::NftId,
         peer::{Peer, PeerId},
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
@@ -12954,9 +12953,10 @@ mod tests {
             validation_fee_payout_recipient_share,
         },
     };
+    use iroha_model_base::name::Name;
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
-        DeserializePayload, NoritoDeserialize,
+        DeserializePayload,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
         from_bytes,
         json::{self, Value},
@@ -14177,7 +14177,7 @@ seiyaku Privacy {
             body,
             signature: signature.payload().to_vec(),
         };
-        let bytes = norito::to_bytes(&token).expect("encode stream token");
+        let bytes = norito::encode_canonical(&token).expect("encode stream token");
         BASE64.encode(bytes)
     }
     fn da_fixture_path(name: &str) -> PathBuf {

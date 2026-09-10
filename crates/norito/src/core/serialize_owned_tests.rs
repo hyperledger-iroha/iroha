@@ -77,7 +77,7 @@ fn serialize_owned_streams_when_exact_length_is_unavailable() {
 fn serialize_owned_rejects_a_changed_second_pass() {
     use std::cell::Cell;
     struct Growing(Cell<usize>);
-    
+
 impl SerializePayload for Growing {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let pass = self.0.get();

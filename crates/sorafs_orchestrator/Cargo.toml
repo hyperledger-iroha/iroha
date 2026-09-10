@@ -25,6 +25,7 @@ cli-orchestrator = [
 local-quic-proxy = ["dep:quinn", "dep:rcgen", "dep:sha2"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_service_model = { workspace = true }
 sorafs_car = { path = "../sorafs_car", features = ["manifest", "cli"] }
 norito = { path = "../norito", features = ["node-codec"], default-features = false }

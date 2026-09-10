@@ -26,7 +26,8 @@ mod binding_types;
 mod catalog;
 mod dependency_scope;
 mod stream_token_gateway;
-mod stream_token_signer;
+mod stream_token_hardware;
+mod stream_token_hardware_binding;
 use binding_collection::{
     append_required_governance_request_auth_binding, append_required_governance_service_binding,
     collect_configured_bindings, governance_request_ingress_binding_from_service,
@@ -34,6 +35,7 @@ use binding_collection::{
 pub(crate) use binding_types::{EvidenceViewerWebAuthnBindingV1, PopCredentialRuntimeBindingV1};
 pub use catalog::{IrohaRuntimeProviderCatalogErrorV1, RUNTIME_PROVIDER_CATALOG_MAX_BYTES_V1};
 use dependency_scope::{dependency_is_present, has_unrequested_dependency};
+pub use stream_token_hardware_binding::StreamTokenHardwareRuntimeBindingV1;
 const MAX_PROVIDER_INGEST_SOURCE_STREAMS_V1: u32 = 1_024;
 const GOVERNANCE_DAG_SIGNER_STARTUP_CHALLENGE_DOMAIN_V1: &[u8] =
     b"sorafs.governance-dag.registry-startup-possession.v1\0";
@@ -332,7 +334,7 @@ pub struct IrohaRuntimeProviderBindingV1 {
     policy_digest: Option<[u8; 32]>,
     bootle_lantern_issuance_bindings:
         Option<iroha_torii::privacy_issuance_api::BootleLanternIssuanceRuntimeProviderBindingsV1>,
-    stream_token_signer_public_key: Option<[u8; 32]>,
+    stream_token_hardware_binding: Option<StreamTokenHardwareRuntimeBindingV1>,
     stream_token_gateway_admission_qualification:
         Option<iroha_torii::sorafs::StreamTokenGatewayAdmissionQualificationV1>,
     stream_token_gateway_admission_max_pending: Option<u32>,
@@ -419,7 +421,7 @@ impl IrohaRuntimeProviderBindingV1 {
             revision,
             policy_digest,
             bootle_lantern_issuance_bindings: None,
-            stream_token_signer_public_key: None,
+            stream_token_hardware_binding: None,
             stream_token_gateway_admission_qualification: None,
             stream_token_gateway_admission_max_pending: None,
             stream_token_gateway_admission_max_tracked_tokens: None,
@@ -509,29 +511,17 @@ impl IrohaRuntimeProviderBindingV1 {
         Ok(projected)
     }
     fn try_new_stream_token_signer(
-        handle: impl Into<String>,
-        public_key: [u8; 32],
-        revision: u64,
-        policy_digest: [u8; 32],
+        hardware: StreamTokenHardwareRuntimeBindingV1,
     ) -> Result<Self, IrohaRuntimeProviderRegistryErrorV1> {
-        let slot = IrohaRuntimeProviderSlotV1::StreamTokenSigner;
-        if public_key == [0; 32] || iroha_crypto::ed25519_parse_public_key(&public_key).is_err() {
-            return Err(IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot));
-        }
-        let qualification = iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-            revision,
-            policy_digest,
-        );
-        qualification
-            .validate()
-            .map_err(|_| IrohaRuntimeProviderRegistryErrorV1::InvalidBinding(slot))?;
+        hardware.validate()?;
+        let custody = hardware.custody();
         let mut projected = Self::try_new(
-            slot,
-            handle,
-            Some(qualification.revision()),
-            Some(qualification.policy_digest()),
+            IrohaRuntimeProviderSlotV1::StreamTokenSigner,
+            custody.runtime_handle.clone(),
+            Some(custody.key_revision),
+            Some(custody.policy_digest),
         )?;
-        projected.stream_token_signer_public_key = Some(public_key);
+        projected.stream_token_hardware_binding = Some(hardware);
         Ok(projected)
     }
     fn try_new_stream_token_gateway_admission(
@@ -1133,10 +1123,12 @@ impl IrohaRuntimeProviderBindingV1 {
     {
         self.bootle_lantern_issuance_bindings
     }
-    /// Return the exact configured stream-token Ed25519 verification key.
+    /// Return complete provider-scoped hardware and independent observer public pins.
     #[must_use]
-    pub const fn stream_token_signer_public_key(&self) -> Option<[u8; 32]> {
-        self.stream_token_signer_public_key
+    pub const fn stream_token_hardware_binding(
+        &self,
+    ) -> Option<&StreamTokenHardwareRuntimeBindingV1> {
+        self.stream_token_hardware_binding.as_ref()
     }
     /// Return the exact public gateway-admission qualification.
     #[must_use]
@@ -1987,8 +1979,10 @@ impl std::error::Error for IrohaRuntimeProviderRegistryErrorV1 {}
 ///
 /// Governance DAG signers are independently cross-bound here to the configured
 /// handle, qualification, publisher peer identity, and Ed25519 public key.
-/// Stream-token signers are independently cross-bound here to the configured
-/// handle, Ed25519 public key, adapter revision, and public-policy digest.
+/// Stream-token resolution checks complete public hardware/observer routing pins
+/// and any separately supplied approved custody floor as structural claims only.
+/// Torii authenticates fresh challenged custody at startup and each prepared
+/// operation against independent trust, trusted time and its own finalized history.
 pub trait IrohaRuntimeProviderRegistryV1: Send + Sync {
     /// Resolve the complete dependency set for one standard daemon launch.
     ///
@@ -2050,7 +2044,7 @@ pub(crate) fn resolve_runtime_deps_from_bindings(
     qualify_fenced_privacy_dependencies(bindings, &dependencies)?;
     qualify_governance_dag_signer_dependency(bindings, &dependencies)?;
     qualify_governance_request_auth_dependencies(bindings, &dependencies)?;
-    stream_token_signer::qualify_dependency(bindings, &dependencies)?;
+    stream_token_hardware::validate_dependency_bindings(bindings, &dependencies)?;
     stream_token_gateway::qualify_dependency(bindings, &dependencies)?;
     qualify_native_transaction_signers(bindings, &mut dependencies)?;
     qualify_soracloud_runtime_signer(bindings, &mut dependencies)?;
@@ -5026,6 +5020,9 @@ mod tests {
         );
     }
     fn configure_stream_token_runtime(config: &mut Config) {
+        config.torii.sorafs_storage.enabled = true;
+        config.torii.sorafs_storage.provider_id =
+            Some(iroha_data_model::sorafs::capacity::ProviderId([0x72; 32]));
         let signer = KeyPair::try_from_seed(vec![0x81; 32], Algorithm::Ed25519)
             .expect("stream-token signer key");
         let signer_public_key = signer
@@ -5036,10 +5033,8 @@ mod tests {
             .expect("Ed25519 public key width");
         let tokens = &mut config.torii.sorafs_storage.stream_tokens;
         tokens.enabled = true;
-        tokens.signer_handle = Some("software://sorafs/stream-token/primary".to_owned());
-        tokens.signer_public_key = Some(signer_public_key);
-        tokens.signer_revision = Some(3);
-        tokens.signer_policy_digest = Some([0x82; 32]);
+        tokens.hardware =
+            Some(super::stream_token_hardware_binding::tests::hardware_config(signer_public_key));
         tokens.admission_provider_handle =
             Some("sealed-cas://sorafs/stream-token/admission-primary".to_owned());
         tokens.admission_provider_revision = Some(4);

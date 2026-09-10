@@ -41,8 +41,8 @@ fn publish_temp_recovery_catalog_baseline(kura: &Kura, catalog: &LaneCatalog) {
     .expect("publish temp-recovery configured catalog baseline");
 }
 fn assert_retained_publication_quarantine(path: &Path, expected: &[u8]) {
-    let metadata = crate::secure_file_metadata::from_path(path)
-        .expect("stat retained publication quarantine");
+    let metadata =
+        crate::secure_file_metadata::from_path(path).expect("stat retained publication quarantine");
     assert!(
         metadata.file_type().is_file()
             && !metadata.file_type().is_symlink()
@@ -1065,4 +1065,60 @@ fn exact_object_quarantine_retains_bounded_repeated_identical_residues() {
         ),
         quarantines,
     );
+}
+
+#[test]
+fn process_generation_counts_actual_create_retry_and_restart_delta_once() {
+    let temp_dir = TempDir::new().expect("process-generation accounting directory");
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let catalog = autonomous_temp_recovery_catalog();
+    let lane_config = RuntimeLaneConfig::from_catalog(&catalog);
+    let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
+    let peer = PeerId::new(signer.public_key().clone());
+    let network = test_network_id(b"process-generation-exact-disk-accounting");
+    let path = Kura::autonomous_lifecycle_process_generation_path_for(temp_dir.path());
+    let (initial, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+        .expect("initialize authenticated accounting root");
+    // This fixture has no signed payload incarnation. Establish its configured
+    // markers before publishing a baseline that authenticates those exact markers.
+    establish_configured_lane_markers_for_test(&initial, &lane_config);
+    publish_temp_recovery_catalog_baseline(&initial, &catalog);
+    drop(initial);
+    for expected_generation in 1..=2 {
+        let (kura, _) = open_authenticated_temp_recovery_kura(&config, &lane_config, &catalog)
+            .expect("reopen authenticated accounting root");
+        kura.bind_local_peer_id(peer.clone())
+            .expect("bind generation claimant");
+        kura.refresh_disk_usage_bytes()
+            .expect("initialize raw disk caches before claim");
+        let before = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("raw preclaim bytes");
+        assert!(before.enforced_initialized && before.total_initialized);
+        assert_eq!(before.cached_total_bytes, before.exact_total_bytes);
+        let previous_length = Kura::file_len_or_zero(&path).expect("old generation file length");
+        let claim = kura
+            .claim_autonomous_lifecycle_process_generation(network, &peer)
+            .expect("publish actual process-generation record");
+        assert_eq!(claim.generation, expected_generation);
+        let length = fs::metadata(&path).expect("new generation metadata").len();
+        for _ in 0..2 {
+            let after = kura
+                .disk_usage_accounting_snapshot_for_tests()
+                .expect("raw postclaim bytes");
+            assert!(after.enforced_initialized && after.total_initialized);
+            assert_eq!(after.cached_enforced_bytes, after.exact_enforced_bytes);
+            assert_eq!(after.cached_total_bytes, after.exact_total_bytes);
+            assert_eq!(
+                after.cached_total_bytes,
+                before.cached_total_bytes - previous_length + length
+            );
+            assert_eq!(
+                kura.claim_autonomous_lifecycle_process_generation(network, &peer)
+                    .expect("retry same live claim")
+                    .generation,
+                claim.generation
+            );
+        }
+    }
 }

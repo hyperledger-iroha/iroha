@@ -1403,6 +1403,10 @@ struct ServerTestPorReplayArchive {
     later_binding: Option<node::PorFinalizedReplayArchiveBindingV1>,
     binding_calls: AtomicU64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::PorReplayArchiveChallengeStateFixtureV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PorReplayArchiveChallengeStateFixtureV1 {
     challenge: sorafs_manifest::por::PorChallengeV1,
@@ -1417,6 +1421,10 @@ struct PorReplayArchiveChallengeStateFixtureV1 {
 struct PorReplayArchiveRecordFixtureV1 {
     finalized: PorReplayArchiveFinalizedStateFixtureV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::platform::tests::PorReplayArchiveFinalizedStateFixtureV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PorReplayArchiveFinalizedStateFixtureV1 {
     state: PorReplayArchiveChallengeStateFixtureV1,

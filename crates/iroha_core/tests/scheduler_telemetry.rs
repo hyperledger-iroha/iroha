@@ -23,6 +23,8 @@ use iroha_data_model::{
     },
     prelude::*,
 };
+#[cfg(feature = "telemetry")]
+use iroha_model_base::name::Name;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},

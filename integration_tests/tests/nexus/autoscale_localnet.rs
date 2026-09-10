@@ -29,8 +29,7 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneId},
         peer::PeerId,
         prelude::{
-            FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
-            TransactionEntrypoint,
+            FindAccountById, HashOf, QueryBuilderExt, SignedTransaction, TransactionEntrypoint,
         },
         query::{
             CommittedTransaction, block::prelude::FindBlocks,
@@ -56,6 +55,7 @@ use iroha_core::{
     queue::{LaneQueueReservationKeyV1, RoutingPlan},
     sumeragi::network_topology::commit_quorum_from_len,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,
@@ -5072,6 +5072,7 @@ fn offline_kura_config(store_dir: PathBuf, blocks_in_memory: NonZeroUsize) -> Ku
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     }
 }

@@ -24,6 +24,10 @@ use thiserror::Error;
 /// Hard V1 ceiling for one reconciliation call.
 pub const STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1: u32 = 1_024;
 /// Exact public identity of a deployment-owned admission provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionQualificationV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionQualificationV1 {
     /// Stable identity derived from the chain and governed compliance gateway.
@@ -63,6 +67,10 @@ impl StreamTokenGatewayAdmissionQualificationV1 {
     }
 }
 /// Signed token quota inputs admitted atomically with one callback row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayQuotaRequestV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayQuotaRequestV1 {
     /// Canonical 16-byte token identifier rendered as lowercase hexadecimal.
@@ -337,6 +345,10 @@ fn exact_lease_expiry_unix_ms(
     Ok(expires_at_unix_ms)
 }
 /// Provider-authenticated state of the exact row returned by `admit`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionDeliveryStateV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
     /// The row is pending after the exact immediately preceding sequence.

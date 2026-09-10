@@ -213,6 +213,13 @@ fn dispatch_server_operation_with_session(
         {
             governance_operations::qualify_governance_authenticator(state, request)
         }
+        (slot, OPERATION_QUALIFY_V1) if slot == stream_token_slot => {
+            requalify()?;
+            encode_canonical(
+                required_binding_ref!(&request.binding, stream_token_hardware_binding),
+                MAX_QUALIFICATION_FRAME_BYTES_V1,
+            )
+        }
         (slot, OPERATION_QUALIFY_V1)
             if slot == governance_signer_slot
                 || slot == privacy_cycle_prf_slot
@@ -221,7 +228,6 @@ fn dispatch_server_operation_with_session(
                 || slot == fenced_privacy_publisher_slot
                 || slot == fenced_privacy_head_reader_slot
                 || slot == governance_checkpoint_slot
-                || slot == stream_token_slot
                 || slot == stream_token_gateway_admission_slot
                 || slot == appeal_signer_slot
                 || slot == appeal_checkpoint_slot
@@ -436,8 +442,13 @@ fn dispatch_server_operation_with_session(
         {
             privacy_operations::fenced_privacy_read_head_with_ancestry(state, request)
         }
-        (slot, OPERATION_STREAM_TOKEN_SIGN_V1) if slot == stream_token_slot => {
-            stream_token_operations::stream_token_sign(state, request)
+        (slot, OPERATION_STREAM_TOKEN_SIGN_V1 | OPERATION_STREAM_TOKEN_RECOVER_V1)
+            if slot == stream_token_slot =>
+        {
+            stream_token_operations::stream_token_sign_or_recover(state, request)
+        }
+        (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
+            stream_token_operations::stream_token_observe(state, request)
         }
         (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
             if slot == stream_token_gateway_admission_slot =>

@@ -147,9 +147,9 @@ mod tests {
     use crate::{
         account::{MultisigMember, MultisigPolicy, address::ChainDiscriminantGuard},
         domain::DomainId,
-        name::Name,
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
 
     fn account(seed: u8) -> AccountId {

@@ -99,8 +99,8 @@ export const BUNDLE_TARGETS = Object.freeze([
     platform: "browser",
     target: "es2020",
     // Final V1 nominal errors, Unit, qualified structs, and cursor/page schemas
-    // require 56,823 bytes across seven canonical modules with pinned esbuild.
-    // The 56 KiB ceiling leaves 521 bytes; browser isolation remains mandatory.
+    // share validation across eight canonical modules: 55,396 bytes with pinned
+    // esbuild. The 56 KiB ceiling leaves 1,948 bytes; browser isolation is mandatory.
     limitKb: 56,
     forbidNodeInputs: true,
     forbidGlobalBuffer: true,
@@ -113,11 +113,13 @@ export const BUNDLE_TARGETS = Object.freeze([
     // The prior first-release aggregate measured a 517,186-byte eager split closure
     // on the pinned runner. Removing feature-specific exports, then adding private
     // browser transport state and exact URL/header/timeout guards, leaves the
-    // reviewed eager surface at 496,687 bytes (-3.96%); the 486 KiB ceiling leaves
-    // 977 bytes. The typed Sumeragi parser and deployment-submit continuation
-    // remain separately inventoried so startup and deferred code cannot trade
+    // reviewed eager surface at 496,687 bytes (-3.96%). Adding canonical nominal
+    // error catalogs, explicit Unit returns, and cursor/page schema validation to
+    // the compact normalizers produces 502,325 bytes; the 491 KiB ceiling leaves
+    // 459 bytes and retains the prior reviewed growth bound. The typed Sumeragi
+    // parser and deployment-submit continuation remain separately inventoried so startup and deferred code cannot trade
     // against one another.
-    limitKb: 486,
+    limitKb: 491,
     reviewedEagerBytes: 496_687,
     reviewedCombinedBytes: 578_683,
     lazyChunks: Object.freeze([

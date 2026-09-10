@@ -234,6 +234,24 @@ impl<T> SerializePayload for SingularQueryFrame<'_, T> {
         self.source.encoded_len_exact()
     }
 }
+/// Encode a payload-only test producer through the actual owned-output frame boundary.
+#[cfg(test)]
+pub(crate) fn encode_singular_query_source_for_test<S: SerializePayload, T: NoritoSerialize>(
+    source: &S,
+) -> Vec<u8> {
+    use norito::NoritoSchema as _;
+
+    assert_ne!(SingularQueryFrame::<T>::nominal_name(), T::nominal_name());
+    assert_eq!(SingularQueryFrame::<T>::frame_name(), T::frame_name());
+    assert_eq!(
+        norito::schema::identity::frame_hash::<SingularQueryFrame<'_, T>>(),
+        norito::schema::identity::frame_hash::<T>(),
+    );
+    let bytes = norito::encode_canonical(&SingularQueryFrame::<T>::new(source))
+        .expect("canonical singular-query source frame");
+    assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+    bytes
+}
 struct BorrowedSequence<I> {
     values: I,
 }
@@ -945,8 +963,72 @@ fn decode_limits(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use norito::NoritoSchema as _;
     use norito::core::DeserializePayload;
     use std::cell::Cell;
+
+    #[test]
+    fn borrowed_optional_fields_preserve_owned_frames_and_nominal_arguments() {
+        for value in [None, Some(41_u64)] {
+            let borrowed = BorrowedSingularOption::new(value.as_ref());
+            assert_eq!(
+                norito::encode_canonical(&SingularQueryFrame::<Option<u64>>::new(&borrowed))
+                    .unwrap(),
+                norito::encode_canonical(&value).unwrap(),
+            );
+        }
+        assert_ne!(
+            Vec::<SingularQueryFrame<'_, Option<u64>>>::nominal_name(),
+            Vec::<Option<u64>>::nominal_name(),
+        );
+        assert_ne!(
+            SingularQueryFrame::<Option<u64>>::nominal_name(),
+            SingularQueryFrame::<Option<u32>>::nominal_name(),
+        );
+    }
+
+    #[test]
+    fn borrowed_sequence_frames_are_independent_of_the_iterator_producer() {
+        let values = vec![11_u64, 23, 37];
+        let direct = BorrowedSequence {
+            values: values.iter(),
+        };
+        let composed = BorrowedSequence {
+            values: values[..1].iter().chain(values[1..].iter()),
+        };
+        let owned_frame = norito::encode_canonical(&values).unwrap();
+        assert_eq!(
+            norito::encode_canonical(&SingularQueryFrame::<Vec<u64>>::new(&direct)).unwrap(),
+            owned_frame
+        );
+        assert_eq!(
+            norito::encode_canonical(&SingularQueryFrame::<Vec<u64>>::new(&composed)).unwrap(),
+            owned_frame
+        );
+    }
+
+    #[test]
+    fn borrowed_struct_frames_preserve_the_declared_owned_schema() {
+        #[derive(norito::Encode, norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_core::query::tests::SingularProjection")]
+        struct Projection {
+            value: u64,
+            label: String,
+        }
+        let owned = Projection {
+            value: 19,
+            label: "projection".to_owned(),
+        };
+        let borrowed = BorrowedSingularStruct::<2>::new([&owned.value, &owned.label]);
+        assert_eq!(
+            norito::encode_canonical(&SingularQueryFrame::<Projection>::new(&borrowed)).unwrap(),
+            norito::encode_canonical(&owned).unwrap(),
+        );
+        assert_ne!(
+            SingularQueryFrame::<'_, Projection>::nominal_name(),
+            Projection::nominal_name(),
+        );
+    }
     thread_local! {
         static OWNED_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };
         static ENCODE_ERROR_SOURCE_DROPPED: Cell<bool> = const { Cell::new(false) };

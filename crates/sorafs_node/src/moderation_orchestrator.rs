@@ -186,12 +186,14 @@ const SIGNED_TRANSACTION_LIMITS: DecodeLimits = DecodeLimits::new(
     128,
 );
 /// One exact native moderation mutation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationNativeActionV1")]
 #[expect(
     clippy::large_enum_variant,
     reason = "boxing a variant would change the canonical public Norito action shape"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(name = "sorafs_node::moderation_orchestrator::ModerationNativeActionV1")]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+
 pub enum ModerationNativeActionV1 {
     /// Activate a policy revision.
     SetPolicy(SetSorafsModerationPolicy),
@@ -1465,6 +1467,10 @@ pub enum ModerationPanelNotificationArchiveExternalErrorV1 {
     Rejected,
 }
 /// Canonical terminal-set statement signed by the sealed checkpoint authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::moderation_orchestrator::ModerationPanelNotificationSourceAttestationV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationPanelNotificationSourceAttestationV1 {
     /// Archive schema version.
@@ -2608,6 +2614,8 @@ enum StoredPanelNotificationStateV1 {
     Delivered,
     DeadLetter,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::moderation_orchestrator::StoredPanelNotificationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredPanelNotificationV1 {
     notification: ModerationPanelNotificationV1,

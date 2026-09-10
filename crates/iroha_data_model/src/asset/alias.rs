@@ -3,12 +3,11 @@ pub use self::model::*;
 use crate::{
     asset::id::AssetDefinitionId,
     domain::DomainId,
-    error::ParseError,
-    name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 use core::fmt;
 use iroha_data_model_derive::model;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -19,6 +18,8 @@ mod model {
     use derive_more::Display;
     use iroha_schema::IntoSchema;
     /// Asset alias in either `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` format.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::asset::alias::model::AssetDefinitionAlias")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]

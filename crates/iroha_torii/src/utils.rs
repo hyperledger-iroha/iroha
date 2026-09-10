@@ -2550,6 +2550,8 @@ pub mod extractors {
         use http_body_util::BodyExt as _;
         use iroha_version::{RawVersioned, UnsupportedVersion, Version};
         use norito::core::{NoritoDeserialize, NoritoSerialize, SerializePayload};
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_torii::utils::extractors::tests::Dummy")]
         #[derive(
             Clone,
             Debug,
@@ -2558,9 +2560,8 @@ pub mod extractors {
             NoritoDeserialize,
             crate::json_macros::JsonSerialize,
             crate::json_macros::JsonDeserialize,
-            norito::derive::NoritoSchema,
         )]
-        #[norito_schema(name = "iroha_torii::utils::extractors::tests::Dummy")]
+
         struct Dummy(u32);
         #[test]
         fn bounded_decode_resource_failures_are_terminal_payload_limits() {
@@ -4494,6 +4495,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_accepts_binary_body() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_accepts_binary_body::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4502,11 +4507,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_accepts_binary_body::Payload"
-            )]
+
             struct Payload {
                 value: u32,
             }
@@ -4539,6 +4541,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_accepts_json_body() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_accepts_json_body::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4547,11 +4553,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_accepts_json_body::Payload"
-            )]
+
             struct Payload {
                 value: u32,
             }
@@ -4568,6 +4571,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_body_limit_uses_typed_error_envelope() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_body_limit_uses_typed_error_envelope::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4575,11 +4582,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_body_limit_uses_typed_error_envelope::Payload"
-            )]
+
             struct Payload {
                 value: u32,
             }
@@ -4790,6 +4794,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_rejects_unsupported_content_type() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_unsupported_content_type::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4797,11 +4805,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_unsupported_content_type::Payload"
-            )]
+
             struct Payload;
             let req = Request::builder()
                 .method("POST")
@@ -4815,6 +4820,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_rejects_missing_content_type() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_missing_content_type::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4822,11 +4831,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_missing_content_type::Payload"
-            )]
+
             struct Payload;
             let req = Request::builder()
                 .method("POST")
@@ -4839,6 +4845,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_rejects_invalid_content_type_before_body_collection() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_invalid_content_type_before_body_collection::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4846,11 +4856,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_invalid_content_type_before_body_collection::Payload"
-            )]
+
             struct Payload;
             let mut duplicate = Request::builder()
                 .method("POST")
@@ -4884,6 +4891,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_rejects_malformed_or_non_utf8_media_before_body_collection() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_malformed_or_non_utf8_media_before_body_collection::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4891,11 +4902,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_malformed_or_non_utf8_media_before_body_collection::Payload"
-            )]
+
             struct Payload;
             for (content_type, expected_status) in [
                 (
@@ -4931,6 +4939,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_with_bytes_rejects_media_type_before_body_collection() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_with_bytes_rejects_media_type_before_body_collection::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4938,11 +4950,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_with_bytes_rejects_media_type_before_body_collection::Payload"
-            )]
+
             struct Payload;
             let mut request = Request::builder()
                 .method("POST")
@@ -4957,6 +4966,10 @@ pub mod extractors {
         }
         #[tokio::test]
         async fn norito_json_rejects_octet_stream_fallback() {
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_octet_stream_fallback::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4964,11 +4977,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_rejects_octet_stream_fallback::Payload"
-            )]
+
             struct Payload;
             let body = norito::to_bytes(&Payload).expect("encode norito payload");
             let req = Request::builder()
@@ -4985,6 +4995,10 @@ pub mod extractors {
         #[tokio::test]
         async fn norito_json_decode_failure_increments_metric() {
             use iroha_telemetry::metrics::global_or_default;
+            #[derive(norito::NoritoSchema)]
+            #[norito_schema(
+                name = "iroha_torii::utils::extractors::tests::norito_json_decode_failure_increments_metric::Payload"
+            )]
             #[derive(
                 Clone,
                 Debug,
@@ -4993,11 +5007,8 @@ pub mod extractors {
                 NoritoDeserialize,
                 crate::json_macros::JsonSerialize,
                 crate::json_macros::JsonDeserialize,
-                norito::derive::NoritoSchema,
             )]
-            #[norito_schema(
-                name = "iroha_torii::utils::extractors::tests::norito_json_decode_failure_increments_metric::Payload"
-            )]
+
             struct Payload {
                 value: u32,
             }

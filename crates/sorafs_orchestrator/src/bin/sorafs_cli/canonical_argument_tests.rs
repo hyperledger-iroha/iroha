@@ -203,7 +203,7 @@ fn fixture_account_uses_checked_seed_derivation() {
     assert_eq!(account, expected);
 }
 #[test]
-fn load_storage_pin_payload_uses_canonical_directory_ordering() {
+fn load_prepared_storage_payload_uses_canonical_directory_ordering() {
     let tempdir = tempdir().expect("tempdir");
     let payload_dir = tempdir.path().join("site");
     fs::create_dir_all(payload_dir.join("assets")).expect("create payload dir");
@@ -218,8 +218,9 @@ fn load_storage_pin_payload_uses_canonical_directory_ordering() {
     let (expected_plan, expected_payload) =
         CarBuildPlan::from_directory_with_profile(&payload_dir, profile)
             .expect("build canonical directory payload");
+    let manifest = super::deployment_integrity_tests::manifest(&expected_plan, &expected_payload);
     let (payload, files, payload_kind) =
-        load_storage_pin_payload(&payload_dir, &manifest).expect("load storage payload");
+        load_prepared_storage_payload(&payload_dir, &manifest).expect("load storage payload");
     assert_eq!(payload_kind, "directory");
     assert_eq!(payload, expected_payload);
     let files = files.expect("directory payload should include file entries");

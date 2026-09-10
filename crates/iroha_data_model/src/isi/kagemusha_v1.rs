@@ -1868,6 +1868,8 @@ impl KagemushaOperationFinalityV1 {
 }
 
 /// Terminal result of one finalized top-up.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::kagemusha_v1::KagemushaTopUpResultV1")]
 #[derive(
     Debug,
     Clone,

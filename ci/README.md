@@ -132,7 +132,7 @@ read-only.
 
 `python3 scripts/check_dependency_budget.py` enforces the exact no-growth
 limits in `ci/dependency_budget.json`. The checked-in scopes cover source
-graphs rooted at the shipping crates `iroha`, `iroha_data_model`, `irohad`, and
+graphs rooted at the shipping crates `iroha_model_base`, `iroha`, `iroha_data_model`, `irohad`, and
 `iroha_cli`, plus a whole-workspace/all-targets scope whose roots include
 development dependencies. CI runs this source-only check before classifying
 affected Rust lanes, so it does not fetch crates, invoke Cargo, depend on the
@@ -164,6 +164,14 @@ ceiling and should ratchet it downward in the same change. Required UI/media
 stacks listed in `denied_required_packages` cannot be blessed by a refresh.
 Any manifest-fingerprint drift fails closed until that dependency change and
 the refreshed exact limits are reviewed together.
+
+The foundational model extraction adds one local compilation unit and direct
+consumer ownership edges. Its reviewed graph adds no external package and keeps
+shared `derive_more` and `sha2` declarations in both owners where they are used.
+The base scope has 13 required local packages, 30 external packages and 72
+required declaration edges. Four separately resolved base feature selections
+reject aggregate, privacy/service, HTTP, storage and node execution paths;
+normal and build dependencies are both checked.
 
 `python3 scripts/check_dependency_budget.py --check-boundaries` additionally
 enforces the `architecture` layer ownership and shipping configurations in
@@ -353,3 +361,17 @@ To keep CI deterministic, **do not** set `[build] build-dir` in
 need a custom build directory for local experimentation, export
 `CARGO_TARGET_DIR` in your shell session but reset it before running any
 `ci/check_*` script.
+
+## Privacy SDK dependency graph
+
+`ci/privacy_sdk_cargo_lockfile.sh` owns the one reviewed Cargo graph digest for
+both the workspace and native SDKs. `provision-ci` authenticates the tracked
+root lock, creates a separate read-only external snapshot from those exact
+bytes, and requires full `cargo metadata --locked` compatibility with the
+pinned toolchain before exporting build inputs. It never resolves a new graph
+or retries without `--locked`. Every privacy release selection must name the external
+file explicitly; root paths, internal paths, symlinks, hardlinks and fallback
+selectors are rejected. Root and external file identities remain independently
+sealed even though their bytes match. Changed manifests or dependencies require
+an explicit graph review, a coherent owner update, and fresh native artifacts;
+source, wheel, ABI, hardware and clean-release gates still apply.

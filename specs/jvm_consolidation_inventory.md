@@ -30,8 +30,8 @@ platform discovery or a JDK 11 implementation in the JDK 8 API surface.
 | J `consensus/SumeragiJsonSupport.java` | Removed. K `consensus/SumeragiStatusModels.kt`, internal `SumeragiJsonPrimitives`, owns strict UTF-8, exact object fields, negative-zero rejection, bounded unsigned numbers and canonical hashes. Migrated Java consumers exercise the Kotlin status and diagnostics parsers. |
 | J `consensus/NativeAmxV2Models.java` | Removed with the duplicate Sumeragi status, diagnostics and wire classes. K `consensus/NativeAmxV2.kt` owns the sole public value hierarchy and grouped parser; Java consumers call it directly. Remaining private-settlement responder checks invoke its canonical BLS peer validator directly. |
 | J `alias/AliasNameSupport.java` | K `alias/AliasNames.kt:201` performs NFC/IDN segment and qualified-domain normalization plus exact u64 bounds; `AliasSetupModels.kt:961` and `AliasPlanVerifier.kt:423` own token/hash checks. No standalone public helper is needed. |
-| J `privacy/ConfidentialNoteScalars.java` | K `privacy/ConfidentialNote.kt:533`: same Pasta modulus, 32-byte canonical/nonzero scalars, positive canonical u128 and defensive byte copies. |
-| J `privacy/ConfidentialNoteCrypto.java` | K `privacy/ConfidentialNote.kt:149–390`: public-key derivation, X25519 agreement, HKDF and authenticated note encryption/decryption, including deterministic entropy entry points. Kotlin `ConfidentialNoteTest.kt:170` covers plaintext contract and tampering. |
+| J `privacy/ConfidentialNoteScalars.java` | Removed. K `privacy/ConfidentialNote.kt:533`: same Pasta modulus, 32-byte canonical/nonzero scalars, positive canonical u128 and defensive byte copies. |
+| J `privacy/ConfidentialNoteCrypto.java` | Removed. K `privacy/ConfidentialNote.kt:149–390`: public-key derivation, X25519 agreement, HKDF and authenticated note encryption/decryption, including deterministic entropy entry points. Kotlin `ConfidentialNoteTest.kt:170` covers plaintext contract and tampering. |
 | J `client/ZkRootsJson.java` | K `client/ZkRoots.kt:69`: response parser is absorbed by the response companion; preserves root strings and evaluated block height/hash checks. |
 | J `client/AccountAliasUInt64.java` | K `client/AccountAliasReadModels.kt:202`: `requireAliasU64`/`aliasU64` retain BigInteger range and integer-token validation. Existing `AccountAliasReadModelsTest.kt` covers the read models. |
 | J `client/SccpSubmitEncoding.java` | K `client/SccpSubmitRequests.kt:90–211`: canonical base64/Norito envelopes, bounded compact cursor and sparse replay non-membership witness validation. Keep these internal to SCCP submissions. |
@@ -86,8 +86,9 @@ owners and three modules. The Rust SDK namespace now has exactly 77 matching
 source exports. Six memo JNI exports without a JVM declaration and three
 undeclared app-specific coordinator exports are removed; all 132 C ABI function
 bodies are unchanged. Coordinator behavior lives directly under its Kotlin SDK
-exports. There are still 55 declared Android duplicates to retire with their
-Java implementation consumers.
+exports. Nineteen Android privacy duplicates are now removed with their Java
+implementation consumers. The remaining 36 Android declarations are outside
+this privacy closure and still require retirement.
 
 Three new Java consumer classes preserve privacy, SoraFS reference validation,
 and signer behavior against Kotlin. All 41 cases compile to JDK 8; 26 managed
@@ -287,3 +288,42 @@ cover the complete Java publication, resource or JNI inventory.
   archive. This is codec/fixture execution evidence, not JNI or native packaging
   qualification. The privacy source guard takes its exact six C exports from
   the manifest parity auditor's single approved inventory.
+
+
+The standalone Java privacy bridge assertions now belong to the Kotlin test
+module as `PrivacyNativeBridgeJavaConsumerTest`. They call the canonical Kotlin
+V1 owner and require its network-bound JNI declarations; no retired JNI aliases
+are restored. The original registry, matrix, status, preflight, native archive and mutation
+assertions remain. Internal archive rejection uses the identical truncations in
+the selected Kotlin friend tests; native modifiers/descriptors and retired
+generic methods are checked through the existing Python classfile owner,
+without adding SDK reflection. The official JVM lane runs
+this consumer with the existing canonical tests and selects JDK 21 executables
+explicitly, preserving the authenticated Cargo PATH through final verification.
+Native execution of this changed source remains a separate qualification gate.
+The duplicate Java confidential/Merkle owner closure and its bridge and three
+identity enums are removed. Its five confidential-note and eight Merkle-path
+Java groups now live in `core-jvm` and call the canonical Kotlin capabilities.
+The Java transport and instruction consumers use the canonical protocol enum
+without label conversion. The official JVM lane selects both migrated suites.
+The Rust bridge removes all 19 corresponding Android privacy exports; all 38
+SDK signatures and body logic in the guarded pair owner are unchanged
+(rustfmt expands one helper call); confidential macro bodies are unchanged. Source inventories,
+JDK 8 API compilation, and migration checks are diagnostic evidence. Fresh
+native execution, compiled export closure, Android packaging, and physical
+hardware qualification remain open.
+
+The remaining generic confidential witness archive producer is removed from
+Java and Kotlin, together with Swift's orphan V1/V2 producer. The retired
+`privacy_production` bridge module has no decoder for those archives. The mixed
+Java compatibility group retains its complete BFV assertions; its witness-copy
+assertions now exercise a Kotlin-owned historical fixture in test sources.
+All five Swift witness archive groups exercise the historical test fixture.
+The Java and Swift tests require the current typed archive decoders to reject
+these retired archives. Source-absence and relocation negatives in
+`scripts/tests/check_privacy_retired_witness_boundary_test.py` keep these fixtures
+out of every production SDK source root. The compiled Kotlin/JVM class auditor
+also rejects retired witness owners and test-fixture leakage into main outputs.
+Engine-specific Rust witnesses remain local to their governed builders. A
+generic witness serializer is not a replacement for an SDK proving route;
+complete SDK proof-construction qualification remains open.

@@ -906,6 +906,8 @@ impl GovernanceDagSealedHttpRequestReceiverV1 {
         self.replay_store.qualification
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance_service::PublishedBlockV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct PublishedBlockV1 {
     sequence: u64,
@@ -1062,6 +1064,8 @@ struct CheckpointBodyV1 {
     archive_head: BlockPrefixArchiveHeadV1,
     mirror_blocks: Vec<PublishedBlockV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::governance_service::IntentBlockV1")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct IntentBlockV1 {
     sequence: u64,
@@ -5455,7 +5459,7 @@ impl PinnedEndpoint {
                 "IPFS query is not canonical or bounded".to_owned(),
             ));
         }
-        {
+        if !canonical_query.is_empty() {
             let mut pairs = url.query_pairs_mut();
             for (key, value) in canonical_query {
                 pairs.append_pair(key, value);

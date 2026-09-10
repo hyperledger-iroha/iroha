@@ -4,8 +4,7 @@ set -euo pipefail
 ROOT_DIR="${PRIVACY_SWIFT_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 SWIFTC_BIN="${PRIVACY_SWIFT_SDK_SWIFTC_BIN:-swiftc}"
 SWIFT_BIN="${PRIVACY_SWIFT_SDK_SWIFT_BIN:-swift}"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
+source "${ROOT_DIR}/ci/privacy_sdk_cargo_lockfile.sh"
 PYTHON_BIN="${MOBILE_SDK_PYTHON_BINARY:-${PRIVACY_SWIFT_SDK_PYTHON_BIN:-}}"
 APPLE_ARTIFACT_CHECKER="${ROOT_DIR}/scripts/check_mobile_sdk_artifacts.sh"
 
@@ -59,7 +58,7 @@ esac
   exit 1
 }
 [[ "$("${PYTHON_BIN}" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${ROOT_DIR}/Cargo.lock")" == \
-  "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] || {
+  "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]] || {
   echo "error: privacy Swift tracked root Cargo.lock authority changed" >&2
   exit 1
 }
@@ -70,8 +69,8 @@ PRIVACY_RELEASE_CARGO_LOCK="${IROHA_PRIVACY_RELEASE_CARGO_LOCKFILE_PATH:-}"
   exit 1
 }
 [[ "$("${PYTHON_BIN}" -I -S -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "${PRIVACY_RELEASE_CARGO_LOCK}")" == \
-  "${FROZEN_CARGO_LOCK_SHA256}" ]] || {
-  echo "error: privacy Swift external Cargo.lock is not the frozen release lock" >&2
+  "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]] || {
+  echo "error: privacy Swift external Cargo.lock does not match the canonical reviewed graph" >&2
   exit 1
 }
 DEVELOPER_DIR="$(xcode-select -p)"
@@ -86,7 +85,7 @@ cd "${ROOT_DIR}"
 MOBILE_SDK_APPLE_ARTIFACT_DIR="${APPLE_ARTIFACT_DIRECTORY}" \
 MOBILE_SDK_REQUIRE_EXTERNAL_APPLE_ARTIFACT=1 \
 MOBILE_SDK_PYTHON_BINARY="${PYTHON_BIN}" \
-  bash "${APPLE_ARTIFACT_CHECKER}" --apple-only
+  bash "${APPLE_ARTIFACT_CHECKER}" --apple-only --lockfile-path "${PRIVACY_RELEASE_CARGO_LOCK}"
 
 "${SWIFTC_BIN}" --version
 "${SWIFTC_BIN}" -parse -parse-as-library \

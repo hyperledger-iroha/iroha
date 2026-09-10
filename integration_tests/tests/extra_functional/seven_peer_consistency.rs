@@ -18,6 +18,7 @@ use iroha::{
     },
     query::QueryError,
 };
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use nonzero_ext::nonzero;

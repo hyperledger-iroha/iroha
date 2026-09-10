@@ -1533,17 +1533,12 @@ pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError>;
 }
 /// Signed, governed billing statement returned by a qualified runtime provider.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    DeriveNoritoSerialize,
-    DeriveNoritoDeserialize,
-    DeriveJsonSerialize,
-    norito::NoritoSchema,
-)]
+#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1")]
+#[derive(
+    Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
+)]
+
 pub struct SignedGovernedBillingStatementV1 {
     /// Schema version.
     pub version: u8,
@@ -1677,19 +1672,14 @@ struct BillingStatementSignaturePreimageV1 {
     governed_statement: GovernedBillingStatementV1,
 }
 /// Durable receipt returned by an authenticated statement publication sink.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    DeriveNoritoSerialize,
-    DeriveNoritoDeserialize,
-    DeriveJsonSerialize,
-    norito::NoritoSchema,
-)]
+#[derive(norito::NoritoSchema)]
 #[norito_schema(
     name = "sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1"
 )]
+#[derive(
+    Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
+)]
+
 pub struct BillingStatementPublicationReceiptV1 {
     /// Schema version.
     pub version: u8,
@@ -2211,17 +2201,12 @@ pub enum HedgeIntentDispositionV1 {
     GovernedOverflow,
 }
 /// Deterministic intent for a later, separately governed execution adapter.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    DeriveNoritoSerialize,
-    DeriveNoritoDeserialize,
-    DeriveJsonSerialize,
-    norito::NoritoSchema,
-)]
+#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::hedging_billing_service::HedgeIntentV1")]
+#[derive(
+    Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
+)]
+
 pub struct HedgeIntentV1 {
     /// Schema version.
     pub version: u8,

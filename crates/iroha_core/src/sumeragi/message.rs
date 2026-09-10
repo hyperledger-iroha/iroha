@@ -144,6 +144,8 @@ impl<'a> ncore::DecodeFromSlice<'a> for BlockMessage {
 ///
 /// A network consumer must pair the decoded payload with its transport-authenticated peer
 /// through one of the identity-requiring `SumeragiHandle` entry points.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::BlockMessageWire")]
 #[derive(Clone)]
 pub struct BlockMessageWire {
     message: Arc<BlockMessage>,
@@ -361,6 +363,8 @@ pub const LANE_HISTORICAL_RECOVERY_VERSION_V1: u16 = 1;
 /// Every field is copied from one locally verified durable finality artifact.
 /// The execution commitment (and therefore `executed_block_wire_hash`) was
 /// signed by the exact CommitQC named by `finality_artifact_hash`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::CanonicalExecutedBlockNeedV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub struct CanonicalExecutedBlockNeedV1 {
@@ -384,6 +388,8 @@ pub struct CanonicalExecutedBlockNeedV1 {
 /// bind exact locally durable global finality and execution authority. The
 /// additional hashes prevent a response for another canonical body or READY
 /// payload from being correlated merely because it names the same height.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryKindV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryKindV1 {
     /// Rehydrate the result-bearing canonical block selected by global finality.
@@ -418,6 +424,8 @@ pub enum LaneHistoricalRecoveryKindV1 {
 /// mismatch. Lane-owned requests carry a complete certificate and exact signer
 /// PoPs. Certificate-free canonical-body repair carries no lane certificate;
 /// its kind binds exact global finality and execution authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryRequestV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct LaneHistoricalRecoveryRequestV1 {
     /// Current-only layout version.
@@ -458,6 +466,8 @@ impl LaneHistoricalRecoveryRequestV1 {
     }
 }
 /// Proof-carrying payload returned for one outstanding historical request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryPayloadV1 {
     /// Result-bearing canonical block plus its complete frozen finality proof.
@@ -498,6 +508,8 @@ pub enum LaneHistoricalRecoveryPayloadV1 {
     },
 }
 /// Versioned response to one exact outstanding historical recovery request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::LaneHistoricalRecoveryResponseV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct LaneHistoricalRecoveryResponseV1 {
     /// Current-only layout version.
@@ -513,6 +525,8 @@ pub const KURA_REPLICA_ADVERT_VERSION_V1: u16 = 1;
 pub const MAX_KURA_REPLICA_ADVERT_WIRE_BYTES: usize = 16 * 1024;
 const KURA_REPLICA_ADVERT_SIGNATURE_BYTES: usize = 96;
 const KURA_REPLICA_ADVERT_SIGNATURE_DOMAIN_V1: &[u8] = b"iroha:kura-replica-advert:v1";
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::KuraReplicaAdvertSignaturePreimageV1")]
 #[derive(Encode)]
 struct KuraReplicaAdvertSignaturePreimageV1 {
     domain: Vec<u8>,
@@ -532,6 +546,8 @@ struct KuraReplicaAdvertSignaturePreimageV1 {
 /// only when Kura independently revalidates the exact retained finality
 /// artifact and deterministically selects `keeper` from that artifact's
 /// CommitQC signers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::message::KuraReplicaAdvertV1")]
 #[derive(Debug, Clone, Decode, Encode, PartialEq, Eq)]
 pub struct KuraReplicaAdvertV1 {
     /// Advert layout version; must equal [`KURA_REPLICA_ADVERT_VERSION_V1`].

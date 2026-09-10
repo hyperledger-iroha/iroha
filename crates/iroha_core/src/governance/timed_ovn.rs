@@ -68,6 +68,8 @@ const NO_RECOVERY_ROOT_DOMAIN_V1: &[u8] =
     b"iroha.parliament.timed-ovn.no-post-freeze-recovery.v1\0";
 
 /// Public bindings needed to reconstruct one timed-OVN cryptographic session.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnSessionPublicV1")]
 #[derive(
     Debug,
     Clone,
@@ -132,6 +134,8 @@ impl TimedOvnSessionPublicV1 {
 }
 
 /// Public future-release identity used by the folded ballot relation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnReleaseIdentityPublicV1")]
 #[derive(
     Debug,
     Clone,
@@ -198,6 +202,8 @@ impl TimedOvnReleaseIdentityPublicV1 {
 }
 
 /// Replay-derived roots available before the release identity is frozen.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnProspectiveRootsV1")]
 #[derive(
     Debug,
     Clone,
@@ -347,6 +353,8 @@ impl TimedOvnParliamentReducerBindingV1 {
 /// The two heights freeze the release schedule so a later transition cannot
 /// move the release earlier than the schedule admitted when registration
 /// opened.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnRegistrationOpenStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -450,6 +458,8 @@ impl TimedOvnRegistrationOpenStateV1 {
 }
 
 /// Public registration-closed state retaining the exact canonical roster wires.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnRegistrationClosedStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -522,6 +532,8 @@ impl TimedOvnRegistrationClosedStateV1 {
 /// The release identity is constructed only by
 /// [`TimedOvnLifecycleStateV1::freeze_survivors`]. Its survivor root and
 /// no-recovery sentinel are comparisons against a fresh replay during restore.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnSurvivorsFrozenStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -769,6 +781,8 @@ impl TimedOvnSurvivorsFrozenStateV1 {
 }
 
 /// Replay-derived public aggregate transcript for one exact ballot corpus.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnAggregateTranscriptV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -949,6 +963,8 @@ impl TimedOvnAggregateTranscriptV1 {
 }
 
 /// Replay-derived rolling public aggregate for one bounded ballot-corpus prefix.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnCorpusAccumulatorV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1073,6 +1089,8 @@ impl TimedOvnCorpusAccumulatorV1 {
 }
 
 /// Intermediate lifecycle state for a proof-verified contiguous ballot-corpus prefix.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnCorpusOpenStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1148,6 +1166,8 @@ impl TimedOvnCorpusOpenStateV1 {
 }
 
 /// Public-only persisted evidence for a complete sealed timed-OVN ballot corpus.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnEvidenceStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
@@ -1324,6 +1344,8 @@ impl TimedOvnEvidenceStateV1 {
 }
 
 /// Public tally derived only after a valid threshold release opens the aggregate.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnPublicTallyV1")]
 #[derive(
     Debug,
     Clone,
@@ -1355,6 +1377,8 @@ impl From<TimedOvnTallyV1> for TimedOvnPublicTallyV1 {
 }
 
 /// Public-only persisted evidence after the exact threshold release is finalized.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::timed_ovn::TimedOvnReleasedEvidenceV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]

@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_lines)]
 use super::*;
 use crate::prelude::*;
+use iroha_model_base::name::Name;
 use iroha_primitives::const_vec::ConstVec;
 const RECORD_SCCP_MESSAGE_WIRE_ID: &str = "iroha.instruction.v1::bridge::RecordSccpMessage";
 macro_rules! check_enum {

@@ -53,6 +53,10 @@ pub enum KagemushaCoordinatorOperationStoreErrorV1 {
 
 type Result<T> = core::result::Result<T, KagemushaCoordinatorOperationStoreErrorV1>;
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::coordinator_operation_store::Reservation"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct Reservation {
     operation_id: DigestV1,

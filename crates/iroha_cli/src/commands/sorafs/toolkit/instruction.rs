@@ -13,7 +13,7 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     musubi::ArchiveId,
-    prelude::{InstructionBox, Name},
+    prelude::InstructionBox,
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
         pin_registry::{
@@ -22,6 +22,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use norito::{
     decode_from_bytes,

@@ -20,10 +20,9 @@ use iroha_data_model::{
     domain::DomainId,
     level::Level,
     peer::PeerId,
-    prelude::{
-        Account, AssetDefinition, Domain, InstructionBox, Log, Mint, Name, SignedTransaction,
-    },
+    prelude::{Account, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction},
 };
+use iroha_model_base::name::Name;
 use iroha_torii::{Torii, json_entry, json_object};
 use iroha_version::codec::DecodeVersioned as _;
 use scrypt::{Params as ScryptParams, scrypt as derive_scrypt};

@@ -121,6 +121,8 @@ impl AttachmentTenant {
         self.0.as_str()
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_attachments::AttachmentHashes")]
 #[derive(
     Debug,
     Clone,
@@ -138,6 +140,8 @@ pub struct AttachmentHashes {
     /// SHA-256 digest of the stored (sanitized) attachment bytes.
     pub sha256: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_attachments::AttachmentSanitizerVerdict")]
 #[derive(
     Debug,
     Clone,
@@ -159,6 +163,8 @@ pub struct AttachmentSanitizerVerdict {
     /// Whether the sanitizer executed in an isolated subprocess.
     pub sandboxed: bool,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_attachments::AttachmentProvenance")]
 #[derive(
     Debug,
     Clone,
@@ -182,6 +188,8 @@ pub struct AttachmentProvenance {
     /// Sanitizer summary for the stored attachment.
     pub sanitizer: AttachmentSanitizerVerdict,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_attachments::AttachmentMeta")]
 #[derive(
     Debug,
     Clone,
@@ -3276,6 +3284,8 @@ struct SanitizerConfig {
     timeout: Duration,
     mode: AttachmentSanitizerMode,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_attachments::SanitizerSummary")]
 #[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct SanitizerSummary {
     sniffed_type: String,
@@ -3288,6 +3298,8 @@ struct SanitizerOutcome {
     summary: SanitizerSummary,
     sanitized_body: Vec<u8>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_attachments::SanitizeErrorWire")]
 #[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct SanitizeErrorWire {
     reason: String,
@@ -3968,6 +3980,8 @@ async fn handle_post_attachment_inner(
 pub async fn handle_list_attachments(tenant: AttachmentTenant) -> impl IntoResponse {
     handle_list_attachments_filtered(tenant, NoritoQuery(AttachmentListQuery::default())).await
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_attachments::AttachmentListQuery")]
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]

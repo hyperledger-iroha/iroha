@@ -2990,6 +2990,7 @@ pub mod account {
         use super::*;
         use crate::prelude;
         use core::num::NonZeroU64;
+        use iroha_model_base::name::Name;
 
         #[derive(Debug)]
         struct TestExecutor {
@@ -3616,7 +3617,7 @@ pub mod asset {
     use iroha_smart_contract::data_model::isi::{
         BuiltInInstruction, RemoveAssetKeyValue, SetAssetKeyValue,
     };
-    use norito::{NoritoSerialize, SerializePayload};
+    use norito::NoritoSerialize;
     fn target_account_scope(
         executor: &(impl Execute + Visit + ?Sized),
         account_id: &AccountId,
@@ -3966,7 +3967,6 @@ pub mod asset {
                     repo::{RepoInstructionBox, RepoIsi},
                 },
                 metadata::Metadata,
-                name::Name,
                 nexus::LaneId,
                 peer::PeerId,
                 prelude::{Json, Quantity},
@@ -3976,6 +3976,7 @@ pub mod asset {
         };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_model_base::name::Name;
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")
@@ -4288,7 +4289,7 @@ pub mod nft {
     use iroha_executor_data_model::permission::nft::{
         CanModifyNftMetadata, CanRegisterNft, CanTransferNft, CanUnregisterNft,
     };
-    use norito::{NoritoSerialize, SerializePayload};
+    use norito::NoritoSerialize;
     /// Registers an NFT when the caller owns the domain or has the registration permission.
     pub fn visit_register_nft<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &Register<Nft>) {
         let domain_id = isi.object().id().domain();

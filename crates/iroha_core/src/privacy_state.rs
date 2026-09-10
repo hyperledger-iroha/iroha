@@ -555,6 +555,8 @@ pub(crate) struct PrivacyPgcPoolInvariantV1 {
     bootstrap_proof_digest: PrivacyPgcBootstrapProofDigestV1,
 }
 /// Domain-separated commitment copied into every retained PGC successor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcPoolInvariantDigestV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyPgcPoolInvariantDigestV1([u8; 32]);
 impl PrivacyPgcPoolInvariantDigestV1 {
@@ -651,6 +653,8 @@ impl PrivacyPgcPoolInvariantV1 {
     }
 }
 /// Domain-separated origin of one encrypted PGC account state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyPgcAccountProvenanceV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(tag = "origin", content = "record")]
 pub(crate) enum PrivacyPgcAccountProvenanceV1 {
@@ -2887,6 +2891,8 @@ impl PrivacyFcmpAccumulatorStateV1 {
 /// The fields remain private so only the validating constructors in this
 /// module can create or advance a frontier.  The type itself is public because
 /// it is part of the durable [`PrivacyStateItemRecordV1`] representation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyProofManagedAccumulatorStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyProofManagedAccumulatorStateV1 {
@@ -3092,6 +3098,8 @@ impl PrivacyProofManagedAccumulatorStateV1 {
 ///
 /// A pool always carries exactly one native frontier, and the enum discriminant prevents an FCMP++
 /// curve frontier from being decoded or persisted as an IVM/PQ SHA-256 note frontier.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyProofManagedPoolAccumulatorStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(tag = "kind", content = "state", deny_unknown_fields)]
 pub enum PrivacyProofManagedPoolAccumulatorStateV1 {
@@ -5211,6 +5219,8 @@ pub(crate) fn validate_privacy_persisted_state_v1(
     Ok(())
 }
 /// Complete authoritative compact state for one governed Orchard V3 pool.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyOrchardPoolStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub struct PrivacyOrchardPoolStateV1 {
     bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
@@ -7778,6 +7788,8 @@ impl PrivacyRootProvenanceV1 {
     }
 }
 /// Exact last-pruned root immediately preceding the retained history window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_state::PrivacyRootRetentionAnchorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 pub(crate) struct PrivacyRootRetentionAnchorV1 {
     epoch: u64,
@@ -9443,8 +9455,9 @@ mod tests {
     };
     use iroha_data_model::{
         NetworkId, account::AccountId, asset::AssetDefinitionId, block::BlockHeader,
-        domain::DomainId, name::Name,
+        domain::DomainId,
     };
+    use iroha_model_base::name::Name;
     use mv::{json::JsonKeyCodec, storage::Storage};
     use p256::{ProjectivePoint, Scalar, elliptic_curve::Group};
     use std::str::FromStr as _;

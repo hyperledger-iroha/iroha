@@ -14,11 +14,11 @@ use iroha_data_model::{
     asset::definition::{
         AssetConfidentialPolicy, ConfidentialPolicyMode, ConfidentialPolicyTransition,
     },
-    name::Name,
     permission::Permission,
     prelude::*,
     proof::VerifyingKeyId,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;

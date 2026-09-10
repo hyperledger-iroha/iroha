@@ -1013,6 +1013,8 @@ fn derive_query_indices_without_replacement(
     Ok(indices)
 }
 /// Norito-serializable Merkle path (dirs as bitset, siblings as hashes).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::MerklePath")]
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
@@ -1189,6 +1191,10 @@ pub fn validate_stark_fri_canonical_verifying_key_payload(
 #[cfg(test)]
 mod verifying_key_decode_tests {
     use super::*;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::zk_stark::verifying_key_decode_tests::RetiredSelectorVerifyingKeyV0"
+    )]
     #[derive(norito::NoritoSerialize)]
     struct RetiredSelectorVerifyingKeyV0 {
         version: u16,
@@ -1290,6 +1296,8 @@ mod verifying_key_decode_tests {
     }
 }
 /// Commitments for multiple layers and optional composition root.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::StarkCommitmentsV1")]
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
@@ -1302,6 +1310,8 @@ pub struct StarkCommitmentsV1 {
     pub comp_root: Option<GoldilocksDigest384V1>,
 }
 /// Auxiliary term contributing to the composition polynomial evaluation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::StarkCompositionTermV1")]
 #[derive(
     Debug,
     Clone,
@@ -1322,6 +1332,8 @@ pub struct StarkCompositionTermV1 {
     pub coeff: u64,
 }
 /// Composition leaf data stored under `comp_root`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::StarkCompositionValueV1")]
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
@@ -1338,6 +1350,8 @@ pub struct StarkCompositionValueV1 {
     pub path: MerklePath,
 }
 /// Sampled AIR trace and composition opening for one verifier query.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::StarkAirOpeningV1")]
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
@@ -1358,6 +1372,8 @@ pub struct StarkAirOpeningV1 {
     pub composition_path: MerklePath,
 }
 /// Verifier-owned AIR statement carried by V1 STARK proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::StarkAirProofV1")]
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
@@ -1379,6 +1395,8 @@ pub struct StarkAirProofV1 {
     pub openings: Vec<StarkAirOpeningV1>,
 }
 /// Decommitment for one fold step at layer `k`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::FoldDecommitV1")]
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]
@@ -1402,6 +1420,8 @@ pub struct FoldDecommitV1 {
     pub path_z: MerklePath,
 }
 /// STARK proof carrying commitments and query decommitments.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk_stark::StarkProofV1")]
 #[derive(
     Debug, Clone, JsonSerialize, JsonDeserialize, norito::NoritoSerialize, norito::NoritoDeserialize,
 )]

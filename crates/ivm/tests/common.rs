@@ -1,5 +1,6 @@
 //! Shared fixtures and helpers for IVM integration tests.
 #![allow(dead_code)]
+use iroha_model_base::name::Name;
 use std::vec::Vec;
 // --- CompactProofBundle helpers via syscalls (test-only utilities) ---
 use iroha_data_model::{prelude::*, smart_contract::manifest::EntryPointKind};

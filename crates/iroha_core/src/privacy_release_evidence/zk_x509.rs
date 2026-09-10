@@ -29,6 +29,10 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 const ZK_X509_RELEASE_GENESIS_HASH_V1: [u8; 32] = [0x95; 32];
 const ZK_X509_RELEASE_ACTION_INDEX_V1: u32 = 0;
 /// Canonical native Linux environment bound into the X.509 resource capture.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_release_evidence::zk_x509::PrivacyReleaseZkX509ResourceEnvironmentV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyReleaseZkX509ResourceEnvironmentV1 {
@@ -62,6 +66,10 @@ pub struct PrivacyReleaseZkX509ResourceEnvironmentV1 {
     pub affinity_cpu_count: u16,
 }
 /// Reviewed native process ceilings and isolation capabilities.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_release_evidence::zk_x509::PrivacyReleaseZkX509ResourceProcessLimitsV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyReleaseZkX509ResourceProcessLimitsV1 {
@@ -107,6 +115,10 @@ pub struct PrivacyReleaseZkX509ResourceProcessLimitsV1 {
     pub seccomp_tsync: bool,
 }
 /// One exact native measurement, distinct from reviewed process ceilings.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_release_evidence::zk_x509::PrivacyReleaseZkX509ResourceObservationV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyReleaseZkX509ResourceObservationV1 {
@@ -136,6 +148,10 @@ pub struct PrivacyReleaseZkX509ResourceObservationV1 {
 /// The certificate digest authenticates this payload but is not itself hashed,
 /// avoiding a self-reference. Source, executable, command-manifest, and final
 /// receipt digests are deliberately absent.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::privacy_release_evidence::zk_x509::PrivacyReleaseZkX509ResourceCertificateV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyReleaseZkX509ResourceCertificateV1 {

@@ -443,6 +443,8 @@ impl<'a> VeRangeType1BatchStatementV1<'a> {
     }
 }
 /// Canonical opaque payload for a VeRange Type-1 proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::verange::VeRangeType1ProofV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -536,6 +538,8 @@ impl VeRangeType1ProofV1 {
     }
 }
 /// Canonical ordered wrapper of independent Type-1 proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::privacy_engines::verange::VeRangeType1BatchProofV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]

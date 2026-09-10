@@ -54,6 +54,7 @@ tempfile = { workspace = true }
 rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
+iroha_model_base = { workspace = true }
 assert_cmd = "2.1.1"
 # Unit-test fixtures deliberately construct and corrupt typed ledger events.
 # Keep that construction surface test-only; production users retain the

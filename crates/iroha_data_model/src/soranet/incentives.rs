@@ -109,6 +109,8 @@ impl RelayBondPolicyV1 {
     }
 }
 /// Ledger entry recording the bond posted by a `SoraNet` relay.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayBondLedgerEntryV1")]
 #[derive(
     Debug,
     Clone,
@@ -128,8 +130,7 @@ impl RelayBondPolicyV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayBondLedgerEntryV1")]
+
 pub struct RelayBondLedgerEntryV1 {
     /// Relay fingerprint as advertised in the directory.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -357,6 +358,8 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
     }
 }
 /// Aggregated metrics for a relay within a specific epoch window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayEpochMetricsV1")]
 #[derive(
     Debug,
     Clone,
@@ -376,8 +379,7 @@ impl JsonDeserialize for RelayComplianceStatusV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayEpochMetricsV1")]
+
 pub struct RelayEpochMetricsV1 {
     /// Relay fingerprint as advertised in the directory consensus.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -423,6 +425,8 @@ impl RelayEpochMetricsV1 {
     }
 }
 /// Instruction surfaced to the XOR treasury for rewarding a relay.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayRewardInstructionV1")]
 #[derive(
     Debug,
     Clone,
@@ -442,8 +446,7 @@ impl RelayEpochMetricsV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayRewardInstructionV1")]
+
 pub struct RelayRewardInstructionV1 {
     /// Relay fingerprint for which the payout is being issued.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -540,6 +543,8 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
     }
 }
 /// Record describing a relay reward dispute submitted to the treasury.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayRewardDisputeV1")]
 #[derive(
     Debug,
     Clone,
@@ -559,8 +564,7 @@ impl JsonDeserialize for RelayRewardDisputeStatusV1 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::soranet::incentives::RelayRewardDisputeV1")]
+
 pub struct RelayRewardDisputeV1 {
     /// Relay fingerprint associated with the disputed payout.
     #[norito(json = "crate::json_helpers::fixed_bytes")]
@@ -618,8 +622,9 @@ impl RelayRewardDisputeV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{domain::DomainId, isi::TransferBox, name::Name};
+    use crate::{domain::DomainId, isi::TransferBox};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::name::Name;
     use iroha_primitives::{json::Json, numeric::Numeric};
     use std::str::FromStr;
     const SMALL_ORDER_ED25519_R: [u8; 32] = [

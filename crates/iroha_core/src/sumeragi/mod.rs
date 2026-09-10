@@ -1825,6 +1825,40 @@ struct FairV2IngressReplyAttempt {
     message_cursor: u64,
     chunk_cursor: u64,
 }
+/// Immutable semantic facts decoded once from the exact admitted allocation.
+/// Ownership transitions still check their mutable resource and route history;
+/// they never need to decode the same canonical message again to classify it.
+#[derive(Debug)]
+struct FairV2IngressCanonicalWire {
+    encoded_bytes: Arc<[u8]>,
+    hash: CryptoHash,
+    message_kind: FairV2IngressMessageKind,
+    class: FairV2IngressClass,
+    is_timeout_vote: bool,
+    is_certified_fence_escape: bool,
+}
+impl FairV2IngressCanonicalWire {
+    fn decode(encoded_bytes: Arc<[u8]>, message_kind: FairV2IngressMessageKind) -> Option<Self> {
+        let mut cursor = encoded_bytes.as_ref();
+        let message = if message_kind.is_v2() {
+            BlockMessage::V2(ConsensusMessageV2::decode(&mut cursor).ok()?)
+        } else {
+            BlockMessage::decode(&mut cursor).ok()?
+        };
+        if !cursor.is_empty() || FairV2IngressMessageKind::classify(&message) != Some(message_kind)
+        {
+            return None;
+        }
+        Some(Self {
+            hash: CryptoHash::new(encoded_bytes.as_ref()),
+            encoded_bytes,
+            message_kind,
+            class: FairV2IngressClass::classify_message(&message),
+            is_timeout_vote: fair_v2_ingress_message_is_timeout_vote(&message),
+            is_certified_fence_escape: fair_v2_ingress_message_is_certified_fence_escape(&message),
+        })
+    }
+}
 #[derive(Clone, Debug)]
 struct FairV2IngressOwnershipOccurrence {
     action: FairV2IngressOwnershipAction,
@@ -1849,6 +1883,7 @@ struct FairV2IngressOwnershipOccurrence {
     message_kind: FairV2IngressMessageKind,
     class: FairV2IngressClass,
     encoded_bytes: Arc<[u8]>,
+    canonical_wire: Arc<FairV2IngressCanonicalWire>,
     encoded_len: usize,
     resource_before: FairV2IngressResourceSnapshot,
     resource_after: FairV2IngressResourceSnapshot,
@@ -2562,32 +2597,16 @@ fn fair_v2_ingress_append_attempt_projection(
 }
 impl FairV2IngressOwnershipOccurrence {
     fn validate_exact(&self) -> bool {
-        let mut cursor = self.encoded_bytes.as_ref();
-        let decoded = if self.message_kind.is_v2() {
-            let Ok(message) =
-                iroha_data_model::block::consensus_v2::ConsensusMessageV2::decode(&mut cursor)
-            else {
-                return false;
-            };
-            BlockMessage::V2(message)
-        } else {
-            let Ok(message) = BlockMessage::decode(&mut cursor) else {
-                return false;
-            };
-            message
-        };
-        let decoded_class = FairV2IngressClass::classify_message(&decoded);
-        let decoded_kind = FairV2IngressMessageKind::classify(&decoded);
-        let is_timeout_vote = fair_v2_ingress_message_is_timeout_vote(&decoded);
-        let is_certified_fence_escape = fair_v2_ingress_message_is_certified_fence_escape(&decoded);
+        let is_timeout_vote = self.canonical_wire.is_timeout_vote;
+        let is_certified_fence_escape = self.canonical_wire.is_certified_fence_escape;
         let is_transport_completion = self.class == FairV2IngressClass::TransportCompletion;
         let uses_certified_fence_escape_reserve = is_certified_fence_escape;
         let semantic_exact = self.wire_key.origin == self.semantic_origin
-            && self.wire_key.hash == CryptoHash::new(self.encoded_bytes.as_ref())
+            && Arc::ptr_eq(&self.encoded_bytes, &self.canonical_wire.encoded_bytes)
+            && self.wire_key.hash == self.canonical_wire.hash
             && self.encoded_len == self.encoded_bytes.len()
-            && cursor.is_empty()
-            && decoded_class == self.class
-            && decoded_kind == Some(self.message_kind);
+            && self.canonical_wire.class == self.class
+            && self.canonical_wire.message_kind == self.message_kind;
         let source_exact = match &self.authenticated_source {
             FairV2IngressSource::Validator(source) => {
                 self.authenticated_via_is_validator && source == &self.authenticated_via
@@ -5483,6 +5502,7 @@ impl FairV2Ingress {
                 message_kind,
                 class,
                 encoded_bytes: Arc::clone(&queued.encoded_bytes),
+                canonical_wire: Arc::clone(&prior_evidence.first.canonical_wire),
                 encoded_len,
                 resource_before: resource.clone(),
                 resource_after: resource,
@@ -5900,6 +5920,17 @@ impl FairV2Ingress {
             state.open = false;
             return Err(FairV2IngressPushError::FailStop(inbound));
         };
+        // Decode before the durable admission cut. The seal owns the immutable
+        // allocation, so every subsequent ownership check can authenticate its
+        // exact semantic facts without repeating Norito decoding or hashing.
+        let Some(canonical_wire) =
+            FairV2IngressCanonicalWire::decode(Arc::clone(&encoded), message_kind).map(Arc::new)
+        else {
+            return Err(FairV2IngressPushError::rejected(
+                inbound,
+                FairV2IngressRejectReason::OwnershipEvidenceInvalid,
+            ));
+        };
         // This is the atomic admission cut: the ingress lock still excludes
         // competing producers, all message/byte/protected-class capacity and
         // physical-ordinal availability have been proved, and the durable
@@ -5940,6 +5971,7 @@ impl FairV2Ingress {
             message_kind,
             class,
             encoded_bytes: Arc::clone(&encoded),
+            canonical_wire,
             encoded_len,
             resource_before,
             resource_after,
@@ -8036,6 +8068,53 @@ mod authoritative_runtime_gate_tests {
         );
     }
     #[test]
+    fn fair_v2_ingress_canonical_wire_seals_only_complete_classified_messages() {
+        for message in [
+            v2_auxiliary_prepare(0),
+            v2_timeout_vote(),
+            v2_quorum_certificate(wire::GlobalPhase::Commit),
+        ] {
+            let kind = super::FairV2IngressMessageKind::classify(&message).unwrap();
+            let BlockMessage::V2(envelope) = &message else {
+                unreachable!("v2 fixtures");
+            };
+            let encoded = Arc::<[u8]>::from(envelope.encode());
+            let sealed = super::FairV2IngressCanonicalWire::decode(Arc::clone(&encoded), kind)
+                .expect("complete canonical message");
+            assert!(Arc::ptr_eq(&encoded, &sealed.encoded_bytes));
+            assert_eq!(sealed.hash, CryptoHash::new(encoded.as_ref()));
+            assert_eq!(
+                sealed.class,
+                super::FairV2IngressClass::classify_message(&message)
+            );
+            assert_eq!(
+                sealed.is_timeout_vote,
+                super::fair_v2_ingress_message_is_timeout_vote(&message)
+            );
+            assert_eq!(
+                sealed.is_certified_fence_escape,
+                super::fair_v2_ingress_message_is_certified_fence_escape(&message)
+            );
+            assert!(
+                super::FairV2IngressCanonicalWire::decode(
+                    Arc::clone(&encoded),
+                    super::FairV2IngressMessageKind::V2Proposal,
+                )
+                .is_none()
+            );
+            let mut trailing = encoded.to_vec();
+            trailing.push(0xFF);
+            assert!(super::FairV2IngressCanonicalWire::decode(trailing.into(), kind).is_none());
+            assert!(
+                super::FairV2IngressCanonicalWire::decode(
+                    Arc::from(&encoded[..encoded.len() / 2]),
+                    kind
+                )
+                .is_none()
+            );
+        }
+    }
+    #[test]
     fn fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors() {
         let (_handle, ingress, _relay_receiver) = test_sumeragi_handle(12);
         let mut sources = validator_peers(2);
@@ -8150,6 +8229,10 @@ mod authoritative_runtime_gate_tests {
         assert!(Arc::ptr_eq(
             &evidence.first.encoded_bytes,
             &evidence.latest.encoded_bytes
+        ));
+        assert!(Arc::ptr_eq(
+            &evidence.first.canonical_wire,
+            &evidence.latest.canonical_wire
         ));
         assert_eq!(
             evidence.latest_action(),
@@ -8268,6 +8351,22 @@ mod authoritative_runtime_gate_tests {
         let mut mutated = evidence.clone();
         mutated.latest.encoded_bytes = Arc::<[u8]>::from(vec![0xFF]);
         rejected("canonical bytes", mutated);
+        let mut mutated = evidence.clone();
+        mutated.first.encoded_bytes = Arc::from(mutated.first.encoded_bytes.to_vec());
+        mutated.latest.encoded_bytes = Arc::clone(&mutated.first.encoded_bytes);
+        rejected("substituted unsealed allocation", mutated);
+        let mut mutated = evidence.clone();
+        let BlockMessage::V2(substitute) = v2_timeout_vote() else {
+            unreachable!("v2 fixture");
+        };
+        mutated.latest.canonical_wire = Arc::new(
+            super::FairV2IngressCanonicalWire::decode(
+                Arc::from(substitute.encode()),
+                super::FairV2IngressMessageKind::V2TimeoutVote,
+            )
+            .expect("different complete message"),
+        );
+        rejected("substituted canonical seal", mutated);
         let mut mutated = evidence.clone();
         mutated.latest.resource_after.global_len =
             mutated.latest.resource_after.global_len.saturating_add(1);

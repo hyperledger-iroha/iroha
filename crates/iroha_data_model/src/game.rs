@@ -64,6 +64,8 @@ pub enum GamePayoutPolicyV1 {
 }
 game_record! {
  /// Canonical GameManifestV1 with application-independent bounded fields.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GameManifestV1")]
  pub struct GameManifestV1 {
   /// Canonical version bound by the session or proof.
   pub version:u16,
@@ -93,6 +95,8 @@ game_record! {
 }
 game_record! {
  /// Canonical GameOutcomeV1 with application-independent bounded fields.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GameOutcomeV1")]
  pub struct GameOutcomeV1 {
   /// Proved terminal logical tick; no future input may change the outcome.
   pub terminal_tick:u32,
@@ -104,6 +108,8 @@ game_record! {
 }
 game_record! {
  /// An immutable awarded prize or refund and its independently claimable unpaid balance.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GamePayoutClaimV1")]
  pub struct GamePayoutClaimV1 {
   /// Original permanent roster slot that owns the claim.
   pub slot:u8,
@@ -128,6 +134,8 @@ game_record! {
 }
 game_record! {
  /// Canonical GameCheckpointV1 with application-independent bounded fields.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GameCheckpointV1")]
  pub struct GameCheckpointV1 {
   /// Exact immutable session identifier.
   pub session_id:Hash,
@@ -154,6 +162,8 @@ game_record! {
 }
 game_record! {
  /// Canonical SignedGameCheckpointV1 with application-independent bounded fields.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::SignedGameCheckpointV1")]
  pub struct SignedGameCheckpointV1 {
   /// Cumulative certified checkpoint; the native genesis checkpoint needs no signatures.
   pub checkpoint:GameCheckpointV1,
@@ -197,6 +207,8 @@ game_record! {
 }
 game_record! {
  /// Canonical GameInputRevealV1 with application-independent bounded fields.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GameInputRevealV1")]
  pub struct GameInputRevealV1 {
   /// Exact immutable session identifier.
   pub session_id:Hash,
@@ -245,6 +257,8 @@ game_record! {
 }
 game_record! {
  /// Canonical GameTranscriptV1 with application-independent bounded fields.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GameTranscriptV1")]
  pub struct GameTranscriptV1 {
   /// Complete ordered opaque input batches without gaps or overlaps.
   pub batches:Vec<GameTranscriptBatchV1>,
@@ -264,6 +278,8 @@ game_record! {
 impl Copy for GameTranscriptAnchorV1 {}
 game_record! {
  /// One explicitly wallet-staked indivisible item with an immutable native award policy.
+ #[derive(norito::NoritoSchema)]
+ #[norito_schema(name = "iroha_data_model::game::GameItemStakeV1")]
  pub struct GameItemStakeV1 {
   /// Permanent original-owner slot; V1 admits at most one NFT per slot.
   pub slot:u8,

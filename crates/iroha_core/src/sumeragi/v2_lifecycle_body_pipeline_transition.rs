@@ -2572,8 +2572,10 @@ impl<'coordinator, 'registry, 'adapter>
     #[allow(clippy::result_large_err)]
     pub(super) fn persist_and_publish(
         self,
-    ) -> Result<(), SealedValidateNoSuccessorPublicationError<'coordinator, 'registry, 'adapter>>
-    {
+    ) -> Result<
+        super::work_registry::ResolvedLifecycleValidateOutcomeV1,
+        SealedValidateNoSuccessorPublicationError<'coordinator, 'registry, 'adapter>,
+    > {
         let Self {
             coordinator,
             preview,
@@ -2597,6 +2599,11 @@ impl<'coordinator, 'registry, 'adapter>
             staged.capacity_generation[&CapacityClass::Consensus]
                 != coordinator.capacity_generation[&CapacityClass::Consensus]
         );
+        let terminal = staged.records[&parent_ordinal].clone();
+        let metadata = staged.durable_records[&parent_ordinal].clone();
+        let pending = preview
+            .prepare_terminal_pending_fingerprint()
+            .expect("the sealed no-successor preview retains its immutable pending fingerprint");
         if let Err(error) = coordinator.persist_exact_staged_successor(&staged) {
             iroha_logger::error!(
                 ?error,
@@ -2612,8 +2619,9 @@ impl<'coordinator, 'registry, 'adapter>
             });
         }
         *coordinator = staged;
-        preview.publish_no_successor_after_ledger_fsync();
-        Ok(())
+        let outcome = preview.publish_no_successor_after_ledger_fsync(terminal, metadata, pending);
+        assert!(outcome.matches_terminal(coordinator));
+        Ok(outcome)
     }
 }
 impl<'coordinator, 'registry, 'adapter>
@@ -2722,6 +2730,144 @@ impl core::fmt::Display for ReleasedValidateApplyPublicationErrorV1 {
 }
 
 impl super::ProductionLifecycleOwnerV1 {
+    /// Authenticate the immutable physical result before any reducer or WAL
+    /// mutation. Child capacity is checked after the closed preview selects it.
+    pub(in crate::sumeragi) fn preflight_resolved_validate_replay(
+        &self,
+        pending: &super::work_registry::PendingResolvedValidateReplayV1,
+    ) -> Result<bool, &'static str> {
+        if !pending.validates_owner(self) {
+            return Err(
+                "terminal Validate replay changed its authenticated outcome or current authority",
+            );
+        }
+        let coordinator = &self.coordinator;
+        if coordinator.fault.is_some()
+            || coordinator.ledger_store.is_none()
+            || coordinator.lifecycle_ordinal_authority.is_none()
+            || coordinator.high_water == u128::MAX
+        {
+            return Err("terminal Validate replay owner is not durably publishable");
+        }
+        Ok(coordinator.active_lease.is_none())
+    }
+
+    /// Check only the child selected by the closed preview. Effect-free
+    /// historical repair cannot be blocked by unrelated child capacity.
+    pub(in crate::sumeragi) fn resolved_validate_child_capacity(
+        &self,
+        kind: crate::sumeragi::v2::ReadyDurableValidateAdapterPublicationKind,
+    ) -> bool {
+        use crate::sumeragi::v2::ReadyDurableValidateAdapterPublicationKind as Kind;
+        let class = match kind {
+            Kind::ValidatedPersist | Kind::ValidatedApply => CapacityClass::Effect,
+            Kind::RejectedReport => CapacityClass::Consensus,
+            _ => return true,
+        };
+        super::schema::has_lifecycle_record_capacity(self.coordinator.records.len(), 1)
+            && self.coordinator.capacity_used[&class]
+                < self.coordinator.capacity_geometry.limit(class)
+    }
+
+    /// Publish only the successor selected by replaying the actual fsynced
+    /// result. The old Validate row and ordinal remain byte-for-byte terminal.
+    pub(in crate::sumeragi) fn publish_resolved_validate_result(
+        &mut self,
+        pending: &super::work_registry::PendingResolvedValidateReplayV1,
+        publication: crate::sumeragi::v2::PreparedReadyDurableValidateAdapterPublication<'_>,
+    ) -> Result<(), &'static str> {
+        use super::{
+            concrete_admission::AdapterEffectAdmissionTransaction,
+            work_registry::{
+                LiveValidateReportWorkProjectionPermit, LiveValidateSignWorkProjectionPermit,
+            },
+        };
+        use crate::sumeragi::v2::ReadyDurableValidateAdapterPublicationKind as Kind;
+        if !self.preflight_resolved_validate_replay(pending)?
+            || !self.resolved_validate_child_capacity(publication.kind())
+        {
+            return Err("terminal Validate replay lost preflighted child capacity");
+        }
+        match publication.kind() {
+            Kind::ValidatedInactive
+            | Kind::ValidatedNoEffect
+            | Kind::RejectedInactive
+            | Kind::RejectedNoEffect => {
+                publication.commit_no_successor_after_durable_ledger();
+                Ok(())
+            }
+            Kind::ValidatedPersist => {
+                let bound = publication
+                    .bind_resolved_validate_sign_predecessor(pending.sign_predecessor())
+                    .map_err(|_| "terminal Validate Sign changed its exact current predecessor")?;
+                let persisted = Box::new(
+                    bound
+                        .append_live_wal()
+                        .map_err(|_| "terminal Validate Sign WAL publication failed")?,
+                );
+                let candidate = persisted
+                    .project_validate_sign_candidate(
+                        &SealedValidateSignProjectionPermit::new(),
+                        &self.verified,
+                    )
+                    .map_err(|_| "terminal Validate Sign candidate projection failed")?;
+                let mut prepared = persisted
+                    .prepare_registry_work(LiveValidateSignWorkProjectionPermit::new(candidate))
+                    .map_err(|_| "terminal Validate Sign concrete preparation failed")?;
+                let admission = prepared
+                    .take_standalone_admission()
+                    .ok_or("terminal Validate Sign omitted its concrete admission")?;
+                match self
+                    .coordinator
+                    .admit_prepared_lifecycle(&mut self.registry, admission)
+                {
+                    AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
+                        producer_turn_ordinal: None,
+                        ..
+                    }) => {
+                        prepared.commit_after_standalone_admission();
+                        Ok(())
+                    }
+                    _ => Err("terminal Validate Sign did not publish one fresh durable child"),
+                }
+            }
+            Kind::RejectedReport => {
+                let replay = pending.seal_report(publication).map_err(
+                    |_| "terminal Validate rejection changed its exact current predecessor",
+                )?;
+                let candidate = pending
+                    .project_report_candidate(
+                        &replay,
+                        SealedInvalidBodyReportProjectionPermit::new(),
+                        &self.verified,
+                    )
+                    .map_err(|_| "terminal Validate rejection candidate projection failed")?;
+                let mut prepared = replay
+                    .prepare_registry_work(LiveValidateReportWorkProjectionPermit::new(candidate))
+                    .map_err(|_| "terminal Validate rejection concrete preparation failed")?;
+                let admission = prepared
+                    .take_standalone_admission()
+                    .ok_or("terminal Validate rejection omitted its concrete admission")?;
+                match self
+                    .coordinator
+                    .admit_prepared_lifecycle(&mut self.registry, admission)
+                {
+                    AdapterEffectAdmissionTransaction::Admitted(AdmissionDecision::Admitted {
+                        producer_turn_ordinal: None,
+                        ..
+                    }) => {
+                        prepared.commit_after_standalone_admission();
+                        Ok(())
+                    }
+                    _ => Err("terminal Validate rejection did not publish one fresh durable child"),
+                }
+            }
+            Kind::ValidatedBusy | Kind::RejectedBusy | Kind::ValidatedApply => {
+                Err("terminal Validate replay selected another settlement owner")
+            }
+        }
+    }
+
     /// Check retryable owner/capacity conditions before consuming the
     /// adapter's one-shot Decision-WAL Apply seal.
     pub(in crate::sumeragi) fn preflight_released_validate_apply_publication(

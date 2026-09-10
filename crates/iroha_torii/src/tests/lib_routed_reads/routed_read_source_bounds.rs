@@ -1,5 +1,7 @@
 // Source-equivalence tests for application routed-read materialization.
 use iroha_data_model::Registrable as _;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RoutedReadSourceFixture")]
 #[derive(
     Debug,
     PartialEq,
@@ -7,9 +9,8 @@ use iroha_data_model::Registrable as _;
     norito::derive::NoritoSerialize,
     norito::derive::NoritoDeserialize,
     crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSchema,
 )]
-#[norito_schema(name = "iroha_torii::RoutedReadSourceFixture")]
+
 struct RoutedReadSourceFixture {
     id: String,
     metadata: Vec<String>,

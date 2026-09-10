@@ -48,6 +48,7 @@ path = "src/bin/tx_decode.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 iroha_schema = { workspace = true }

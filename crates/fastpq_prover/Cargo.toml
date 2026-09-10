@@ -71,6 +71,10 @@ required-features = ["dev-tools"]
 name = "fastpq_integration"
 path = "tests/fastpq_integration.rs"
 
+[[test]]
+name = "offline_compact"
+path = "tests/offline_compact.rs"
+
 [build-dependencies]
 cc = "1.2.45"
 

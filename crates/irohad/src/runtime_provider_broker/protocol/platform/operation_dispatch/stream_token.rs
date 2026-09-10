@@ -2,28 +2,52 @@
 
 use super::*;
 
-pub(super) fn stream_token_sign(
+pub(super) fn stream_token_sign_or_recover(
     state: &BrokerServerStateV1,
     request: &OperationRequestV1,
 ) -> Result<Vec<u8>, BrokerError> {
     let requalify =
         || qualify_server_binding(state, &request.binding, request.provider_metadata_digest);
-    let sign =
-        decode_canonical::<SignRequestWireV1>(&request.payload, MAX_STREAM_TOKEN_FRAME_BYTES_V1)?;
-    validate_stream_token_signing_payload(&sign.payload)?;
-    let signer = broker_backend!(state, stream_token_signer);
-    let signature = signer.sign(&sign.payload).map_err(|error| match error {
-        iroha_torii::sorafs::StreamTokenSigningError::Unavailable => BrokerError::Unavailable,
-        iroha_torii::sorafs::StreamTokenSigningError::Refused => BrokerError::Rejected,
+    let (body, expected) = prepare_stream_token_broker_request(&request.binding, &request.payload)?;
+    let client = broker_backend!(state, stream_token_hardware_client);
+    let mutating = request.operation == OPERATION_STREAM_TOKEN_SIGN_V1;
+    let receipt = if mutating {
+        client.sign(&expected, &body)
+    } else {
+        client.recover(&expected, &body)
+    }
+    .map_err(|error| stream_token_backend_error(error, mutating))?;
+    validate_stream_token_receipt_result(request, receipt.bytes()).map_err(|_| {
+        if mutating {
+            BrokerError::Ambiguous
+        } else {
+            BrokerError::Protocol
+        }
     })?;
-    let public_key = required_binding_value!(&request.binding, stream_token_signer_public_key);
-    verify_evidence_viewer_ed25519_signature(public_key, signature, &sign.payload)
-        .map_err(|_| BrokerError::Rejected)?;
+    requalify().map_err(|error| {
+        if mutating {
+            BrokerError::Ambiguous
+        } else {
+            error
+        }
+    })?;
+    Ok(receipt.bytes().to_vec())
+}
+
+pub(super) fn stream_token_observe(
+    state: &BrokerServerStateV1,
+    request: &OperationRequestV1,
+) -> Result<Vec<u8>, BrokerError> {
+    let requalify =
+        || qualify_server_binding(state, &request.binding, request.provider_metadata_digest);
+    let query = decode_stream_token_observer_request(&request.binding, &request.payload)?;
+    let observer = broker_backend!(state, stream_token_state_observer);
+    let reply = observer
+        .observe(&query)
+        .map_err(|error| stream_token_backend_error(error, false))?;
+    let encoded = encode_stream_token_observer_reply(&query, &reply)?;
     requalify()?;
-    encode_canonical(
-        &SignResultWireV1 { signature },
-        MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-    )
+    Ok(encoded)
 }
 
 pub(super) fn stream_token_gateway_admit(

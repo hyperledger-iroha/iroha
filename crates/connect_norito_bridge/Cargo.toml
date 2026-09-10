@@ -37,6 +37,7 @@ privacy-production-enabled = []
 cuda = ["ivm/cuda"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["node-codec"] }
 # Keep the bridge feature closure explicit so it does not silently inherit a
 # daemon consensus mode. Core currently requires BLS and unconditionally uses

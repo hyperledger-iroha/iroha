@@ -26,7 +26,6 @@ use iroha_data_model::{
     events::time::{ExecutionTime, Schedule, TimeEventFilter},
     isi::{InstructionBox, Register},
     metadata::Metadata,
-    name::Name,
     nft::{Nft, NftId},
     peer::PeerId,
     prelude::Repeats,
@@ -39,6 +38,7 @@ use iroha_data_model::{
     },
     trigger::{Trigger, TriggerId, action::Action},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{NumericSpec, Quantity},

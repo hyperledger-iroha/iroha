@@ -155,6 +155,7 @@ impl SoftwareSignerServiceV1 {
         provisioning: SoftwareSignerProvisioningV1,
         wrapping_key: SoftwareSignerWrappingKeyV1,
     ) -> Result<Self, SoftwareSignerErrorV1> {
+        provisioning.validate()?;
         let keypair = KeyPair::try_random_with_algorithm(provisioning.algorithm.algorithm())
             .map_err(|_| SoftwareSignerErrorV1::CryptoUnavailable)?;
         Self::provision_with_keypair(state_directory, provisioning, wrapping_key, keypair)

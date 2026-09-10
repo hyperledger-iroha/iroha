@@ -13,12 +13,11 @@ use crate::{
     },
     asset::AssetDefinitionId,
     domain::DomainId,
-    error::ParseError,
-    name::{self, Name},
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 use core::{fmt, str::FromStr};
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::{error::ParseError, name, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

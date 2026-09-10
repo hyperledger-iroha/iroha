@@ -609,6 +609,10 @@ fn maximum_duration_replay_and_typed_settlement_fit_the_execution_cap() {
     let envelope_bound = proof.encode().len() + invitation_allowance + admission_allowance;
     // Build canonical field bytes without depending on the instruction's constructor API,
     // then decode and re-encode the real registered native ISI.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::execution_proofs::proof::tests::maximum_duration_replay_and_typed_settlement_fit_the_execution_cap::SettlementFields"
+    )]
     #[derive(Encode)]
     struct SettlementFields {
         session_id: Hash,

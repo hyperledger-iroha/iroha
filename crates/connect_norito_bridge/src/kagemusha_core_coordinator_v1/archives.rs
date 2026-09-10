@@ -10,7 +10,7 @@ use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderWalletContextV1,
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
 };
 
@@ -32,8 +32,11 @@ pub enum KagemushaCoreCoordinatorArchiveErrorV1 {
 type Result<T> = std::result::Result<T, KagemushaCoreCoordinatorArchiveErrorV1>;
 
 /// Public preparation projection retained under the caller's original operation ID.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.core.v1.sender-preparation")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::archives::KagemushaCoreSenderPreparationArchiveV1",
+    frame = "iroha.kagemusha.core.v1.sender-preparation"
+)]
 pub struct KagemushaCoreSenderPreparationArchiveV1 {
     /// Sole canonical archive version, one.
     pub version: u16,
@@ -71,8 +74,11 @@ impl KagemushaCoreSenderPreparationArchiveV1 {
 }
 
 /// Public candidate projection returned only after the native backend persists its real proof.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.core.v1.sender-candidate")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::archives::KagemushaCoreSenderCandidateArchiveV1",
+    frame = "iroha.kagemusha.core.v1.sender-candidate"
+)]
 pub struct KagemushaCoreSenderCandidateArchiveV1 {
     /// Sole canonical archive version, one.
     pub version: u16,
@@ -132,8 +138,11 @@ impl KagemushaCoreSenderCandidateArchiveV1 {
 }
 
 /// Public recovery projection for one retained sender operation and terminal identity.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.core.v1.sender-recovery")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::archives::KagemushaCoreSenderRecoveryArchiveV1",
+    frame = "iroha.kagemusha.core.v1.sender-recovery"
+)]
 pub struct KagemushaCoreSenderRecoveryArchiveV1 {
     /// Sole canonical archive version, one.
     pub version: u16,

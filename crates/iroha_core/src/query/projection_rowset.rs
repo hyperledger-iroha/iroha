@@ -12,6 +12,8 @@ use norito::{
 /// Version of the logical rowset payload carried inside a shard archive.
 pub const QUERY_PROJECTION_ROWSET_VERSION: u16 = 1;
 /// Alias-aware projected account row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionAccountRow")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountRow {
     /// Canonical account id.
@@ -28,6 +30,8 @@ pub struct QueryProjectionAccountRow {
     pub has_primary_alias: bool,
 }
 /// Alias-aware projected asset-holder row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionAssetHolderRow")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetHolderRow {
     /// Canonical account id.
@@ -48,6 +52,8 @@ pub struct QueryProjectionAssetHolderRow {
     pub has_primary_alias: bool,
 }
 /// Alias-aware projected account asset row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionAccountAssetRow")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountAssetRow {
     /// Canonical account id.
@@ -74,6 +80,8 @@ pub struct QueryProjectionAccountAssetRow {
     pub has_primary_alias: bool,
 }
 /// Stable metadata entry captured in an asset-definition projection row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionMetadataEntry")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionMetadataEntry {
     /// Metadata key.
@@ -82,6 +90,8 @@ pub struct QueryProjectionMetadataEntry {
     pub value_json: String,
 }
 /// Projected asset definition row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionAssetDefinitionRow")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetDefinitionRow {
     /// Canonical asset definition id.
@@ -104,12 +114,16 @@ pub struct QueryProjectionAssetDefinitionRow {
     pub metadata: Vec<QueryProjectionMetadataEntry>,
 }
 /// Projected domain row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionDomainRow")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionDomainRow {
     /// Canonical domain id.
     pub id: String,
 }
 /// Rowset payload for one `accounts` projection shard.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionAccountsShardRowSet")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountsShardRowSet {
     /// Payload version.
@@ -120,6 +134,10 @@ pub struct QueryProjectionAccountsShardRowSet {
     pub rows: Vec<QueryProjectionAccountRow>,
 }
 /// Rowset payload for one `asset_holders` projection shard.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::projection_rowset::QueryProjectionAssetHoldersShardRowSet"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetHoldersShardRowSet {
     /// Payload version.
@@ -134,6 +152,10 @@ pub struct QueryProjectionAssetHoldersShardRowSet {
     pub rows: Vec<QueryProjectionAssetHolderRow>,
 }
 /// Rowset payload for one `account_assets` projection shard.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::projection_rowset::QueryProjectionAccountAssetsShardRowSet"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAccountAssetsShardRowSet {
     /// Payload version.
@@ -144,6 +166,10 @@ pub struct QueryProjectionAccountAssetsShardRowSet {
     pub rows: Vec<QueryProjectionAccountAssetRow>,
 }
 /// Rowset payload for one `asset_definitions` projection shard.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::projection_rowset::QueryProjectionAssetDefinitionsShardRowSet"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionAssetDefinitionsShardRowSet {
     /// Payload version.
@@ -154,6 +180,8 @@ pub struct QueryProjectionAssetDefinitionsShardRowSet {
     pub rows: Vec<QueryProjectionAssetDefinitionRow>,
 }
 /// Rowset payload for one `domains` projection shard.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_rowset::QueryProjectionDomainsShardRowSet")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionDomainsShardRowSet {
     /// Payload version.

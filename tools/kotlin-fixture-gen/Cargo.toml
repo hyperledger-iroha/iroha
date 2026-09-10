@@ -17,6 +17,7 @@ path = "src/main.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_data_model = { path = "../../crates/iroha_data_model", default-features = false, features = ["application-model", "transparent_api"] }
 iroha_crypto = { path = "../../crates/iroha_crypto", default-features = false, features = ["node-crypto"] }
 norito = { path = "../../crates/norito", default-features = false, features = ["node-codec"] }

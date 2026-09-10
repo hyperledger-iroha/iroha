@@ -82,7 +82,6 @@ use iroha_data_model::{
     soracloud::{
         SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
     },
-    state_path::StatePath,
     subscription::{
         SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
         SUBSCRIPTION_PLAN_METADATA_KEY, SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
@@ -90,6 +89,7 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelopeBounds, OpenVerifyEnvelopeValidationError},
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     bigint::BigInt,
     calendar,
@@ -1569,7 +1569,7 @@ fn visit_bounded_durable_state_positions(
 #[cfg(test)]
 mod durable_state_merge_tests {
     use super::*;
-    use iroha_data_model::state_path::MAX_STATE_PATH_BYTES;
+    use iroha_model_base::state_path::MAX_STATE_PATH_BYTES;
     use iroha_test_samples::ALICE_ID;
     #[test]
     fn bounded_merge_seeks_after_deleted_positions_and_stops_without_lookahead() {
@@ -17052,7 +17052,7 @@ seiyaku PrivilegedBinding {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "n1".parse().unwrap(),
         );
-        let key: iroha_data_model::name::Name = "k".parse().unwrap();
+        let key: iroha_model_base::name::Name = "k".parse().unwrap();
         let value = iroha_primitives::json::Json::new("v");
         let nft_blob = norito::to_bytes(&nft_id).expect("encode nft id");
         let key_blob = norito::to_bytes(&key).expect("encode name");
@@ -17109,7 +17109,7 @@ seiyaku PrivilegedBinding {
         let program = build_program(&code, 0);
         vm.load_program(&program).unwrap();
         // payload is a Name
-        let key: iroha_data_model::name::Name = "k".parse().unwrap();
+        let key: iroha_model_base::name::Name = "k".parse().unwrap();
         let key_blob = norito::to_bytes(&key).expect("encode key");
         // Wrong version
         let mut tlv_wrong_ver = Vec::new();
@@ -19962,6 +19962,10 @@ seiyaku OpaqueInstructionSubmission {
     }
     #[test]
     fn fastpq_batch_apply_rejects_noncanonical_amount() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::NonCanonicalNumeric"
+        )]
         #[derive(norito::Encode)]
         struct NonCanonicalNumeric {
             #[codec(compact)]
@@ -19969,6 +19973,10 @@ seiyaku OpaqueInstructionSubmission {
             #[codec(compact)]
             scale: u32,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::ForgedTransferAssetBatchEntry"
+        )]
         #[derive(norito::Encode)]
         struct ForgedTransferAssetBatchEntry {
             from: AccountId,
@@ -19976,6 +19984,10 @@ seiyaku OpaqueInstructionSubmission {
             asset_definition: AssetDefinitionId,
             amount: NonCanonicalNumeric,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::smartcontracts::ivm::host::tests::fastpq_batch_apply_rejects_noncanonical_amount::ForgedTransferAssetBatch"
+        )]
         #[derive(norito::Encode)]
         struct ForgedTransferAssetBatch {
             entries: Vec<ForgedTransferAssetBatchEntry>,

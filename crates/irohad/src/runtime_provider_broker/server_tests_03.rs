@@ -751,6 +751,10 @@ fn signing_payload_bound_matches_canonical_governance_ceiling() {
 }
 #[test]
 fn stream_token_and_potr_signers_reject_noncanonical_or_unbound_payloads() {
+    let binding = token_signer_binding();
+    let validate_token_payload =
+        |payload: &[u8]| prepare_stream_token_broker_request(&binding, payload).map(|_| ());
+
     let token_body = sorafs_manifest::StreamTokenBodyV1 {
         token_id: "0123456789abcdef0123456789abcdef".to_owned(),
         manifest_cid: vec![0x21; 32],
@@ -761,26 +765,23 @@ fn stream_token_and_potr_signers_reject_noncanonical_or_unbound_payloads() {
         rate_limit_bytes: 8 * 1024 * 1024,
         issued_at: 1_700_000_000,
         requests_per_minute: 120,
-        token_pk_version: 1,
+        token_pk_version: 7,
     };
     let token_payload = token_body
         .signing_payload_bytes()
         .expect("encode canonical stream-token signing payload");
+    assert_eq!(validate_token_payload(&token_payload), Ok(()));
     assert_eq!(
-        validate_stream_token_signing_payload(&token_payload),
-        Ok(())
-    );
-    assert_eq!(
-        validate_stream_token_signing_payload(b"arbitrary signing oracle input"),
+        validate_token_payload(b"arbitrary signing oracle input"),
         Err(BrokerError::Rejected)
     );
     let mut trailing_token = token_payload.clone();
     trailing_token.push(0);
-    assert!(validate_stream_token_signing_payload(&trailing_token).is_err());
+    assert!(validate_token_payload(&trailing_token).is_err());
     let mut invalid_token = token_body;
     invalid_token.max_streams = 0;
     assert_eq!(
-        validate_stream_token_signing_payload(
+        validate_token_payload(
             &invalid_token
                 .signing_payload_bytes()
                 .expect("encode structurally invalid stream-token body")
@@ -862,28 +863,25 @@ fn stream_token_signer_binding_and_qualification_frames_are_exact() {
         OPERATION_QUALIFY_V1,
         encode_canonical(&(), MAX_OPERATION_FRAME_BYTES_V1).expect("encode qualification request"),
     );
-    let exact = encode_canonical(
-        &QualificationResultWireV1 {
-            revision: 7,
-            policy_digest: TEST_POLICY_DIGEST,
-        },
-        MAX_OPERATION_FRAME_BYTES_V1,
-    )
-    .expect("encode exact qualification");
+    let hardware = stream_token_hardware_test_support::hardware_binding();
+    let exact = encode_canonical(&hardware, MAX_STREAM_TOKEN_METADATA_BYTES_V1)
+        .expect("encode exact metadata claim");
     assert_eq!(
-        validate_operation_result(&request, STATUS_OK_V1, &exact, &network_id(),),
+        validate_operation_result(&request, STATUS_OK_V1, &exact, &network_id()),
         Ok(())
     );
-    let substituted = encode_canonical(
-        &QualificationResultWireV1 {
-            revision: 8,
-            policy_digest: TEST_POLICY_DIGEST,
-        },
-        MAX_OPERATION_FRAME_BYTES_V1,
+    let mut custody = hardware.custody().clone();
+    custody.key_revision = 8;
+    let changed = StreamTokenHardwareRuntimeBindingV1::new(
+        custody,
+        hardware.observer_handle().to_owned(),
+        hardware.trust_pins_digest(),
     )
-    .expect("encode substituted qualification");
+    .unwrap();
+    let substituted = encode_canonical(&changed, MAX_STREAM_TOKEN_METADATA_BYTES_V1)
+        .expect("encode substituted metadata claim");
     assert_eq!(
-        validate_operation_result(&request, STATUS_OK_V1, &substituted, &network_id(),),
+        validate_operation_result(&request, STATUS_OK_V1, &substituted, &network_id()),
         Err(BrokerError::Protocol)
     );
 }
@@ -894,57 +892,76 @@ fn stream_token_server_observation_rejects_drift_and_test_markers() {
         drift: bool,
         calls: AtomicU64,
     }
-    impl iroha_torii::sorafs::StreamTokenRuntimeSigner for SignerProbe {
+    impl iroha_torii::sorafs::StreamTokenHardwareClientV1 for SignerProbe {
         fn handle(&self) -> &str {
-            self.handle
-        }
-        fn public_key(&self) -> [u8; 32] {
-            TEST_SIGNER_KEY
-        }
-        fn qualification(
-            &self,
-        ) -> Result<
-            iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1,
-            iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1,
-        > {
             let call = self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(
-                iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-                    if self.drift { 7 + call } else { 7 },
-                    TEST_POLICY_DIGEST,
-                ),
-            )
+            if self.drift && call != 0 {
+                "hsm://sorafs/stream-token/substitute"
+            } else {
+                self.handle
+            }
         }
         fn sign(
             &self,
-            _signing_payload: &[u8],
-        ) -> Result<[u8; 64], iroha_torii::sorafs::StreamTokenSigningError> {
-            Err(iroha_torii::sorafs::StreamTokenSigningError::Refused)
+            _: &SignerStreamTokenExpectedV1,
+            _: &sorafs_manifest::StreamTokenBodyV1,
+        ) -> Result<StreamTokenHardwareReceiptV1, StreamTokenHardwareCallErrorV1> {
+            Err(StreamTokenHardwareCallErrorV1::Refused)
+        }
+        fn recover(
+            &self,
+            _: &SignerStreamTokenExpectedV1,
+            _: &sorafs_manifest::StreamTokenBodyV1,
+        ) -> Result<StreamTokenHardwareReceiptV1, StreamTokenHardwareCallErrorV1> {
+            Err(StreamTokenHardwareCallErrorV1::Refused)
         }
     }
+    struct ObserverProbe {
+        calls: AtomicU64,
+    }
+    impl iroha_torii::sorafs::StreamTokenStateObserverClientV1 for ObserverProbe {
+        fn handle(&self) -> &str {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            "state://sorafs/stream-token/observer-primary"
+        }
+        fn observe(
+            &self,
+            _: &SignerStreamTokenObservationRequestV1,
+        ) -> Result<StreamTokenObserverReplyV1, StreamTokenHardwareCallErrorV1> {
+            panic!("metadata must not fabricate or request custody qualification")
+        }
+    }
+    let observer = Arc::new(ObserverProbe {
+        calls: AtomicU64::new(0),
+    });
     let binding = token_signer_binding();
     let exact = Arc::new(SignerProbe {
-        handle: "software://sorafs/stream-token/primary",
+        handle: "hsm://sorafs/stream-token/primary-a",
         drift: false,
         calls: AtomicU64::new(0),
     });
-    let backends = RuntimeProviderBrokerBackendsV1::new().with_stream_token_signer(exact.clone());
-    make_server_observation(&binding, &backends).expect("observe exact stream-token signer twice");
+    let backends = RuntimeProviderBrokerBackendsV1::new()
+        .with_stream_token_hardware_client(exact.clone())
+        .with_stream_token_state_observer(observer.clone());
+    make_server_observation(&binding, &backends)
+        .expect("observe exact non-authorizing routing metadata twice");
     assert_eq!(exact.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(observer.calls.load(Ordering::SeqCst), 2);
     for provider in [
         SignerProbe {
-            handle: "software://sorafs/stream-token/primary",
+            handle: "hsm://sorafs/stream-token/primary-a",
             drift: true,
             calls: AtomicU64::new(0),
         },
         SignerProbe {
-            handle: "software://sorafs/stream-token/test",
+            handle: "hsm://sorafs/stream-token/test",
             drift: false,
             calls: AtomicU64::new(0),
         },
     ] {
-        let backends =
-            RuntimeProviderBrokerBackendsV1::new().with_stream_token_signer(Arc::new(provider));
+        let backends = RuntimeProviderBrokerBackendsV1::new()
+            .with_stream_token_hardware_client(Arc::new(provider))
+            .with_stream_token_state_observer(observer.clone());
         assert!(matches!(
             make_server_observation(&binding, &backends),
             Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch)
@@ -1385,7 +1402,7 @@ fn sensitive_broker_payload_is_scrubbed_before_request_ownership_on_early_errors
         requested_catalog: vec![binding.clone()],
     });
 
-    let oversized_len = MAX_STREAM_TOKEN_FRAME_BYTES_V1 + 1;
+    let oversized_len = MAX_STREAM_TOKEN_HARDWARE_FRAME_BYTES_V1 + 1;
     let admission_audit = Arc::new(std::sync::atomic::AtomicUsize::new(usize::MAX));
     let admission_error = session.call_sensitive(
         &binding,
@@ -2632,3 +2649,5 @@ fn fenced_privacy_publisher_operation_is_canonical_bounded_and_read_back() {
         make_operation_response(&request, STATUS_AMBIGUOUS_V1, unit, &state.network_id,).is_ok()
     );
 }
+
+include!("stream_token_mutation_tests.rs");

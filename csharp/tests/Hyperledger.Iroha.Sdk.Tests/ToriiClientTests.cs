@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Address;
+using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Http;
 using Hyperledger.Iroha.Norito;
 using Hyperledger.Iroha.Queries;
@@ -32,6 +33,9 @@ public sealed partial class ToriiClientTests
     private static readonly string CanonicalMultisigAccountId = TestAccountId(0x43);
     private static readonly string MultisigSignerAccountId = TestAccountId(0x44);
     private static readonly string ContractAuthorityAccountId = TestAccountId(0x45);
+    private static readonly string ContractCallAuthorityAccountId = AccountAddress
+        .FromPublicKey(Ed25519Signer.GetPublicKey(CanonicalPrivateKeySeed))
+        .ToI105(AccountAddress.DefaultChainDiscriminant);
     private static readonly string ContractFeeSponsorAccountId = TestAccountId(0x46);
     private static readonly string MultisigFeeSponsorAccountId = TestAccountId(0x47);
     private static readonly string VerifyingKeyAuthorityAccountId = TestAccountId(0x48);
@@ -14331,7 +14335,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ToriiTransactionHashResponseJson(operation, field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeToriiTransactionHashResponseOperationAsync(client, operation));
@@ -15299,7 +15305,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ContractMetadataHashResponseJson(operation, field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -15329,7 +15337,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ContractMetadataHashResponseJson(operation, field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -15380,7 +15390,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ContractCodeViewShapeResponseJson(field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -15648,7 +15660,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ContractCallViewResponseJson(operation, field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -16192,12 +16206,195 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     }
 
     [Fact]
+    public async Task CallContractAsyncRequiresCanonicalAuthBeforeDispatch()
+    {
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("unsigned HTTP request escaped"));
+        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.CallContractAsync(TrustedContractCallRequest(), TestContext.Current.CancellationToken));
+        Assert.Null(handler.LastRequest);
+        Assert.Null(typeof(ToriiContractCallRequest).GetProperty("PrivateKey"));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    public async Task CallContractAsyncRejectsPartialDetachedEnvelopeAndMissingCreation(int fields)
+    {
+        var request = TrustedContractCallRequest();
+        var draft = JsonSerializer.Deserialize<ToriiContractCallResponse>(BoundContractCallResponseJsonObject(request).ToJsonString())!;
+        var signed = SignedContractCallRequest(request, draft);
+        var partial = signed with
+        {
+            PublicKeyHex = (fields & 1) != 0 ? signed.PublicKeyHex : null,
+            SignatureBase64 = (fields & 2) != 0 ? signed.SignatureBase64 : null,
+            TransactionPayloadBase64 = (fields & 4) != 0 ? signed.TransactionPayloadBase64 : null,
+            CreationTimeMilliseconds = fields == 7 ? null : signed.CreationTimeMilliseconds,
+        };
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("partial envelope escaped"));
+        using var client = BoundContractToriiClient(handler);
+        await Assert.ThrowsAsync<ArgumentException>(() => client.CallContractAsync(partial, TestContext.Current.CancellationToken));
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData(60000UL)]
+    public async Task CallContractAsyncPreservesExactDetachedPayloadFeeAndNullableTtl(ulong? ttl)
+    {
+        var request = TrustedContractCallRequest() with { TransactionTimeToLiveMilliseconds = ttl };
+        var quotedFee = FeePaymentIntent.Authority(
+            [new FeeChargeLimit(FeeChargeKind.Nexus, UaidPortfolioAssetDefinitionId, "1")], 500_000);
+        var prepared = BoundContractCallResponseJsonObject(request, quotedFee, quotedFee);
+        var exactPayload = prepared["transaction_payload_b64"]!.GetValue<string>();
+        var calls = 0;
+        using var handler = new RecordingHandler(httpRequest =>
+        {
+            calls++;
+            Assert.True(httpRequest.Headers.Contains("X-Iroha-Signature"));
+            var body = ReadBodyAsJson(httpRequest).RootElement;
+            Assert.False(body.TryGetProperty("private_key", out _));
+            if (calls == 1)
+            {
+                return JsonResponse(prepared.ToJsonString());
+            }
+            Assert.Equal(exactPayload, body.GetProperty("transaction_payload_b64").GetString());
+            Assert.Equal(123456UL, body.GetProperty("creation_time_ms").GetUInt64());
+            Assert.Equal("router::dex.universal", body.GetProperty("contract_alias").GetString());
+            Assert.Equal(quotedFee, JsonSerializer.Deserialize<FeePaymentIntent>(body.GetProperty("fee_payment")));
+            if (ttl.HasValue) Assert.Equal(ttl, body.GetProperty("transaction_ttl_ms").GetUInt64());
+            return JsonResponse(SubmittedContractCallResponse(prepared).ToJsonString());
+        });
+        using var client = BoundContractToriiClient(handler);
+        var draft = await client.CallContractAsync(request, TestContext.Current.CancellationToken);
+        var detached = SignedContractCallRequest(request, draft);
+        var response = await client.CallContractAsync(detached, TestContext.Current.CancellationToken);
+        Assert.True(response.Submitted);
+        Assert.Null(response.PipelineStatus);
+        Assert.Equal(ttl, response.TransactionTimeToLiveMilliseconds);
+        Assert.Equal(2, calls);
+    }
+
+    [Theory]
+    [InlineData("intent")]
+    [InlineData("network")]
+    [InlineData("fee")]
+    [InlineData("time")]
+    [InlineData("ttl")]
+    [InlineData("ttl-none")]
+    [InlineData("signature")]
+    [InlineData("signer")]
+    public async Task CallContractAsyncRejectsDetachedSubstitutionBeforeDispatch(string mutation)
+    {
+        var request = TrustedContractCallRequest() with { TransactionTimeToLiveMilliseconds = 60000 };
+        var prepared = BoundContractCallResponseJsonObject(request);
+        var draft = JsonSerializer.Deserialize<ToriiContractCallResponse>(prepared.ToJsonString())!;
+        var detached = SignedContractCallRequest(request, draft);
+        switch (mutation)
+        {
+            case "intent":
+                var changed = ReplaceTransactionAdmissionIntent(
+                    Convert.FromBase64String(detached.TransactionPayloadBase64!),
+                    TransactionAdmissionIntent.Ordinary, new TransactionEncodingContext(request.Authority));
+                detached = detached with
+                {
+                    TransactionPayloadBase64 = Convert.ToBase64String(changed),
+                    SignatureBase64 = Convert.ToBase64String(Ed25519Signer.Sign(IrohaHash.Hash(changed), CanonicalPrivateKeySeed)),
+                };
+                break;
+            case "network":
+                prepared = BoundContractCallResponseJsonObject(request, transactionNetworkId: NetworkId.Parse(AlternateNetworkId));
+                detached = SignedContractCallRequest(request, JsonSerializer.Deserialize<ToriiContractCallResponse>(prepared.ToJsonString())!);
+                break;
+            case "fee": detached = detached with { FeePayment = FeePaymentIntent.Authority([], 500_001) }; break;
+            case "time": detached = detached with { CreationTimeMilliseconds = 123457 }; break;
+            case "ttl": detached = detached with { TransactionTimeToLiveMilliseconds = null }; break;
+            case "ttl-none": detached = ContractCallRequestWithAbsentPayloadTtl(detached); break;
+            case "signature": detached = detached with { SignatureBase64 = Convert.ToBase64String(new byte[64]) }; break;
+            case "signer": detached = detached with { PublicKeyHex = new string('a', 64) }; break;
+        }
+        using var handler = new RecordingHandler(_ => throw new InvalidOperationException("invalid detached request escaped"));
+        using var client = BoundContractToriiClient(handler);
+        await Assert.ThrowsAnyAsync<Exception>(() => client.CallContractAsync(detached, TestContext.Current.CancellationToken));
+        Assert.Null(handler.LastRequest);
+    }
+
+    [Fact]
+    public async Task CallContractAsyncRejectsSyntheticQueuedAdmissionReceipt()
+    {
+        var request = TrustedContractCallRequest();
+        var prepared = BoundContractCallResponseJsonObject(request);
+        var detached = SignedContractCallRequest(request, JsonSerializer.Deserialize<ToriiContractCallResponse>(prepared.ToJsonString())!);
+        var submitted = SubmittedContractCallResponse(prepared);
+        submitted["pipeline_status"] = new JsonObject { ["status"] = new JsonObject { ["kind"] = "Queued" }, ["scope"] = "local", ["resolved_from"] = "queue" };
+        using var handler = new RecordingHandler(_ => JsonResponse(submitted.ToJsonString()));
+        using var client = BoundContractToriiClient(handler);
+        var error = await Assert.ThrowsAsync<JsonException>(() => client.CallContractAsync(detached, TestContext.Current.CancellationToken));
+        Assert.Contains("pipeline_status", error.Message);
+    }
+
+    private static ToriiContractCallRequest ContractCallRequestWithAbsentPayloadTtl(ToriiContractCallRequest request)
+    {
+        var reader = new CanonicalNoritoReader(Convert.FromBase64String(request.TransactionPayloadBase64!), "TTL mutation", "payload");
+        var writer = new CanonicalNoritoWriter();
+        for (var index = 0; index < 10; index++)
+        {
+            var field = reader.ReadField($"field_{index}");
+            writer.WriteField(index == 4 ? new byte[] { 0 } : field);
+        }
+        reader.RequireEnd();
+        var payload = writer.ToArray();
+        return request with
+        {
+            TransactionTimeToLiveMilliseconds = null,
+            TransactionPayloadBase64 = Convert.ToBase64String(payload),
+            SignatureBase64 = Convert.ToBase64String(Ed25519Signer.Sign(IrohaHash.Hash(payload), CanonicalPrivateKeySeed)),
+        };
+    }
+
+    private static ToriiContractCallRequest SignedContractCallRequest(
+        ToriiContractCallRequest request, ToriiContractCallResponse draft) => request with
+    {
+        CreationTimeMilliseconds = draft.CreationTimeMilliseconds,
+        TransactionTimeToLiveMilliseconds = draft.TransactionTimeToLiveMilliseconds,
+        FeePayment = draft.OperationReceipt.FeePayment!,
+        TransactionPayloadBase64 = draft.TransactionPayloadBase64,
+        PublicKeyHex = Convert.ToHexString(Ed25519Signer.GetPublicKey(CanonicalPrivateKeySeed)).ToLowerInvariant(),
+        SignatureBase64 = Convert.ToBase64String(Ed25519Signer.Sign(
+            Convert.FromBase64String(draft.SigningMessageBase64!), CanonicalPrivateKeySeed)),
+    };
+
+    private static JsonObject SubmittedContractCallResponse(JsonObject prepared)
+    {
+        var response = (JsonObject)prepared.DeepClone();
+        var entrypoint = new CanonicalNoritoWriter();
+        entrypoint.WriteUInt32LittleEndian(0);
+        entrypoint.WriteField(Convert.FromBase64String(response["transaction_payload_b64"]!.GetValue<string>()));
+        var hash = Convert.ToHexString(IrohaHash.Hash(entrypoint.ToArray())).ToLowerInvariant();
+        response["submitted"] = true;
+        response["transaction_payload_b64"] = null;
+        response["signing_message_b64"] = null;
+        response["tx_hash_hex"] = hash;
+        response["entrypoint_hash_hex"] = hash;
+        var receipt = (JsonObject)response["operation_receipt"]!;
+        receipt["status"] = "submitted";
+        receipt["tx_hash_hex"] = hash;
+        receipt["entrypoint_hash_hex"] = hash;
+        return response;
+    }
+
+    [Fact]
     public async Task CallContractAsyncDeserializesUnsignedPayloadResponse()
     {
         var payload = JsonNode.Parse("""{ "amount": "1" }""");
         var request = new ToriiContractCallRequest
         {
-            Authority = ContractAuthorityAccountId,
+            Authority = ContractCallAuthorityAccountId,
             ContractAlias = "router::dex.universal",
             Entrypoint = "main",
             Payload = payload,
@@ -16211,14 +16408,14 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(httpRequest =>
         {
             var body = ReadBodyAsJson(httpRequest);
-            Assert.Equal(ContractAuthorityAccountId, body.RootElement.GetProperty("authority").GetString());
+            Assert.Equal(ContractCallAuthorityAccountId, body.RootElement.GetProperty("authority").GetString());
             Assert.True(body.RootElement.TryGetProperty("fee_payment", out _));
             Assert.False(body.RootElement.TryGetProperty("draft_intent", out _));
 
             return JsonResponse(BoundContractCallResponseJsonObject(request: request).ToJsonString());
         });
 
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
         var response = await client.CallContractAsync(
             request,
             cancellationToken: TestContext.Current.CancellationToken);
@@ -16243,7 +16440,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             responseFeePayment: quotedFeePayment,
             transactionFeePayment: quotedFeePayment);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var response = await client.CallContractAsync(
             request,
@@ -16258,7 +16455,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var trustedRequest = TrustedContractCallRequest();
         var responseJson = BoundContractCallResponseJsonObject(trustedRequest);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16276,14 +16473,21 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
         using var client = new ToriiClient(
             new Uri("https://torii.example"),
-            new HttpClient(handler));
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    ContractCallAuthorityAccountId, CanonicalPrivateKeySeed),
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
-        var error = await Assert.ThrowsAsync<JsonException>(() =>
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.CallContractAsync(
                 request,
                 cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Contains(nameof(ToriiClientOptions.NetworkId), error.Message);
+        Assert.Null(handler.LastRequest);
     }
 
     [Fact]
@@ -16294,7 +16498,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             request,
             transactionNetworkId: NetworkId.Parse(AlternateNetworkId));
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16310,7 +16514,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var request = TrustedContractCallRequest() with { Entrypoint = "other" };
         using var handler = new RecordingHandler(_ =>
             throw new InvalidOperationException("incoherent draft intent reached dispatch"));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
             client.CallContractAsync(
@@ -16379,7 +16583,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             request,
             transactionInvocation: substitutedInvocation);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16402,7 +16606,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             request,
             transactionMetadata: substitutedMetadata);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16432,7 +16636,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             receipt["code_hash_hex"] = new string('b', 64);
         }
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16455,7 +16659,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         var responseJson = BoundContractCallResponseJsonObject(request);
         ((JsonObject)responseJson["operation_receipt"]!)[field] = replacement;
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16473,7 +16677,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         ((JsonObject)responseJson["operation_receipt"]!)["payload_digest_hex"] =
             new string('4', 64);
         using var handler = new RecordingHandler(_ => JsonResponse(responseJson.ToJsonString()));
-        using var client = BoundToriiClient(handler);
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -16492,11 +16696,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ContractCallRawResponseJson("ok", false)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = BoundContractToriiClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(new ToriiContractCallRequest
             {
-                Authority = ContractAuthorityAccountId,
+                Authority = ContractCallAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
                 FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
@@ -16525,11 +16729,11 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ContractCallRawResponseJson(responseField, responseValue)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = BoundContractToriiClient(handler);
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(new ToriiContractCallRequest
             {
-                Authority = ContractAuthorityAccountId,
+                Authority = ContractCallAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
                 FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
@@ -16546,12 +16750,12 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(_ => JsonResponse(RemoveTopLevelJsonField(
             ContractCallRawResponseJson("creation_time_ms", 123456),
             "creation_time_ms")));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(new ToriiContractCallRequest
             {
-                Authority = ContractAuthorityAccountId,
+                Authority = ContractCallAuthorityAccountId,
                 ContractAlias = "router::dex.universal",
                 Payload = JsonNode.Parse("""{ "amount": "1" }"""),
                 FeePayment = FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), 500_000),
@@ -16675,7 +16879,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string expectedMessage)
     {
         using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = BoundContractToriiClient(handler);
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             client.CallContractAsync(
@@ -17081,7 +17285,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         yield return new object[] { valid with { ContractAddress = "iroha1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" }, "ContractAddress", "exactly one" };
         yield return new object[] { valid with { ContractAlias = " router::dex.universal" }, "ContractAlias", "whitespace" };
         yield return new object[] { valid with { ContractAlias = "router::dex.universal\u0001" }, "ContractAlias", "control characters" };
-        yield return new object[] { valid with { PrivateKey = "ed0120AABB", PublicKeyHex = new string('a', 64), SignatureBase64 = "AQID" }, "PrivateKey", "not both" };
+        yield return new object[] { valid with { PublicKeyHex = new string('a', 64), SignatureBase64 = "AQID" }, "TransactionPayloadBase64", "requires transaction_payload_b64" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 64) }, "SignatureBase64", "Detached signing requires both" };
         yield return new object[] { valid with { SignatureBase64 = "AQID" }, "PublicKeyHex", "Detached signing requires both" };
         yield return new object[] { valid with { PublicKeyHex = new string('a', 63), SignatureBase64 = "AQID" }, "PublicKeyHex", "32-byte hex string" };
@@ -17657,7 +17861,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         using var handler = new RecordingHandler(_ => JsonResponse(MultisigResponseJson(
             "resolved_multisig_account_id",
             value)));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeToriiTransactionHashResponseOperationAsync(client, operation));
@@ -17702,7 +17908,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         string json)
     {
         using var handler = new RecordingHandler(_ => JsonResponse(json));
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeToriiTransactionHashResponseOperationAsync(client, operation));
@@ -18973,7 +19181,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             Content = new StringContent(ContractVerifiedSourceJobShapeResponseJson(field, value)),
         });
 
-        using var client = new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
+        using var client = operation == "contract-call"
+            ? BoundContractToriiClient(handler)
+            : new ToriiClient(new Uri("https://torii.example"), new HttpClient(handler));
 
         var error = await Assert.ThrowsAsync<JsonException>(() =>
             InvokeContractMetadataHashResponseOperationAsync(client, operation));
@@ -28707,13 +28917,25 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 NetworkId = NetworkId.Parse(CanonicalNetworkId),
             });
 
+    private static ToriiClient BoundContractToriiClient(HttpMessageHandler handler) =>
+        new(
+            new Uri("https://torii.example"),
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                NetworkId = NetworkId.Parse(CanonicalNetworkId),
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(
+                    ContractCallAuthorityAccountId, CanonicalPrivateKeySeed),
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
+
     private static ToriiContractCallRequest TrustedContractCallRequest(
         FeePaymentIntent? feePayment = null)
     {
         var payload = JsonNode.Parse("""{ "amount": "1" }""");
         return new ToriiContractCallRequest
         {
-            Authority = ContractAuthorityAccountId,
+            Authority = ContractCallAuthorityAccountId,
             ContractAlias = "router::dex.universal",
             Entrypoint = "main",
             Payload = payload,
@@ -28847,7 +29069,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             encoding.EncodeUInt64));
         payload.WriteField(encoding.EncodeOption<uint>(null, encoding.EncodeUInt32));
         payload.WriteField(encoding.EncodeFeePaymentIntent(feePayment));
-        payload.WriteField(encoding.EncodeUInt32((uint)TransactionAdmissionIntent.Ordinary));
+        payload.WriteField(encoding.EncodeUInt32((uint)TransactionAdmissionIntent.QueuePlanSynced));
         payload.WriteField(encoding.EncodeMetadata(metadata));
         payload.WriteField(new byte[] { 0 });
         var bytes = payload.ToArray();
@@ -28886,6 +29108,9 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
             ["abi_hash_hex"] = ContractAbiHashHex,
             ["creation_time_ms"] = creationTimeMilliseconds,
             ["tx_hash_hex"] = null,
+            ["pipeline_status"] = null,
+            ["entrypoint_hash_hex"] = null,
+            ["transaction_ttl_ms"] = request.TransactionTimeToLiveMilliseconds,
             ["transaction_payload_b64"] = draft.TransactionPayloadBase64,
             ["signing_message_b64"] = draft.SigningMessageBase64,
             ["entrypoint"] = draftIntent.Invocation.Entrypoint,
@@ -28900,6 +29125,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
                 ["code_hash_hex"] = ContractDraftCodeHashHex,
                 ["abi_hash_hex"] = ContractAbiHashHex,
                 ["tx_hash_hex"] = null,
+                ["entrypoint_hash_hex"] = null,
                 ["entrypoint"] = draftIntent.Invocation.Entrypoint,
                 ["gas_limit"] = selectedFeePayment.GasLimit,
                 ["gas_used"] = null,
@@ -30608,7 +30834,7 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
     {
         return new ToriiContractCallRequest
         {
-            Authority = ContractAuthorityAccountId,
+            Authority = ContractCallAuthorityAccountId,
             ContractAlias = "router::dex.universal",
             Entrypoint = "main",
             Payload = JsonNode.Parse("""{ "amount": "1" }"""),
@@ -30953,10 +31179,10 @@ data: {"authority":"{{{ExplorerInstructionAuthorityAccountId}}}","created_at":"2
         return Convert.ToHexString(SHA256.HashData(preimage)).ToLowerInvariant();
     }
 
-    private static string TestAccountId(byte publicKeyByte)
+    private static string TestAccountId(byte privateKeySeedByte)
     {
-        var publicKey = new byte[32];
-        Array.Fill(publicKey, publicKeyByte);
+        var seed = Enumerable.Repeat(privateKeySeedByte, 32).ToArray();
+        var publicKey = Ed25519Signer.GetPublicKey(seed);
         return AccountAddress
             .FromPublicKey(publicKey)
             .ToI105(AccountAddress.DefaultChainDiscriminant);

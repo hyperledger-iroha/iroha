@@ -22,8 +22,8 @@ use iroha::{
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
         prelude::{
-            AccountId, AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Name,
-            Quantity, QueryBuilderExt,
+            AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Quantity,
+            QueryBuilderExt,
         },
         privacy::{
             PrivacyActiveLifecycleV1, PrivacyCompiledProfileResultV1,
@@ -48,7 +48,8 @@ use iroha_core::{
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
+use iroha_model_base::name::Name;
+use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::{
     num::{NonZeroU32, NonZeroU64},
@@ -75,10 +76,14 @@ struct ProtocolExpectationV1 {
     activation: Option<PrivacyProtocolActivationRecordV1>,
 }
 fn bounded_client(client: Client) -> Client {
-    integration_tests::sync::rebind_blocking_client(&client, |builder| {
-        builder.transaction_status_timeout = SUBMISSION_TIMEOUT;
-        builder.torii_request_timeout = Duration::from_secs(45);
+    integration_tests::sync::rebind_blocking_client(&client, |configured| {
+        configured.transaction_status_timeout = SUBMISSION_TIMEOUT;
+        configured.torii_request_timeout = Duration::from_secs(45);
     })
+}
+async fn read_privacy_capabilities(client: &Client) -> Result<PrivacyExact12CapabilityManifestV1> {
+    let client = client.clone();
+    read_on_dedicated_thread(move || client.client().get_privacy_capabilities()).await
 }
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -157,7 +162,7 @@ async fn wait_for_all_peer_protocols(
         last_observed.clear();
         for (index, peer) in network.peers().iter().enumerate() {
             let client = bounded_client(peer.client());
-            match client.get_privacy_capabilities() {
+            match read_privacy_capabilities(&client).await {
                 Ok(snapshot) if snapshot.committed_height >= minimum_height => {
                     match assert_protocol_expectations(&snapshot, expectations, context) {
                         Ok(()) => {
@@ -192,11 +197,13 @@ async fn wait_for_all_peer_protocols(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
-    let blocks = client
-        .query(FindBlocks)
-        .execute_all()
-        .wrap_err("query committed blocks for canonical genesis binding")?;
+async fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
+    let query_client = client.clone();
+    let blocks = read_on_dedicated_thread(move || {
+        Ok(query_client.client().query(FindBlocks).execute_all()?)
+    })
+    .await
+    .wrap_err("query committed blocks for canonical genesis binding")?;
     let genesis = blocks
         .iter()
         .filter(|block| block.header().prev_block_hash().is_none())
@@ -210,9 +217,9 @@ fn canonical_genesis_hash(client: &Client) -> Result<[u8; 32]> {
     ensure!(hash != [0; 32], "canonical genesis hash must be nonzero");
     Ok(hash)
 }
-fn next_incoming_height(client: &Client) -> Result<u64> {
-    client
-        .get_privacy_capabilities()
+async fn next_incoming_height(client: &Client) -> Result<u64> {
+    read_privacy_capabilities(&client)
+        .await
         .wrap_err("query committed height before governed transaction")?
         .committed_height
         .checked_add(1)
@@ -251,11 +258,10 @@ async fn submit_instructions(
     let client = client.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_all(instructions, no_fee())),
+        read_on_dedicated_thread(move || client.submit_all(instructions, no_fee())),
     )
     .await
     .map_err(|_| eyre!("{context}: submission exceeded {SUBMISSION_TIMEOUT:?}"))?
-    .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
 async fn submit_signed_transaction(
@@ -263,20 +269,19 @@ async fn submit_signed_transaction(
     transaction: &SignedTransaction,
     context: &str,
 ) -> Result<iroha_crypto::HashOf<SignedTransaction>> {
-    let client = client.clone();
-    let transaction = transaction.clone();
     timeout(
         SUBMISSION_TIMEOUT,
-        tokio::task::spawn_blocking(move || client.submit_transaction_and_wait(&transaction)),
+        client
+            .account_client()
+            .submit_transaction_and_wait(transaction),
     )
     .await
     .map_err(|_| eyre!("{context}: signed transaction exceeded {SUBMISSION_TIMEOUT:?}"))?
-    .map_err(|error| eyre!("{context}: submission task failed: {error}"))?
     .wrap_err_with(|| context.to_owned())
 }
 async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<()> {
-    let start = client
-        .get_privacy_capabilities()
+    let start = read_privacy_capabilities(&client)
+        .await
         .wrap_err("query height before deterministic activation advance")?
         .committed_height;
     ensure!(
@@ -297,8 +302,8 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
         )
         .await?;
     }
-    let observed = client
-        .get_privacy_capabilities()
+    let observed = read_privacy_capabilities(&client)
+        .await
         .wrap_err("query height after deterministic activation advance")?
         .committed_height;
     ensure!(
@@ -307,16 +312,21 @@ async fn advance_to_exact_height(client: &Client, target_height: u64) -> Result<
     );
     Ok(())
 }
-fn exact_transaction_result(
+async fn exact_transaction_result(
     client: &Client,
     transaction: &SignedTransaction,
 ) -> Result<Option<bool>> {
     let expected_hash = transaction.hash_as_entrypoint();
     let expected_entrypoint = TransactionEntrypoint::External(transaction.clone());
-    let transactions = client
-        .query(FindTransactions::new())
-        .execute_all()
-        .wrap_err("query finalized transactions")?;
+    let query_client = client.clone();
+    let transactions = read_on_dedicated_thread(move || {
+        Ok(query_client
+            .client()
+            .query(FindTransactions::new())
+            .execute_all()?)
+    })
+    .await
+    .wrap_err("query finalized transactions")?;
     let Some(committed) = transactions
         .iter()
         .find(|committed| committed.entrypoint_hash() == &expected_hash)
@@ -341,7 +351,7 @@ async fn wait_for_transaction_result_on_peers(
         let mut matching = 0_usize;
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match exact_transaction_result(client, transaction) {
+            match exact_transaction_result(client, transaction).await {
                 Ok(Some(success)) if success == expected_success => {
                     matching += 1;
                     last_observed.push(format!("peer {index}: expected result visible"));
@@ -366,11 +376,16 @@ async fn wait_for_transaction_result_on_peers(
         sleep(POLL_INTERVAL).await;
     }
 }
-fn asset_quantities(client: &Client, asset_ids: &[AssetId]) -> Result<Vec<Option<Quantity>>> {
-    let assets = client
-        .query(FindAssets::new())
-        .execute_all()
-        .wrap_err("query exact asset snapshot")?;
+async fn asset_quantities(client: &Client, asset_ids: &[AssetId]) -> Result<Vec<Option<Quantity>>> {
+    let query_client = client.clone();
+    let assets = read_on_dedicated_thread(move || {
+        Ok(query_client
+            .client()
+            .query(FindAssets::new())
+            .execute_all()?)
+    })
+    .await
+    .wrap_err("query exact asset snapshot")?;
     Ok(asset_ids
         .iter()
         .map(|asset_id| {
@@ -393,7 +408,7 @@ async fn wait_for_asset_quantities(
         let mut matching = 0_usize;
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match asset_quantities(client, asset_ids) {
+            match asset_quantities(client, asset_ids).await {
                 Ok(observed) if observed == expected => {
                     matching += 1;
                     last_observed.push(format!("peer {index}: {observed:?}"));
@@ -473,7 +488,10 @@ async fn wait_for_common_v2_subject(
         let mut subjects = Vec::with_capacity(clients.len());
         last_observed.clear();
         for (index, client) in clients.iter().enumerate() {
-            match client.get_sumeragi_status() {
+            let status_client = client.clone();
+            match read_on_dedicated_thread(move || status_client.client().get_sumeragi_status())
+                .await
+            {
                 Ok(status) => {
                     if let Err(error) = status.validate() {
                         last_observed.push(format!("peer {index}: invalid v2 status: {error}"));
@@ -621,7 +639,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             .iter()
             .map(|peer| bounded_client(peer.client()))
             .collect::<Vec<_>>();
-        let genesis_hash = canonical_genesis_hash(&client)?;
+        let genesis_hash = canonical_genesis_hash(&client).await?;
         let orchard_compiled = compiled_privacy_profile_v1(ORCHARD_PROTOCOL)
             .wrap_err("load canonical Orchard compiled profile")?;
         let pq_compiled = compiled_privacy_profile_v1(PQ_MASP_PROTOCOL)
@@ -640,7 +658,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "grant CanEnactGovernance",
         )
         .await?;
-        let registration_height = next_incoming_height(&client)?;
+        let registration_height = next_incoming_height(&client).await?;
         let activation_height = registration_height
             .checked_add(PRIVACY_MIN_ACTIVATION_DELAY_BLOCKS_V1)
             .ok_or_else(|| eyre!("retained-native activation height overflowed"))?;
@@ -870,8 +888,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "bootstrap authoritative Orchard and PQ-MASP pools",
         )
         .await?;
-        let bootstrap_height = client
-            .get_privacy_capabilities()
+        let bootstrap_height = read_privacy_capabilities(&client).await
             .wrap_err("query height after retained-native bootstraps")?
             .committed_height;
         wait_for_asset_quantities(
@@ -938,8 +955,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         )
         .await?;
         ensure!(
-            client
-                .get_privacy_capabilities()
+            read_privacy_capabilities(&client).await
                 .wrap_err("query height after corruption rejections")?
                 .committed_height
                 >= bootstrap_height.saturating_add(2),
@@ -1026,23 +1042,25 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "nullifier replay must preserve post-Orchard state",
         )
         .await?;
-        let finalized_height = client
-            .get_privacy_capabilities()
+        let finalized_height = read_privacy_capabilities(&client).await
             .wrap_err("query height before exact retained-native replays")?
             .committed_height;
         for (label, transaction) in [
             ("Orchard", &final_orchard.transaction),
             ("PQ-MASP", &pq_actions.canonical_transaction),
         ] {
-            let replay_error = client
-                .submit_transaction(transaction)
-                .expect_err("exact retained-native transaction replay was accepted");
+            let replay_error = timeout(
+                SUBMISSION_TIMEOUT,
+                client.account_client().submit_transaction(transaction),
+            )
+            .await
+            .map_err(|_| eyre!("exact {label} replay submission exceeded {SUBMISSION_TIMEOUT:?}"))?
+            .expect_err("exact retained-native transaction replay was accepted");
             ensure!(
                 is_exact_transaction_replay(&replay_error),
                 "exact {label} replay rejected for wrong reason: {replay_error:?}"
             );
-            let observed_height = client
-                .get_privacy_capabilities()
+            let observed_height = read_privacy_capabilities(&client).await
                 .wrap_err_with(|| format!("query height after exact {label} replay"))?
                 .committed_height;
             ensure!(
@@ -1099,8 +1117,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
             "fresh post-restart PQ-MASP replay convergence",
         )
         .await?;
-        let post_restart_replay_height = restarted_client
-            .get_privacy_capabilities()
+        let post_restart_replay_height = read_privacy_capabilities(&restarted_client).await
             .wrap_err("query height after fresh post-restart PQ-MASP replay")?
             .committed_height;
         ensure!(
@@ -1141,7 +1158,7 @@ async fn canonical_orchard_and_pq_masp_actions_survive_four_peer_da_replay_and_r
         )
         .await?;
         ensure!(
-            canonical_genesis_hash(&bounded_client(restart_peer.client()))? == genesis_hash,
+            canonical_genesis_hash(&bounded_client(restart_peer.client())).await? == genesis_hash,
             "restarted peer derived a different canonical genesis hash"
         );
         println!(

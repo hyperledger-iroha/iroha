@@ -181,10 +181,12 @@ impl Solver {
         task: &PendingEdge,
         candidate: &Arc<MusubiReleaseIdV1>,
     ) -> Result<(SearchState, Vec<Arc<PendingEdge>>), Box<ResolutionConflictV1>> {
-        let conflict = |reason| Box::new(ResolutionConflictV1 {
-            chain: task.chain.to_vec(),
-            reason,
-        });
+        let conflict = |reason| {
+            Box::new(ResolutionConflictV1 {
+                chain: task.chain.to_vec(),
+                reason,
+            })
+        };
         if Self::would_cycle(state, &task.parent, candidate.as_ref()) {
             return Err(conflict(ConflictReasonV1::Cycle(
                 candidate.as_ref().clone(),

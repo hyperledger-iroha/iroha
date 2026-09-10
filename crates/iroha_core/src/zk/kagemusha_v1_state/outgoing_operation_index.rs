@@ -421,6 +421,10 @@ impl KagemushaOutgoingPublicInputPreimageV1 {
 }
 
 /// Monotonic durable stage of one caller operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::outgoing_operation_index::KagemushaOutgoingOperationPhaseV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum KagemushaOutgoingOperationPhaseV1 {
     /// Core accepted the exact preparation and reserved terminal capacity.

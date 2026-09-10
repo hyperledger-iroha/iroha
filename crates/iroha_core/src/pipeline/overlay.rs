@@ -41,19 +41,18 @@ use iroha_data_model::{
         },
     },
     metadata::Metadata,
-    name::Name,
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
     proof::VerifyingKeyId,
     smart_contract::ContractAddress,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
-    state_path::StatePath,
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
     zk::{
         BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
         OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
     },
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
@@ -6165,7 +6164,7 @@ seiyaku GuardedOverlayRebound {
         );
         md.insert(
             iroha_data_model::smart_contract::manifest::MANIFEST_METADATA_KEY
-                .parse::<iroha_data_model::name::Name>()
+                .parse::<iroha_model_base::name::Name>()
                 .unwrap(),
             Json::new(manifest.clone()),
         );
@@ -10161,6 +10160,8 @@ struct IvmTraceBundleV1 {
     register_log: Vec<IvmRegEventV1>,
     step_log: Vec<IvmStepEntryV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmRegisterStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -10169,6 +10170,8 @@ struct IvmRegisterStateV1 {
     gpr: Vec<u64>,
     tags: Vec<u8>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmConstraintV1")]
 #[derive(
     Debug,
     Clone,
@@ -10183,6 +10186,8 @@ enum IvmConstraintV1 {
     Eq { reg1: u16, reg2: u16, cycle: u64 },
     Range { reg: u16, bits: u8, cycle: u64 },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmMemEventV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -10202,6 +10207,8 @@ enum IvmMemEventV1 {
         root: [u8; 32],
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmRegEventV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -10221,6 +10228,8 @@ enum IvmRegEventV1 {
         root: [u8; 32],
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmStepEntryV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]

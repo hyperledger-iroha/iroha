@@ -1625,7 +1625,7 @@ mod scoped_readback_recovery_tests {
             revision: Some(7),
             policy_digest: Some([7; 32]),
             bootle_lantern_issuance_bindings: None,
-            stream_token_signer_public_key: None,
+            stream_token_hardware_binding: None,
             stream_token_gateway_admission_qualification: None,
             stream_token_gateway_admission_max_pending: None,
             stream_token_gateway_admission_max_tracked_tokens: None,

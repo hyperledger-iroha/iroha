@@ -4,7 +4,7 @@
 //! consent-selected balance scopes and terminal settlement status are retained
 //! so maturity settlement cannot infer or substitute caller-controlled terms.
 use crate::{
-    Identifiable, Name,
+    Identifiable,
     asset::prelude::{AssetDefinitionId, AssetId},
     metadata::Metadata,
     prelude::AccountId,
@@ -12,6 +12,7 @@ use crate::{
 use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 
@@ -24,6 +25,8 @@ use norito::{
 mod model {
     use super::*;
     /// Identifier for a repo agreement lifecycle.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::repo::model::RepoAgreementId")]
     #[derive(
         Debug,
         Display,
@@ -44,8 +47,7 @@ mod model {
     #[getset(get = "pub")]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
-    #[derive(norito::NoritoSchema)]
-    #[norito_schema(name = "iroha_data_model::repo::model::RepoAgreementId")]
+
     pub struct RepoAgreementId {
         /// Logical name assigned by the initiating desk or workflow.
         pub name: Name,

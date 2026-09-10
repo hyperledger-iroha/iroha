@@ -93,7 +93,6 @@ use crate::{
 };
 use iroha_data_model::{
     metadata::Metadata,
-    prelude::Name,
     soranet::{
         RelayId,
         incentives::{RelayBandwidthProofV1, RelayComplianceStatusV1, RelayEpochMetricsV1},
@@ -110,6 +109,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     DecodeLimits,

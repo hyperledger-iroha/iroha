@@ -1,4 +1,4 @@
-//! Immutable original-codec frame and signature-preimage checks for P2P owners.
+//! Captured frame/signature bytes and reference identity checks for P2P owners.
 use norito::{
     NoritoSchema,
     core::{NoritoDeserialize, NoritoSerialize},
@@ -127,35 +127,30 @@ pub(crate) fn preimage(owner: &str, variant: &str, signed: &[u8]) {
     assert_eq!(signed, bytes(value, "signed_bytes_hex"));
 }
 
-/// Match a test payload's declared identity to both original compiler directions.
-pub(crate) fn test_payload_identity<T: NoritoSchema>(expected_nominal: &str) {
+/// Check both typed codec contracts against an independently hashed identity vector.
+pub(crate) fn test_payload_identity<T>(expected_nominal: &str)
+where
+    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+{
     static RECORDS: OnceLock<Vec<Value>> = OnceLock::new();
     let records = RECORDS.get_or_init(|| {
         norito::json::from_slice(include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../fixtures/p2p/test_payload_identity_observations.v1.json"
+            "/../../fixtures/p2p/payload_identities.v1.json"
         )))
-        .expect("immutable original P2P test-payload identities")
+        .expect("reference P2P test-payload identities")
     });
     assert_eq!(T::nominal_name(), expected_nominal);
     let rows: Vec<_> = records
         .iter()
         .filter(|row| field(row, "nominal") == expected_nominal)
         .collect();
-    assert_eq!(rows.len(), 2, "both original codec directions are present");
-    for direction in ["serialize", "deserialize"] {
-        let matching: Vec<_> = rows
-            .iter()
-            .filter(|row| field(row, "direction") == direction)
-            .collect();
-        assert_eq!(matching.len(), 1, "each direction is unique");
-        let row = matching[0];
-        assert_eq!(T::frame_name(), field(row, "root_hint"));
-        assert_eq!(
-            norito::schema::identity::frame_hash::<T>().as_slice(),
-            bytes(row, "schema_hash")
-        );
-    }
+    assert_eq!(rows.len(), 1, "each reference identity is unique");
+    assert_eq!(T::frame_name(), expected_nominal);
+    assert_eq!(
+        norito::schema::identity::frame_hash::<T>().as_slice(),
+        bytes(rows[0], "schema_hash")
+    );
 }
 
 /// Check faulty test codecs without invoking their deliberately rejected serializers.

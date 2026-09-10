@@ -6,7 +6,6 @@ use crate::{
     escrow::AssetEscrowRecord,
     events::data::oracle::FeedEventRecord,
     metadata::Metadata,
-    name::Name,
     nft::{Nft, NftId},
     oracle::{
         FeedConfig, OracleChangeProposal, OracleDispute, OracleProviderStatsRecord,
@@ -24,6 +23,7 @@ use crate::{
     trigger::{Trigger, TriggerId, action::Action},
 };
 use iroha_crypto::{HashOf, PublicKey};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Numeric};
 use std::vec::{self, Vec};
 #[derive(Debug)]

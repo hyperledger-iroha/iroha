@@ -1,5 +1,6 @@
 //! JSON object-key identities for scalar data-model identifiers.
 
+use iroha_model_base::name::Name;
 use norito::json::{self, JsonObjectKey, JsonObjectKeyOwned};
 
 macro_rules! impl_display_object_key {
@@ -31,7 +32,7 @@ macro_rules! impl_name_object_key {
 
         impl JsonObjectKeyOwned for $ty {
             fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
-                <crate::Name as JsonObjectKeyOwned>::from_json_key_text(key).map($constructor)
+                <Name as JsonObjectKeyOwned>::from_json_key_text(key).map($constructor)
             }
         }
     };
@@ -122,7 +123,7 @@ impl JsonObjectKeyOwned for crate::nft::NftId {
                 "NFT key must use `name$domain.dataspace`".to_owned(),
             ));
         }
-        let name = <crate::Name as JsonObjectKeyOwned>::from_json_key_text(name)?;
+        let name = <Name as JsonObjectKeyOwned>::from_json_key_text(name)?;
         let domain = <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(domain)?;
         Ok(crate::nft::NftId::new(domain, name))
     }
@@ -144,21 +145,6 @@ impl JsonObjectKeyOwned for crate::proof::ProofId {
             .map_err(json::Error::from_decode_resource)?;
         key.parse::<crate::proof::ProofId>()
             .map_err(|error| json::Error::Message(error.to_owned()))
-    }
-}
-
-impl JsonObjectKey for crate::state_path::StatePath {
-    fn visit_json_key_text<E>(
-        &self,
-        mut visitor: impl FnMut(&str) -> Result<(), E>,
-    ) -> Result<(), E> {
-        visitor(self.as_ref())
-    }
-}
-
-impl JsonObjectKeyOwned for crate::state_path::StatePath {
-    fn from_json_key_text(key: &str) -> Result<Self, json::Error> {
-        crate::state_path::StatePath::parse_json_object_key(key)
     }
 }
 
@@ -451,54 +437,6 @@ mod tests {
                 <crate::domain::DomainId as JsonObjectKeyOwned>::from_json_key_text(uppercase)
             });
         assert!(noncanonical.is_err());
-        assert_eq!(usage.total_allocated_bytes(), 0);
-    }
-
-    #[test]
-    fn state_path_key_accounts_nfc_scratch_before_normalization() {
-        let key = "root/é".repeat(4);
-        // Twenty-four scalars have a 96-scalar audited decomposition bound.
-        // Growing through 32, 64 and 128 u32 elements requests 896 bytes.
-        let normalization_allocation = 896;
-        let expected_allocation = key.len() + normalization_allocation;
-
-        let (decoded, usage) = norito::core::with_decode_limits_measured(
-            allocation_limit(expected_allocation),
-            || <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(&key),
-        );
-        assert_eq!(
-            decoded
-                .expect("canonical state path at exact allocation bound")
-                .as_ref(),
-            key
-        );
-        assert_eq!(usage.total_allocated_bytes(), expected_allocation);
-
-        let (rejected, usage) = norito::core::with_decode_limits_measured(
-            allocation_limit(expected_allocation - 1),
-            || <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(&key),
-        );
-        assert!(matches!(rejected, Err(json::Error::DecodeResourceLimit)));
-        assert_eq!(usage.total_allocated_bytes(), normalization_allocation);
-
-        let decomposed = "root/e\u{301}".repeat(4);
-        let (rejected, usage) =
-            norito::core::with_decode_limits_measured(allocation_limit(usize::MAX), || {
-                <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text(
-                    &decomposed,
-                )
-            });
-        assert!(rejected.is_err());
-        assert_eq!(usage.total_allocated_bytes(), normalization_allocation);
-
-        let (inline, usage) =
-            norito::core::with_decode_limits_measured(allocation_limit(0), || {
-                <crate::state_path::StatePath as JsonObjectKeyOwned>::from_json_key_text("root/a")
-            });
-        assert_eq!(
-            inline.expect("inline path needs no heap").as_ref(),
-            "root/a"
-        );
         assert_eq!(usage.total_allocated_bytes(), 0);
     }
 }

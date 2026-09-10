@@ -193,19 +193,12 @@ impl ReputationRequiredSourceMaskV1 {
     }
 }
 /// Exact identity of one immutable finalized ledger view.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    NoritoSerialize,
-    NoritoDeserialize,
-    norito::NoritoSchema,
-)]
+#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::reputation::ReputationFinalizedIdentityV1")]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+
 pub struct ReputationFinalizedIdentityV1 {
     /// Finalized block height.
     pub height: u64,

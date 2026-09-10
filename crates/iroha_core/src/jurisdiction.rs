@@ -211,6 +211,8 @@ pub struct JdgCommitteeManifest {
     pub committees: Vec<JdgCommitteeRecord>,
 }
 /// Committee membership/rotation record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::jurisdiction::JdgCommitteeRecord")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
 pub struct JdgCommitteeRecord {
     /// Committee identifier bound into attestations.
@@ -226,6 +228,8 @@ pub struct JdgCommitteeRecord {
     pub retire_height: u64,
 }
 /// Committee member with optional proof-of-possession.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::jurisdiction::JdgCommitteeMember")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, norito::codec::Decode, IntoSchema)]
 pub struct JdgCommitteeMember {
     /// Member public key.

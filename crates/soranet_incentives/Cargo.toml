@@ -10,6 +10,7 @@ description = "Deterministic SoraNet relay rewards and payout accounting"
 workspace = true
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false }
 iroha_primitives = { workspace = true, features = ["json"] }
 thiserror = { workspace = true }

@@ -182,9 +182,9 @@ jobs:
           echo "NORITO_BRIDGE_OUT_DIR=$artifact_dir" >> "$GITHUB_ENV"
           echo "NORITO_BRIDGE_BUILD_DIR=$build_dir" >> "$GITHUB_ENV"
       - name: Build exact ABI-23 NoritoBridge XCFramework
-        run: scripts/build_norito_xcframework.sh
+        run: scripts/build_norito_xcframework.sh --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
       - name: Authenticate Apple native artifact
-        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only
+        run: bash scripts/check_mobile_sdk_artifacts.sh --apple-only --lockfile-path "$GITHUB_WORKSPACE/Cargo.lock"
       - name: Run exact Python 3.12 ABI-23 native reference parity
         env:
           SORAFS_PYTHON_SDK_EVIDENCE_DIR: ${{ runner.temp }}/iroha-sorafs-python-native-abi23-evidence

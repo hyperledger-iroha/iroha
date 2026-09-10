@@ -12,7 +12,7 @@ use iroha_data_model::kagemusha::{
     KagemushaPaymentRequestV1, KagemushaPaymentV1,
 };
 use norito::{
-    DecodeLimits, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DecodeLimits, NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
 };
 
@@ -49,8 +49,11 @@ pub(super) enum ReceiverErrorV1 {
 }
 type Result<T> = std::result::Result<T, ReceiverErrorV1>;
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.stage-inbound-payment-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::StagePayloadV1",
+    frame = "iroha.kagemusha.device.v1.stage-inbound-payment-command"
+)]
 struct StagePayloadV1 {
     version: u16,
     operation: u8,
@@ -59,16 +62,22 @@ struct StagePayloadV1 {
     staging_metadata: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.recover-staged-inbound-payment-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::RecoverStagedPayloadV1",
+    frame = "iroha.kagemusha.device.v1.recover-staged-inbound-payment-command"
+)]
 struct RecoverStagedPayloadV1 {
     version: u16,
     operation: u8,
     credit_id: [u8; 32],
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.recover-inbound-inbox-page-command")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::PagePayloadV1",
+    frame = "iroha.kagemusha.device.v1.recover-inbound-inbox-page-command"
+)]
 struct PagePayloadV1 {
     version: u16,
     operation: u8,
@@ -109,8 +118,11 @@ impl ReceiverCommandV1 {
 }
 
 /// Durable public projection returned by staging and recovery.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.staged-inbound-payment-record")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::StagedRecordV1",
+    frame = "iroha.kagemusha.device.v1.staged-inbound-payment-record"
+)]
 struct StagedRecordV1 {
     canonical_request: Vec<u8>,
     canonical_payment: Vec<u8>,
@@ -118,8 +130,11 @@ struct StagedRecordV1 {
     inbox_receipt: KagemushaInboxReceiptV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.staged-inbound-payment-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::StagedReplyV1",
+    frame = "iroha.kagemusha.device.v1.staged-inbound-payment-reply"
+)]
 struct StagedReplyV1 {
     version: u16,
     operation: u8,
@@ -127,8 +142,11 @@ struct StagedReplyV1 {
     record: StagedRecordV1,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.inbound-inbox-page-reply")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_device_bridge_v1::receiver_payload::PageReplyV1",
+    frame = "iroha.kagemusha.device.v1.inbound-inbox-page-reply"
+)]
 struct PageReplyV1 {
     version: u16,
     operation: u8,
@@ -174,6 +192,7 @@ where
     .map_err(|_| ReceiverErrorV1::CanonicalEncoding)
 }
 
+#[cfg(test)]
 fn encode<T: NoritoSerialize>(value: &T, maximum: usize) -> Result<Vec<u8>> {
     let bytes = norito::encode_canonical(value).map_err(|_| ReceiverErrorV1::CanonicalEncoding)?;
     bound(&bytes, maximum)?;

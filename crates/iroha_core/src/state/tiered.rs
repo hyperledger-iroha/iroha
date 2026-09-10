@@ -10,7 +10,7 @@ use crate::telemetry::StateTelemetry;
 use eyre::{Context, Result};
 use hex::ToHex as _;
 use iroha_config::parameters::actual::{LaneConfig, LaneConfigEntry};
-use iroha_data_model::prelude::StatePath;
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
@@ -2722,7 +2722,6 @@ mod measured_bytes_impls {
         },
         ipfs::IpfsPath,
         metadata::Metadata,
-        name::Name,
         nexus::{
             AxtAssetIncarnationV1, AxtHandleBudgetRecord, AxtHandleCounterRecord, AxtPolicyEntry,
             AxtReplayRecord, LanePrivacyMerkleWitness, LanePrivacyProof, LanePrivacyWitness,
@@ -2753,6 +2752,7 @@ mod measured_bytes_impls {
         trigger::{TriggerId, action::Repeats},
         zk::BackendTag,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::{
         bigint::BigInt,
         const_vec::ConstVec,

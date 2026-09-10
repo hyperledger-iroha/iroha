@@ -434,7 +434,9 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         in owner["generator"]
     )
     assert '--output-dir "${IROHA_OPENAPI_STAGE}"' in owner["generator"]
-    assert '--output-dir="${IROHA_OPENAPI_STAGE}"' in owner["generator"]
+    assert 'sync-openapi.mjs' not in owner["generator"]
+    assert 'cp -R' not in owner["generator"]
+    assert 'existing empty' in owner["generator"]
     assert "absolute private /private/tmp <run>/artifacts/<stage> directory" in owner["generator"]
     assert "--reuse-canonical-spec" not in owner["generator"]
     assert "cargo run" not in owner["generator"]
@@ -446,6 +448,7 @@ def test_openapi_generated_owner_has_exact_outputs_and_staging_interfaces() -> N
         "scripts/seal_workspace_source.py",
         "scripts/sumeragi_v2_release_process_policy.sh",
         "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
+        "tools/openapi/scripts/generate-unsigned-openapi.mjs",
         "tools/openapi/scripts/verify-openapi-release-inputs.mjs",
         "xtask/src/openapi_git.rs",
     } <= set(owner["generator_sources"])

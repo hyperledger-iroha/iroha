@@ -34,7 +34,6 @@ use iroha_data_model::{
         ingest::{DaIngestAdmissionLaneV1, DaIngestAdmissionPolicyV1, DaStripeLayout},
         types::{BlobDigest, DaRentQuote, StorageTicketId},
     },
-    name::Name,
     nexus::{
         DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, LaneCatalog,
         LaneConfig as ModelLaneConfig, LaneId,
@@ -50,6 +49,7 @@ use iroha_data_model::{
         TaikaiSegmentWindow, TaikaiStreamId, TaikaiTimeIndexKey,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::XorQuantity};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, BOB_ID};

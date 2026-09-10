@@ -67,11 +67,11 @@ fn ingress_metadata_accessors_read_numeric_values() {
     let account_id = AccountId::new(keypair.public_key().clone());
     let mut metadata = Metadata::default();
     metadata.insert(
-        crate::name::Name::from_str("expires_at_height").unwrap(),
+        iroha_model_base::name::Name::from_str("expires_at_height").unwrap(),
         iroha_primitives::json::Json::from(10_u64),
     );
     metadata.insert(
-        crate::name::Name::from_str("tx_sequence").unwrap(),
+        iroha_model_base::name::Name::from_str("tx_sequence").unwrap(),
         iroha_primitives::json::Json::from(3_u64),
     );
     let tx = TransactionBuilder::new(
@@ -92,7 +92,7 @@ fn ingress_metadata_accessors_propagate_decode_error() {
     let account_id = AccountId::new(keypair.public_key().clone());
     let mut metadata = Metadata::default();
     metadata.insert(
-        crate::name::Name::from_str("expires_at_height").unwrap(),
+        iroha_model_base::name::Name::from_str("expires_at_height").unwrap(),
         iroha_primitives::json::Json::new("not-a-number"),
     );
     let tx = TransactionBuilder::new(

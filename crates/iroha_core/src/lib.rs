@@ -1,4 +1,8 @@
 //! Iroha — A simple, enterprise-grade decentralized ledger.
+//!
+//! Framed Core records declare their protocol identity with `NoritoSchema`.
+//! Borrowed query views retain distinct nominal identities and explicitly project
+//! to the owned result's frame; payload serialization does not choose an identity.
 #![allow(unexpected_cfgs)]
 // Nested `if` blocks remain intentional for readability/instrumentation; Clippy's
 // `collapsible_if` lint would force let-chains that obscure the control flow.
@@ -1207,6 +1211,8 @@ pub mod role {
     use mv::json::JsonKeyCodec;
     use norito::json;
     /// [`RoleId`] with owner [`AccountId`] attached to it.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::role::RoleIdWithOwner")]
     #[derive(
         Debug,
         Clone,
@@ -1254,19 +1260,23 @@ pub mod role {
         }
     }
     impl FromStr for RoleIdWithOwner {
-        type Err = iroha_data_model::ParseError;
+        type Err = iroha_model_base::error::ParseError;
         fn from_str(s: &str) -> Result<Self, Self::Err> {
             const SEPARATOR: char = '|';
             let (account_raw, role_raw) =
                 s.split_once(SEPARATOR)
-                    .ok_or(iroha_data_model::ParseError::new(
+                    .ok_or(iroha_model_base::error::ParseError::new(
                         "RoleIdWithOwner must be formatted as `account|role`",
                     ))?;
             let account = AccountId::parse_encoded(account_raw).map_err(|_| {
-                iroha_data_model::ParseError::new("Invalid account component in RoleIdWithOwner")
+                iroha_model_base::error::ParseError::new(
+                    "Invalid account component in RoleIdWithOwner",
+                )
             })?;
             let id = role_raw.parse().map_err(|_| {
-                iroha_data_model::ParseError::new("Invalid role component in RoleIdWithOwner")
+                iroha_model_base::error::ParseError::new(
+                    "Invalid role component in RoleIdWithOwner",
+                )
             })?;
             Ok(RoleIdWithOwner { account, id })
         }
@@ -1573,6 +1583,10 @@ mod tests {
     }
     #[test]
     fn raw_network_topic_is_total_for_restricted_gossip_and_fails_closed_on_unknown_layouts() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_network_topic_is_total_for_restricted_gossip_and_fails_closed_on_unknown_layouts::SingleFieldNetworkMessage"
+        )]
         #[derive(Encode)]
         enum SingleFieldNetworkMessage {
             Field(u8),
@@ -1659,11 +1673,19 @@ mod tests {
     }
     #[test]
     fn raw_consensus_struct_parser_accepts_each_advertised_packed_layout() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::TwoFieldFixture"
+        )]
         #[derive(Encode)]
         struct TwoFieldFixture {
             version: u16,
             payload: PayloadFixture,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::PayloadFixture"
+        )]
         #[derive(Encode)]
         enum PayloadFixture {
             Safety(u8),
@@ -2037,10 +2059,18 @@ mod tests {
             CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
         };
         use iroha_data_model::merge::MergeLedgerEntry;
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::LegacySidecarCarrier"
+        )]
         #[derive(Encode)]
         enum LegacySidecarCarrier {
             Payload(Box<CertifiedMergeSidecarMessage>),
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::SharedSidecarCarrier"
+        )]
         #[derive(Encode)]
         enum SharedSidecarCarrier {
             Payload(Arc<CertifiedMergeSidecarMessage>),
@@ -2354,6 +2384,11 @@ mod tests {
     include!("tests/sumeragi_v2_decode_limits.rs");
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps::BoxToriiProxyCarrier",
+            frame = "iroha_core::NetworkMessage"
+        )]
         #[derive(Encode)]
         enum BoxToriiProxyCarrier {
             #[codec(index = 13)]
@@ -2398,12 +2433,13 @@ mod tests {
             shared, boxed,
             "Box-to-Arc ownership must not change wire bytes"
         );
-        let origin_key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+        let origin_key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
             .expect("generate proxy relay origin key");
         let origin = PeerId::new(origin_key.public_key().clone());
         let live = ncore::decode_from_bytes::<NetworkMessage>(&shared)
             .expect("decode live Arc proxy carrier");
         let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &live);
+        assert_ne!(p2p_wire_len, usize::MAX, "valid node relay geometry");
         let view = ncore::from_bytes_view(&shared).expect("inspect proxy carrier frame");
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_decode_limits(

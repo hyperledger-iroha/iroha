@@ -22,6 +22,10 @@ use super::{
 };
 
 /// Frozen application parameters. Catalog eligibility must be authenticated by consensus.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::execution_proofs::classed_race_v1::admission::ClassedRaceParametersV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct ClassedRaceParametersV1 {
     /// Exactly one.
@@ -37,6 +41,10 @@ pub struct ClassedRaceParametersV1 {
 }
 
 /// Exact participant data; resource identities live in the typed admission resources.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::execution_proofs::classed_race_v1::admission::ClassedRaceParticipantDataV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct ClassedRaceParticipantDataV1 {
     /// Exactly one.

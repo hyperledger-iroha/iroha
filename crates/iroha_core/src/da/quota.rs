@@ -2,9 +2,8 @@
 use super::DaPinIntentValidationError;
 use iroha_config::parameters::actual::Da as DaPolicy;
 use iroha_crypto::blake3_256;
-use iroha_data_model::{
-    account::AccountId, da::pin_intent::DaPinIntentBundle, state_path::StatePath,
-};
+use iroha_data_model::{account::AccountId, da::pin_intent::DaPinIntentBundle};
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{Decode, Encode, decode_from_bytes, to_bytes};
 use std::{collections::BTreeMap, str::FromStr};

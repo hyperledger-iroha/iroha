@@ -5,6 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+iroha_model_base = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 color-eyre = { workspace = true }
 futures = { workspace = true }

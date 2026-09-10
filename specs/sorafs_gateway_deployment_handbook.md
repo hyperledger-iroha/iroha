@@ -18,7 +18,7 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 |-------------|-------|
 | Torii build ≥ `2026-02-18` | Must include stream-token enforcement and the `sorafs.gateway` config surface. |
 | GAR admission artefacts | Gateway admission envelope + manifest signed via governance tooling. |
-| Stream token runtime signer | Encrypted runtime-only Ed25519 key in an independently administered external software signer, an authenticated runtime adapter, and a reviewed non-secret handle/public-key/revision/public-policy-digest binding. Distribute the public key through authenticated provider inventory and rotate as described in §5.4. |
+| Stream token hardware custody | Complete signer/attester/observer public pins, a non-exportable hardware key, separate runtime clients and independently approved finalized custody state. See the [source contract](sorafs/stream_token_hardware_custody.md); public pins and simulated receipts do not qualify a deployment. |
 | Observability stack | Prometheus + Grafana dashboards (`grafana_sorafs_gateway_*`) shipped in `specs/`. |
 | Smoke tooling | Latest `sorafs-fetch` CLI (`cargo run -p sorafs_fetch -- --help`) with the gateway options described below. |
 
@@ -31,22 +31,10 @@ This handbook gives infra teams a single playbook for shipping and running Torii
    enforce_admission = true
    enforce_capabilities = true
 
-   [sorafs.storage]
-   enabled = true
-
-   [sorafs.storage.stream_tokens]
-   enabled = true
-   signer_handle = "software://sorafs/stream-token/primary"
-   signer_public_key_hex = "<64-lowercase-hex-characters>"
-   signer_revision = 4
-   signer_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
-   admission_provider_handle = "sealed-cas:prod/stream-token/admission/v1"
-   admission_provider_revision = 7
-   admission_provider_policy_digest_hex = "<64-lowercase-nonzero-hex-characters>"
-   key_version = 4
-   default_ttl_secs = 900
-   default_max_streams = 8
    ```
+   Merge the complete [stream-token public-pin template](sorafs/snippets/stream_token_hardware_binding.toml)
+   into the same configuration, replacing its deliberately invalid placeholders and
+   zero trust generations/intervals with independently reviewed values.
 2. Configure distinct proof-outcome, repair, reserve, and orderbook entries under
    `sorafs.storage.native_transaction_signers`, and inject all four matching
    live providers. The storage-enabled durable-drain requirement does not
@@ -57,26 +45,23 @@ This handbook gives infra teams a single playbook for shipping and running Torii
 3. Ensure TLS automation controller is active (`tls_automation` section) so the `X-Sora-TLS-State` header is populated.
 4. Configure observability exporters (Prometheus scrape of `torii_metrics` endpoint). Dashboards referenced in §4 expect metric names `torii_sorafs_chunk_range_requests_total`, `torii_sorafs_stream_token_denials_total{reason=…}`, etc.
 
-The TOML `enabled` value is the only production activation control; do not use
-an environment override. The deployment launcher must inject the external software-signer
-adapter whose reported non-secret handle, 32-byte Ed25519 public key, non-zero
-adapter revision, and non-zero public-policy digest exactly match
-`signer_handle`, `signer_public_key_hex`, `signer_revision`, and
-`signer_policy_digest_hex`. Startup probes this public identity twice and fails
-closed when the adapter is absent, any value is missing or invalid, either
-probe differs, or the provider is stale, substituted, or test-marked.
-The signing key remains non-exportable, and adapter credentials, sessions, PINs,
-and tokens are runtime-only secrets that must not enter configuration, disk
-files, logs, or readiness evidence.
+The TOML `enabled` value is the only production activation control. The nested
+`hardware` group contains every signer, attester and observer pin; the sole key
+generation is `hardware.key_revision`. Provider identity comes from storage,
+and the runtime supplies the exact chain/network context. All three authority
+keys and six service/administrator identities are independent. Credentials,
+sessions and PINs remain runtime-only.
 
-For every issuance, Torii revalidates the exact public signer identity before
-and after sending the canonical domain-separated Norito payload to the adapter,
-accepts only the raw 64-byte Ed25519 signature, and verifies it strictly against
-the configured public key before returning a token. Treat qualification drift,
-an unavailable or refusing signer, and every malformed, weak-key, wrong-key, or
-non-verifying output as a fail-closed issuance error. Configure positive token
-defaults only: zero does not mean unlimited, TTL is capped at one hour, and
-request overrides may only reduce these defaults.
+The launcher injects the hardware client, independent signed-observer client and
+approved full custody anchor. Torii rejects missing or unexpected dependencies;
+startup cannot bootstrap trust from either client's output. Every operation has
+fresh phase-bound state reads and exactly one Sign, with bounded read-only recovery
+on ambiguity. The four-signature receipt and independent final completed-state
+evidence must pass local Core finality and expiry checks before token publication.
+See the [hardware custody contract](sorafs/stream_token_hardware_custody.md) for
+precise bindings, ceilings and the unfinished native/device/state qualification
+requirements. Positive defaults remain bounded: TTL is at most one hour and
+request overrides may only reduce configured ceilings.
 
 ### 3.1 CID cache hydration and origin isolation
 
@@ -218,31 +203,16 @@ Recommended alerts:
 
 ### 5.4 Key Rotation
 
-1. Create a fresh Ed25519 key inside the independently administered software
-   signer and keep it encrypted and runtime-only. Assign it a new non-secret signer handle; do not copy a seed
-   into a file, environment variable, configuration value, or deployment
-   artefact.
-2. In one reviewed rollout, inject the adapter bound to that handle and update
-   `signer_handle`, `signer_public_key_hex`, `signer_revision`,
-   `signer_policy_digest_hex`, and `key_version`. Restart the issuer and require
-   both exact startup qualification probes to pass.
-3. Issue a probe token and require strict verification of the software-signer signature
-   against the newly configured public key before publishing that key in the
-   authenticated provider deployment inventory. The endpoint's
-   `X-SoraFS-Verifying-Key` header is useful for comparison but is not a trust
-   anchor by itself.
-4. Stage a new provider descriptor containing the new `gateway-key` and a token
-   signed by that key. A descriptor pins exactly one key; never pair a new key
-   with an old token or silently fall back to a key returned beside a failed
-   token.
-5. Switch consumers atomically after the inventory update is visible. If an
-   overlap window is required, use separately named old/new descriptors so each
-   token remains bound to its own pinned key, then remove the old descriptor no
-   later than its final token expiry.
-6. Revoke and destroy the old software-signing key. Retain only its non-secret handle,
-   public-key fingerprint, `token_pk_version`, activation time, final expiry,
-   change approval, and negative probes proving old-key, cross-key, and
-   wrong-handle tokens are rejected.
+Use the [hardware custody cutover](sorafs/stream_token_hardware_custody.md#cutover-and-qualification):
+generate a new key inside qualified hardware, obtain independent attestation and
+governed activation, then atomically update public pins, approved custody anchor
+and authenticated provider inventory. Require fresh signed startup and complete
+release evidence; signature validity alone does not qualify hardware or state.
+
+Switch each descriptor's pinned `gateway-key` and token together. Finalize the old
+custody's terminal audit/revocation before revocation takes effect, and never retry
+an in-flight operation under a replacement record. Retain public fingerprints,
+generations, approval and negative old-key/cross-key/wrong-binding evidence only.
 
 ### 5.5 WAF Policy Pack
 

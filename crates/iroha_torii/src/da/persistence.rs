@@ -67,12 +67,13 @@ const DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1: usize = 128 * 1024;
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static DA_INGEST_SERVER_ASSIGNMENT_LOCK: OnceLock<NonPoisoningMutex<()>> = OnceLock::new();
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::persistence::DaIngestServerAssignmentV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 /// Durable server-owned choices for one signed DA ingest request.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::persistence::DaIngestServerAssignmentV1")]
+
 pub(super) struct DaIngestServerAssignmentV1 {
     /// Assignment layout version.
     pub(super) version: u16,
@@ -110,16 +111,12 @@ pub(super) struct DaIngestServerAssignmentV1 {
     pub(super) assignment_signature: Signature,
 }
 
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    Eq,
-    norito::derive::NoritoSerialize,
-    norito::derive::NoritoDeserialize,
-    norito::NoritoSchema,
-)]
+#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV1")]
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
+
 struct DaIngestSignedReceiptAssignmentV1 {
     version: u16,
     request_digest: [u8; 32],
@@ -4978,10 +4975,11 @@ pub(super) fn persist_da_commitment_record(
     );
     Ok(Some(target_path))
 }
-#[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-/// On-disk schedule entry combining commitment record and PDP commitment bytes.
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::da::persistence::DaCommitmentScheduleEntry")]
+#[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
+/// On-disk schedule entry combining commitment record and PDP commitment bytes.
+
 pub(super) struct DaCommitmentScheduleEntry {
     /// Entry layout version for future migrations.
     pub(super) version: u16,

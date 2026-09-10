@@ -24,6 +24,7 @@ da_harness = [
     "dep:iroha_primitives",
 ]
 cli = [
+    "dep:iroha_model_base",
     "manifest",
     "sorafs_manifest/pqc",
     "dep:ed25519-dalek",
@@ -35,6 +36,7 @@ cli = [
 ]
 fetch_cli = ["cli"]
 [dependencies]
+iroha_model_base = { workspace = true, optional = true }
 iroha_service_model = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 blake3 = "1.8.2"
@@ -61,6 +63,7 @@ toml = { version = "0.8.19" }
 rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
+iroha_model_base = { workspace = true }
 assert_cmd = "2.1.1"
 tempfile = "3.23.0"
 httpmock = "0.8.2"

@@ -125,9 +125,9 @@ use crate::{
         KaigiRelayHop, KaigiRelayManifest, KaigiRoomPolicy, NewKaigi,
         scalar::KaigiAuthorizationScalarV1,
     },
-    name::Name,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_model_base::name::Name;
 fn account(seed: u8) -> AccountId {
     let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap();
     AccountId::new(key.public_key().clone())

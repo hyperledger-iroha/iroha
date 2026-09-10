@@ -1,3 +1,5 @@
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p::ConsensusMessage")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct ConsensusMessage(u32);
 impl iroha_p2p::network::message::ClassifyTopic for ConsensusMessage {

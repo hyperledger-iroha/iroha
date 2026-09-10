@@ -221,8 +221,11 @@ pub enum SignerPurposeBindingV1 {
     },
     /// Evidence-viewer authority is the binding handle and Ed25519 key.
     EvidenceViewer,
-    /// Stream-token authority is the binding handle and Ed25519 key.
-    StreamToken,
+    /// Exact provider whose stream tokens this hardware custody may sign.
+    StreamToken {
+        /// Nonzero provider identity authorized for the token body.
+        provider_id: [u8; 32],
+    },
     /// Exact governed `PoP` issuer identity.
     PopCredentials {
         /// Stable public `PoP` credential issuer identity.
@@ -242,8 +245,10 @@ impl SignerPurposeBindingV1 {
                 | SignerRoleV1::Promotion,
                 Self::NativeOrPromotion,
             )
-            | (SignerRoleV1::EvidenceViewer, Self::EvidenceViewer)
-            | (SignerRoleV1::StreamToken, Self::StreamToken) => true,
+            | (SignerRoleV1::EvidenceViewer, Self::EvidenceViewer) => true,
+            (SignerRoleV1::StreamToken, Self::StreamToken { provider_id }) => {
+                *provider_id != [0; 32]
+            }
             (SignerRoleV1::ReleaseManifest, Self::ReleaseManifest { deployment_id }) => {
                 valid_identity(deployment_id)
             }
@@ -609,6 +614,10 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "protocol/stream_token_purpose_tests.rs"]
+mod stream_token_purpose_tests;
 
 #[cfg(test)]
 include!("protocol/captured_owner_identity_tests.rs");

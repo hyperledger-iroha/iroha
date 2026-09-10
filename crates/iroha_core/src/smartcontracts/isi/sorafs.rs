@@ -20,7 +20,6 @@ use iroha_data_model::{
         MUSUBI_MIN_HEALTHY_REPLICAS_V1, MusubiArchiveLocationKeyV1, MusubiProviderLocationKeyV1,
         MusubiReplicationOrderArchiveBindingV1, MusubiReplicationOrderLocationReferenceV1,
     },
-    name::Name,
     permission::{Permission, Permissions},
     query::{
         error::{FindError, QueryExecutionFail},
@@ -67,9 +66,9 @@ use iroha_data_model::{
             XOR_QUANTITY_SCALE, checked_mul_div_round_u128,
         },
     },
-    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+use iroha_model_base::{name::Name, state_path::StatePath};
 use iroha_primitives::{
     json::Json,
     numeric::{NumericOperationError, Quantity, RoundingMode},
@@ -7862,7 +7861,6 @@ mod sorafs_tests {
             MusubiSeedIngressReceiptBindingV1, MusubiSeedIngressReceiptPayloadV1,
             MusubiSeedIngressReceiptV1, MusubiSemanticReleaseDigestV1,
         },
-        name::Name,
         permission::{Permission as AccountPermission, Permissions},
         prelude::{Account, AccountId, Asset, AssetDefinition, AssetId, Domain},
         query::error::FindError,
@@ -7887,6 +7885,7 @@ mod sorafs_tests {
         },
     };
     use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
+    use iroha_model_base::name::Name;
     use iroha_primitives::{bigint::BigInt, json::Json};
     use nonzero_ext::nonzero;
     use norito::{json, to_bytes};

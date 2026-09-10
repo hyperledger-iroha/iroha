@@ -1166,7 +1166,7 @@ function unwrapNoritoOption(bytes, context) {
 
 function accountEd25519PublicKey(accountId) {
   const address = AccountAddress.fromI105(accountId);
-  const controller = address._controller;
+  const controller = address.controllerInfo();
   if (!controller || controller.tag !== 0 || controller.curve !== 1 || controller.publicKey.length !== 32) {
     throw new Error("Connect approval account id must be a canonical single-key Ed25519 I105 address");
   }

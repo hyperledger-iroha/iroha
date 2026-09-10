@@ -63,6 +63,7 @@ use iroha_executor_data_model::permission::{
     sorafs::CanIssueSorafsReplicationOrder,
     trigger::CanRegisterTrigger,
 };
+use iroha_model_base::name::Name;
 use norito::{
     codec::Encode as NoritoEncode,
     json::{Map as JsonMap, Value as JsonValue},

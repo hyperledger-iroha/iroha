@@ -1155,14 +1155,9 @@ fn decode_stream_token_exact(encoded: &str) -> Result<StreamTokenV1, MusubiArchi
         STREAM_TOKEN_MAX_WIRE_BYTES_V1.saturating_mul(4),
         32,
     );
-    let token: StreamTokenV1 = norito::decode_from_bytes_with_limits(&bytes, limits)
+    let token: StreamTokenV1 = norito::decode_canonical_with_limits(&bytes, limits)
         .map_err(|_| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?;
-    let canonical = norito::encode_canonical(&token)
-        .map_err(|_| control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"))?;
-    if canonical != bytes
-        || token.body.requests_per_minute == 0
-        || token.body.ttl_epoch <= token.body.issued_at
-    {
+    if token.body.requests_per_minute == 0 || token.body.ttl_epoch <= token.body.issued_at {
         return Err(control_integrity("MUSUBI_ARCHIVE_TOKEN_RESPONSE_INVALID"));
     }
     Ok(token)
@@ -2584,3 +2579,7 @@ operator_private_key_file = "provider.key"
         assert_eq!(error.code(), "MUSUBI_ARCHIVE_PLAN_MEMORY_LIMIT");
     }
 }
+
+#[cfg(test)]
+#[path = "musubi_archive_fetch/stream_token_codec_tests.rs"]
+mod stream_token_codec_tests;

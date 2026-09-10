@@ -15,6 +15,8 @@ use iroha_primitives::addr::{SocketAddr, socket_addr};
 use norito::codec::{Decode, Encode};
 use std::{collections::HashSet, num::NonZeroUsize};
 use tokio::{sync::mpsc, time::Duration};
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_p2p::tests::integration::p2p_trust_gossip::TrustTestMessage")]
 #[derive(Clone, Debug, Decode, Encode)]
 enum TrustTestMessage {
     Trust(u32),

@@ -55,6 +55,10 @@ const PREPARED_OUTGOING_INTENT_MAX_BYTES_V1: u64 = 64 * 1024;
 ///
 /// These byte budgets are local resource bounds only. Neither value limits payment history,
 /// accepted-credit count, proof depth, ancestry, or fan-in.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaDurableCapacityV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaDurableCapacityV1 {
     /// Bytes durably available for accepted credits and byte-identical acknowledgements.
@@ -332,6 +336,10 @@ impl KagemushaOutgoingCommitCapabilityV1 {
 }
 
 /// Core-derived sender inputs durably sealed before hardware consumes a payment predecessor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedSendMaterialV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PreparedSendMaterialV1 {
     pub(super) proof_statement: TransitionProofStatementV1,
@@ -347,6 +355,10 @@ pub(super) struct PreparedSendMaterialV1 {
 }
 
 /// Core-derived redeemer inputs sealed before hardware consumes a redemption predecessor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedRedemptionMaterialV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PreparedRedemptionMaterialV1 {
     pub(super) proof_statement: TransitionProofStatementV1,
@@ -359,6 +371,10 @@ pub(super) struct PreparedRedemptionMaterialV1 {
     pub(super) normalized_guard_statement_digest: DigestV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedSendPublicProjectionV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PreparedSendPublicProjectionV1 {
     request: KagemushaPaymentRequestV1,
@@ -367,12 +383,20 @@ struct PreparedSendPublicProjectionV1 {
     encrypted_credit: Vec<u8>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedRedemptionPublicProjectionV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct PreparedRedemptionPublicProjectionV1 {
     statement: KagemushaRedemptionStatementV1,
     artifact_manifest_digest: DigestV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PreparedPublicProjectionV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 enum PreparedPublicProjectionV1 {
     Send(Box<PreparedSendPublicProjectionV1>),
@@ -873,6 +897,10 @@ impl PreparedOutgoingCandidateV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::PersistedOutgoingProofAuthorityV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 enum PersistedOutgoingProofAuthorityV1 {
     Send(KagemushaPairedProofV1),
@@ -1272,6 +1300,10 @@ impl CommittedOutgoingCandidateV1 {
 }
 
 /// Final terminal wire envelope retained by the authenticated retry outbox.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaOutgoingEnvelopeV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum KagemushaOutgoingEnvelopeV1 {
     /// Receiver-bound payment.
@@ -1496,6 +1528,10 @@ impl DurableOutgoingEnvelopeV1 {
 }
 
 /// Durable stage of the sole outgoing transition on one serialized monetary lane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaOutgoingJournalStageV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum KagemushaOutgoingJournalStageV1 {
     /// No active outgoing predecessor exists.
@@ -1509,6 +1545,10 @@ pub enum KagemushaOutgoingJournalStageV1 {
 }
 
 /// Recoverable prepare → proof authority → hardware commit → terminal envelope → exposure journal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::KagemushaOutgoingCandidateJournalV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaOutgoingCandidateJournalV1 {
     stage: KagemushaOutgoingJournalStageV1,
@@ -1988,6 +2028,10 @@ impl KagemushaOutgoingCandidateJournalV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::candidate_lifecycle::SenderOutboxReservationRecordV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 struct SenderOutboxReservationRecordV1 {
     reservation: KagemushaOutboxReservationV1,

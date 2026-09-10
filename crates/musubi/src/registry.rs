@@ -231,6 +231,49 @@ impl fmt::Debug for RegistryPublicConfigImageV1 {
     }
 }
 impl RegistryPublicConfigImageV1 {
+    /// Read one anchored, bounded configuration image without constructing a signer or transport.
+    pub(crate) fn load(config: Option<&Path>) -> Result<Self, RegistryErrorV1> {
+        let selected =
+            config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
+        let path = if selected.is_absolute() {
+            selected
+        } else {
+            std::env::current_dir()
+                .map_err(|_| invalid_public_config())?
+                .join(selected)
+        };
+        let bytes = read_bounded_config(&path)?;
+        Ok(Self { path, bytes })
+    }
+    /// Read only the public address profile needed to reproduce compiled package bytes.
+    ///
+    /// Account keys, endpoints, storage configuration and environment overrides are not inputs
+    /// to this projection. Parsing errors remain redacted because the image can contain secrets.
+    pub(crate) fn account_chain_discriminant(&self) -> Result<u16, RegistryErrorV1> {
+        let source = std::str::from_utf8(&self.bytes).map_err(|_| invalid_public_config())?;
+        let table = source
+            .parse::<toml::Table>()
+            .map_err(|_| invalid_public_config())?;
+        let account = table
+            .get("account")
+            .and_then(toml::Value::as_table)
+            .ok_or_else(invalid_public_config)?;
+        let profile = account
+            .get("profile")
+            .map(|value| value.as_str().ok_or_else(invalid_public_config))
+            .transpose()?;
+        let explicit = account
+            .get("chain_discriminant")
+            .map(|value| {
+                value
+                    .as_integer()
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(invalid_public_config)
+            })
+            .transpose()?;
+        iroha::config::resolve_account_chain_discriminant(profile, explicit)
+            .map_err(|_| invalid_public_config())
+    }
     /// Return the original path used to resolve relative platform-owned files.
     pub(crate) fn path(&self) -> &Path {
         &self.path
@@ -367,18 +410,9 @@ private_key = "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9
     pub(crate) fn load_with_config_image(
         config: Option<&Path>,
     ) -> Result<(Self, RegistryPublicConfigImageV1), RegistryErrorV1> {
-        let selected =
-            config.map_or_else(|| PathBuf::from(DEFAULT_CLIENT_CONFIG), Path::to_path_buf);
-        let path = if selected.is_absolute() {
-            selected
-        } else {
-            std::env::current_dir()
-                .map_err(|_| invalid_public_config())?
-                .join(selected)
-        };
-        let bytes = read_bounded_config(&path)?;
-        let reader = Self::load_from_config_bytes(&path, &bytes)?;
-        Ok((reader, RegistryPublicConfigImageV1 { path, bytes }))
+        let image = RegistryPublicConfigImageV1::load(config)?;
+        let reader = Self::load_from_config_bytes(image.path(), image.bytes())?;
+        Ok((reader, image))
     }
     /// Parse the exact-network signer and endpoint from one already-read `client.toml` image.
     ///
@@ -2578,6 +2612,68 @@ private_key = "{}"
             })
             .expect_err("invalid retention request must fail before transport");
         assert_eq!(error.code(), "MUSUBI_REGISTRY_RETENTION_REQUEST_INVALID");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn public_config_image_loads_an_address_profile_without_credentials() {
+        let temporary = tempdir().expect("temporary directory");
+        let path = temporary.path().join("client.toml");
+        let source = "torii_url = false\n[account]\nprofile = 'taira'\n\
+                      public_key = 'not-a-key'\nprivate_key = 'not-a-key'\n";
+        fs::write(&path, source).expect("write signer-free configuration");
+        let image = RegistryPublicConfigImageV1::load(Some(&path))
+            .expect("read bounded image without parsing credentials");
+        fs::remove_file(&path).expect("remove original configuration after capturing its image");
+        assert_eq!(image.bytes(), source.as_bytes());
+        assert_eq!(
+            image.account_chain_discriminant().expect("public profile"),
+            369
+        );
+        assert_eq!(
+            RegistryReadClientV1::load_from_config_bytes(image.path(), image.bytes())
+                .expect_err("authenticated access still requires valid signer configuration")
+                .code(),
+            "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID"
+        );
+    }
+    #[test]
+    fn public_address_projection_enforces_the_canonical_profile_rules() {
+        for (source, expected) in [
+            ("[account]\n", Some(753)),
+            ("[account]\nprofile = 'taira'\n", Some(369)),
+            ("[account]\nchain_discriminant = 753\n", Some(753)),
+            (
+                "[account]\nprofile = 'taira'\nchain_discriminant = 369\n",
+                Some(369),
+            ),
+            (
+                "[account]\nprofile = 'taira'\nchain_discriminant = 753\n",
+                None,
+            ),
+            ("[account]\nprofile = 'unknown-profile'\n", None),
+            ("[account]\nprofile = 369\n", None),
+            ("[account]\nchain_discriminant = '753'\n", None),
+            ("[account]\nchain_discriminant = 0\n", None),
+            ("[account]\nchain_discriminant = -1\n", None),
+            ("[account]\nchain_discriminant = 65536\n", None),
+            ("[account]\nchain_discriminant = 753.0\n", None),
+            ("account = 'not-a-table'\n", None),
+            ("", None),
+            ("[account", None),
+        ] {
+            let image = RegistryPublicConfigImageV1 {
+                path: PathBuf::from("must-not-be-opened.toml"),
+                bytes: source.as_bytes().to_vec(),
+            };
+            match (image.account_chain_discriminant(), expected) {
+                (Ok(actual), Some(expected)) => assert_eq!(actual, expected, "{source}"),
+                (Err(error), None) => {
+                    assert_eq!(error.class(), RegistryFailureClassV1::Permanent);
+                    assert_eq!(error.code(), "MUSUBI_REGISTRY_PUBLIC_CONFIG_INVALID");
+                }
+                (actual, expected) => panic!("unexpected public profile: {actual:?}, {expected:?}"),
+            }
+        }
     }
     #[cfg(unix)]
     #[test]

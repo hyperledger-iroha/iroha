@@ -222,6 +222,8 @@ const fn boundary_path_name(boundary: SccpReplayBoundaryV1) -> &'static str {
 }
 
 /// One complete signed checkpoint and its exact canonical snapshot bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SccpReplayReplicaCheckpointEntryV1 {
     /// Exactly-three-signature checkpoint statement.
@@ -652,6 +654,8 @@ impl From<SccpReplayArchiveProviderErrorV1> for ToriiSccpReplayEndpointErrorV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayHeadEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayHeadEntryV1 {
     accumulator_id: SccpReplayAccumulatorIdV1,
@@ -660,6 +664,8 @@ struct PersistedReplayHeadEntryV1 {
     checkpoint_sha256: [u8; 32],
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayGenerationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayGenerationV1 {
     checkpoint_set_sha256: [u8; 32],

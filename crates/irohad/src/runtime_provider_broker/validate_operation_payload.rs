@@ -609,12 +609,13 @@ fn validate_operation_payload(
             )
             .map_err(|_| BrokerError::Rejected)?;
         }
-        (slot, OPERATION_STREAM_TOKEN_SIGN_V1) if slot == stream_token_slot => {
-            let signing = decode_canonical::<SignRequestWireV1>(
-                &request.payload,
-                MAX_STREAM_TOKEN_FRAME_BYTES_V1,
-            )?;
-            validate_stream_token_signing_payload(&signing.payload)?;
+        (slot, OPERATION_STREAM_TOKEN_SIGN_V1 | OPERATION_STREAM_TOKEN_RECOVER_V1)
+            if slot == stream_token_slot =>
+        {
+            prepare_stream_token_broker_request(&request.binding, &request.payload)?;
+        }
+        (slot, OPERATION_STREAM_TOKEN_OBSERVE_V1) if slot == stream_token_slot => {
+            decode_stream_token_observer_request(&request.binding, &request.payload)?;
         }
         (slot, OPERATION_STREAM_TOKEN_GATEWAY_ADMIT_V1)
             if slot == stream_token_gateway_admission_slot =>

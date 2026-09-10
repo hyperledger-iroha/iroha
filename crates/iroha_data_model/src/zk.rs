@@ -766,10 +766,9 @@ pub enum ZkAceTransferDigestErrorV1 {
 mod tests {
     #![allow(clippy::type_complexity)]
     use super::*;
-    use crate::{
-        account::address::ChainDiscriminantGuard, block::BlockHeader, domain::DomainId, name::Name,
-    };
+    use crate::{account::address::ChainDiscriminantGuard, block::BlockHeader, domain::DomainId};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
+    use iroha_model_base::name::Name;
     use std::{
         collections::BTreeSet,
         str::FromStr as _,

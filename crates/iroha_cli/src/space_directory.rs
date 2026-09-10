@@ -14,12 +14,12 @@ use iroha::data_model::{
 use iroha::{config::Config, data_model::Decode};
 use iroha_data_model::{
     asset::AssetDefinitionId,
-    name::Name,
     nexus::{
         Allowance, AllowanceWindow, AmxRole, CapabilityScope, DenyDirective, ManifestEffect,
         ManifestEntry, ManifestVersion, SmartContractId, UniversalAccountId,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue};
 use reqwest::{
@@ -1183,8 +1183,10 @@ where
         ),
     )
     .map_err(|error| eyre!("{label} exceeds its JSON lexical resource bounds: {error}"))?;
-    norito::with_decode_limits_scope(SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1, || json::from_slice(bytes))
-        .map_err(|_| eyre!("{label} could not be decoded within its resource limits"))
+    norito::with_decode_limits_scope(SPACE_DIRECTORY_JSON_DECODE_LIMITS_V1, || {
+        json::from_slice(bytes)
+    })
+    .map_err(|_| eyre!("{label} could not be decoded within its resource limits"))
 }
 fn encode_space_directory_json_bounded<T>(value: &T) -> Result<Vec<u8>>
 where

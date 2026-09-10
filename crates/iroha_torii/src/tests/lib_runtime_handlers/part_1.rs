@@ -47,7 +47,6 @@ use iroha_data_model::{
     },
     isi::{Grant, Log, Register, RegisterPeerWithPop, consensus_keys::RegisterConsensusKey},
     level::Level,
-    name::Name,
     nexus::{AxtPolicySnapshot, AxtRejectReason, DataSpaceId, LaneId, UniversalAccountId},
     parameter::{Parameter, system::SumeragiNposParameters},
     peer::{Peer, PeerId},
@@ -70,6 +69,7 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
+use iroha_model_base::name::Name;
 use iroha_primitives::{const_vec::ConstVec, json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
 use iroha_torii_shared::configuration::Configuration;
@@ -646,9 +646,9 @@ fn install_lane_manifest_registry_for_test(
 }
 /// Test-only wire twin of the private core committee record.
 ///
-/// The explicit frame projection keeps its Norito header identical to the record
+/// The explicit frame identity keeps its Norito header identical to the record
 /// decoded by `State`; field order and types intentionally mirror that record.
-#[derive(norito::Encode, norito::derive::NoritoSchema)]
+#[derive(norito::Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1",
     frame = "iroha_core::state::AutoscaleLaneCommitteeV1"
@@ -2147,12 +2147,8 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id(
     })
 }
 #[cfg(feature = "telemetry")]
-pub async fn mk_norito_rpc_test_harness(
-    cfg: NoritoRpcTransport,
-) -> (SharedAppState, Arc<iroha_telemetry::metrics::Metrics>) {
-    let app = mk_app_state_for_tests_with_options(None, None, Some(cfg), None);
-    let metrics = iroha_telemetry::metrics::global_or_default();
-    (app, metrics)
+pub async fn mk_norito_rpc_test_harness(cfg: NoritoRpcTransport) -> SharedAppState {
+    mk_app_state_for_tests_with_options(None, None, Some(cfg), None)
 }
 #[tokio::test]
 async fn runtime_handlers_ok_without_token_and_rate_limit() {

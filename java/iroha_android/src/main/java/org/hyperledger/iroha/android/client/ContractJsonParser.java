@@ -65,7 +65,8 @@ public final class ContractJsonParser {
         response.operationReceipt().feePayment(),
         response.transactionPayloadB64(),
         response.signingMessageB64(),
-        "contract call response");
+        "contract call response",
+        TransactionAdmissionIntent.QUEUE_PLAN_SYNCED);
     if (!response.submitted()
         && (response.entrypointHashHex() != null
             || response.operationReceipt().txHashHex() != null
@@ -152,7 +153,8 @@ public final class ContractJsonParser {
         response.feePayment(),
         response.transactionPayloadB64(),
         response.signingMessageB64(),
-        "multisig response");
+        "multisig response",
+        TransactionAdmissionIntent.ORDINARY);
     return response;
   }
 
@@ -579,7 +581,8 @@ public final class ContractJsonParser {
       final FeePaymentIntent feePayment,
       final String transactionPayloadB64,
       final String signingMessageB64,
-      final String context) {
+      final String context,
+      final TransactionAdmissionIntent expectedAdmissionIntent) {
     if (submitted) {
       if (txHashHex == null || transactionPayloadB64 != null || signingMessageB64 != null) {
         throw new IllegalStateException(
@@ -596,7 +599,7 @@ public final class ContractJsonParser {
     final TransactionPayload decodedPayload;
     try {
       decodedPayload = NoritoJavaCodecAdapter.decodeCanonicalTransactionPayload(
-          transactionPayload, TransactionAdmissionIntent.ORDINARY);
+          transactionPayload, expectedAdmissionIntent);
     } catch (final Exception ex) {
       throw new IllegalStateException(
           context + ".transaction_payload_b64 must contain one canonical TransactionPayload", ex);

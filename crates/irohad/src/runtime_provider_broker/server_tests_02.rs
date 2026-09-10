@@ -1706,7 +1706,7 @@ fn signer_binding() -> ProviderBindingWireV1 {
         revision: Some(7),
         policy_digest: Some(TEST_POLICY_DIGEST),
         bootle_lantern_issuance_bindings: None,
-        stream_token_signer_public_key: None,
+        stream_token_hardware_binding: None,
         stream_token_gateway_admission_qualification: None,
         stream_token_gateway_admission_max_pending: None,
         stream_token_gateway_admission_max_tracked_tokens: None,
@@ -1740,11 +1740,14 @@ fn signer_binding() -> ProviderBindingWireV1 {
     }
 }
 fn token_signer_binding() -> ProviderBindingWireV1 {
+    let hardware = stream_token_hardware_test_support::hardware_binding();
     let mut binding = runtime_binding(
         IrohaRuntimeProviderSlotV1::StreamTokenSigner,
-        "software://sorafs/stream-token/primary",
+        &hardware.custody().runtime_handle,
     );
-    binding.stream_token_signer_public_key = Some(TEST_SIGNER_KEY);
+    binding.revision = Some(hardware.custody().key_revision);
+    binding.policy_digest = Some(hardware.custody().policy_digest);
+    binding.stream_token_hardware_binding = Some(hardware);
     binding
 }
 fn runtime_binding(slot: IrohaRuntimeProviderSlotV1, handle: &str) -> ProviderBindingWireV1 {
@@ -2792,3 +2795,5 @@ fn signer_binding_for_server() -> ProviderBindingWireV1 {
 }
 include!("server_source_tests.rs");
 include!("codec_signer_tests.rs");
+
+include!("stream_token_hardware_test_support.rs");

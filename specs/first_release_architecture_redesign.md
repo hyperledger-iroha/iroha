@@ -1,5 +1,10 @@
 # First-release architecture redesign
 
+The [September 10 SDK and Musubi checkpoint](../docs/history/2026-09-10/musubi-sdk-and-resolver.md)
+records the iterative resolver repair, canonical compiler adapters, authenticated
+Musubi capability and merged-source development qualification. Release acceptance
+remains open; historical checkpoints below do not attest the current candidate.
+
 This record tracks implementation of the approved SDK and repository redesign.
 It is not a release qualification claim. The implementation retains one canonical
 first-release interface and does not add compatibility adapters.

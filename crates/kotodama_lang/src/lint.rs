@@ -2850,7 +2850,7 @@ fn main() { subscription_bill(); }"#,
             asset::AssetDefinitionId,
             isi::{InstructionBox, escrow::OpenAssetEscrow},
         };
-        let escrow_name: iroha_data_model::name::Name = "aitai_offer".parse().expect("escrow name");
+        let escrow_name: iroha_model_base::name::Name = "aitai_offer".parse().expect("escrow name");
         let escrow_id = iroha_data_model::escrow::EscrowId::from_kotodama_name(&escrow_name);
         let asset_def: AssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
             .parse()

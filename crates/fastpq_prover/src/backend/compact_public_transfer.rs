@@ -31,7 +31,11 @@ use crate::{
     proof::PublicIO,
 };
 
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_transfer::BoundDelta",
+    frame = "fastpq_prover::compact_v1::PublicDeltaV1"
+)]
 struct BoundDelta {
     from_account: AccountId,
     to_account: AccountId,
@@ -56,7 +60,11 @@ impl From<&PublicTransferDelta> for BoundDelta {
     }
 }
 
-#[derive(NoritoSerialize)]
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "fastpq_prover::backend::compact_public_transfer::BoundTranscript",
+    frame = "fastpq_prover::compact_v1::PublicTranscriptV1"
+)]
 struct BoundTranscript {
     batch_hash: Hash,
     authority_digest: Hash,
@@ -67,7 +75,7 @@ struct BoundTranscript {
 #[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::compact_public_transfer::BoundContext",
-    frame = "fastpq_prover::compact_prototype::PublicTransferContextV1"
+    frame = "fastpq_prover::compact_v1::PublicTransferContextV1"
 )]
 struct BoundContext {
     version: u16,
@@ -81,7 +89,7 @@ struct BoundContext {
 #[derive(NoritoSerialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::compact_public_transfer::BoundQuantityContext",
-    frame = "fastpq_prover::compact_prototype::QuantityTransferContextV1"
+    frame = "fastpq_prover::compact_v1::QuantityTransferContextV1"
 )]
 struct BoundQuantityContext {
     version: u16,
@@ -256,6 +264,15 @@ fn invariant(details: &str) -> Error {
 
 #[cfg(test)]
 mod tests {
+    // Isolate the derived replay byte ceiling from the independently retained
+    // raw-replay default query ceiling. This is an explicit test policy.
+    fn byte_limit_policy() -> crate::VerifyLimits {
+        crate::VerifyLimits {
+            max_queries: 375,
+            ..crate::VerifyLimits::default()
+        }
+    }
+
     use super::*;
     use crate::{
         OperationKind, PublicInputs,
@@ -496,21 +513,33 @@ mod tests {
     fn extracted_context_preserves_original_one_delta_envelope_bytes() {
         // Keep independent records with the original field order as the bare
         // payload oracle; do not route this through the shared encoder.
-        #[derive(NoritoSerialize)]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "fastpq_prover::backend::compact_public_transfer::tests::OriginalDelta",
+            frame = "fastpq_prover::compact_v1::PublicDeltaV1"
+        )]
         struct OriginalDelta {
             from_account: AccountId,
             to_account: AccountId,
             asset_definition: AssetDefinitionId,
             quantities: [Quantity; 5],
         }
-        #[derive(NoritoSerialize)]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "fastpq_prover::backend::compact_public_transfer::tests::OriginalTranscript",
+            frame = "fastpq_prover::compact_v1::PublicTranscriptV1"
+        )]
         struct OriginalTranscript {
             batch_hash: Hash,
             authority_digest: Hash,
             deltas: Vec<OriginalDelta>,
             poseidon_preimage_digest: Option<Hash>,
         }
-        #[derive(NoritoSerialize)]
+        #[derive(NoritoSerialize, norito::NoritoSchema)]
+        #[norito_schema(
+            name = "fastpq_prover::backend::compact_public_transfer::tests::OriginalContext",
+            frame = "fastpq_prover::compact_v1::PublicTransferContextV1"
+        )]
         struct OriginalContext {
             version: u16,
             semantics: u8,
@@ -671,23 +700,24 @@ mod tests {
         }
         let verifier = VerifyOnly(&air);
         assert!(matches!(
-            super::super::compact_protocol::verify(&verifier, &proof, VerifyLimits::default()),
+            super::super::compact_protocol::verify(&verifier, &proof, byte_limit_policy()),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
                 ..
             })
         ));
         let limits = VerifyLimits {
-            max_proof_bytes: 4 * 1024 * 1024,
-            ..VerifyLimits::default()
+            max_proof_bytes: 16 * 1024 * 1024,
+            max_queries: 375,
+            ..byte_limit_policy()
         };
         let verifying_started = std::time::Instant::now();
         let work = super::super::compact_protocol::verify(&verifier, &proof, limits).unwrap();
         let verifying = verifying_started.elapsed();
-        assert_eq!(work.air_evaluations, 136);
-        assert_eq!(work.row_leaves, 272);
-        assert_eq!(work.fri_queries, 136);
-        assert_eq!(work.proof_bytes, 2_826_491);
+        assert_eq!(work.air_evaluations, 375);
+        assert!(work.row_leaves <= 750);
+        assert_eq!(work.fri_queries, 375);
+        assert_eq!(norito::encode_canonical(&proof).unwrap().len(), 7_791_716);
         let shared_conversion_started = std::time::Instant::now();
         let shared = super::super::compact_protocol::shared_openings::from_compact(
             &verifier, &proof, limits,
@@ -706,18 +736,18 @@ mod tests {
             norito::core::to_bytes(&shared).unwrap()
         };
         let raw_verifying_started = std::time::Instant::now();
-        let raw_work = super::super::compact_protocol::shared_openings::codec::decode_and_verify(
-            &verifier, &encoded, limits,
-        )
+        let raw_work = super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
+            &verifier, &encoded, limits, 64 * 1024 * 1024)
         .unwrap();
         let raw_verifying = raw_verifying_started.elapsed();
         assert_eq!(raw_work, shared_work);
         let facade_started = std::time::Instant::now();
-        let verified = super::super::compact_public_api::verify_transfer(
+        let verified = super::super::compact_public_api::verify_transfer_with_allocation(
             &prepared,
             &expected(&prepared),
             &encoded,
             limits,
+            64 * 1024 * 1024,
         )
         .unwrap();
         let facade_verifying = facade_started.elapsed();
@@ -728,22 +758,23 @@ mod tests {
                 &prepared,
                 &expected(&prepared),
                 &encoded,
-                VerifyLimits::default(),
+                byte_limit_policy(),
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
                 ..
             })
         ));
-        assert_eq!(shared_work.air_evaluations, 136);
-        assert!(shared_work.row_leaves <= 272);
+        assert_eq!(shared_work.air_evaluations, 375);
+        assert!(shared_work.row_leaves <= 750);
         assert_eq!(shared_work.terminal_degree_checks, 1);
-        assert!(shared_work.proof_bytes < work.proof_bytes);
+        assert_eq!(shared_work.proof_bytes, work.proof_bytes);
+        assert!(shared_work.proof_bytes < norito::encode_canonical(&proof).unwrap().len());
         assert!(matches!(
             super::super::compact_protocol::shared_openings::verify_shared(
                 &verifier,
                 &shared,
-                VerifyLimits::default()
+                byte_limit_policy()
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_proof_bytes",
@@ -769,19 +800,19 @@ mod tests {
             .is_err()
         );
         assert!(
-            super::super::compact_protocol::shared_openings::codec::decode_and_verify(
+            super::super::compact_protocol::shared_openings::codec::decode_and_verify_with_allocation(
                 &changed_air,
                 &encoded,
-                limits,
-            )
+                limits, 64 * 1024 * 1024)
             .is_err()
         );
         assert!(
-            super::super::compact_public_api::verify_transfer(
+            super::super::compact_public_api::verify_transfer_with_allocation(
                 &changed,
                 &expected(&changed),
                 &encoded,
                 limits,
+                64 * 1024 * 1024,
             )
             .is_err()
         );

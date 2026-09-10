@@ -47,10 +47,98 @@ def _write_clean_git_shim(directory: Path) -> None:
         "        dirty_after and count > dirty_after\n"
         "    ):\n"
         "        raise SystemExit(1)\n"
+        "    raise SystemExit(0)\n"
         "if arguments == ['ls-files', '--cached', '-z']:\n"
         "    arguments = ['ls-files', '--cached', '--others', '-z']\n"
         "os.execv(real_git, [real_git, *arguments])\n",
     )
+
+
+def _git_fixture_probe(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    """Expose underlying Git calls without touching or qualifying a repository."""
+
+    called = tmp_path / "underlying-git-called"
+    real_git = _write_executable(
+        tmp_path / "underlying-git",
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        f"pathlib.Path({str(called)!r}).write_text('called', encoding='ascii')\n"
+        "print(json.dumps(sys.argv[1:]))\n"
+        "raise SystemExit(17)\n",
+    )
+    monkeypatch.setattr(shutil, "which", lambda name: str(real_git) if name == "git" else None)
+    _write_clean_git_shim(tmp_path)
+    return tmp_path / "git", called
+
+
+def _git_fixture_environment(**overrides: str) -> dict[str, str]:
+    """Make the test-only fault controls explicit rather than inheriting other tests."""
+
+    environment = os.environ.copy()
+    for name in (
+        "IROHA_TEST_GIT_ALWAYS_DIRTY",
+        "IROHA_TEST_GIT_DIFF_COUNTER",
+        "IROHA_TEST_GIT_DIRTY_AFTER",
+    ):
+        environment.pop(name, None)
+    environment.update(overrides)
+    return environment
+
+
+@pytest.mark.parametrize("always_dirty, expected", (("0", 0), ("1", 1)))
+def test_bundle_git_fixture_clean_and_dirty_diff_never_delegate(
+    tmp_path: Path, monkeypatch, always_dirty: str, expected: int
+) -> None:
+    shim, called = _git_fixture_probe(tmp_path, monkeypatch)
+    result = subprocess.run(
+        [str(shim), "diff", "--quiet", "--no-ext-diff", "a" * 40, "--"],
+        cwd=tmp_path,
+        env=_git_fixture_environment(IROHA_TEST_GIT_ALWAYS_DIRTY=always_dirty),
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == expected, result.stderr
+    assert not called.exists(), "controlled diff must not inspect the unrelated worktree"
+
+
+def test_bundle_git_fixture_late_dirty_fence_counts_every_diff(
+    tmp_path: Path, monkeypatch
+) -> None:
+    shim, called = _git_fixture_probe(tmp_path, monkeypatch)
+    counter = tmp_path / "diff-count"
+    environment = _git_fixture_environment(
+        IROHA_TEST_GIT_DIFF_COUNTER=str(counter), IROHA_TEST_GIT_DIRTY_AFTER="1"
+    )
+    outcomes = [
+        subprocess.run(
+            [str(shim), "diff", "--quiet", "--no-ext-diff", "b" * 40, "--"],
+            cwd=tmp_path,
+            env=environment,
+            capture_output=True,
+            check=False,
+        ).returncode
+        for _ in range(3)
+    ]
+    assert outcomes == [0, 1, 1]
+    assert counter.read_text(encoding="ascii") == "3"
+    assert not called.exists()
+
+
+def test_bundle_git_fixture_unhandled_command_keeps_real_status(
+    tmp_path: Path, monkeypatch
+) -> None:
+    shim, called = _git_fixture_probe(tmp_path, monkeypatch)
+    result = subprocess.run(
+        [str(shim), "status", "--porcelain"],
+        cwd=tmp_path,
+        env=_git_fixture_environment(),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 17
+    assert json.loads(result.stdout) == ["status", "--porcelain"]
+    assert called.read_text(encoding="ascii") == "called"
 
 
 def _fixture(tmp_path: Path) -> tuple[Path, Path, str]:
@@ -373,13 +461,21 @@ def test_bundle_macos_closes_launchd_inventory(tmp_path: Path) -> None:
         "potr-provider",
         "billing",
         "evidence-viewer",
-        "stream-token",
         "pop-credentials",
     ):
         assert (
             f"{root}/share/iroha/sorafs/external_software_signer/launchd/"
             f"org.hyperledger.iroha.sorafs-signer-{role}.plist"
         ) in names
+
+    assert not any("sorafs-signer-stream-token" in name for name in names)
+    with tarfile.open(archive_path, "r:") as archive:
+        launcher = archive.extractfile(
+            f"{root}/share/iroha/sorafs/external_software_signer/launchd/"
+            "sorafs-external-software-signer-launchd-v1"
+        )
+        assert launcher is not None
+        assert b"|stream-token|" not in launcher.read()
 
 
 def test_bundle_windows_excludes_signer_and_never_smokes_it(tmp_path: Path) -> None:

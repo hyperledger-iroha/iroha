@@ -2774,9 +2774,9 @@ mod tests {
     use iroha_data_model::{
         asset::AssetDefinitionId,
         domain::DomainId,
-        name::Name,
         soranet::prelude::{RelayBondLedgerEntryV1, RelayBondPolicyV1},
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::numeric::Quantity;
     use rand::rand_core::TryRngCore;
     use rand::{RngCore, SeedableRng, rngs::StdRng};

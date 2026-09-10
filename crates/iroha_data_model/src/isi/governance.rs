@@ -264,6 +264,8 @@ pub struct CastZkBallot {
     pub public_inputs_json: String,
 }
 impl crate::seal::Instruction for CastZkBallot {}
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::governance::BallotProof")]
 #[derive(
     Clone,
     Debug,

@@ -39,6 +39,7 @@ required-features = ["dev-tools", "runtime"]
 description = "Reference SoraNet relay daemon"
 
 [dependencies]
+iroha_model_base = { workspace = true }
 clap = { version = "4.5.51", features = ["derive"] }
 futures = { workspace = true, features = ["std"] }
 hex = { workspace = true, features = ["alloc"] }

@@ -291,7 +291,6 @@ use iroha_data_model::{
     domain::DomainId,
     events::trigger_completed::{TriggerCompletedEvent, TriggerCompletedOutcome},
     isi::settlement::{FxCorridorPolicy, FxCorridorPolicyRegistry},
-    name::Name,
     nexus::{DataSpaceId, FeeRejectionCode, FeeSponsorProgram, FeeSponsorProgramId, LaneId},
     nft::NftId,
     peer::{Peer, PeerId},
@@ -324,6 +323,8 @@ use iroha_executor_data_model::permission::query::{
     CanReadAllLedgerData, CanReadRestrictedDataspace,
 };
 use iroha_futures::supervisor::ShutdownSignal;
+#[cfg(feature = "app_api")]
+use iroha_model_base::name::Name;
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
 use iroha_primitives::{addr::SocketAddr, numeric::Quantity};
@@ -1221,7 +1222,7 @@ pub use routing::{
     SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
     ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk,
-    handle_post_asset_transfer, handle_post_contract_alias_set, handle_post_contract_call,
+    handle_post_asset_transfer, handle_post_contract_alias_set,
     handle_post_contract_call_batch_prepare, handle_post_contract_call_simulate,
     handle_post_contract_view, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
@@ -2384,7 +2385,7 @@ fn is_exact_tx_history_dataspace_alias(
 ) -> bool {
     !dataspace.is_empty()
         && !dataspace.contains('.')
-        && iroha_data_model::name::canonicalize_domain_label(dataspace)
+        && iroha_model_base::name::canonicalize_domain_label(dataspace)
             .is_ok_and(|canonical| canonical == dataspace)
         && catalog.by_alias(dataspace).is_some()
 }
@@ -4191,6 +4192,8 @@ enum NoritoRpcGateFailure {
     CanaryDenied,
     MtlsRequired,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcCapabilitiesResponse")]
 #[derive(
     Debug,
     Clone,
@@ -4206,6 +4209,8 @@ struct RpcCapabilitiesResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcPingResponse")]
 #[derive(
     Debug,
     Clone,
@@ -4225,6 +4230,8 @@ struct RpcPingResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcNoritoRpcCapability")]
 #[derive(
     Debug,
     Clone,
@@ -12666,6 +12673,8 @@ async fn handler_gov_unlock_stats(
     check_access(&app, &headers, Some(remote.ip()), "v1/gov/unlocks/stats").await?;
     crate::gov::handle_gov_unlock_stats(app.state.clone()).await
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::InternalAccountReadResponse")]
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
@@ -12678,8 +12687,7 @@ async fn handler_gov_unlock_stats(
     norito::derive::NoritoDeserialize,
 )]
 /// Full canonical account state exposed only through the trusted internal read boundary.
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::InternalAccountReadResponse")]
+
 struct InternalAccountReadResponse {
     /// Canonical domainless account identifier.
     id: AccountId,
@@ -19050,6 +19058,8 @@ async fn handler_zk_verify_batch(
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     routing::handle_v1_zk_verify_batch_admitted(format, body, limits, admission).await
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmDeriveRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -19075,6 +19085,8 @@ pub struct ZkIvmDeriveRequestDto {
     /// IVM bytecode to execute.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmDeriveResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -19092,6 +19104,8 @@ pub struct ZkIvmDeriveResponseDto {
     /// Proved executable payload derived from local IVM execution.
     pub proved: iroha_data_model::transaction::IvmProved,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -19142,6 +19156,8 @@ mod zk_ivm_request_dto_json_tests {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveJobCreatedDto")]
 #[derive(
     Debug,
     Clone,
@@ -19153,12 +19169,13 @@ mod zk_ivm_request_dto_json_tests {
     Eq,
 )]
 /// Response body returned by `POST /v1/zk/ivm/prove` and `DELETE /v1/zk/ivm/prove/{job_id}`.
-#[derive(norito::derive::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::ZkIvmProveJobCreatedDto")]
+
 pub struct ZkIvmProveJobCreatedDto {
     /// Stable job identifier.
     pub job_id: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveJobDto")]
 #[derive(
     Debug,
     Clone,
@@ -24494,7 +24511,7 @@ mod torii_proxy_session_id_tests {
 type OwnedToriiProxyRequestIdPreimage = (&'static str, Hash, PeerId, u64, ToriiProxyRequestKindV1);
 /// Borrowed wire-equivalent of [`OwnedToriiProxyRequestIdPreimage`].
 ///
-/// Each tuple field keeps the canonical length prefix, but the potentially
+/// Each tuple field uses its canonical length prefix, while the potentially
 /// large request arm is streamed directly instead of being cloned merely to
 /// derive its request id.
 #[cfg(feature = "connect")]
@@ -24508,7 +24525,7 @@ struct BorrowedToriiProxyRequestIdPreimage<'a> {
 #[cfg(feature = "connect")]
 impl norito::NoritoSchema for BorrowedToriiProxyRequestIdPreimage<'_> {
     fn nominal_name() -> String {
-        "iroha_torii::BorrowedToriiProxyRequestIdPreimage<'_>".into()
+        "iroha_torii::BorrowedToriiProxyRequestIdPreimage<'_>".to_owned()
     }
     fn frame_name() -> String {
         <OwnedToriiProxyRequestIdPreimage as norito::NoritoSchema>::frame_name()
@@ -26067,7 +26084,7 @@ impl BoundedCanonicalIterableFanoutResponse {
 }
 impl norito::NoritoSchema for BoundedCanonicalIterableFanoutResponse {
     fn nominal_name() -> String {
-        "iroha_torii::BoundedCanonicalIterableFanoutResponse".into()
+        "iroha_torii::BoundedCanonicalIterableFanoutResponse".to_owned()
     }
     fn frame_name() -> String {
         <iroha_data_model::query::QueryResponse as norito::NoritoSchema>::frame_name()
@@ -37644,21 +37661,42 @@ async fn handler_post_contract_call(
         "call",
     )
     .await?;
-    match crate::routing::handle_post_contract_call(
+    let crate::routing::PreparedContractCallRequest {
+        mut response,
+        transaction,
+    } = crate::routing::prepare_contract_call_request(
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
-        request,
+        request.0,
     )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("call"));
-            Err(err)
+    .inspect_err(|_| {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("call"));
+    })?;
+    if let Some(transaction) = transaction {
+        let tx_hash_hex = hex::encode(transaction.hash().as_ref());
+        let entrypoint_hash_hex = hex::encode(transaction.hash_as_entrypoint().as_ref());
+        let admitted = submit_signed_transaction_for_ingress_strict_durable(
+            app.clone(),
+            headers,
+            None,
+            transaction,
+        )
+        .await?;
+        if admitted.status() != StatusCode::ACCEPTED {
+            return Ok(admitted);
         }
+        // A certified acceptance proves admission. It does not prove local queue presence or Applied.
+        response.submitted = true;
+        response.tx_hash_hex = Some(tx_hash_hex.clone());
+        response.entrypoint_hash_hex = Some(entrypoint_hash_hex.clone());
+        response.transaction_payload_b64 = None;
+        response.signing_message_b64 = None;
+        response.operation_receipt.status = "submitted".to_owned();
+        response.operation_receipt.tx_hash_hex = Some(tx_hash_hex);
+        response.operation_receipt.entrypoint_hash_hex = Some(entrypoint_hash_hex);
     }
+    Ok(JsonBody(response).into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_batch_prepare(
@@ -48311,7 +48349,11 @@ pub struct ToriiRuntimeDeps {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     #[cfg(feature = "app_api")]
-    sorafs_stream_token_signer: Option<Arc<dyn sorafs::StreamTokenRuntimeSigner>>,
+    sorafs_stream_token_hardware_client: Option<Arc<dyn sorafs::StreamTokenHardwareClientV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_stream_token_state_observer: Option<Arc<dyn sorafs::StreamTokenStateObserverClientV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_stream_token_approved_anchor: Option<sorafs::StreamTokenApprovedCustodyAnchorV1>,
     #[cfg(feature = "app_api")]
     sorafs_stream_token_admission_capture: Option<Arc<sorafs::StreamTokenAdmissionCaptureV1>>,
     #[cfg(feature = "app_api")]
@@ -48436,7 +48478,11 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             sorafs_node: None,
             #[cfg(feature = "app_api")]
-            sorafs_stream_token_signer: None,
+            sorafs_stream_token_hardware_client: None,
+            #[cfg(feature = "app_api")]
+            sorafs_stream_token_state_observer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_stream_token_approved_anchor: None,
             #[cfg(feature = "app_api")]
             sorafs_stream_token_admission_capture: None,
             #[cfg(feature = "app_api")]
@@ -50690,7 +50736,7 @@ impl Torii {
     ) -> Result<(), String> {
         const PIN_GLOBAL_USAGE_STATE_KEY_V1: &str = "sorafs_pin_accounting_v1/global";
         const PIN_GLOBAL_USAGE_MAX_BYTES_V1: usize = 128;
-        let key = iroha_data_model::state_path::StatePath::from_str(PIN_GLOBAL_USAGE_STATE_KEY_V1)
+        let key = iroha_model_base::state_path::StatePath::from_str(PIN_GLOBAL_USAGE_STATE_KEY_V1)
             .map_err(|error| format!("invalid pin resource summary state path: {error:?}"))?;
         let world = state.world_view();
         let usage = match world.smart_contract_state().get(&key) {
@@ -52535,7 +52581,14 @@ impl Torii {
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
-        let shared_sorafs_stream_token_signer = runtime_deps.sorafs_stream_token_signer.clone();
+        let shared_sorafs_stream_token_hardware_client =
+            runtime_deps.sorafs_stream_token_hardware_client.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_stream_token_state_observer =
+            runtime_deps.sorafs_stream_token_state_observer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_stream_token_approved_anchor =
+            runtime_deps.sorafs_stream_token_approved_anchor;
         #[cfg(feature = "app_api")]
         let shared_sorafs_stream_token_admission_capture =
             runtime_deps.sorafs_stream_token_admission_capture.clone();
@@ -53640,15 +53693,25 @@ impl Torii {
         };
         #[cfg(feature = "app_api")]
         let stream_token_issuer = {
-            if config.sorafs_storage.stream_tokens.enabled && !operator_signatures.is_enabled() {
+            if sorafs::stream_token_runtime::validate_issuer_operator_signatures(
+                &config.sorafs_storage.stream_tokens,
+                operator_signatures.is_enabled(),
+            )
+            .is_err()
+            {
                 return Err(ToriiBuildError::invalid_configuration(
                     "sorafs.storage.stream_tokens",
                     "enabled stream-token issuance requires operator_signatures.enabled",
                 ));
             }
             sorafs::StreamTokenIssuer::from_config(
-                &config.sorafs_storage.stream_tokens,
-                shared_sorafs_stream_token_signer,
+                &config.sorafs_storage,
+                chain_id.as_ref(),
+                *network_id.as_bytes(),
+                shared_sorafs_stream_token_hardware_client,
+                shared_sorafs_stream_token_state_observer,
+                shared_sorafs_stream_token_approved_anchor,
+                Arc::clone(&state),
             )
             .map_err(|error| {
                 ToriiBuildError::invalid_runtime_dependency("sorafs.storage.stream_tokens", error)
@@ -56910,35 +56973,6 @@ mod gateway_runtime_config_tests {
             ))
         }
     }
-    #[derive(Debug)]
-    struct TestStreamTokenRuntimeSigner {
-        public_key: [u8; 32],
-    }
-    impl sorafs::StreamTokenRuntimeSigner for TestStreamTokenRuntimeSigner {
-        fn handle(&self) -> &str {
-            "provider:prod/stream-token/v1"
-        }
-        fn public_key(&self) -> [u8; 32] {
-            self.public_key
-        }
-        fn qualification(
-            &self,
-        ) -> Result<
-            sorafs::StreamTokenRuntimeSignerQualificationV1,
-            sorafs::StreamTokenRuntimeSignerProbeErrorV1,
-        > {
-            Ok(sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-                4, [0xb4; 32],
-            ))
-        }
-        fn sign(
-            &self,
-            _signing_payload: &[u8],
-        ) -> Result<[u8; ed25519_dalek::SIGNATURE_LENGTH], sorafs::StreamTokenSigningError>
-        {
-            Err(sorafs::StreamTokenSigningError::Refused)
-        }
-    }
     fn compliance_signer(
         signer_id: &str,
         signing_key_byte: u8,
@@ -57180,46 +57214,7 @@ mod gateway_runtime_config_tests {
         );
         mapped.validate().expect("mapped policy must remain valid");
     }
-    #[test]
-    fn runtime_dependency_builders_retain_injected_instances() {
-        let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
-        let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
-            Arc::new(TestComplianceFeedTransport);
-        let stream_token_signer: Arc<dyn sorafs::StreamTokenRuntimeSigner> =
-            Arc::new(TestStreamTokenRuntimeSigner {
-                public_key: SigningKey::from_bytes(&[0x54; 32])
-                    .verifying_key()
-                    .to_bytes(),
-            });
-        let dependencies = ToriiRuntimeDeps::new(
-            crate::build_identity_test_fixture::build_identity(),
-            routing::MaybeTelemetry::disabled(),
-        )
-        .with_sorafs_stream_token_signer(Arc::clone(&stream_token_signer))
-        .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
-        .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
-        assert!(Arc::ptr_eq(
-            dependencies
-                .sorafs_stream_token_signer
-                .as_ref()
-                .expect("stream-token signer retained"),
-            &stream_token_signer
-        ));
-        assert!(Arc::ptr_eq(
-            dependencies
-                .sorafs_gateway_acme_client
-                .as_ref()
-                .expect("ACME client retained"),
-            &acme_client
-        ));
-        assert!(Arc::ptr_eq(
-            dependencies
-                .sorafs_gateway_compliance_feed_transport
-                .as_ref()
-                .expect("compliance transport retained"),
-            &compliance_transport
-        ));
-    }
+    include!("runtime_dependency_tests/stream_token_hardware.rs");
     #[test]
     fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
         let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");

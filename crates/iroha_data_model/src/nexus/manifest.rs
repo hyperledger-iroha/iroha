@@ -1,9 +1,10 @@
 //! Space Directory manifest representations and evaluation helpers.
 use super::DataSpaceId;
 
+use crate::asset::AssetDefinitionId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{asset::AssetDefinitionId, error::ParseError, name::Name};
 use iroha_crypto::Hash;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -146,7 +147,7 @@ impl From<SmartContractId> for Name {
     }
 }
 impl FromStr for SmartContractId {
-    type Err = crate::ParseError;
+    type Err = iroha_model_base::error::ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Name::from_str(s).map(Self::new)
     }
@@ -190,6 +191,8 @@ impl From<ManifestVersion> for u16 {
     }
 }
 /// Capability manifest describing deterministic allowances for a UAID.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::nexus::manifest::AssetPermissionManifest")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     all(feature = "ffi_export", not(feature = "ffi_import")),
@@ -199,8 +202,7 @@ impl From<ManifestVersion> for u16 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::nexus::manifest::AssetPermissionManifest")]
+
 pub struct AssetPermissionManifest {
     /// Schema version used to interpret the manifest.
     pub version: ManifestVersion,

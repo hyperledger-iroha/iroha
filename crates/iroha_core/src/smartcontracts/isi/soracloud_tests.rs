@@ -1,4 +1,5 @@
 use super::*;
+use iroha_model_base::name::Name;
 use crate::{
     block::ValidBlock,
     kura::Kura,
@@ -10,13 +11,14 @@ use iroha_crypto::fhe_bfv::BfvBootstrapKeyMode;
 use iroha_crypto::{
     Algorithm, Hash, KeyPair,
     fhe_bfv::{
-        BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BfvCiphertext, BfvEvaluationKeyBundle,
-        BfvFullBootstrapAccumulatorV1, BfvFullBootstrapCircuitArtifactBundleV1,
-        BfvFullBootstrapCircuitArtifactRoleV1, BfvFullBootstrapCircuitMaterialV1,
-        BfvFullBootstrapLinearTransformDiagonalV1, BfvFullBootstrapLinearTransformV1,
-        BfvFullBootstrapSampleExtractionV1, BfvIdentifierCiphertext, BfvIdentifierPublicParameters,
-        BfvParameters, BfvPublicKey, BfvSecretKey, apply_galois_automorphism_ciphertext,
-        bfv_balanced_multiplication_depth, bfv_encrypted_zero_refresh_residual_multiple_bound,
+        BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS, BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1, BfvCiphertext,
+        BfvEvaluationKeyBundle, BfvFullBootstrapAccumulatorV1,
+        BfvFullBootstrapCircuitArtifactBundleV1, BfvFullBootstrapCircuitArtifactRoleV1,
+        BfvFullBootstrapCircuitMaterialV1, BfvFullBootstrapLinearTransformDiagonalV1,
+        BfvFullBootstrapLinearTransformV1, BfvFullBootstrapSampleExtractionV1,
+        BfvIdentifierCiphertext, BfvIdentifierPublicParameters, BfvParameters, BfvPublicKey,
+        BfvSecretKey, apply_galois_automorphism_ciphertext, bfv_balanced_multiplication_depth,
+        bfv_encrypted_zero_refresh_residual_multiple_bound,
         bfv_fresh_bounded_noise_ciphertext_bound,
         bfv_full_bootstrap_arithmetic_air_constraint_system_material_v1,
         bfv_full_bootstrap_blind_rotation_key_for_packed_left_rotation_v1,
@@ -138,6 +140,12 @@ fn sample_inrou_published_artifact() -> SoraPublishedInrouGuestImageArtifactV1 {
     }
 }
 include!("soracloud_initial_fixture_tests.rs");
+#[cfg(feature = "zk-stark")]
+#[path = "soracloud_full_bootstrap_preflight_tests.rs"]
+mod full_bootstrap_preflight_tests;
+#[cfg(feature = "zk-stark")]
+#[path = "soracloud_required_refresh_mode_tests.rs"]
+mod required_refresh_mode_tests;
 macro_rules! permissioned_soracloud_state {
     ($kura:ident, $state:ident) => {
         let $kura = Kura::blank_kura_for_testing();
@@ -461,7 +469,7 @@ fn sample_bfv_refresh_transcript() -> BfvEvaluationKeyRefreshTranscriptV1 {
         }],
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "bootstrap-test-key".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: 1,
             seed: b"soracloud-fhe-bootstrap-key".to_vec(),
         }),
     }
@@ -536,7 +544,7 @@ fn sample_bounded_noise_bfv_refresh_material() -> (
         &params,
         &public_key,
         "soracloud-core-bounded-bootstrap",
-        2,
+        BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
         bootstrap_seed,
     )
     .expect("bounded-noise bootstrap key");
@@ -554,7 +562,7 @@ fn sample_bounded_noise_bfv_refresh_material() -> (
         }],
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "soracloud-core-bounded-bootstrap".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
             seed: bootstrap_seed.to_vec(),
         }),
     };
@@ -586,7 +594,7 @@ fn sample_registered_bounded_noise_bfv_material() -> (
         &params,
         &public_key,
         "soracloud-core-registered-bounded-bootstrap",
-        2,
+        BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
         bootstrap_seed,
     )
     .expect("registered bounded-noise bootstrap key");
@@ -601,7 +609,7 @@ fn sample_registered_bounded_noise_bfv_material() -> (
         rotation_transcripts: Vec::new(),
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "soracloud-core-registered-bounded-bootstrap".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
             seed: bootstrap_seed.to_vec(),
         }),
     };
@@ -613,6 +621,43 @@ fn sample_registered_bounded_noise_bfv_material() -> (
         )
         .expect("registered bounded-noise refresh transcript digest");
     (secret_key, public_key, evaluation_keys, transcript, digest)
+}
+#[test]
+fn bounded_noise_fhe_fixtures_bind_supported_refresh_capacity() {
+    let (params, evaluation_keys, transcript, digest) = sample_bounded_noise_bfv_refresh_material();
+    let (_, _, registered_keys, registered_transcript, registered_digest) =
+        sample_registered_bounded_noise_bfv_material();
+    for (params, keys, transcript, expected_digest) in [
+        (params, evaluation_keys, transcript, digest),
+        (
+            ram_lfe_bfv_parameters_v1(),
+            registered_keys,
+            registered_transcript,
+            registered_digest,
+        ),
+    ] {
+        let key = keys.bootstrap_key.as_ref().expect("fixture bootstrap key");
+        let refresh = transcript
+            .bootstrap_transcript
+            .as_ref()
+            .expect("fixture bootstrap transcript");
+        assert_eq!(key.max_refresh_rounds, BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS);
+        assert_eq!(refresh.max_refresh_rounds, key.max_refresh_rounds);
+        assert_eq!(
+            key.round_refreshes.len(),
+            usize::from(key.max_refresh_rounds)
+        );
+        assert_eq!(
+            transcript
+                .digest_for_evaluation_keys_with_mode(
+                    &params,
+                    &keys,
+                    BfvRefreshTranscriptModeV1::BoundedNoise,
+                )
+                .expect("fixture transcript binds the evaluation keys"),
+            expected_digest
+        );
+    }
 }
 fn sample_bounded_noise_fhe_payload(
     public_key: &BfvPublicKey,
@@ -643,11 +688,50 @@ fn sample_fhe_payload(input: &[u8], seed: &[u8]) -> Vec<u8> {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key,
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let ciphertext =
         encrypt_identifier_from_seed(&public_parameters, input, seed).expect("encrypt");
     norito::encode_canonical(&ciphertext).expect("encode ciphertext")
+}
+#[test]
+fn sample_fhe_payload_uses_fixed_first_release_identifier_width() {
+    let params = ram_lfe_bfv_parameters_v1();
+    let (secret_key, public_key, _) =
+        keygen_from_seed(&params, b"soracloud-fhe-test-keygen").expect("fixture keygen");
+    let public_parameters = BfvIdentifierPublicParameters {
+        parameters: params,
+        public_key,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
+    };
+    let maximum = vec![u8::MAX; usize::from(public_parameters.max_input_bytes)];
+    for input in [b"".as_slice(), b"abc".as_slice(), maximum.as_slice()] {
+        let encoded = sample_fhe_payload(input, b"soracloud-fixed-identifier-width");
+        let ciphertext =
+            decode_soracloud_fhe_envelope(&encoded).expect("canonical fixture envelope");
+        assert_eq!(ciphertext.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
+        assert_eq!(
+            norito::encode_canonical(&ciphertext).expect("canonical reencoding"),
+            encoded
+        );
+        assert_eq!(
+            decrypt_identifier(&public_parameters, &secret_key, &ciphertext)
+                .expect("decrypt fixture envelope"),
+            input
+        );
+    }
+    let oversized = vec![0; usize::from(public_parameters.max_input_bytes) + 1];
+    let error = encrypt_identifier_from_seed(
+        &public_parameters,
+        &oversized,
+        b"soracloud-fixed-identifier-width-too-long",
+    )
+    .expect_err("the fixture profile must reject a sixty-fourth input byte");
+    assert!(matches!(
+        error,
+        iroha_crypto::fhe_bfv::BfvError::InputTooLong { max_input_bytes }
+            if max_input_bytes == public_parameters.max_input_bytes
+    ));
 }
 fn structurally_truncated_fhe_payload() -> Vec<u8> {
     let canonical = norito::encode_canonical(&BfvIdentifierCiphertext { slots: Vec::new() })
@@ -772,11 +856,7 @@ fn soracloud_fhe_proof_boundaries_reject_alternate_outer_and_wrapper_layouts() {
         )));
         let outer_error = proof_attachment_envelope_with_context(&alternate_outer, case.context)
             .expect_err("alternate outer proof envelope must be rejected");
-        assert!(
-            outer_error.to_string().contains("non-canonical encoding"),
-            "{} alternate outer layout returned the wrong error: {outer_error}",
-            case.label
-        );
+        assert_invalid_parameter_contains(outer_error, "non-canonical encoding");
         let mut alternate_wrapper_envelope = envelope;
         alternate_wrapper_envelope.proof_bytes = encode_alternate_norito_layout(&open);
         let mut alternate_wrapper = attachment;
@@ -789,11 +869,7 @@ fn soracloud_fhe_proof_boundaries_reject_alternate_outer_and_wrapper_layouts() {
             .expect("canonical outer proof envelope must decode");
         let wrapper_error = (case.validate)(&alternate_wrapper, &decoded, statement_hash)
             .expect_err("alternate nested STARK wrapper must be rejected");
-        assert!(
-            wrapper_error.to_string().contains("non-canonical encoding"),
-            "{} alternate wrapper layout returned the wrong error: {wrapper_error}",
-            case.label
-        );
+        assert_invalid_parameter_contains(wrapper_error, "non-canonical encoding");
     }
 }
 #[test]
@@ -896,10 +972,7 @@ fn soracloud_fhe_proof_families_reject_alternate_native_envelope_layout() {
             statement_hash,
         )
         .expect_err("alternate native STARK envelope must be rejected");
-        assert!(
-            error.to_string().contains("non-canonical encoding"),
-            "{label} alternate native envelope returned the wrong error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "non-canonical encoding");
     }
     let label = "FHE full-bootstrap execution proof";
     let error = validate_soracloud_fhe_full_bootstrap_native_air_statement_binding_v1(
@@ -910,10 +983,7 @@ fn soracloud_fhe_proof_families_reject_alternate_native_envelope_layout() {
         iroha_crypto::fhe_bfv::BFV_FULL_BOOTSTRAP_CIRCUIT_ID_V1,
     )
     .expect_err("alternate full-bootstrap native STARK envelope must be rejected");
-    assert!(
-        error.to_string().contains("non-canonical encoding"),
-        "{label} alternate native envelope returned the wrong error: {error}"
-    );
+    assert_invalid_parameter_contains(error, "non-canonical encoding");
 }
 #[cfg(feature = "zk-stark")]
 fn canonical_stark_verifier_key_box(circuit_id: &str) -> iroha_data_model::proof::VerifyingKeyBox {
@@ -970,10 +1040,7 @@ fn soracloud_fhe_proof_families_reject_alternate_verifier_key_layouts() {
             circuit_id,
         )
         .expect_err("alternate-layout STARK verifier key must be rejected");
-        assert!(
-            error.to_string().contains("non-canonical encoding"),
-            "{label} alternate verifier key returned the wrong error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "non-canonical encoding");
     }
     let execution_circuit_id = SORACLOUD_FHE_FULL_BOOTSTRAP_EXECUTION_PROOF_CIRCUIT_ID_V1;
     let canonical_execution = canonical_stark_verifier_key_box(execution_circuit_id);
@@ -982,12 +1049,7 @@ fn soracloud_fhe_proof_families_reject_alternate_verifier_key_layouts() {
         &mut governed_core_alternate,
     )
     .expect_err("governed Core STARK verifier-key payload must be rejected");
-    assert!(
-        execution_error
-            .to_string()
-            .contains("canonical BFV-native governed V1 payload"),
-        "governed Core STARK verifier key returned the wrong error: {execution_error}"
-    );
+    assert_invalid_parameter_contains(execution_error, "canonical BFV-native governed V1 payload");
     let native_bytes =
         iroha_crypto::fhe_bfv::encode_bfv_full_bootstrap_native_stark_fri_verifier_key_payload_v1(
             execution_circuit_id,
@@ -1004,10 +1066,7 @@ fn soracloud_fhe_proof_families_reject_alternate_verifier_key_layouts() {
         &mut alternate_native,
     )
     .expect_err("alternate governed native verifier key must be rejected");
-    assert!(
-        native_error.to_string().contains("non-canonical encoding"),
-        "native alternate verifier key returned the wrong error: {native_error}"
-    );
+    assert_invalid_parameter_contains(native_error, "non-canonical encoding");
     let mut expected_native = iroha_data_model::proof::VerifyingKeyBox::new(
         FHE_INPUT_ADMISSION_BACKEND.to_owned(),
         native_bytes.clone(),
@@ -1123,16 +1182,13 @@ fn governed_full_bootstrap_verifier_artifact_rejects_each_alternate_nested_layou
         ),
         ("native payload", alternate_native_payload_artifact),
     ];
-    for (layout, bytes) in alternate_artifacts {
+    for (_layout, bytes) in alternate_artifacts {
         let error =
             validate_governed_full_bootstrap_execution_verifier_key_artifact_canonical_layouts(
                 &bytes,
             )
             .expect_err("alternate governed verifier-key layout must be rejected");
-        assert!(
-            error.to_string().contains("non-canonical encoding"),
-            "alternate {layout} returned the wrong error: {error}"
-        );
+        assert_invalid_parameter_contains(error, "non-canonical encoding");
     }
     let core_payload = norito::encode_canonical(&crate::zk_stark::StarkFriVerifyingKeyV1 {
         version: 1,
@@ -1156,12 +1212,7 @@ fn governed_full_bootstrap_verifier_artifact_rejects_each_alternate_nested_layou
         &canonical_core_artifact,
     )
     .expect_err("governed Core STARK verifier-key payload must be rejected");
-    assert!(
-        error
-            .to_string()
-            .contains("canonical BFV-native governed V1 format"),
-        "governed Core STARK verifier-key payload returned the wrong error: {error}"
-    );
+    assert_invalid_parameter_contains(error, "canonical BFV-native governed V1 format");
 }
 fn sample_fhe_input_admission_attachment(
     proof_box: iroha_data_model::proof::ProofBox,
@@ -2619,7 +2670,9 @@ fn full_bootstrap_bfv_native_air_tamper_error(tamper: NativeAirTamper) -> &'stat
         NativeAirTamper::CircuitId => "native BFV AIR circuit id mismatch",
         NativeAirTamper::TraceWidth => "native BFV AIR trace width mismatch",
         NativeAirTamper::OpeningCount => "native BFV AIR opening count mismatch",
-        NativeAirTamper::CompositionRoot => "native BFV AIR composition root mismatch",
+        NativeAirTamper::CompositionRoot => {
+            "native BFV AIR composition root does not match governed AIR evaluation"
+        }
         NativeAirTamper::PublicDigest => "native BFV AIR public digest mismatch",
     }
 }
@@ -3450,14 +3503,13 @@ fn register_fhe_input_admission_verifier_for_circuit_and_version(
 }
 #[track_caller]
 fn assert_invalid_parameter_contains(err: InstructionExecutionError, expected: &str) {
-    let debug = format!("{err:?}");
     assert!(
         matches!(
             err,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(ref message)
             ) if message.contains(expected)
-        ) || debug.contains(expected),
+        ),
         "unexpected error: expected {expected:?}, got {err:?}"
     );
 }
@@ -4075,6 +4127,143 @@ fn full_bootstrap_execution_native_air_uses_crypto_domain_and_base_label() {
 }
 #[cfg(feature = "zk-stark")]
 #[test]
+fn soracloud_fhe_binding_air_reconstructs_its_typed_composition_root() {
+    let label = "FHE bootstrap-key";
+    let statement_hash = Hash::new(b"binding-air-typed-composition-root");
+    let vk_box = sample_fhe_bootstrap_key_stark_vk_box();
+    let proof = sample_fhe_bootstrap_key_binding_air_rejection_proof(statement_hash, &vk_box);
+    let envelope = bootstrap_key_proof_attachment_envelope(&proof.proof)
+        .expect("decode binding-AIR proof envelope");
+    let open: StarkFriOpenProofV1 =
+        norito::decode_canonical(&envelope.proof_bytes).expect("decode binding-AIR wrapper");
+    let native: crate::zk_stark::StarkVerifyEnvelopeV1 =
+        norito::decode_canonical(&open.envelope_bytes).expect("decode binding-AIR envelope");
+    let air = native.proof.air.as_ref().expect("binding-AIR section");
+    let fri_root = *native.proof.commits.roots.first().expect("FRI base root");
+    assert_ne!(air.composition_root, fri_root);
+    validate_soracloud_fhe_stark_native_air_binding(
+        label,
+        FHE_INPUT_ADMISSION_BACKEND,
+        &envelope,
+        statement_hash,
+    )
+    .expect("binding preflight must authenticate its own typed composition root");
+
+    let mut substituted = proof.clone();
+    mutate_fhe_native_stark_envelope(&mut substituted.proof, |native| {
+        native
+            .proof
+            .air
+            .as_mut()
+            .expect("binding-AIR section")
+            .composition_root = fri_root;
+    });
+    let substituted_envelope = bootstrap_key_proof_attachment_envelope(&substituted.proof)
+        .expect("decode substituted binding-AIR envelope");
+    let err = validate_soracloud_fhe_stark_native_air_binding(
+        label,
+        FHE_INPUT_ADMISSION_BACKEND,
+        &substituted_envelope,
+        statement_hash,
+    )
+    .expect_err("a FRI root must not substitute for the typed AIR composition root");
+    assert_invalid_parameter_contains(err, "native AIR composition root mismatch");
+
+    let mut missing_roots = proof.clone();
+    mutate_fhe_native_stark_envelope(&mut missing_roots.proof, |native| {
+        native.proof.commits.roots.clear();
+    });
+    let missing_roots_envelope = bootstrap_key_proof_attachment_envelope(&missing_roots.proof)
+        .expect("decode binding-AIR envelope without FRI roots");
+    let err = validate_soracloud_fhe_stark_native_air_binding(
+        label,
+        FHE_INPUT_ADMISSION_BACKEND,
+        &missing_roots_envelope,
+        statement_hash,
+    )
+    .expect_err("binding preflight must retain its requirement for a FRI commitment");
+    assert_invalid_parameter_contains(err, "native AIR commitment root count mismatch");
+
+    let mut oversized = proof;
+    mutate_fhe_native_stark_envelope(&mut oversized.proof, |native| {
+        native.params.n_log2 = crate::zk_stark::MAX_BINDING_AIR_DOMAIN_LOG2 + 1;
+    });
+    let oversized_envelope = bootstrap_key_proof_attachment_envelope(&oversized.proof)
+        .expect("decode oversized binding-AIR envelope");
+    let err = validate_soracloud_fhe_stark_native_air_binding(
+        label,
+        FHE_INPUT_ADMISSION_BACKEND,
+        &oversized_envelope,
+        statement_hash,
+    )
+    .expect_err("binding preflight must bound full-domain root reconstruction");
+    assert_invalid_parameter_contains(err, "binding domain exceeds the supported limit");
+}
+#[cfg(feature = "zk-stark")]
+#[test]
+fn full_bootstrap_bfv_native_air_boundary_authenticates_distinct_commitment_domains() {
+    let label = "FHE full-bootstrap execution proof";
+    let (statement_hash, native) =
+        sample_safe_full_bootstrap_bfv_native_air_envelope(b"bfv-air-typed-commitment-roots");
+    let context = Some(
+        sample_full_bootstrap_bfv_native_air_public_padding_context_for_statement(
+            statement_hash,
+            &native,
+        ),
+    );
+    let composition_root = native
+        .proof
+        .air
+        .as_ref()
+        .expect("BFV AIR section")
+        .composition_root;
+    let fri_root = *native.proof.commits.roots.first().expect("FRI base root");
+    assert_ne!(composition_root, fri_root);
+    validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+        label,
+        statement_hash,
+        &native,
+        context.clone(),
+    )
+    .expect("distinct typed roots must pass with authenticated equal opened evaluations");
+
+    let mut substituted_air = native.clone();
+    substituted_air
+        .proof
+        .air
+        .as_mut()
+        .expect("BFV AIR section")
+        .composition_root = fri_root;
+    let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+        label,
+        statement_hash,
+        &substituted_air,
+        context.clone(),
+    )
+    .expect_err("FRI root substitution must fail governed AIR root reconstruction");
+    assert_invalid_parameter_contains(
+        err,
+        "composition root does not match governed AIR evaluation",
+    );
+
+    let mut substituted_fri = native;
+    *substituted_fri
+        .proof
+        .commits
+        .roots
+        .first_mut()
+        .expect("FRI base root") = composition_root;
+    let err = validate_soracloud_fhe_full_bootstrap_bfv_native_air_boundary(
+        label,
+        statement_hash,
+        &substituted_fri,
+        context,
+    )
+    .expect_err("AIR root substitution must fail FRI Merkle authentication");
+    assert_invalid_parameter_contains(err, "FRI query Merkle root mismatch");
+}
+#[cfg(feature = "zk-stark")]
+#[test]
 fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
     let label = "FHE full-bootstrap execution proof";
     let vk_box = sample_fhe_full_bootstrap_execution_vk_box();
@@ -4284,7 +4473,7 @@ fn full_bootstrap_bfv_native_air_builder_binds_arithmetic_trace_rows() {
                 &prover_input_material.arithmetic_air_evaluation_material,
             )
             .expect_err("BFV AIR builder replay must reject FRI base-root mismatch");
-    assert_invalid_parameter_contains(err, "composition root mismatch");
+    assert_invalid_parameter_contains(err, "FRI query Merkle root mismatch");
     let mut auxiliary_composition_native = native.clone();
     attach_full_bootstrap_bfv_native_air_composition_values(&mut auxiliary_composition_native);
     let auxiliary_composition_envelope_bytes = norito::to_bytes(&auxiliary_composition_native)
@@ -11644,7 +11833,7 @@ fn run_full_bootstrap_release_verifier_case(
                 rejection_cases.push((
                     base_proofs,
                     "release-prover FRI base-root drift must fail before native proof acceptance",
-                    "composition root mismatch",
+                    "FRI query Merkle root mismatch",
                 ));
             }
             FullBootstrapReleaseVerifierCase::OpenedAirDrift => {
@@ -12094,7 +12283,7 @@ fn run_full_bootstrap_guarded_verifier_case(
             rejection_cases.push((
                 base_root_mismatch,
                 "guarded verifier must reject release-native FRI base-root drift",
-                "composition root mismatch",
+                "FRI query Merkle root mismatch",
             ));
         }
         FullBootstrapGuardedVerifierCase::ReleaseNativeAirOpeningCommitment => {
@@ -12419,7 +12608,7 @@ fn soracloud_fhe_base_attachments_require_canonical_bfv_backend() {
 }
 #[test]
 fn soracloud_fhe_full_bootstrap_execution_attachment_requires_canonical_bfv_backend() {
-    let noncanonical_backend = crate::zk::ZK_BACKEND_STARK_FRI_V1;
+    let noncanonical_backend = "stark/fri";
     let execution_statement_hash = Hash::new(b"full-bootstrap-execution-noncanonical-backend");
     let execution_proof =
         sample_fhe_full_bootstrap_execution_proof(execution_statement_hash, [0x63; Hash::LENGTH]);
@@ -13580,7 +13769,7 @@ fn soracloud_bounded_noise_bootstrap_uses_registered_rns_basis_extension_refresh
         &norito::to_bytes(&input).expect("encode bounded bootstrap input"),
     )]);
     job.operation = FheJobOperationV1::Bootstrap;
-    job.bootstrap_count = 2;
+    job.bootstrap_count = BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS;
     let input_bound = bfv_fresh_bounded_noise_ciphertext_bound(&params).expect("fresh noise bound");
     let expected_output_bound = bfv_bootstrap_key_refresh_bounded_noise_output_bound(
         &params,
@@ -13650,7 +13839,7 @@ fn soracloud_multi_input_add_matches_plaintext_slots() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key,
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let inputs = [
         encrypt_identifier_from_seed(&public_parameters, &[1, 2], b"soracloud-fhe-add-input-1")
@@ -13660,10 +13849,14 @@ fn soracloud_multi_input_add_matches_plaintext_slots() {
         encrypt_identifier_from_seed(&public_parameters, &[5, 6], b"soracloud-fhe-add-input-3")
             .expect("encrypt input 3"),
     ];
+    for input in &inputs {
+        assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
+    }
     let evaluation_keys = sample_bfv_evaluation_key_bundle();
     let job = sample_fhe_job(Vec::new());
     let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
         .expect("execute three-input FHE add job");
+    assert_eq!(output.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let plaintext_slots = output
         .slots
         .iter()
@@ -13691,7 +13884,7 @@ fn soracloud_multi_input_multiply_matches_plaintext_slots() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key,
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let inputs = [
         encrypt_identifier_from_seed(&public_parameters, &[2, 3], b"soracloud-fhe-mul-input-1")
@@ -13701,6 +13894,9 @@ fn soracloud_multi_input_multiply_matches_plaintext_slots() {
         encrypt_identifier_from_seed(&public_parameters, &[6, 7], b"soracloud-fhe-mul-input-3")
             .expect("encrypt input 3"),
     ];
+    for input in &inputs {
+        assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
+    }
     let evaluation_keys = sample_bfv_evaluation_key_bundle();
     let mut job = sample_fhe_job(Vec::new());
     job.operation = FheJobOperationV1::Multiply;
@@ -13708,6 +13904,7 @@ fn soracloud_multi_input_multiply_matches_plaintext_slots() {
         bfv_balanced_multiplication_depth(inputs.len()).expect("three-input depth plan");
     let output = execute_soracloud_fhe_job(&params, &evaluation_keys, &job, &inputs)
         .expect("execute three-input FHE multiply job");
+    assert_eq!(output.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let plaintext_slots = output
         .slots
         .iter()
@@ -14054,11 +14251,12 @@ fn soracloud_bootstrap_uses_refresh_key() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key: public_key.clone(),
-        max_input_bytes: 8,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let input =
         encrypt_identifier_from_seed(&public_parameters, b"abc", b"soracloud-bootstrap-input")
             .expect("encrypt input");
+    assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,
         rotation_keys: Vec::new(),
@@ -14495,10 +14693,11 @@ fn soracloud_rotate_left_uses_rotation_key_refresh() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key: public_key.clone(),
-        max_input_bytes: 4,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let input = encrypt_identifier_from_seed(&public_parameters, b"ab", b"soracloud-rotate-input")
         .expect("encrypt input");
+    assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let mut plain_rotated = input.slots.clone();
     plain_rotated.rotate_left(1);
     let evaluation_keys = BfvEvaluationKeyBundle {
@@ -14534,6 +14733,23 @@ fn soracloud_rotate_left_uses_rotation_key_refresh() {
         .iter()
         .map(|slot| decrypt(&params, &secret_key, slot).expect("decrypt")[0])
         .collect::<Vec<_>>();
+    let fixed_width_plaintext_slots = plaintext_slots;
+    // The canonical [length, a, b, padding...] input rotates left once:
+    // a and b lead, all 61 padding slots follow, and length occupies slot 63.
+    let mut expected_slots = vec![0; RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT];
+    expected_slots[0] = 97;
+    expected_slots[1] = 98;
+    expected_slots[RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT - 1] = 2;
+    assert_eq!(fixed_width_plaintext_slots, expected_slots);
+    // Preserve the original five-coordinate assertion as a projection of the
+    // complete, independently specified fixed-width result checked above.
+    let plaintext_slots = vec![
+        fixed_width_plaintext_slots[0],
+        fixed_width_plaintext_slots[1],
+        fixed_width_plaintext_slots[2],
+        fixed_width_plaintext_slots[3],
+        fixed_width_plaintext_slots[RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT - 1],
+    ];
     assert_eq!(plaintext_slots, vec![97, 98, 0, 0, 2]);
 }
 #[test]
@@ -14544,7 +14760,7 @@ fn soracloud_rotate_left_rejects_outer_slot_full_cycle_noop() {
     let public_parameters = BfvIdentifierPublicParameters {
         parameters: params,
         public_key: public_key.clone(),
-        max_input_bytes: 4,
+        max_input_bytes: iroha_crypto::fhe_bfv::RAM_LFE_BFV_IDENTIFIER_MAX_INPUT_BYTES,
     };
     let input = encrypt_identifier_from_seed(
         &public_parameters,
@@ -14552,6 +14768,7 @@ fn soracloud_rotate_left_rejects_outer_slot_full_cycle_noop() {
         b"soracloud-rotate-full-cycle-input",
     )
     .expect("encrypt input");
+    assert_eq!(input.slots.len(), RAM_LFE_BFV_IDENTIFIER_SLOT_COUNT);
     let full_cycle_steps = u32::try_from(input.slots.len()).expect("slot count fits u32");
     let evaluation_keys = BfvEvaluationKeyBundle {
         relinearization_key,
@@ -15032,8 +15249,8 @@ fn sample_fhe_policy_reference(tag: &[u8]) -> SoracloudFhePolicyReferenceV1 {
     }
 }
 fn fhe_job_provenance(
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     job: FheJobSpecV1,
     policy_reference: SoracloudFhePolicyReferenceV1,
     public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
@@ -15199,7 +15416,7 @@ fn sample_service_secret_envelope() -> SecretEnvelopeV1 {
     }
 }
 fn decryption_request_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     policy: DecryptionAuthorityPolicyV1,
     request: DecryptionRequestV1,
 ) -> ManifestProvenance {
@@ -15224,37 +15441,31 @@ fn training_model_text_helpers_reject_rewrites_and_preserve_free_form_reasons() 
         parse_training_model_name("vision_model").expect("canonical model name"),
         "vision_model"
     );
-    assert!(
-        parse_training_model_name("mode\u{301}l")
-            .expect_err("NFC-rewritten model name must fail")
-            .to_string()
-            .contains("exact canonical Name representation")
+    assert_invalid_parameter_contains(
+        parse_training_model_name("mode\u{301}l").expect_err("NFC-rewritten model name must fail"),
+        "model_name must use its exact canonical Name representation",
     );
     for job_id in [" job-1", "job-1 "] {
-        assert!(
-            parse_training_job_id(job_id)
-                .expect_err("padded job id must fail")
-                .to_string()
-                .contains("whitespace")
+        assert_invalid_parameter_contains(
+            parse_training_job_id(job_id).expect_err("padded job id must fail"),
+            "job_id must not contain surrounding whitespace",
         );
     }
     for weight_version in [" v1", "v1 "] {
-        assert!(
+        assert_invalid_parameter_contains(
             parse_model_weight_version(weight_version)
-                .expect_err("padded weight version must fail")
-                .to_string()
-                .contains("whitespace")
+                .expect_err("padded weight version must fail"),
+            "weight_version must not contain surrounding whitespace",
         );
     }
     assert_eq!(
         parse_model_weight_dataset_ref("dataset://train").expect("canonical dataset ref"),
         "dataset://train"
     );
-    assert!(
+    assert_invalid_parameter_contains(
         parse_model_weight_dataset_ref(" dataset://train ")
-            .expect_err("padded dataset ref must fail")
-            .to_string()
-            .contains("surrounding whitespace")
+            .expect_err("padded dataset ref must fail"),
+        "dataset_ref must not contain surrounding whitespace",
     );
     assert_eq!(
         validate_training_reason(" retry after worker loss ")
@@ -15307,7 +15518,7 @@ fn uploaded_model_bundle_provenance_for(
     }
 }
 fn uploaded_model_finalize_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     model_id: &str,
     artifact_id: &str,
@@ -15336,7 +15547,7 @@ fn uploaded_model_finalize_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn uploaded_model_finalize_provenance_for(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     model_id: &str,
     artifact_id: &str,
@@ -15537,7 +15748,7 @@ fn agent_deploy_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn training_start_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     job_id: &str,
     worker_group_size: u16,
@@ -15567,7 +15778,7 @@ fn training_start_provenance(
     }
 }
 fn training_checkpoint_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     completed_step: u32,
     checkpoint_size_bytes: u64,
@@ -15587,7 +15798,7 @@ fn training_checkpoint_provenance(
     }
 }
 fn training_retry_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     reason: &str,
 ) -> ManifestProvenance {
@@ -15601,7 +15812,7 @@ fn training_retry_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn model_artifact_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     training_job_id: &str,
     weight_artifact_hash: Hash,
@@ -15628,7 +15839,7 @@ fn model_artifact_provenance(
 }
 #[allow(clippy::too_many_arguments)]
 fn model_weight_register_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     training_job_id: &str,
@@ -15658,7 +15869,7 @@ fn model_weight_register_provenance(
     }
 }
 fn model_weight_promote_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     gate_approved: bool,
@@ -15678,7 +15889,7 @@ fn model_weight_promote_provenance(
     }
 }
 fn model_weight_rollback_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     target_version: &str,
     reason: &str,
@@ -15699,8 +15910,8 @@ fn model_weight_rollback_provenance(
 fn hf_shared_lease_join_provenance(
     repo_id: &str,
     resolved_revision: &str,
-    service_name: &iroha_data_model::name::Name,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: &iroha_model_base::name::Name,
+    apartment_name: Option<&iroha_model_base::name::Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
@@ -15723,8 +15934,8 @@ fn hf_shared_lease_join_provenance_for(
     key_pair: &KeyPair,
     repo_id: &str,
     resolved_revision: &str,
-    service_name: &iroha_data_model::name::Name,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: &iroha_model_base::name::Name,
+    apartment_name: Option<&iroha_model_base::name::Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
@@ -15734,7 +15945,7 @@ fn hf_shared_lease_join_provenance_for(
         repo_id,
         resolved_revision,
         service_name.as_ref(),
-        apartment_name.map(iroha_data_model::name::Name::as_ref),
+        apartment_name.map(iroha_model_base::name::Name::as_ref),
         storage_class,
         lease_term_ms,
         lease_asset_definition_id,
@@ -15750,8 +15961,8 @@ fn hf_shared_lease_join_provenance_for(
 fn hf_shared_lease_renew_provenance(
     repo_id: &str,
     resolved_revision: &str,
-    service_name: &iroha_data_model::name::Name,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: &iroha_model_base::name::Name,
+    apartment_name: Option<&iroha_model_base::name::Name>,
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: &AssetDefinitionId,
@@ -15761,7 +15972,7 @@ fn hf_shared_lease_renew_provenance(
         repo_id,
         resolved_revision,
         service_name.as_ref(),
-        apartment_name.map(iroha_data_model::name::Name::as_ref),
+        apartment_name.map(iroha_model_base::name::Name::as_ref),
         storage_class,
         lease_term_ms,
         lease_asset_definition_id,
@@ -15778,16 +15989,16 @@ fn hf_shared_lease_leave_provenance(
     resolved_revision: &str,
     storage_class: StorageClass,
     lease_term_ms: u64,
-    service_name: Option<&iroha_data_model::name::Name>,
-    apartment_name: Option<&iroha_data_model::name::Name>,
+    service_name: Option<&iroha_model_base::name::Name>,
+    apartment_name: Option<&iroha_model_base::name::Name>,
 ) -> ManifestProvenance {
     let payload = encode_hf_shared_lease_leave_provenance_payload(
         repo_id,
         resolved_revision,
         storage_class,
         lease_term_ms,
-        service_name.map(iroha_data_model::name::Name::as_ref),
-        apartment_name.map(iroha_data_model::name::Name::as_ref),
+        service_name.map(iroha_model_base::name::Name::as_ref),
+        apartment_name.map(iroha_model_base::name::Name::as_ref),
     )
     .expect("hf shared lease leave payload");
     ManifestProvenance {
@@ -16034,11 +16245,11 @@ fn divide_quantity_by_member_count_rejects_zero_members() {
 #[test]
 fn next_soracloud_audit_sequence_includes_hf_shared_lease_events() -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    stx.world.soracloud_hf_shared_lease_audit_events.insert(
-        9,
+    record_hf_shared_lease_audit_event(
+        &mut stx,
         SoraHfSharedLeaseAuditEventV1 {
             schema_version: SORA_HF_SHARED_LEASE_AUDIT_EVENT_VERSION_V1,
-            sequence: 9,
+            sequence: 1,
             action: SoraHfSharedLeaseActionV1::CreateWindow,
             pool_id: Hash::new(b"hf-pool"),
             source_id: Hash::new(b"hf-source"),
@@ -16052,8 +16263,9 @@ fn next_soracloud_audit_sequence_includes_hf_shared_lease_events() -> Result<(),
             service_name: Some("vision_portal".to_owned()),
             apartment_name: Some("ops_agent".to_owned()),
         },
-    );
-    assert_eq!(next_soracloud_audit_sequence(&stx)?, 10);
+    )?;
+    assert_eq!(next_soracloud_audit_sequence(&stx)?, 2);
+    assert_eq!(*stx.world.soracloud_sequence_watermark.get(), 1);
     Ok(())
 }
 #[test]
@@ -16162,7 +16374,7 @@ fn hf_shared_lease_audit_sequence_exhaustion_fails_before_authoritative_writes()
     permissioned_soracloud_state!(kura, state);
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name =
+    let service_name: iroha_model_base::name::Name =
         "vision_portal".parse().expect("valid service name");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
@@ -16191,6 +16403,7 @@ fn hf_shared_lease_audit_sequence_exhaustion_fails_before_authoritative_writes()
     stx.world
         .soracloud_hf_shared_lease_audit_events
         .insert(u64::MAX, terminal_event.clone());
+    *stx.world.soracloud_sequence_watermark.get_mut() = u64::MAX;
     let source_count = stx.world.soracloud_hf_sources.iter().count();
     let pool_count = stx.world.soracloud_hf_shared_lease_pools.iter().count();
     let member_count = stx.world.soracloud_hf_shared_lease_members.iter().count();
@@ -16272,7 +16485,7 @@ fn leave_hf_shared_lease_last_member_uses_configured_drain_grace() -> Result<(),
     state.nexus.get_mut().hf_shared_leases.drain_grace = Duration::from_secs(30);
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "vision_portal".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
     let base_fee: Quantity = "0.00001".parse().expect("base fee");
@@ -16357,7 +16570,7 @@ fn hf_shared_lease_registration_does_not_create_runtime_service() -> Result<(), 
     state.nexus.get_mut().fees.fee_sink_account_id = ALICE_ID.to_string();
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "vision_portal".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
     let base_fee: Quantity = "0.00001".parse().expect("base fee");
@@ -16420,8 +16633,8 @@ fn renew_hf_shared_lease_active_window_queues_next_window() -> Result<(), eyre::
     state.nexus.get_mut().fees.fee_sink_account_id = BOB_ID.to_string();
     let repo_id = "openai/gpt-oss";
     let resolved_revision = "0123456789abcdef0123456789abcdef01234567";
-    let service_name: iroha_data_model::name::Name = "vision_portal".parse().expect("valid");
-    let renewed_service_name: iroha_data_model::name::Name =
+    let service_name: iroha_model_base::name::Name = "vision_portal".parse().expect("valid");
+    let renewed_service_name: iroha_model_base::name::Name =
         "vision_portal_v2".parse().expect("valid");
     let storage_class = StorageClass::Warm;
     let lease_term_ms = 60_000_u64;
@@ -17142,7 +17355,7 @@ fn inrou_reconciliation_keeps_same_lease_host_sticky_and_reassigns_only_new_leas
 #[test]
 fn set_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
     let runtime_state = sample_inrou_replica_runtime_state_for(
         service_name.clone(),
@@ -17180,7 +17393,7 @@ fn set_inrou_replica_runtime_state_rejects_missing_placement() -> Result<(), eyr
 fn clear_inrou_replica_runtime_state_removes_exact_stale_state_without_placement()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
     let runtime_state = sample_inrou_replica_runtime_state_for(
         service_name.clone(),
@@ -17237,7 +17450,7 @@ fn set_inrou_replica_runtime_state_records_matching_placement() -> Result<(), ey
 fn set_inrou_replica_runtime_state_rejects_zero_version_and_timestamp() -> Result<(), eyre::Report>
 {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
-    let service_name: iroha_data_model::name::Name = "hayahi_live".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "hayahi_live".parse().expect("valid");
     let service_version = "2026.04.28.075015";
     let canonical = sample_inrou_replica_runtime_state_for(
         service_name.clone(),
@@ -17436,7 +17649,7 @@ fn deploy_soracloud_service_records_bundle_and_audit_state() -> Result<(), eyre:
     state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     assert!(
         world
             .soracloud_service_revisions()
@@ -17516,6 +17729,7 @@ fn soracloud_audit_sequence_exhaustion_fails_service_and_app_mutations_atomicall
     stx.world
         .soracloud_service_audit_events
         .insert(u64::MAX, exhausted_audit.clone());
+    *stx.world.soracloud_sequence_watermark.get_mut() = u64::MAX;
     let service_before = stx
         .world
         .soracloud_service_deployments
@@ -17720,7 +17934,10 @@ fn runtime_receipt_sequence_is_ledger_owned_and_cannot_be_poisoned() -> Result<(
         let error = isi::RecordSoracloudRuntimeReceipt { receipt: poisoned }
             .execute(&ALICE_ID, &mut stx)
             .expect_err("caller-controlled runtime receipt sequences must be rejected");
-        assert_invalid_parameter_contains(error, "emitted_sequence must be zero");
+        assert_invalid_parameter_contains(
+            error,
+            "field `emitted_sequence` is invalid: must be zero before ledger submission",
+        );
         assert_eq!(
             stx.world.soracloud_runtime_receipts.iter().count(),
             receipt_count_before,
@@ -17795,6 +18012,8 @@ fn runtime_receipt_sequence_is_ledger_owned_and_cannot_be_poisoned() -> Result<(
     stx.world
         .soracloud_service_audit_events
         .insert(u64::MAX, terminal_audit.clone());
+    // The allocator is owned by the persisted watermark, independently of retained history.
+    *stx.world.soracloud_sequence_watermark.get_mut() = u64::MAX;
     let mut exhausted_receipt = ingress_receipt;
     exhausted_receipt.result_commitment = Hash::new(b"exhausted-runtime-receipt-result");
     exhausted_receipt.receipt_id = derive_soracloud_local_read_receipt_id_v1(&exhausted_receipt);
@@ -18999,7 +19218,7 @@ fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
 fn lease_volume_mutation_fails_before_revision_admission() -> Result<(), eyre::Report> {
     permissioned_soracloud_state!(kura, state);
     let deploy_bundle = sample_hosted_http_service_bundle("portal", "1.0.0", 0);
-    let mut upgrade_bundle = sample_hosted_http_service_bundle("portal", "1.1.0", 25);
+    let mut upgrade_bundle = sample_hosted_http_service_bundle("portal", "1.1.0", 0);
     upgrade_bundle.service.lease_volumes[0].max_total_bytes =
         NonZeroU64::new(16 * 1024 * 1024 * 1024).expect("nonzero");
     let service_name = deploy_bundle.service.service_name.clone();
@@ -19021,7 +19240,7 @@ fn lease_volume_mutation_fails_before_revision_admission() -> Result<(), eyre::R
         provenance: bundle_provenance_with_precondition(&upgrade_bundle, &precondition),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect_err("a rolling revision must not mutate lease-volume economics");
+    .expect_err("an atomic revision must not mutate lease-volume economics");
     assert_invariant_contains(error, "cannot change lease-volume identity or economics");
     assert!(
         stx.world
@@ -19035,992 +19254,19 @@ fn lease_volume_mutation_fails_before_revision_admission() -> Result<(), eyre::R
     );
     Ok(())
 }
+#[path = "soracloud_service_lease_usage_tests.rs"]
+mod service_lease_usage_tests;
 #[test]
 fn service_lease_usage_is_reporter_scoped_exact_and_replay_safe() -> Result<(), eyre::Report> {
-    permissioned_soracloud_state!(kura, state);
-    let mut bundle = sample_bundle("reporter_usage", "1.0.0", 0);
-    bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
-    bundle.container.entrypoint = "/app/bin/service".to_owned();
-    bundle.container.inrou = Some(sample_inrou_manifest());
-    bundle.container.capabilities.network = SoraNetworkPolicyV1::Isolated;
-    bundle.service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
-    bundle.service.replicas = NonZeroU16::new(2).expect("nonzero");
-    bundle.service.placement_targets = sample_inrou_placement_targets();
-    bundle.service.economics.prepaid_runtime_balance =
-        "1000000000".parse().expect("large prepaid balance");
-    bundle.service.lease_volumes = sample_inrou_lease_volumes();
-    bundle.service.state_bindings.clear();
-    bundle.service.handlers.clear();
-    bundle.service.artifacts[0].handler_name = None;
-    bundle.service.container.manifest_hash = bundle.container_manifest_hash();
-    soracloud_transaction!(state, block_header, state_block, stx);
-    Register::account(Account::new(BOB_ID.clone()))
-        .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
-    insert_active_public_lane_validator(&mut stx, BOB_ID.clone(), 500);
-    isi::DeploySoracloudService {
-        bundle: bundle.clone(),
-        initial_service_configs: BTreeMap::new(),
-        initial_service_secrets: BTreeMap::new(),
-        precondition: SoraServiceMutationPreconditionV1::ServiceAbsent,
-        provenance: bundle_provenance(&bundle),
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    let lease_started_height = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.as_ref())
-        .expect("hosted service lease")
-        .lease_started_height;
-    let alice_runtime = sample_inrou_replica_runtime_state_for(
-        bundle.service.service_name.clone(),
-        &bundle.service.service_version,
-        1,
-        ALICE_ID.clone(),
-    );
-    let mut placement = sample_inrou_service_placement_record_for(
-        bundle.service.service_name.clone(),
-        &bundle.service.service_version,
-        &alice_runtime,
-    );
-    placement.placements[0].lease_started_height = lease_started_height;
-    let alice_placement_incarnation = placement.placements[0].placement_incarnation;
-    let mut bob_assignment = placement.placements[0].clone();
-    bob_assignment.replica_slot = 2;
-    bob_assignment.placement_incarnation = Hash::new(b"placement-2");
-    let bob_placement_incarnation = bob_assignment.placement_incarnation;
-    bob_assignment.validator_account_id = BOB_ID.clone();
-    bob_assignment.peer_id = PeerId::from(BOB_ID.expect_single_signatory().clone()).to_string();
-    placement.desired_replica_count = 2;
-    placement.eligible_validator_count = 2;
-    placement.placements.push(bob_assignment);
-    stx.world.soracloud_inrou_service_placements.insert(
-        (
-            placement.service_name.as_ref().to_owned(),
-            placement.service_version.clone(),
-        ),
-        placement,
-    );
-    let now_ms = stx.block_unix_timestamp_ms().max(1);
-    for validator in [&*ALICE_ID, &*BOB_ID] {
-        let mut capability =
-            sample_inrou_host_capability(validator.clone(), now_ms, now_ms.saturating_add(10_000));
-        capability.supported_guest_isas = BTreeSet::from([SoraInrouGuestIsaV1::Aarch64]);
-        stx.world
-            .soracloud_inrou_host_capabilities
-            .insert(validator.clone(), capability);
-    }
-    let reporting_epoch = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.as_ref())
-        .expect("hosted service lease")
-        .reporting_epoch;
-    let lease_started_height = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.as_ref())
-        .expect("hosted service lease")
-        .lease_started_height;
-    for (authority, replica_slot) in [(&*ALICE_ID, 1_u16), (&*BOB_ID, 2_u16)] {
-        let placement_incarnation = if replica_slot == 1 {
-            alice_placement_incarnation
-        } else {
-            bob_placement_incarnation
-        };
-        isi::ReportSoracloudServiceLeaseUsage {
-            service_name: bundle.service.service_name.clone(),
-            lease_started_height,
-            reporting_epoch,
-            active_service_version: bundle.service.service_version.clone(),
-            replica_slot,
-            placement_incarnation,
-            replica_accounted_egress_bytes: 0,
-            finalize_reporter: false,
-        }
-        .execute(authority, &mut stx)?;
-    }
-    stx.apply();
-    state_block.commit_world_overlay_for_testing()?;
-    let successor_height = lease_started_height
-        .checked_add(1)
-        .expect("the test lease height has a successor");
-    soracloud_transaction_at_height!(state, block_header, state_block, stx, successor_height);
-
-    let baseline = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .cloned()
-        .expect("deployment baseline");
-    let mut mismatched_volume_clock = baseline.clone();
-    mismatched_volume_clock.lease_volume_states[0].lease_expires_height += 1;
-    mismatched_volume_clock
-        .validate()
-        .expect_err("leased-volume economics must match the containing service lease");
-    let zero_incarnation_error = isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height: 0,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a zero lease incarnation must fail closed");
-    assert_invalid_parameter_contains(
-        zero_incarnation_error,
-        "lease_started_height must be greater than zero",
-    );
-
-    let next_lease_started_height = lease_started_height
-        .checked_add(1)
-        .expect("fixture lease incarnation has a successor");
-    let mut next_incarnation = baseline.clone();
-    let next_incarnation_lease = next_incarnation
-        .service_lease
-        .as_mut()
-        .expect("hosted service lease");
-    assert!(next_lease_started_height < next_incarnation_lease.lease_expires_height);
-    next_incarnation_lease.lease_started_height = next_lease_started_height;
-    for volume in &mut next_incarnation.lease_volume_states {
-        volume.lease_started_height = next_lease_started_height;
-    }
-    next_incarnation
-        .validate()
-        .expect("successor lease incarnation fixture must remain valid");
-    stx.world.soracloud_service_deployments.insert(
-        bundle.service.service_name.clone(),
-        next_incarnation.clone(),
-    );
-    let stale_incarnation_error = isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err(
-        "a report for an old lease must be rejected even when epoch, revision, and slot match",
-    );
-    assert_invalid_parameter_contains(stale_incarnation_error, "lease-incarnation CAS expected");
-    assert_eq!(
-        stx.world
-            .soracloud_service_deployments
-            .get(&bundle.service.service_name),
-        Some(&next_incarnation),
-        "a stale lease report must not mutate the current incarnation",
-    );
-    stx.world
-        .soracloud_service_deployments
-        .insert(bundle.service.service_name.clone(), baseline.clone());
-
-    let alice_bytes = 1024 * 1024;
-    let bob_bytes = 10;
-
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: alice_bytes,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: bob_bytes,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)?;
-    let first_lease = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.clone())
-        .expect("first ordered lease");
-    let first_accounted_bytes = u128::from(alice_bytes) + u128::from(bob_bytes);
-    assert_eq!(first_lease.accounted_egress_bytes, first_accounted_bytes);
-    assert_eq!(first_lease.egress_reporter_checkpoints.len(), 2);
-    assert!(
-        first_lease
-            .egress_reporter_checkpoints
-            .iter()
-            .all(|checkpoint| { checkpoint.reporting_epoch == reporting_epoch })
-    );
-    first_lease.validate()?;
-    let mut invalid_aggregate = first_lease.clone();
-    invalid_aggregate.accounted_egress_bytes = 0;
-    invalid_aggregate
-        .validate()
-        .expect_err("the cached aggregate must match reporter checkpoints");
-    let mut noncanonical = first_lease.clone();
-    noncanonical.egress_reporter_checkpoints.reverse();
-    noncanonical
-        .validate()
-        .expect_err("reporter checkpoints must stay in canonical key order");
-    let mut wrong_epoch = first_lease.clone();
-    wrong_epoch.egress_reporter_checkpoints[0].reporting_epoch = reporting_epoch.saturating_add(1);
-    wrong_epoch
-        .validate()
-        .expect_err("every checkpoint must belong to its containing reporting epoch");
-    let mut oversized = first_lease.clone();
-    oversized.egress_reporter_checkpoints.resize(
-        SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1 + 1,
-        first_lease.egress_reporter_checkpoints[0].clone(),
-    );
-    oversized
-        .validate()
-        .expect_err("reporter checkpoint state growth must be protocol bounded");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch.saturating_add(2),
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: alice_bytes,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a report outside the current or exact successor epoch must be rejected");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch.saturating_add(2),
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: alice_bytes,
-        finalize_reporter: true,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a delayed terminal report must not finalize another reporting epoch");
-    let checkpointed_deployment = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .cloned()
-        .expect("checkpointed deployment");
-    let mut next_bundle = bundle.clone();
-    next_bundle.service.service_version = "2.0.0".to_owned();
-    let renewed_lease =
-        build_http_service_lease_state(&next_bundle, Some(&checkpointed_deployment), 2, true)?
-            .expect("renewed lease");
-    assert_eq!(
-        renewed_lease.egress_reporter_checkpoints,
-        first_lease.egress_reporter_checkpoints
-    );
-    assert_eq!(renewed_lease.lease_started_height, lease_started_height);
-    assert_eq!(renewed_lease.accounted_egress_bytes, first_accounted_bytes);
-    let retained_lease =
-        build_http_service_lease_state(&next_bundle, Some(&checkpointed_deployment), 2, false)?
-            .expect("retained lease");
-    assert_eq!(
-        retained_lease.egress_reporter_checkpoints,
-        first_lease.egress_reporter_checkpoints
-    );
-    let mut repriced_bundle = next_bundle.clone();
-    repriced_bundle.service.economics.egress_price_per_mib =
-        "0.000006".parse().expect("changed egress price");
-    build_http_service_lease_state(&repriced_bundle, Some(&checkpointed_deployment), 2, true)
-        .expect_err("one economic lease must reject retroactive unit-price drift");
-
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: alice_bytes,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("an unchanged active reporter checkpoint must be rejected as a no-op");
-    let replayed_lease = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.clone())
-        .expect("replayed lease");
-    assert_eq!(
-        replayed_lease.egress_reporter_checkpoints,
-        first_lease.egress_reporter_checkpoints
-    );
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: alice_bytes,
-        finalize_reporter: true,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("an active assignment must not seal its reporter checkpoint");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: alice_bytes - 1,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a reporter checkpoint must not decrease");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: u64::MAX,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("a validator must not spoof another replica slot");
-
-    stx.apply();
-    state_block.commit_world_overlay_for_testing()?;
-    soracloud_transaction_at_height!(state, block_header, state_block, stx, 4);
-
-    let placement_key = (
-        bundle.service.service_name.as_ref().to_owned(),
-        bundle.service.service_version.clone(),
-    );
-    let mut retired_alice_placement = stx
-        .world
-        .soracloud_inrou_service_placements
-        .get(&placement_key)
-        .cloned()
-        .expect("two-reporter placement");
-    let alice_assignment_index = retired_alice_placement
-        .placements
-        .iter()
-        .position(|assignment| {
-            assignment.replica_slot == 1 && assignment.validator_account_id == *ALICE_ID
-        })
-        .expect("Alice placement");
-    let alice_assignment = retired_alice_placement.placements[alice_assignment_index].clone();
-    let successor_assignment = &mut retired_alice_placement.placements[alice_assignment_index];
-    successor_assignment.validator_account_id = CARPENTER_ID.clone();
-    successor_assignment.peer_id =
-        PeerId::from(CARPENTER_ID.expect_single_signatory().clone()).to_string();
-    stx.world
-        .soracloud_inrou_service_placements
-        .insert(placement_key.clone(), retired_alice_placement.clone());
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: alice_bytes + 1,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a former reporter may only submit a terminal checkpoint");
-    let terminal_alice_bytes = alice_bytes + 1;
-    let terminal = isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: terminal_alice_bytes,
-        finalize_reporter: true,
-    };
-    terminal.clone().execute(&ALICE_ID, &mut stx)?;
-    terminal
-        .execute(&ALICE_ID, &mut stx)
-        .expect_err("an identical terminal reporter checkpoint must be rejected as a no-op");
-    let finalized_checkpoint = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.as_ref())
-        .and_then(|lease| {
-            lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
-                checkpoint.assignment.placement.replica_slot == 1
-                    && checkpoint.assignment.placement.validator_account_id == *ALICE_ID
-            })
-        })
-        .expect("finalized Alice checkpoint");
-    assert!(finalized_checkpoint.finalize_reporter);
-    assert_eq!(
-        finalized_checkpoint.accounted_egress_bytes, terminal_alice_bytes,
-        "a former reporter's one terminal update must retain final in-flight usage"
-    );
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: terminal_alice_bytes + 1,
-        finalize_reporter: true,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a sealed former reporter must not advance again");
-    retired_alice_placement.placements[alice_assignment_index] = alice_assignment;
-    stx.world
-        .soracloud_inrou_service_placements
-        .insert(placement_key, retired_alice_placement);
-    let reopen_with_increase_error = isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: terminal_alice_bytes + 1,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("a finalized checkpoint must reopen at its exact terminal byte value");
-    assert_invalid_parameter_contains(reopen_with_increase_error, "exact terminal byte value");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: terminal_alice_bytes,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    let reopened_checkpoint = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.as_ref())
-        .and_then(|lease| {
-            lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
-                checkpoint.assignment.placement.replica_slot == 1
-                    && checkpoint.assignment.placement.validator_account_id == *ALICE_ID
-            })
-        })
-        .expect("reopened Alice checkpoint");
-    assert!(!reopened_checkpoint.finalize_reporter);
-    assert_eq!(
-        reopened_checkpoint.accounted_egress_bytes, terminal_alice_bytes,
-        "reopening must preserve the finalized checkpoint's terminal counter"
-    );
-
-    stx.apply();
-    state_block.commit_world_overlay_for_testing()?;
-    soracloud_transaction_at_height!(state, block_header, state_block, stx, 5);
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: terminal_alice_bytes + 1,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)?;
-    let increased_checkpoint = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .and_then(|deployment| deployment.service_lease.as_ref())
-        .and_then(|lease| {
-            lease.egress_reporter_checkpoints.iter().find(|checkpoint| {
-                checkpoint.assignment.placement.replica_slot == 1
-                    && checkpoint.assignment.placement.validator_account_id == *ALICE_ID
-            })
-        })
-        .expect("increased Alice checkpoint");
-    assert_eq!(
-        increased_checkpoint.accounted_egress_bytes,
-        terminal_alice_bytes + 1,
-        "a reopened checkpoint may resume monotonic reporting in a later block"
-    );
-
-    let mut capped_deployment = baseline.clone();
-    let capped_lease = capped_deployment.service_lease.as_mut().expect("lease");
-    let capped_checkpoint = first_lease.egress_reporter_checkpoints[0].clone();
-    capped_lease.settled_egress_bytes = 7;
-    capped_lease.egress_reporter_checkpoints = (0
-        ..SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
-        .map(|index| SoraServiceLeaseEgressCheckpointV1 {
-            assignment: SoraServiceLeaseReporterAssignmentV1 {
-                service_version: format!("retired-{index:04}"),
-                ..capped_checkpoint.assignment.clone()
-            },
-            accounted_egress_bytes: 1,
-            finalize_reporter: true,
-            ..capped_checkpoint.clone()
-        })
-        .collect();
-    capped_lease
-        .refresh_accounted_egress_bytes()
-        .expect("bounded capped reporter aggregate");
-    let capped_volumes = capped_deployment.lease_volume_states.clone();
-    let capped_lease_started_height = capped_lease.lease_started_height;
-    let capped_lease_expires_height = capped_lease.lease_expires_height;
-    stx.world.soracloud_service_deployments.insert(
-        bundle.service.service_name.clone(),
-        capped_deployment.clone(),
-    );
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("a full current-epoch table must reject a new identity without rollover");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 2,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("rollover must reject a skipped reporting epoch");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 1,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("rollover must reject a nonzero successor counter");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: true,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("rollover must reject a finalized successor counter");
-
-    let mut manager_unassigned_placement = stx
-        .world
-        .soracloud_inrou_service_placements
-        .get(&(
-            bundle.service.service_name.as_ref().to_owned(),
-            bundle.service.service_version.clone(),
-        ))
-        .cloned()
-        .expect("reporter placement");
-    let manager_assignment = manager_unassigned_placement
-        .placements
-        .iter_mut()
-        .find(|assignment| assignment.validator_account_id == *ALICE_ID)
-        .expect("Alice placement");
-    manager_assignment.validator_account_id = CARPENTER_ID.clone();
-    manager_assignment.peer_id =
-        PeerId::from(CARPENTER_ID.expect_single_signatory().clone()).to_string();
-    stx.world.soracloud_inrou_service_placements.insert(
-        (
-            bundle.service.service_name.as_ref().to_owned(),
-            bundle.service.service_version.clone(),
-        ),
-        manager_unassigned_placement,
-    );
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 1,
-        placement_incarnation: alice_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&ALICE_ID, &mut stx)
-    .expect_err("Soracloud manager authority must not substitute for an exact reporter assignment");
-
-    let mut nonterminal_deployment = capped_deployment.clone();
-    nonterminal_deployment
-        .service_lease
-        .as_mut()
-        .expect("lease")
-        .egress_reporter_checkpoints[0]
-        .finalize_reporter = false;
-    stx.world.soracloud_service_deployments.insert(
-        bundle.service.service_name.clone(),
-        nonterminal_deployment.clone(),
-    );
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("rollover must preserve unknown usage until every terminal report arrives");
-    assert_eq!(
-        stx.world
-            .soracloud_service_deployments
-            .get(&bundle.service.service_name),
-        Some(&nonterminal_deployment)
-    );
-
-    let mut actively_placed_deployment = capped_deployment.clone();
-    let actively_placed_checkpoint = &mut actively_placed_deployment
-        .service_lease
-        .as_mut()
-        .expect("lease")
-        .egress_reporter_checkpoints[0];
-    let active_bob_assignment = stx
-        .world
-        .soracloud_inrou_service_placements
-        .get(&(
-            bundle.service.service_name.as_ref().to_owned(),
-            bundle.service.service_version.clone(),
-        ))
-        .and_then(|record| {
-            record
-                .placements
-                .iter()
-                .find(|placement| placement.replica_slot == 2)
-                .map(|placement| (placement.clone(), record.reconciled_at_ms))
-        })
-        .expect("active Bob assignment");
-    actively_placed_checkpoint.assignment.service_version = bundle.service.service_version.clone();
-    actively_placed_checkpoint.assignment.placement = active_bob_assignment.0;
-    actively_placed_checkpoint
-        .assignment
-        .placement_reconciled_at_ms = active_bob_assignment.1;
-    actively_placed_deployment
-        .service_lease
-        .as_mut()
-        .expect("lease")
-        .egress_reporter_checkpoints
-        .sort_by(|left, right| {
-            (
-                left.reporting_epoch,
-                left.assignment.service_version.as_str(),
-                left.assignment.placement.replica_slot,
-                &left.assignment.placement.validator_account_id,
-            )
-                .cmp(&(
-                    right.reporting_epoch,
-                    right.assignment.service_version.as_str(),
-                    right.assignment.placement.replica_slot,
-                    &right.assignment.placement.validator_account_id,
-                ))
-        });
-    stx.world.soracloud_service_deployments.insert(
-        bundle.service.service_name.clone(),
-        actively_placed_deployment,
-    );
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("rollover must reject any prior checkpoint key that remains actively placed");
-
-    let mut overflowing_deployment = capped_deployment.clone();
-    overflowing_deployment
-        .service_lease
-        .as_mut()
-        .expect("lease")
-        .settled_egress_bytes = u128::MAX;
-    stx.world
-        .soracloud_service_deployments
-        .insert(bundle.service.service_name.clone(), overflowing_deployment);
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("rollover must reject cumulative settled-byte overflow");
-
-    let mut exhausted_sequence_event =
-        latest_service_audit_event(&stx, &bundle.service.service_name)
-            .expect("existing service audit event");
-    exhausted_sequence_event.sequence = u64::MAX;
-    stx.world
-        .soracloud_service_audit_events
-        .insert(u64::MAX, exhausted_sequence_event);
-    let audit_exhausted_deployment = capped_deployment.clone();
-    stx.world.soracloud_service_deployments.insert(
-        bundle.service.service_name.clone(),
-        audit_exhausted_deployment.clone(),
-    );
-    let audit_exhaustion_error = isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height: capped_lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("rollover must fail atomically when no unique audit sequence remains");
-    assert_invariant_contains(audit_exhaustion_error, "audit sequence space is exhausted");
-    assert_eq!(
-        stx.world
-            .soracloud_service_deployments
-            .get(&bundle.service.service_name),
-        Some(&audit_exhausted_deployment),
-        "audit failure must not persist the prepared epoch settlement"
-    );
-    stx.world.soracloud_service_audit_events.remove(u64::MAX);
-
-    stx.world
-        .soracloud_service_deployments
-        .insert(bundle.service.service_name.clone(), capped_deployment);
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)?;
-    let rolled_deployment = stx
-        .world
-        .soracloud_service_deployments
-        .get(&bundle.service.service_name)
-        .expect("rolled deployment");
-    let rolled_lease = rolled_deployment
-        .service_lease
-        .as_ref()
-        .expect("rolled lease");
-    assert_eq!(rolled_lease.reporting_epoch, reporting_epoch + 1);
-    assert_eq!(rolled_lease.settled_egress_bytes, 7 + 4_096);
-    assert_eq!(rolled_lease.accounted_egress_bytes, 7 + 4_096);
-    assert_eq!(
-        rolled_lease.lease_started_height,
-        capped_lease_started_height
-    );
-    assert_eq!(
-        rolled_lease.lease_expires_height,
-        capped_lease_expires_height
-    );
-    assert_eq!(rolled_deployment.lease_volume_states, capped_volumes);
-    assert_eq!(rolled_lease.egress_reporter_checkpoints.len(), 1);
-    let successor_checkpoint = &rolled_lease.egress_reporter_checkpoints[0];
-    assert_eq!(successor_checkpoint.reporting_epoch, reporting_epoch + 1);
-    assert_eq!(
-        successor_checkpoint
-            .assignment
-            .placement
-            .validator_account_id,
-        *BOB_ID
-    );
-    assert_eq!(successor_checkpoint.accounted_egress_bytes, 0);
-    assert!(!successor_checkpoint.finalize_reporter);
-    let rollover_event = latest_service_audit_event(&stx, &bundle.service.service_name)
-        .expect("reporting epoch rollover audit event");
-    assert_eq!(
-        rollover_event.action,
-        SoraServiceLifecycleActionV1::LeaseReportingEpochRollover
-    );
-    let mut invalid_rollover_event = rollover_event.clone();
-    invalid_rollover_event
-        .lease_reporting_epoch_rollover
-        .as_mut()
-        .expect("typed rollover payload")
-        .new_reporting_epoch += 1;
-    invalid_rollover_event
-        .validate()
-        .expect_err("rollover audit payload must bind the exact successor epoch");
-    let rollover = rollover_event
-        .lease_reporting_epoch_rollover
-        .expect("typed rollover payload");
-    assert_eq!(rollover.lease_started_height, capped_lease_started_height);
-    assert_eq!(rollover.previous_reporting_epoch, reporting_epoch);
-    assert_eq!(rollover.new_reporting_epoch, reporting_epoch + 1);
-    assert_eq!(rollover.reporter_account_id, *BOB_ID);
-    assert_eq!(rollover.placement_incarnation, bob_placement_incarnation);
-    assert_eq!(rollover.settled_egress_bytes_delta, 4_096);
-    assert_eq!(rollover.settled_egress_bytes, 7 + 4_096);
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height,
-        reporting_epoch,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("a stale pre-rollover report must fail closed");
-
-    let returned_placement_key = (
-        bundle.service.service_name.as_ref().to_owned(),
-        bundle.service.service_version.clone(),
-    );
-    let mut transit_placement = stx
-        .world
-        .soracloud_inrou_service_placements
-        .get(&returned_placement_key)
-        .cloned()
-        .expect("active placement after rollover");
-    let transit_incarnation = Hash::new(b"bob-placement-transit");
-    transit_placement
-        .placements
-        .iter_mut()
-        .find(|assignment| assignment.replica_slot == 2)
-        .expect("Bob assignment")
-        .placement_incarnation = transit_incarnation;
-    stx.world
-        .soracloud_inrou_service_placements
-        .insert(returned_placement_key.clone(), transit_placement.clone());
-    let returned_incarnation = Hash::new(b"bob-placement-returned");
-    transit_placement
-        .placements
-        .iter_mut()
-        .find(|assignment| assignment.replica_slot == 2)
-        .expect("Bob returned assignment")
-        .placement_incarnation = returned_incarnation;
-    stx.world
-        .soracloud_inrou_service_placements
-        .insert(returned_placement_key, transit_placement);
-
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height: capped_lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: bob_placement_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("an A-to-B-to-A delayed report must not target the returned placement");
-    isi::ReportSoracloudServiceLeaseUsage {
-        service_name: bundle.service.service_name.clone(),
-        lease_started_height: capped_lease_started_height,
-        reporting_epoch: reporting_epoch + 1,
-        active_service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        placement_incarnation: returned_incarnation,
-        replica_accounted_egress_bytes: 0,
-        finalize_reporter: false,
-    }
-    .execute(&BOB_ID, &mut stx)?;
-
-    let mut returned_runtime = sample_inrou_replica_runtime_state_for(
-        bundle.service.service_name.clone(),
-        &bundle.service.service_version,
-        2,
-        BOB_ID.clone(),
-    );
-    returned_runtime.placement_incarnation = returned_incarnation;
-    returned_runtime.reporting_epoch = reporting_epoch + 1;
-    let returned_runtime_key = inrou_replica_runtime_key(
-        &returned_runtime.service_name,
-        &returned_runtime.service_version,
-        returned_runtime.replica_slot,
-    );
-    stx.world
-        .soracloud_inrou_replica_runtime
-        .insert(returned_runtime_key.clone(), returned_runtime.clone());
-    isi::ClearSoracloudInrouReplicaRuntimeState {
-        service_name: bundle.service.service_name.clone(),
-        service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        expected_placement_incarnation: bob_placement_incarnation,
-    }
-    .execute(&BOB_ID, &mut stx)
-    .expect_err("an A-to-B-to-A delayed clear must not erase the returned placement state");
-    assert_eq!(
-        stx.world
-            .soracloud_inrou_replica_runtime
-            .get(&returned_runtime_key),
-        Some(&returned_runtime)
-    );
-    isi::ClearSoracloudInrouReplicaRuntimeState {
-        service_name: bundle.service.service_name.clone(),
-        service_version: bundle.service.service_version.clone(),
-        replica_slot: 2,
-        expected_placement_incarnation: returned_incarnation,
-    }
-    .execute(&BOB_ID, &mut stx)?;
-    assert!(
-        stx.world
-            .soracloud_inrou_replica_runtime
-            .get(&returned_runtime_key)
-            .is_none()
-    );
-
-    let fresh_lease = build_http_service_lease_state(
-        &bundle,
-        None,
-        lease_started_height.saturating_add(100),
-        false,
-    )?
-    .expect("fresh hosted-service lease");
-    assert!(fresh_lease.egress_reporter_checkpoints.is_empty());
-    assert_eq!(fresh_lease.accounted_egress_bytes, 0);
-    assert_eq!(fresh_lease.reporting_epoch, 1);
-    assert_eq!(fresh_lease.settled_egress_bytes, 0);
-    assert_ne!(fresh_lease.lease_started_height, lease_started_height);
-
-    Ok(())
+    let fixture = service_lease_usage_tests::prepare_service_lease_usage()?;
+    let (baseline, first_lease) =
+        service_lease_usage_tests::verify_reporter_usage_and_replays(&fixture)?;
+    service_lease_usage_tests::verify_reporter_finalization_and_reopening(&fixture)?;
+    service_lease_usage_tests::verify_reporter_rollover_and_placement_incarnation(
+        &fixture,
+        &baseline,
+        &first_lease,
+    )
 }
 #[test]
 fn deploy_soracloud_service_accepts_required_inline_materials() -> Result<(), eyre::Report> {
@@ -20065,7 +19311,7 @@ fn deploy_soracloud_service_accepts_required_inline_materials() -> Result<(), ey
     .execute(&ALICE_ID, &mut stx)?;
     stx.apply();
     state_block.commit_world_overlay_for_testing()?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid service name");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid service name");
     let view = state.view();
     let deployment = view
         .world()
@@ -20303,7 +19549,7 @@ fn upgrade_soracloud_service_starts_canary_rollout() -> Result<(), eyre::Report>
     state_block.commit_world_overlay_for_testing()?;
     let view = state.view();
     let world = view.world();
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let deployment = world
         .soracloud_service_deployments()
         .get(&service_name)
@@ -20360,7 +19606,7 @@ fn upgrade_inrou_service_rejects_partial_canary_before_revision_admission()
     .expect_err("first-release Inrou upgrades must reject split revision-private disks");
     assert_invalid_parameter_contains(error, "service.rollout.canary_percent");
 
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let deployment = stx
         .world
         .soracloud_service_deployments
@@ -20553,10 +19799,7 @@ fn build_rollout_state_rejects_out_of_range_canary_percent() {
     let error = build_rollout_state(&bundle, 7, "1.0.0".to_owned())
         .expect_err("out-of-range rollout percentages must not be clamped");
 
-    assert!(
-        error.to_string().contains("canary_percent"),
-        "unexpected error: {error}"
-    );
+    assert_invalid_parameter_contains(error, "rollout canary_percent must be within 0..=100");
 }
 #[test]
 fn rollout_step_requires_branch_specific_explicit_promotion_target() -> Result<(), eyre::Report> {
@@ -20581,7 +19824,7 @@ fn rollout_step_requires_branch_specific_explicit_promotion_target() -> Result<(
         provenance: bundle_provenance_with_precondition(&upgrade_bundle, &upgrade_precondition),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let rollout_handle = latest_service_audit_event(&stx, &service_name)
         .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
         .expect("rollout handle");
@@ -20644,7 +19887,7 @@ fn unhealthy_rollout_auto_rolls_back_to_baseline() -> Result<(), eyre::Report> {
         ),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let rollout_handle = latest_service_audit_event(&stx, &service_name)
         .and_then(|event| event.rollout_state.map(|rollout| rollout.rollout_handle))
         .expect("rollout handle");
@@ -20785,7 +20028,7 @@ fn upgrade_inrou_service_rejects_execution_plane_and_runtime_change() -> Result<
             .contains("service revision cannot change execution_plane"),
         "unexpected error: {error:?}"
     );
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let deployment = stx
         .world
         .soracloud_service_deployments
@@ -20830,7 +20073,7 @@ fn rollback_soracloud_service_reuses_admitted_revision() -> Result<(), eyre::Rep
         ),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let mut exhausted_deployment = stx
         .world
         .soracloud_service_deployments
@@ -20979,8 +20222,8 @@ fn mutate_soracloud_state_records_authoritative_service_state() -> Result<(), ey
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-    let binding_name: iroha_data_model::name::Name = "vault".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
+    let binding_name: iroha_model_base::name::Name = "vault".parse().expect("valid");
     let governance_tx_hash = Hash::new(b"gov-state");
     let value_payload = vec![0xAB; 256];
     let value_payload_commitment = Hash::new(&value_payload);
@@ -21560,7 +20803,7 @@ fn run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add
         &params,
         &public_key,
         "soracloud-ledger-bounded-non-add-bootstrap",
-        2,
+        BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
         bootstrap_seed,
     )
     .expect("bounded-noise bootstrap key");
@@ -21587,7 +20830,7 @@ fn run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add
         rotation_transcripts: Vec::new(),
         bootstrap_transcript: Some(BfvBootstrapRefreshTranscriptV1 {
             key_id: "soracloud-ledger-bounded-non-add-bootstrap".to_string(),
-            max_refresh_rounds: 2,
+            max_refresh_rounds: BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS,
             seed: bootstrap_seed.to_vec(),
         }),
     };
@@ -21676,7 +20919,7 @@ fn run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add
     );
     policy.max_rotation_count =
         NonZeroU32::new(u32::from(params.polynomial_degree)).expect("nonzero rotation budget");
-    policy.max_bootstrap_count = 2;
+    policy.max_bootstrap_count = BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS;
     let public_key_vk_box = sample_fhe_public_key_stark_vk_box();
     let (_public_key_vk_id, _public_key_vk_commitment) =
         install_fhe_public_key_verifier_record(&mut stx, public_key_vk_box.clone());
@@ -21733,7 +20976,7 @@ fn run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add
     bootstrap_job.job_id = "bounded-bootstrap-job".to_string();
     bootstrap_job.output_state_key = "/state/private/bounded-bootstrap-output".to_string();
     bootstrap_job.operation = FheJobOperationV1::Bootstrap;
-    bootstrap_job.bootstrap_count = 2;
+    bootstrap_job.bootstrap_count = BFV_BOOTSTRAP_KEY_MAX_REFRESH_ROUNDS;
     let state_entry_count = stx.world.soracloud_service_state_entries.len();
     let audit_count = stx.world.soracloud_service_audit_events.len();
     let event_count = stx.world.internal_event_buf.len();
@@ -22759,7 +22002,7 @@ fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), 
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     let policy = sample_decryption_policy();
     let request = sample_decryption_request();
     iroha_data_model::isi::InstructionBox::from(isi::RecordSoracloudDecryptionRequest {
@@ -22799,12 +22042,14 @@ fn record_soracloud_decryption_request_persists_policy_snapshot() -> Result<(), 
     Ok(())
 }
 struct TrainingStartFixture {
-    service_name: iroha_data_model::name::Name,
+    service_name: iroha_model_base::name::Name,
+    job_id: String,
 }
 impl TrainingStartFixture {
     fn portal() -> Self {
         Self {
             service_name: "portal".parse().expect("valid"),
+            job_id: "job-1".to_owned(),
         }
     }
     fn execute(
@@ -22814,7 +22059,7 @@ impl TrainingStartFixture {
         iroha_data_model::isi::InstructionBox::from(isi::StartSoracloudTrainingJob {
             service_name: self.service_name.clone(),
             model_name: "vision_model".to_string(),
-            job_id: "job-1".to_string(),
+            job_id: self.job_id.clone(),
             worker_group_size: 4,
             target_steps: 100,
             checkpoint_interval_steps: 20,
@@ -22825,7 +22070,7 @@ impl TrainingStartFixture {
             provenance: training_start_provenance(
                 &self.service_name,
                 "vision_model",
-                "job-1",
+                &self.job_id,
                 4,
                 100,
                 20,
@@ -22844,13 +22089,13 @@ impl TrainingStartFixture {
     ) -> Result<(), InstructionExecutionError> {
         iroha_data_model::isi::InstructionBox::from(isi::CheckpointSoracloudTrainingJob {
             service_name: self.service_name.clone(),
-            job_id: "job-1".to_string(),
+            job_id: self.job_id.clone(),
             completed_step: 100,
             checkpoint_size_bytes: 1_024,
             metrics_hash,
             provenance: training_checkpoint_provenance(
                 &self.service_name,
-                "job-1",
+                &self.job_id,
                 100,
                 1_024,
                 metrics_hash,
@@ -22865,10 +22110,18 @@ fn training_start_rejects_signed_model_and_job_text_aliases_before_mutation()
 -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
     for (model_name, job_id, expected) in [
-        (" vision_model ", "job-model-alias", "model_name"),
-        ("vision_model", " job-id-alias ", "job_id"),
+        (
+            " vision_model ",
+            "job-model-alias",
+            "model_name must not contain surrounding whitespace",
+        ),
+        (
+            "vision_model",
+            " job-id-alias ",
+            "job_id must not contain surrounding whitespace",
+        ),
     ] {
         let instruction = isi::StartSoracloudTrainingJob {
             service_name: service_name.clone(),
@@ -22897,10 +22150,7 @@ fn training_start_rejects_signed_model_and_job_text_aliases_before_mutation()
         let error = instruction
             .execute(&ALICE_ID, &mut stx)
             .expect_err("signed text aliases must fail closed");
-        assert!(
-            error.to_string().contains(expected),
-            "unexpected {expected} alias rejection: {error}"
-        );
+        assert_invalid_parameter_contains(error, expected);
     }
     assert!(stx.world.soracloud_training_jobs.iter().next().is_none());
     Ok(())
@@ -23197,85 +22447,100 @@ fn rollback_soracloud_model_weight_updates_authoritative_registry_state() -> Res
         provenance: bundle_provenance(&bundle),
     }
     .execute(&ALICE_ID, &mut stx)?;
-    let service_name: iroha_data_model::name::Name = "portal".parse().expect("valid");
-    record_model_registry(
-        &mut stx,
-        SoraModelRegistryV1 {
-            schema_version: SORA_MODEL_REGISTRY_VERSION_V1,
+    let service_name: iroha_model_base::name::Name = "portal".parse().expect("valid");
+    // Build the rollback target and its successor through the authoritative lifecycle so
+    // every record and audit entry receives its sequence from the same allocator.
+    for (job_id, weight_version, parent_version) in
+        [("job-1", "v1", None), ("job-2", "v2", Some("v1"))]
+    {
+        let training = TrainingStartFixture {
             service_name: service_name.clone(),
-            service_version: "1.0.0".to_string(),
-            model_name: "vision_model".to_string(),
-            current_version: Some("v2".to_string()),
-            updated_sequence: 4,
-        },
-    )?;
-    record_model_weight_version(
-        &mut stx,
-        SoraModelWeightVersionRecordV1 {
-            schema_version: SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+            job_id: job_id.to_owned(),
+        };
+        training.execute(&mut stx)?;
+        training.checkpoint(&mut stx, Hash::new(format!("metrics-{weight_version}")))?;
+        let weight_artifact_hash = Hash::new(format!("weights-{weight_version}"));
+        let training_config_hash = Hash::new(format!("train-config-{weight_version}"));
+        let reproducibility_hash = Hash::new(format!("repro-{weight_version}"));
+        let provenance_attestation_hash = Hash::new(format!("prov-{weight_version}"));
+        isi::RegisterSoracloudModelArtifact {
             service_name: service_name.clone(),
-            service_version: "1.0.0".to_string(),
-            model_name: "vision_model".to_string(),
-            weight_version: "v1".to_string(),
-            parent_version: None,
-            training_job_id: "job-1".to_string(),
-            source_provenance: Some(SoraModelProvenanceRefV1 {
-                kind: SoraModelProvenanceKindV1::TrainingJob,
-                id: "job-1".to_string(),
-            }),
-            weight_artifact_hash: Hash::new(b"weights-v1"),
-            dataset_ref: "dataset://train".to_string(),
-            training_config_hash: Hash::new(b"train-config-v1"),
-            reproducibility_hash: Hash::new(b"repro-v1"),
-            provenance_attestation_hash: Hash::new(b"prov-v1"),
-            registered_sequence: 2,
-            promoted_sequence: Some(2),
-            gate_report_hash: Some(Hash::new(b"gate-v1")),
-            promoted_by: Some(ALICE_KEYPAIR.public_key().clone()),
-        },
-    )?;
-    record_model_weight_version(
-        &mut stx,
-        SoraModelWeightVersionRecordV1 {
-            schema_version: SORA_MODEL_WEIGHT_VERSION_RECORD_VERSION_V1,
+            model_name: "vision_model".to_owned(),
+            training_job_id: job_id.to_owned(),
+            weight_artifact_hash,
+            dataset_ref: "dataset://train".to_owned(),
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+            provenance: model_artifact_provenance(
+                &service_name,
+                "vision_model",
+                job_id,
+                weight_artifact_hash,
+                "dataset://train",
+                training_config_hash,
+                reproducibility_hash,
+                provenance_attestation_hash,
+            ),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+        isi::RegisterSoracloudModelWeight {
             service_name: service_name.clone(),
-            service_version: "1.0.0".to_string(),
-            model_name: "vision_model".to_string(),
-            weight_version: "v2".to_string(),
-            parent_version: Some("v1".to_string()),
-            training_job_id: "job-2".to_string(),
-            source_provenance: Some(SoraModelProvenanceRefV1 {
-                kind: SoraModelProvenanceKindV1::TrainingJob,
-                id: "job-2".to_string(),
-            }),
-            weight_artifact_hash: Hash::new(b"weights-v2"),
-            dataset_ref: "dataset://train".to_string(),
-            training_config_hash: Hash::new(b"train-config-v2"),
-            reproducibility_hash: Hash::new(b"repro-v2"),
-            provenance_attestation_hash: Hash::new(b"prov-v2"),
-            registered_sequence: 3,
-            promoted_sequence: Some(4),
-            gate_report_hash: Some(Hash::new(b"gate-v2")),
-            promoted_by: Some(ALICE_KEYPAIR.public_key().clone()),
-        },
-    )?;
-    record_model_weight_audit_event(
-        &mut stx,
-        SoraModelWeightAuditEventV1 {
-            schema_version: SORA_MODEL_WEIGHT_AUDIT_EVENT_VERSION_V1,
-            sequence: 4,
-            action: SoraModelWeightActionV1::Promote,
+            model_name: "vision_model".to_owned(),
+            weight_version: weight_version.to_owned(),
+            training_job_id: job_id.to_owned(),
+            parent_version: parent_version.map(str::to_owned),
+            weight_artifact_hash,
+            dataset_ref: "dataset://train".to_owned(),
+            training_config_hash,
+            reproducibility_hash,
+            provenance_attestation_hash,
+            provenance: model_weight_register_provenance(
+                &service_name,
+                "vision_model",
+                weight_version,
+                job_id,
+                parent_version,
+                weight_artifact_hash,
+                "dataset://train",
+                training_config_hash,
+                reproducibility_hash,
+                provenance_attestation_hash,
+            ),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+        let gate_report_hash = Hash::new(format!("gate-{weight_version}"));
+        isi::PromoteSoracloudModelWeight {
             service_name: service_name.clone(),
-            service_version: "1.0.0".to_string(),
-            model_name: "vision_model".to_string(),
-            target_version: "v2".to_string(),
-            current_version: Some("v2".to_string()),
-            parent_version: Some("v1".to_string()),
-            gate_approved: Some(true),
-            rollback_reason: None,
-            signer: ALICE_KEYPAIR.public_key().clone(),
-        },
-    )?;
+            model_name: "vision_model".to_owned(),
+            weight_version: weight_version.to_owned(),
+            gate_approved: true,
+            gate_report_hash,
+            provenance: model_weight_promote_provenance(
+                &service_name,
+                "vision_model",
+                weight_version,
+                true,
+                gate_report_hash,
+            ),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+    }
+    let model_key = (service_name.as_ref().to_owned(), "vision_model".to_owned());
+    let registry_before = stx
+        .world
+        .soracloud_model_registries
+        .get(&model_key)
+        .expect("promoted model registry");
+    assert_eq!(registry_before.current_version.as_deref(), Some("v2"));
+    assert_eq!(registry_before.updated_sequence, 11);
+    let weights_before: Vec<_> = stx
+        .world
+        .soracloud_model_weight_versions
+        .iter()
+        .map(|(key, record)| (key.clone(), record.clone()))
+        .collect();
+    assert_eq!(weights_before.len(), 2);
     let rollback_reason = " revert ";
     iroha_data_model::isi::InstructionBox::from(isi::RollbackSoracloudModelWeight {
         service_name: service_name.clone(),
@@ -23299,10 +22564,18 @@ fn rollback_soracloud_model_weight_updates_authoritative_registry_state() -> Res
         .get(&(service_name.as_ref().to_owned(), "vision_model".to_string()))
         .expect("model registry");
     assert_eq!(registry.current_version.as_deref(), Some("v1"));
-    assert_eq!(registry.updated_sequence, 5);
+    assert_eq!(registry.updated_sequence, 12);
+    assert_eq!(world.soracloud_sequence_watermark(), 12);
+    for (key, record) in weights_before {
+        assert_eq!(
+            world.soracloud_model_weight_versions().get(&key),
+            Some(&record),
+            "rollback must preserve registered provenance and promotion history"
+        );
+    }
     let rollback_audit = world
         .soracloud_model_weight_audit_events()
-        .get(&5)
+        .get(&12)
         .expect("rollback audit");
     assert_eq!(rollback_audit.action, SoraModelWeightActionV1::Rollback);
     assert_eq!(
@@ -23472,15 +22745,19 @@ fn soracloud_uploaded_model_register_rejects_signed_padded_identifiers_without_s
 -> Result<(), eyre::Report> {
     permissioned_soracloud_transaction!(kura, state, state_block, stx);
     deploy_uploaded_model_service(&mut stx)?;
-    let malformed_cases: [(u8, fn(&mut SoraUploadedModelBundleV1)); 2] = [
-        (0xEC, |bundle: &mut SoraUploadedModelBundleV1| {
-            bundle.model_id = " vision_model ".to_owned();
-        }),
-        (0xED, |bundle: &mut SoraUploadedModelBundleV1| {
-            bundle.weight_version = " v1 ".to_owned();
-        }),
+    let malformed_cases: [(u8, fn(&mut SoraUploadedModelBundleV1), &str); 2] = [
+        (
+            0xEC,
+            |bundle| bundle.model_id = " vision_model ".to_owned(),
+            "invalid model_id",
+        ),
+        (
+            0xED,
+            |bundle| bundle.weight_version = " v1 ".to_owned(),
+            "weight_version must not contain surrounding whitespace",
+        ),
     ];
-    for (digest_byte, mutate) in malformed_cases {
+    for (digest_byte, mutate, expected) in malformed_cases {
         let digest = ManifestDigest::new([digest_byte; 32]);
         insert_uploaded_model_pin(&mut stx, digest, PinStatus::Approved(1));
         let mut bundle = sample_uploaded_model_bundle("portal", digest);
@@ -23491,11 +22768,7 @@ fn soracloud_uploaded_model_register_rejects_signed_padded_identifiers_without_s
         }
         .execute(&ALICE_ID, &mut stx)
         .expect_err("signed padded uploaded-model identifiers must fail closed");
-        assert!(
-            error.to_string().contains("invalid model_id")
-                || error.to_string().contains("weight_version"),
-            "unexpected padded uploaded-model rejection: {error}"
-        );
+        assert_invalid_parameter_contains(error, expected);
     }
     assert!(
         stx.world
@@ -24053,10 +23326,9 @@ fn soracloud_uploaded_model_finalize_rejects_malformed_identifiers() -> Result<(
     let padded_dataset_error = padded_dataset_instruction
         .execute(&ALICE_ID, &mut stx)
         .expect_err("padded dataset_ref must not resolve to its signed trimmed alias");
-    assert!(
-        padded_dataset_error
-            .to_string()
-            .contains("surrounding whitespace")
+    assert_invalid_parameter_contains(
+        padded_dataset_error,
+        "dataset_ref must not contain surrounding whitespace",
     );
 
     let mut padded_model_name_instruction = sample_uploaded_model_finalize_instruction(

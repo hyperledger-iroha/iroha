@@ -1,6 +1,7 @@
 //! WsvHost JSON/Name/Schema decode syscalls coverage.
 use iroha_crypto::PublicKey;
-use iroha_data_model::prelude::{AssetDefinitionId, Name};
+use iroha_data_model::prelude::AssetDefinitionId;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use ivm::{
     IVM, PointerType, VMError,

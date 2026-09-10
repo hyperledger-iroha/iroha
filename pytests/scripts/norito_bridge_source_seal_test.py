@@ -70,24 +70,24 @@ def source_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def test_explicit_ignored_root_input_is_fingerprinted(source_fixture: Path) -> None:
     inputs = ["Cargo.lock", "Cargo.toml", "bridge-src"]
 
-    listed = SOURCE_SEAL.listed_files(source_fixture, inputs)
-    before = SOURCE_SEAL.fingerprint(source_fixture, inputs)
+    listed = SOURCE_SEAL.listed_files(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
+    before = SOURCE_SEAL.fingerprint(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
     (source_fixture / "Cargo.lock").write_text("lock-v2\n", encoding="utf-8")
-    after = SOURCE_SEAL.fingerprint(source_fixture, inputs)
+    after = SOURCE_SEAL.fingerprint(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
 
     assert "Cargo.lock" in listed
     assert before != after
     # The lock remains intentionally ignored/untracked; its exact bytes are
     # bound by the fingerprint rather than misclassified as Git dirt.
-    assert SOURCE_SEAL.status(source_fixture, inputs) == ""
+    assert SOURCE_SEAL.status(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock") == ""
 
 
 def test_nonignored_untracked_dependency_input_is_dirty(source_fixture: Path) -> None:
     inputs = ["Cargo.lock", "Cargo.toml", "bridge-src"]
     (source_fixture / "bridge-src/new.rs").write_text("pub fn new_input() {}\n", encoding="utf-8")
 
-    listed = SOURCE_SEAL.listed_files(source_fixture, inputs)
-    status = SOURCE_SEAL.status(source_fixture, inputs)
+    listed = SOURCE_SEAL.listed_files(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
+    status = SOURCE_SEAL.status(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
 
     assert "bridge-src/new.rs" in listed
     assert "?? bridge-src/new.rs" in status
@@ -101,23 +101,23 @@ def test_tracked_deleted_dependency_input_is_bound_without_being_read(
     retired.write_text("pub fn retired() {}\n", encoding="utf-8")
     _git(source_fixture, "add", "bridge-src/retired.rs")
     _git(source_fixture, "commit", "-qm", "add retired fixture")
-    before = SOURCE_SEAL.fingerprint(source_fixture, inputs)
+    before = SOURCE_SEAL.fingerprint(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
 
     retired.unlink()
 
     assert "bridge-src/retired.rs" not in SOURCE_SEAL.listed_files(
-        source_fixture, inputs
+        source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock"
     )
-    assert before != SOURCE_SEAL.fingerprint(source_fixture, inputs)
-    assert " D bridge-src/retired.rs" in SOURCE_SEAL.status(source_fixture, inputs)
+    assert before != SOURCE_SEAL.fingerprint(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
+    assert " D bridge-src/retired.rs" in SOURCE_SEAL.status(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
 
 
 def test_unnamed_policy_ignored_file_stays_outside_seal(source_fixture: Path) -> None:
     inputs = ["Cargo.lock", "Cargo.toml", "bridge-src"]
     (source_fixture / "bridge-src/local.cache").write_text("generated\n", encoding="utf-8")
 
-    assert "bridge-src/local.cache" not in SOURCE_SEAL.listed_files(source_fixture, inputs)
-    assert SOURCE_SEAL.status(source_fixture, inputs) == ""
+    assert "bridge-src/local.cache" not in SOURCE_SEAL.listed_files(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
+    assert SOURCE_SEAL.status(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock") == ""
 
 
 def test_explicit_symlink_is_rejected(source_fixture: Path) -> None:
@@ -129,7 +129,7 @@ def test_explicit_symlink_is_rejected(source_fixture: Path) -> None:
         RuntimeError,
         match="selected Cargo lock must be a non-symbolic regular file",
     ):
-        SOURCE_SEAL.listed_files(source_fixture, ["Cargo.lock", "Cargo.toml"])
+        SOURCE_SEAL.listed_files(source_fixture, ["Cargo.lock", "Cargo.toml"], lockfile_path=source_fixture / "Cargo.lock")
 
 
 def test_nested_dependency_symlink_is_rejected(source_fixture: Path) -> None:
@@ -138,7 +138,7 @@ def test_nested_dependency_symlink_is_rejected(source_fixture: Path) -> None:
     _git(source_fixture, "add", "bridge-src/external.rs")
 
     with pytest.raises(RuntimeError, match="source-seal input is symlinked"):
-        SOURCE_SEAL.fingerprint(source_fixture, ["Cargo.toml", "bridge-src"])
+        SOURCE_SEAL.fingerprint(source_fixture, ["Cargo.toml", "bridge-src"], lockfile_path=source_fixture / "Cargo.lock")
 
 
 def test_android_inputs_and_targets_are_platform_specific(
@@ -177,8 +177,8 @@ def test_android_inputs_and_targets_are_platform_specific(
 
     monkeypatch.setattr(SOURCE_SEAL, "local_dependency_roots", dependency_roots)
 
-    android_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "android")
-    apple_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "apple")
+    android_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock")
+    apple_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "apple", lockfile_path=source_fixture / "Cargo.lock")
 
     assert "kotlin/client-android/build.gradle.kts" in android_inputs
     assert "kotlin/core-jvm/src/main" in android_inputs
@@ -220,14 +220,15 @@ def test_android_fingerprint_binds_each_shipping_jvm_source_tree(
         lambda _root, _targets, _lockfile_path=None: {"bridge-src"},
     )
 
-    android_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "android")
-    before = SOURCE_SEAL.fingerprint(source_fixture, android_inputs)
+    android_inputs = SOURCE_SEAL.seal_inputs(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock")
+    before = SOURCE_SEAL.fingerprint(source_fixture, android_inputs, lockfile_path=source_fixture / "Cargo.lock")
     source.write_text("shipping-source-v2\n", encoding="utf-8")
-    after = SOURCE_SEAL.fingerprint(source_fixture, android_inputs)
+    after = SOURCE_SEAL.fingerprint(source_fixture, android_inputs, lockfile_path=source_fixture / "Cargo.lock")
 
     assert relative_path in SOURCE_SEAL.listed_files(
         source_fixture,
         android_inputs,
+        lockfile_path=source_fixture / "Cargo.lock",
     )
     assert before != after
 
@@ -262,15 +263,15 @@ def test_android_snapshot_rejects_source_change_between_abi_builds(
         lambda _root, platform="apple", _lockfile_path=None: inputs,
     )
     snapshot_path = source_fixture / "android-source-seal.json"
-    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
+    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock"))
 
-    SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+    SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path, source_fixture / "Cargo.lock")
     (source_fixture / "bridge-src/lib.rs").write_text(
         "pub fn changed_between_abis() {}\n", encoding="utf-8"
     )
 
     with pytest.raises(RuntimeError, match="source changed after the build started"):
-        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path, source_fixture / "Cargo.lock")
 
 
 def test_android_snapshot_rejects_commit_drift_with_unchanged_selected_source(
@@ -283,14 +284,14 @@ def test_android_snapshot_rejects_commit_drift_with_unchanged_selected_source(
         lambda _root, platform="apple", _lockfile_path=None: inputs,
     )
     snapshot_path = source_fixture / "android-source-seal.json"
-    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
-    fingerprint_before = SOURCE_SEAL.fingerprint(source_fixture, inputs)
+    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock"))
+    fingerprint_before = SOURCE_SEAL.fingerprint(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock")
 
     _git(source_fixture, "commit", "--allow-empty", "-qm", "move head only")
 
-    assert SOURCE_SEAL.fingerprint(source_fixture, inputs) == fingerprint_before
+    assert SOURCE_SEAL.fingerprint(source_fixture, inputs, lockfile_path=source_fixture / "Cargo.lock") == fingerprint_before
     with pytest.raises(RuntimeError, match="source changed after the build started"):
-        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path, source_fixture / "Cargo.lock")
 
 
 def test_android_snapshot_rejects_commit_drift_during_authentication(
@@ -315,7 +316,7 @@ def test_android_snapshot_rejects_commit_drift_during_authentication(
     )
 
     with pytest.raises(RuntimeError, match="source commit changed while authenticating"):
-        SOURCE_SEAL.snapshot(source_fixture, "android")
+        SOURCE_SEAL.snapshot(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock")
 
 
 def test_android_snapshot_rejects_selected_source_drift_during_authentication(
@@ -340,7 +341,7 @@ def test_android_snapshot_rejects_selected_source_drift_during_authentication(
     )
 
     with pytest.raises(RuntimeError, match="selected source changed while authenticating"):
-        SOURCE_SEAL.snapshot(source_fixture, "android")
+        SOURCE_SEAL.snapshot(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock")
 
 
 def test_android_snapshot_rejects_tampering(
@@ -356,11 +357,11 @@ def test_android_snapshot_rejects_tampering(
         ],
     )
     snapshot_path = source_fixture / "android-source-seal.json"
-    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android"))
+    snapshot_path.write_bytes(SOURCE_SEAL.snapshot_bytes(source_fixture, "android", lockfile_path=source_fixture / "Cargo.lock"))
     snapshot_path.write_bytes(snapshot_path.read_bytes().replace(b'"android"', b'"apple"'))
 
     with pytest.raises(RuntimeError, match="source changed after the build started"):
-        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path)
+        SOURCE_SEAL.verify_snapshot(source_fixture, "android", snapshot_path, source_fixture / "Cargo.lock")
 
 
 def test_android_promotions_authenticate_source_immediately_before_and_after_copy() -> None:

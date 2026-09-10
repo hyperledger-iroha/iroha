@@ -5338,7 +5338,7 @@ impl NodeHandle {
         publication.validate().map_err(|error| {
             GovernancePublishError::other(format!("invalid PoR challenge publication: {error}"))
         })?;
-        let encoded = norito::to_bytes(&publication).map_err(|error| {
+        let encoded = norito::encode_canonical(&publication).map_err(|error| {
             GovernancePublishError::other(format!("encode PoR challenge publication: {error}"))
         })?;
         self.enqueue_governance_outbox(GovernanceOutboxKindV1::PorChallengePublication, encoded)?;
@@ -5353,7 +5353,7 @@ impl NodeHandle {
         report.validate().map_err(|error| {
             GovernancePublishError::other(format!("invalid PoR weekly report: {error}"))
         })?;
-        let encoded = norito::to_bytes(&report).map_err(|error| {
+        let encoded = norito::encode_canonical(&report).map_err(|error| {
             GovernancePublishError::other(format!("encode PoR weekly report: {error}"))
         })?;
         self.enqueue_governance_outbox(GovernanceOutboxKindV1::PorWeeklyReport, encoded)?;

@@ -66,10 +66,19 @@ the roadmap milestone.
   hash so Parliament can trace payouts back to signed approvals.
 - The orchestrator can persist `RelayEpochMetricsV1` snapshots via the optional
   `RewardConfig::metrics_log_path`, allowing auditors to replay the scoring pipeline deterministically.
-  The log concatenates complete canonical Norito frames. The writer fixes the layout independently
-  of caller flags; `read_metrics_log` bounds each frame by its validated header before exact decoding.
-  An incomplete final record, substituted owner, noncanonical frame, or excessive declared size is
-  an error. The reader grows its frame buffer only for bytes actually read.
+  The append-only log contains adjacent canonical V1 frames; replay isolates each complete
+  header/padding/payload record and rejects noncanonical, corrupt, or partial trailing records.
+  `read_metrics_log(path, MetricsLogReadLimitsV1)` requires positive caller-selected batch limits
+  before filesystem access: at most 64 MiB of complete frames, 65,536 records, and 256 MiB of
+  Norito-accounted cumulative allocation requests. The input ceiling follows the existing archive
+  scale, while independent record/allocation ceilings cover the returned vector, reader buffer,
+  instrumented nested decoders (including Metadata's entry vector, owned children and conservative
+  B-tree node estimate), and geometric output growth across the whole batch. These modeled cumulative
+  charges are not an exact process-heap/RSS bound or an audit of every allocator request; allocator
+  exhaustion can still abort. Each record also
+  retains the global payload ceiling; appending counts its canonical output and enforces the
+  full-frame replay ceiling before output allocation. Batch exhaustion is an error, not a partial
+  replay. These offline limits are separate from disk retention.【crates/sorafs_orchestrator/src/incentives.rs:192】
 
 ## Treasury & XOR Integration
 

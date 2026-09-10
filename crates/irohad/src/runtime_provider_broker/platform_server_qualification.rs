@@ -338,36 +338,24 @@ fn make_server_observation(
             }
         }
         slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenSigner.wire_id() => {
-            let signer = server_backend!(backends, stream_token_signer);
-            let expected_key = binding
-                .stream_token_signer_public_key
+            // This is immutable routing metadata only. Torii separately authenticates fresh
+            // signed custody observations against its independent approved anchor and Core state.
+            let hardware = binding
+                .stream_token_hardware_binding
+                .as_ref()
                 .ok_or(RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            let public_key = signer.public_key();
-            let qualification = signer
-                .qualification()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            qualification
-                .validate()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            if signer.handle() != binding.handle
-                || !iroha_config::parameters::is_production_runtime_handle(signer.handle())
-                || public_key != expected_key
-                || binding.revision != Some(qualification.revision())
-                || binding.policy_digest != Some(qualification.policy_digest())
-            {
-                return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
-            }
-            let qualification_after = signer
-                .qualification()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            qualification_after
-                .validate()
-                .map_err(|_| RuntimeProviderBrokerServerErrorV1::BindingMismatch)?;
-            if signer.handle() != binding.handle
-                || signer.public_key() != public_key
-                || qualification_after != qualification
-            {
-                return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+            let client = server_backend!(backends, stream_token_hardware_client);
+            let observer = server_backend!(backends, stream_token_state_observer);
+            for _ in 0..2 {
+                let client_handle = client.handle();
+                let observer_handle = observer.handle();
+                if hardware.validate().is_err()
+                    || client_handle != hardware.custody().runtime_handle
+                    || observer_handle != hardware.observer_handle()
+                    || client_handle == observer_handle
+                {
+                    return Err(RuntimeProviderBrokerServerErrorV1::BindingMismatch);
+                }
             }
         }
         slot if slot == IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission.wire_id() => {
@@ -1498,7 +1486,9 @@ fn validate_exact_backend_set(
             && requested(IrohaRuntimeProviderSlotV1::GovernanceDagCheckpointStore)
                 == backends.governance_dag_checkpoint_store.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
-                == backends.stream_token_signer.is_some()
+                == backends.stream_token_hardware_client.is_some()
+            && requested(IrohaRuntimeProviderSlotV1::StreamTokenSigner)
+                == backends.stream_token_state_observer.is_some()
             && requested(IrohaRuntimeProviderSlotV1::StreamTokenGatewayAdmission)
                 == backends.stream_token_gateway_admission.is_some()
             && requested(IrohaRuntimeProviderSlotV1::AppealFinanceCheckpoint)

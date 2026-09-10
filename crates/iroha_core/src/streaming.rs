@@ -253,6 +253,8 @@ const BUNDLE_ACCEL_CAPABILITY_MASK: u32 = BUNDLE_ACCEL_CPU_SIMD_BIT | BUNDLE_ACC
 #[cfg(feature = "quic")]
 const FEATURE_PRIVACY_PROVIDER: u32 = 1 << 11;
 /// Persisted snapshot entry for a streaming session keyed by peer and role.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::streaming::StreamingSnapshotEntry")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 pub struct StreamingSnapshotEntry {
     /// Role associated with the stored session.

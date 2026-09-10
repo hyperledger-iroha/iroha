@@ -31,13 +31,12 @@ pub mod rekey;
 use crate::{
     HasMetadata, Identifiable, IntoKeyValue, Registered, Registrable,
     common::{Owned, Ref},
-    error::ParseError,
     metadata::Metadata,
-    name::Name,
     nexus::UniversalAccountId,
 };
 pub use address::{AccountAddress, AccountAddressError, AccountAddressErrorCode};
 pub use controller::{AccountController, MultisigMember, MultisigPolicy, MultisigPolicyError};
+use iroha_model_base::{error::ParseError, name::Name};
 #[model]
 mod model {
     use super::*;
@@ -1188,8 +1187,9 @@ pub mod prelude {
 #[cfg(feature = "transparent_api")]
 mod tests {
     use super::*;
-    use crate::{name::Name, nexus::DataSpaceId};
+    use crate::nexus::DataSpaceId;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::name::Name;
     fn checked_random_keypair() -> KeyPair {
         KeyPair::try_random().expect("generate checked account fixture keypair")
     }
@@ -1377,11 +1377,11 @@ mod json_tests {
     use crate::{
         account::address,
         metadata::Metadata,
-        name::Name,
         nexus::{DataSpaceId, UniversalAccountId},
         prelude::Register,
     };
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_model_base::name::Name;
     use norito::codec::{decode_adaptive, encode_adaptive};
     fn guard_chain_discriminant() -> address::ChainDiscriminantGuard {
         address::ChainDiscriminantGuard::enter(address::chain_discriminant())

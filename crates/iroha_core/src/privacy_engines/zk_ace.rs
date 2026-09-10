@@ -425,7 +425,6 @@ mod tests {
         account::AccountId,
         asset::AssetDefinitionId,
         domain::DomainId,
-        name::Name,
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
             PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
@@ -438,6 +437,7 @@ mod tests {
             derive_zk_ace_replay_nullifier,
         },
     };
+    use iroha_model_base::name::Name;
     use rand::{TryCryptoRng, TryRngCore};
     use std::str::FromStr as _;
     #[derive(Debug)]

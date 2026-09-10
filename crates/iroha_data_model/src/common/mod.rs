@@ -1,4 +1,4 @@
-use crate::error::ParseError;
+use iroha_model_base::error::ParseError;
 use norito::core::{Archived, Error as NoritoCodecError};
 /// Split a string into two non-empty parts separated by `delimiter`.
 ///

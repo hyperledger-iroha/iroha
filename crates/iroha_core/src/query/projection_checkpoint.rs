@@ -37,6 +37,8 @@ pub const QUERY_PROJECTION_CHECKPOINT_MAX_ASSET_DEFINITION_ID_BYTES: usize = 4 *
 /// First-release aggregate ceiling for asset-definition discriminators in one checkpoint.
 pub const QUERY_PROJECTION_CHECKPOINT_MAX_TOTAL_ASSET_DEFINITION_ID_BYTES: usize = 4 * 1024 * 1024;
 /// Resource family described by a query projection checkpoint shard.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_checkpoint::QueryProjectionResourceKind")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Encode, Decode)]
 pub enum QueryProjectionResourceKind {
     /// Account inventory rows and related aggregate cubes.
@@ -51,6 +53,8 @@ pub enum QueryProjectionResourceKind {
     Domains,
 }
 /// Reference to one immutable DA shard that belongs to a query projection checkpoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_checkpoint::QueryProjectionCheckpointShard")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionCheckpointShard {
     /// Resource family covered by this shard.
@@ -67,6 +71,8 @@ pub struct QueryProjectionCheckpointShard {
     pub blob_hash: BlobDigest,
 }
 /// Top-level checkpoint descriptor tying a set of projection shards to one indexed height.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::projection_checkpoint::QueryProjectionCheckpoint")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 pub struct QueryProjectionCheckpoint {
     /// Version of this descriptor payload.

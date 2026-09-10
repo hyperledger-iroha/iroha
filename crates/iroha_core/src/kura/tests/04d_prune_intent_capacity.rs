@@ -449,18 +449,24 @@ fn active_prune_recovery_never_allocates_missing_retained_merge_carrier() {
     assert!(!retained_carrier.exists());
     assert!(Kura::prune_intent_path_for(temp_dir.path()).is_file());
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::LegacyKuraPruneSidecarPairProjectionV2Fixture")]
 #[derive(Encode)]
 struct LegacyKuraPruneSidecarPairProjectionV2Fixture {
     required: bool,
     retained_data_bytes: u64,
     retained_index_bytes: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::LegacyKuraPruneSidecarRewriteProjectionV2Fixture")]
 #[derive(Encode)]
 struct LegacyKuraPruneSidecarRewriteProjectionV2Fixture {
     pipeline: LegacyKuraPruneSidecarPairProjectionV2Fixture,
     roster: LegacyKuraPruneSidecarPairProjectionV2Fixture,
     sequential_peak_bytes: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::RetiredRosterPruneProjectionV2Fixture")]
 #[derive(Encode)]
 struct RetiredRosterPruneProjectionV2Fixture {
     required: bool,
@@ -471,6 +477,8 @@ struct RetiredRosterPruneProjectionV2Fixture {
     pointer_temporary_bytes: u64,
     current_pointer_growth_bytes: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::LegacyKuraPruneCapacityAdmissionV2Fixture")]
 #[derive(Encode)]
 struct LegacyKuraPruneCapacityAdmissionV2Fixture {
     source_physical_bytes: u64,
@@ -484,6 +492,8 @@ struct LegacyKuraPruneCapacityAdmissionV2Fixture {
     roster: RetiredRosterPruneProjectionV2Fixture,
     admitted_peak_bytes: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::tests::LegacyKuraPruneIntentV2Fixture")]
 #[derive(Encode)]
 struct LegacyKuraPruneIntentV2Fixture {
     version: u8,

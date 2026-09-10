@@ -75,6 +75,8 @@ pub const MAX_CERTIFIED_MERGE_CHUNKS: usize =
 /// across crashes or height rollover. Sequence and cumulative-close values are
 /// meaningful only inside the exact `(requester, responder, stream_epoch)`
 /// tuple.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarStreamEpochV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[repr(transparent)]
 pub struct CertifiedMergeSidecarStreamEpochV1(pub NonZeroU64);
@@ -91,6 +93,8 @@ impl CertifiedMergeSidecarStreamEpochV1 {
 /// responder, service_generation, stream_epoch)` tuple. Cumulative close
 /// floors and stream high-water counters remain plain `u64` values because
 /// zero represents an empty prefix.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarSemanticSequenceV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[repr(transparent)]
 pub struct CertifiedMergeSidecarSemanticSequenceV1(pub NonZeroU64);
@@ -110,6 +114,8 @@ impl CertifiedMergeSidecarSemanticSequenceV1 {
 /// unreachable. Delayed messages from the prior roster generation can
 /// therefore be rejected without retaining an unbounded collection of peer
 /// tombstones.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[repr(transparent)]
 pub struct CertifiedMergeSidecarServiceGenerationV1(pub NonZeroU64);
@@ -373,6 +379,8 @@ fn retry_timeout(base: Duration, attempts: u32) -> Duration {
     base.saturating_mul(1_u32 << backoff_shift)
 }
 /// Point-to-point request for one exact certified merge sidecar.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarRequestV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -448,6 +456,8 @@ impl CertifiedMergeSidecarRequestV1 {
     }
 }
 /// Cumulative authenticated release of completed semantic request occurrences.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarCloseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarCloseV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -490,6 +500,8 @@ impl CertifiedMergeSidecarCloseV1 {
     }
 }
 /// Idempotent responder acknowledgement for one cumulative close witness.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarCloseAckV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarCloseAckV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -532,6 +544,8 @@ impl CertifiedMergeSidecarCloseAckV1 {
     }
 }
 /// Authenticated responder fence returned for a stale service generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarGenerationHintV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarGenerationHintV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -573,6 +587,8 @@ impl CertifiedMergeSidecarGenerationHintV1 {
     }
 }
 /// One fixed-boundary chunk of a certified merge sidecar response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarChunkV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarChunkV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -605,6 +621,8 @@ pub struct CertifiedMergeSidecarChunkV1 {
     pub bytes: Vec<u8>,
 }
 /// Wire messages used by the certified merge-sidecar protocol.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum CertifiedMergeSidecarMessage {
     /// Request an exact full entry from one merge-QC signer.
@@ -1316,7 +1334,8 @@ struct OutboundAttempt {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum ServerRequestSource {
     Synthetic(PeerId),
-    Authenticated(NetworkReplySourceKey),
+    /// Share the sealed transport identity across queued attempts and snapshots.
+    Authenticated(Arc<NetworkReplySourceKey>),
     /// Stable authenticated hub restored without any process-local capability.
     RecoveredAuthenticated(PeerId),
 }
@@ -1455,6 +1474,8 @@ impl ServerPendingChunkIdentity {
             && self.topic == projection.ticket_topic
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarRuntimeGeometryV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarRuntimeGeometryV3 {
@@ -1472,6 +1493,8 @@ struct MergeSidecarRuntimeGeometryV3 {
     outbound_bytes_per_source: u64,
     server_request_gates_per_source: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::RequestStreamLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct RequestStreamLifecycleV3 {
@@ -1482,16 +1505,22 @@ struct RequestStreamLifecycleV3 {
     closed_through: u64,
     acknowledged_through: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::DurableServerRequestSourceV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 enum DurableServerRequestSourceV3 {
     Synthetic(PeerId),
     Authenticated(PeerId),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::DurableServerResponseCursorV3")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum DurableServerResponseCursorV3 {
     Pending(u64),
     Complete,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerPendingChunkLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerPendingChunkLifecycleV3 {
@@ -1557,6 +1586,8 @@ impl From<ServerPendingChunkLifecycleV3> for ServerPendingChunkIdentity {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerRequestAttemptLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerRequestAttemptLifecycleV3 {
@@ -1564,6 +1595,8 @@ struct ServerRequestAttemptLifecycleV3 {
     cursor: DurableServerResponseCursorV3,
     pending_flush_chunk: Option<ServerPendingChunkLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerRequestGateLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerRequestGateLifecycleV3 {
@@ -1577,6 +1610,8 @@ struct ServerRequestGateLifecycleV3 {
     source_capacity: Option<u64>,
     attempts: Vec<ServerRequestAttemptLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerStreamLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerStreamLifecycleV3 {
@@ -1586,6 +1621,8 @@ struct ServerStreamLifecycleV3 {
     closed_through: u64,
     highest_sequence: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecyclePayloadV1")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1598,6 +1635,8 @@ struct UnsupportedMergeSidecarLifecyclePayloadV1 {
     server_streams: Vec<ServerStreamLifecycleV3>,
     server_request_gates: Vec<ServerRequestGateLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecycleSnapshotV1")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1615,6 +1654,8 @@ impl UnsupportedMergeSidecarLifecycleSnapshotV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecyclePayloadV2")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1628,6 +1669,8 @@ struct UnsupportedMergeSidecarLifecyclePayloadV2 {
     server_streams: Vec<ServerStreamLifecycleV3>,
     server_request_gates: Vec<ServerRequestGateLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecycleSnapshotV2")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1647,6 +1690,8 @@ impl UnsupportedMergeSidecarLifecycleSnapshotV2 {
 }
 /// The current format fingerprints the canonical responder roster and the independently
 /// bounded stream, logical-gate, and authenticated-attempt tables.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecycleGeometryV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarLifecycleGeometryV3 {
@@ -1656,6 +1701,8 @@ struct MergeSidecarLifecycleGeometryV3 {
     server_request_gate_capacity: u64,
     server_request_attempt_capacity: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecyclePayloadV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarLifecyclePayloadV3 {
@@ -3376,7 +3423,7 @@ fn preflight_reliable_flush_gate(
 ) -> Result<ReliableFlushGatePreflight, MergeSidecarError> {
     let evidence = admission.projection();
     let key = (evidence.requester.clone(), evidence.request_id);
-    let source = ServerRequestSource::Authenticated(admission.source_key.clone());
+    let source = ServerRequestSource::Authenticated(admission.source_key.clone().into());
     let Some(gate) = transport.server_request_gates.get(&key) else {
         return Ok(ReliableFlushGatePreflight::ConsumeWithoutMutation);
     };
@@ -7048,7 +7095,7 @@ impl MergeSidecarTransport {
     ) -> ServerRequestSource {
         reply_route.map_or_else(
             || ServerRequestSource::Synthetic(sender.clone()),
-            |route| ServerRequestSource::Authenticated(route.source_key()),
+            |route| ServerRequestSource::Authenticated(route.source_key().into()),
         )
     }
     fn source_gate_count(&self, source: &ServerRequestSource) -> usize {
@@ -9974,8 +10021,8 @@ mod tests {
                 now,
             )
             .expect("independent authenticated source retains its own gate quota");
-        let source_a = ServerRequestSource::Authenticated(over_route.source_key());
-        let source_b = ServerRequestSource::Authenticated(other_hub_route.source_key());
+        let source_a = ServerRequestSource::Authenticated(over_route.source_key().into());
+        let source_b = ServerRequestSource::Authenticated(other_hub_route.source_key().into());
         assert_eq!(
             transport.source_gate_count(&source_a),
             limits.server_request_gates_per_source
@@ -9984,6 +10031,38 @@ mod tests {
         assert_eq!(transport.server_request_gates.len(), 3);
         assert_eq!(transport.server_gate_attempt_count(), 3);
     }
+    #[test]
+    fn authenticated_server_sources_share_storage_and_preserve_actor_identity() {
+        let hub = peer(b"shared source identity hub");
+        let requester = peer(b"shared source identity requester");
+        let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
+        let key = routes.mint(requester.clone()).source_key();
+        let source = ServerRequestSource::Authenticated(Arc::new(key.clone()));
+        let cloned = source.clone();
+        let (
+            ServerRequestSource::Authenticated(original),
+            ServerRequestSource::Authenticated(retained),
+        ) = (&source, &cloned)
+        else {
+            panic!("the cloned source must retain its authenticated kind");
+        };
+        assert!(Arc::ptr_eq(original, retained));
+        let equivalent = ServerRequestSource::Authenticated(Arc::new(key));
+        assert_eq!(source, equivalent);
+        assert_eq!(source.cmp(&equivalent), std::cmp::Ordering::Equal);
+        assert!(source.shares_budget_with(&equivalent));
+
+        let mut other_actor = NetworkReplyRouteTestFixture::new(hub);
+        let foreign =
+            ServerRequestSource::Authenticated(Arc::new(other_actor.mint(requester).source_key()));
+        assert_ne!(source, foreign);
+        assert!(source.shares_budget_with(&foreign));
+        assert_eq!(
+            std::mem::size_of::<ServerRequestSource>(),
+            std::mem::size_of::<ServerRequestBudgetSource>(),
+        );
+    }
+
     fn peer(label: &[u8]) -> PeerId {
         PeerId::new(
             KeyPair::try_from_seed(label.to_vec(), Algorithm::BlsNormal)
@@ -11834,8 +11913,8 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a);
         let route_b = routes.mint_via(requester.clone(), hub_b);
-        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
-        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key().into());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key().into());
         let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
@@ -12060,8 +12139,8 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a);
         let route_b = routes.mint_via(requester.clone(), hub_b);
-        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
-        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key().into());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key().into());
         let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
@@ -12455,7 +12534,7 @@ mod tests {
         let hub_c = peer(b"connection ordinal collision hub c");
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a);
-        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key().into());
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
             server
@@ -12483,8 +12562,8 @@ mod tests {
             .expect("forge an actor-global connection ordinal collision for the adversarial test");
         assert!(route_a.equal_connection_ordinal_different_tenure(&forged_connection_ordinal));
         let forged_sources = [
-            ServerRequestSource::Authenticated(forged_delivery_ordinal.source_key()),
-            ServerRequestSource::Authenticated(forged_connection_ordinal.source_key()),
+            ServerRequestSource::Authenticated(forged_delivery_ordinal.source_key().into()),
+            ServerRequestSource::Authenticated(forged_connection_ordinal.source_key().into()),
         ];
         assert!(forged_sources.iter().all(|source| source != &source_a));
         let key = (requester.clone(), request.request_id);
@@ -12559,7 +12638,7 @@ mod tests {
         let hub = peer(b"source teardown hub");
         let mut routes = NetworkReplyRouteTestFixture::new(hub);
         let route = routes.mint(requester.clone());
-        let source = ServerRequestSource::Authenticated(route.source_key());
+        let source = ServerRequestSource::Authenticated(route.source_key().into());
         let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
@@ -12890,7 +12969,7 @@ mod tests {
             let mut routes =
                 NetworkReplyRouteTestFixture::new(peer(b"receipt prune-before-reconnect hub"));
             let old_route = routes.mint(requester.clone());
-            let source = ServerRequestSource::Authenticated(old_route.source_key());
+            let source = ServerRequestSource::Authenticated(old_route.source_key().into());
             let key = (requester.clone(), request.request_id);
             let mut server = MergeSidecarTransport::new();
             assert!(matches!(
@@ -13099,7 +13178,7 @@ mod tests {
             ServerRequestAdmission::Existing
         ));
         let key = (requester.clone(), request.request_id);
-        let source = ServerRequestSource::Authenticated(admitted_route.source_key());
+        let source = ServerRequestSource::Authenticated(admitted_route.source_key().into());
         let attempt = &server.server_request_gates[&key].attempts[&source];
         assert!(attempt.materialization_authorized);
         assert!(
@@ -13165,7 +13244,7 @@ mod tests {
             ServerRequestAdmission::Existing
         ));
         let key = (requester.clone(), request.request_id);
-        let source = ServerRequestSource::Authenticated(reconnected.source_key());
+        let source = ServerRequestSource::Authenticated(reconnected.source_key().into());
         let attempt = &server.server_request_gates[&key].attempts[&source];
         assert_eq!(attempt.cursor, ServerResponseCursor::Pending(0));
         assert!(attempt.materialization_authorized);
@@ -13442,7 +13521,7 @@ mod tests {
             .pop()
             .expect("hand the successor occurrence to exact output");
         let successor_key = (requester.clone(), successor.request_id);
-        let source = ServerRequestSource::Authenticated(route.source_key());
+        let source = ServerRequestSource::Authenticated(route.source_key().into());
         let before = server.server_request_gates[&successor_key].attempts[&source]
             .pending_flush_chunk
             .clone();
@@ -14524,7 +14603,7 @@ mod tests {
         let hub = peer(b"inactive reclamation hub");
         let mut routes = NetworkReplyRouteTestFixture::new(hub);
         let route = routes.mint(requester.clone());
-        let source = ServerRequestSource::Authenticated(route.source_key());
+        let source = ServerRequestSource::Authenticated(route.source_key().into());
         let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
@@ -14577,7 +14656,7 @@ mod tests {
         let responder = request.responder.clone();
         let mut routes = NetworkReplyRouteTestFixture::new(peer(b"unwritable materialization hub"));
         let route = routes.mint(requester.clone());
-        let source = ServerRequestSource::Authenticated(route.source_key());
+        let source = ServerRequestSource::Authenticated(route.source_key().into());
         let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
@@ -14625,7 +14704,7 @@ mod tests {
         let responder = request.responder.clone();
         let mut routes = NetworkReplyRouteTestFixture::new(peer(b"unwritable late-flush hub"));
         let route = routes.mint(requester.clone());
-        let source = ServerRequestSource::Authenticated(route.source_key());
+        let source = ServerRequestSource::Authenticated(route.source_key().into());
         let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
@@ -15231,7 +15310,7 @@ mod tests {
                 .expect("retain retryable work while the exact source budget is full"),
             ServerRequestAdmission::Existing
         ));
-        let source = ServerRequestSource::Authenticated(route.source_key());
+        let source = ServerRequestSource::Authenticated(route.source_key().into());
         let key = (requester.clone(), request.request_id);
         assert!(
             server.server_request_gates[&key].attempts[&source].materialization_retryable,
@@ -15485,8 +15564,8 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a);
         let route_b = routes.mint_via(requester.clone(), hub_b);
-        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
-        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key().into());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key().into());
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
             server
@@ -15556,8 +15635,8 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let prior_route = routes.mint_via(requester.clone(), hub_a.clone());
         let sibling_route = routes.mint_via(requester.clone(), hub_b);
-        let source_a = ServerRequestSource::Authenticated(prior_route.source_key());
-        let source_b = ServerRequestSource::Authenticated(sibling_route.source_key());
+        let source_a = ServerRequestSource::Authenticated(prior_route.source_key().into());
+        let source_b = ServerRequestSource::Authenticated(sibling_route.source_key().into());
         assert!(matches!(
             server
                 .admit_server_request(&requester, &request, Some(&prior_route), &local_peer, now,)
@@ -15884,13 +15963,13 @@ mod tests {
             .expect("independent authenticated hub retains its own reservation");
         assert_eq!(
             server.source_gate_count(&ServerRequestSource::Authenticated(
-                additional_route.source_key()
+                additional_route.source_key().into()
             )),
             MAX_SERVER_REQUEST_GATES_PER_SOURCE
         );
         assert_eq!(
             server.source_gate_count(&ServerRequestSource::Authenticated(
-                independent_route.source_key()
+                independent_route.source_key().into()
             )),
             1
         );
@@ -16002,8 +16081,8 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a.clone());
         let route_b = routes.mint_via(requester.clone(), hub_b);
-        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
-        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key().into());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key().into());
         let mut server = MergeSidecarTransport::new();
         for index in 0..MAX_OUTBOUND_SESSIONS_PER_SOURCE {
             let filler_requester = peer(format!("session saturation origin {index}").as_bytes());
@@ -16148,8 +16227,8 @@ mod tests {
         let mut routes = NetworkReplyRouteTestFixture::new(hub_a.clone());
         let route_a = routes.mint_via(requester.clone(), hub_a.clone());
         let route_b = routes.mint_via(requester.clone(), hub_b);
-        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
-        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key().into());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key().into());
         let mut server = MergeSidecarTransport::new();
         let filler_requester = peer(b"byte saturation origin");
         let filler = routed_server_request(
@@ -16314,7 +16393,7 @@ mod tests {
         let hub = peer(b"reclaimed capacity resume hub");
         let mut routes = NetworkReplyRouteTestFixture::new(hub.clone());
         let route_a = routes.mint_via(requester.clone(), hub.clone());
-        let source_a = ServerRequestSource::Authenticated(route_a.source_key());
+        let source_a = ServerRequestSource::Authenticated(route_a.source_key().into());
         let key = (requester.clone(), request.request_id);
         let mut server = MergeSidecarTransport::new();
         assert!(matches!(
@@ -18524,7 +18603,8 @@ mod tests {
             post.reply_route
                 .as_ref()
                 .expect("response retains its exact route")
-                .source_key(),
+                .source_key()
+                .into(),
         );
         let pending_before = transport.server_request_gates[&key].attempts[&source].clone();
         assert!(matches!(
@@ -19245,8 +19325,10 @@ mod tests {
                 now,
             )
             .expect("an independent authenticated hub retains its gate corridor");
-        let saturated_source = ServerRequestSource::Authenticated(same_hub_route.source_key());
-        let independent_source = ServerRequestSource::Authenticated(independent_route.source_key());
+        let saturated_source =
+            ServerRequestSource::Authenticated(same_hub_route.source_key().into());
+        let independent_source =
+            ServerRequestSource::Authenticated(independent_route.source_key().into());
         assert_eq!(
             restarted.source_gate_count(&saturated_source),
             MAX_SERVER_REQUEST_GATES_PER_SOURCE
@@ -19312,7 +19394,7 @@ mod tests {
                 .expect("responsive source B attaches while recovered A stays offline"),
             ServerRequestAdmission::Materialize
         ));
-        let source_b = ServerRequestSource::Authenticated(route_b.source_key());
+        let source_b = ServerRequestSource::Authenticated(route_b.source_key().into());
         assert_eq!(
             restarted.server_request_gates[&key].attempts[&recovered_a].cursor,
             ServerResponseCursor::Pending(1)
@@ -19486,7 +19568,7 @@ mod tests {
                 .expect("rebind terminal source to the new process-local capability"),
             ServerRequestAdmission::Existing
         ));
-        let rebound_source = ServerRequestSource::Authenticated(rebound.source_key());
+        let rebound_source = ServerRequestSource::Authenticated(rebound.source_key().into());
         let rebound_attempt = &restarted.server_request_gates[&key].attempts[&rebound_source];
         assert_eq!(rebound_attempt.cursor, ServerResponseCursor::Complete);
         assert!(rebound_attempt.pending_flush_chunk.is_none());

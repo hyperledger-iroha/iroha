@@ -768,8 +768,14 @@ impl PreparedLifecycleDecisionApplyExecutorDispatchV1<'_> {
                 successor_outputs.installed.is_none(),
                 "preflighted post-Apply output proof retains an empty install slot"
             );
-            match successor_outputs.retained_effect_batch.take() {
-                Some(retained) => {
+            match successor_outputs.attestation.mode() {
+                LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix
+                | LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {
+                    ..
+                } => {
+                    let retained = successor_outputs.retained_effect_batch.take().expect(
+                        "preflighted same-batch post-Apply output proof retains its Apply suffix",
+                    );
                     assert!(
                         retained.effects.len() == 1
                             && retained.effects.front().is_some_and(|owned| {
@@ -780,13 +786,12 @@ impl PreparedLifecycleDecisionApplyExecutorDispatchV1<'_> {
                         "preflighted post-Apply output proof retains the same exact Apply suffix"
                     );
                 }
-                None => {
+                LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
+                    ..
+                } => {
                     assert!(
-                        matches!(
-                            successor_outputs.attestation.mode(),
-                            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit { .. }
-                        ),
-                        "only delayed output admission may omit the retained periodic Apply suffix"
+                        successor_outputs.retained_effect_batch.is_none(),
+                        "delayed-admission post-Apply output cannot consume a retained Apply batch"
                     );
                 }
             }

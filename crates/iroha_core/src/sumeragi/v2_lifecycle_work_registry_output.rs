@@ -153,9 +153,21 @@ struct LifecycleDecisionApplySuccessorOutputsSealV1;
 pub(in crate::sumeragi) enum LifecycleDecisionApplySuccessorOutputModeV1 {
     /// Broadcast and Apply are the two effects of one retained periodic batch.
     SameBatchSuffix,
-    /// Broadcast predates Apply in the runtime but was admitted after it.
-    /// Its exact paired periodic Apply suffix may still be retained by the executor.
+    /// A single-effect Broadcast predates Apply but was admitted after it.
+    /// This mode has no retained periodic Apply suffix.
     DelayedAdmissionPeriodicRetransmit { runtime_ordinal: u128 },
+    /// Delayed Broadcast admission retains its bound two-effect Apply suffix.
+    DelayedAdmissionPeriodicApplySuffix { runtime_ordinal: u128 },
+}
+
+impl LifecycleDecisionApplySuccessorOutputModeV1 {
+    /// Whether this mode requires the exact retained two-effect Apply suffix.
+    pub(in crate::sumeragi) const fn retains_apply_suffix(self) -> bool {
+        matches!(
+            self,
+            Self::SameBatchSuffix | Self::DelayedAdmissionPeriodicApplySuffix { .. }
+        )
+    }
 }
 
 /// Proof that the sole executor-pending output is an exact CommitQC
@@ -251,6 +263,8 @@ pub(in crate::sumeragi) enum LifecycleDecisionApplyPendingOutputCensusErrorV1 {
     SuccessorOrdinalOrder,
     /// The Apply/output pair was not the first adjacent Ready pair.
     SuccessorReadyOrder,
+    /// Delayed periodic output was neither a single Broadcast nor an exact Apply prefix.
+    InvalidDelayedPeriodicBatchShape,
     /// Delayed admission exposed additional Ready work beside the exact pair.
     DelayedSuccessorReadyCardinality,
 }
@@ -308,6 +322,9 @@ impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
             LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix => true,
             LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
                 runtime_ordinal,
+            }
+            | LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {
+                runtime_ordinal,
             } => {
                 let AdapterEffect::Broadcast(message) = &pending.effect else {
                     return false;
@@ -322,6 +339,11 @@ impl AttestedLifecycleDecisionApplySuccessorOutputsV1 {
                     && pending
                         .ownership
                         .exactly_binds_periodic_retransmit_broadcast(&pending.effect)
+                    && if self.mode.retains_apply_suffix() {
+                        pending.binds_periodic_retransmit_apply_prefix()
+                    } else {
+                        pending.binds_single_periodic_retransmit_broadcast()
+                    }
                     && certificate == self.live_apply.certificate()
                     && certificate.phase == wire::GlobalPhase::Commit
             }
@@ -674,8 +696,16 @@ impl ConcreteLifecycleWorkRegistry {
                     LifecycleDecisionApplyPendingOutputCensusErrorV1::DelayedSuccessorReadyCardinality,
                 );
             }
-            LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
-                runtime_ordinal,
+            if pending_output.binds_periodic_retransmit_apply_prefix() {
+                LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicApplySuffix {
+                    runtime_ordinal,
+                }
+            } else if pending_output.binds_single_periodic_retransmit_broadcast() {
+                LifecycleDecisionApplySuccessorOutputModeV1::DelayedAdmissionPeriodicRetransmit {
+                    runtime_ordinal,
+                }
+            } else {
+                return Err(LifecycleDecisionApplyPendingOutputCensusErrorV1::InvalidDelayedPeriodicBatchShape);
             }
         } else {
             LifecycleDecisionApplySuccessorOutputModeV1::SameBatchSuffix

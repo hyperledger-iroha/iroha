@@ -20,7 +20,11 @@ use prometheus::{
     IntGauge, IntGaugeVec, Opts, Registry,
     core::{AtomicU64, GenericGauge, GenericGaugeVec},
 };
-pub use prometheus::{GaugeVec, core::Collector};
+pub use prometheus::{
+    Error as CollectorRegistrationError, GaugeVec,
+    core::{Collector, Desc as CollectorDesc},
+    proto,
+};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     sync::{
@@ -7447,6 +7451,18 @@ impl Metrics {
             .with_label_values(&[version, profile, digest_hex])
             .set(gauge_value);
     }
+    /// Register an independently owned collector without tolerating a duplicate owner.
+    ///
+    /// # Errors
+    /// Returns a registration error for invalid or conflicting descriptors, including
+    /// a collector already bound to this registry. The earlier source is never replaced.
+    pub fn register_collector(
+        &self,
+        collector: Box<dyn Collector>,
+    ) -> Result<(), CollectorRegistrationError> {
+        self.registry.register(collector)
+    }
+
     /// Convert the current [`Metrics`] into a Prometheus-readable format.
     ///
     /// # Errors

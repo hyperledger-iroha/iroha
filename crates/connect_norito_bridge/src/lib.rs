@@ -54,7 +54,6 @@ use iroha_data_model::{
         KagemushaRedemptionVoucherV1, validate_kagemusha_complete_exchange_shape_v1,
     },
     metadata::Metadata,
-    name::Name,
     nexus::DataSpaceId,
     privacy::{
         PRIVACY_BRIDGE_ABI_VERSION_V1, PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1,
@@ -65,7 +64,7 @@ use iroha_data_model::{
         privacy_exact12_fixture_bundle_bytes_v1, validate_privacy_capability_archive_v1,
         validate_privacy_exact12_fixture_bundle_v1,
     },
-    proof::{ProofAttachment, ProofBox, VerifyingKeyId},
+    proof::{ProofBox, VerifyingKeyId},
     ram_lfe::RamLfeReceiptAttestation,
     ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId},
     rwa::RwaId,
@@ -76,6 +75,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_torii_shared::{
     connect as proto, connect_sdk,
@@ -90,9 +90,8 @@ use iroha_torii_shared::{
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
+use norito::decode_from_bytes;
 use norito::json::{Map as JsonMap, Value as JsonValue};
-use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, decode_from_bytes};
-use sha2::{Digest as _, Sha256};
 use sorafs_car::{
     ChunkStore, ChunkStoreError, InMemoryPayload, PorProof, build_plan_from_da_manifest,
     local_fetch::{
@@ -110,17 +109,17 @@ use sorafs_manifest::{
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1, derive_orderbook_order_id_v1,
     reference_ffi as sorafs_reference_ffi, sign_orderbook_payload_bytes_ed25519_v1,
 };
+#[cfg(test)]
+use std::sync::Arc;
 use std::{
     cell::RefCell,
-    collections::{HashMap, HashSet},
-    fs::{File, OpenOptions},
-    io::{Read as _, Seek as _, SeekFrom, Write as _},
+    collections::HashSet,
     num::{NonZeroU32, NonZeroU64},
     path::PathBuf,
     ptr, slice,
     str::FromStr as _,
     sync::{
-        Arc, Mutex, OnceLock,
+        OnceLock,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -3660,19 +3659,6 @@ pub unsafe extern "C" fn connect_norito_open_confidential_memo_v1(
         Err(_) => return -3,
     };
     unsafe { write_bytes(out_ptr, out_len, &plaintext) }.map_or_else(|error| error, |_| 0)
-}
-fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
-    loop {
-        let mut byte = (value & 0x7F) as u8;
-        value >>= 7;
-        if value != 0 {
-            byte |= 0x80;
-        }
-        out.push(byte);
-        if value == 0 {
-            break;
-        }
-    }
 }
 fn encode_connect_frame(frame: &proto::ConnectFrameV1) -> Result<Vec<u8>, norito::core::Error> {
     proto::encode_connect_frame_bare(frame)
@@ -10102,7 +10088,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaDeviceLif
 ))]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_KagemushaCoreCoordinatorJniV1_nativeContractV1(
-    mut env: jni::JNIEnv<'_>,
+    env: jni::JNIEnv<'_>,
     _class: jni::objects::JClass<'_>,
 ) -> jni::sys::jintArray {
     let mut words = [0_u32; KAGEMUSHA_CORE_COORDINATOR_CONTRACT_WORDS_V1.len()];
@@ -12402,6 +12388,7 @@ mod tests {
         assert_eq!(native_signer_jni_contract_revision(), 5);
     }
 
+    #[test]
     fn c_and_jni_transaction_network_ids_require_exact_canonical_encodings() {
         const NETWORK_ID: &str =
             "hash:32C903E5B3497E34C2B844EBFE8A39C19E6CF8F95D44C1FFB8BA9DCB42F91149#A2F0";
@@ -14760,6 +14747,7 @@ mod tests {
         assert_eq!(decoded.seq, env.seq);
         assert_eq!(decoded.payload, env.payload);
     }
+    #[test]
     fn connect_frame_roundtrip_uses_canonical_layout() {
         let frame = proto::ConnectFrameV1 {
             sid: [0xAB; 32],

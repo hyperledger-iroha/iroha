@@ -25,6 +25,8 @@ impl NativeAmxParticipantApplicationManifestArtifactV1 {
         norito::encode_canonical(self)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::NativeAmxEvidencePruneEntryV2")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct NativeAmxEvidencePruneEntryV2 {
@@ -38,6 +40,8 @@ struct NativeAmxEvidencePruneEntryV2 {
 /// derived latest pointer, but the prune intent owns its own immutable copy.
 /// The receipt hash additionally binds the complete result-bearing artifact;
 /// `identity` already binds its manifest, finality, carrier, and route.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::NativeAmxEvidencePruneProtectedLatestV2")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct NativeAmxEvidencePruneProtectedLatestV2 {

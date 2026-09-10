@@ -125,7 +125,7 @@ outputs = [
   "artifacts/openapi/versions/current/manifest.json",
   "artifacts/openapi/versions.json",
 ]
-generator = "cp -R \"$PWD/artifacts/openapi/.\" \"${IROHA_OPENAPI_STAGE:?set an existing absolute private /private/tmp <run>/artifacts/<stage> directory}/\" && IROHA_RELEASE_ARTIFACT_ROOT=\"${IROHA_OPENAPI_STAGE%/*}\" IROHA_RELEASE_CANCEL_REQUEST_PATH=\"${IROHA_OPENAPI_STAGE%/*/*}/cancel-request.json\" bash ci/run_openapi_generator.sh --output-dir \"${IROHA_OPENAPI_STAGE}\" --unsigned-manifest && node tools/openapi/scripts/sync-openapi.mjs --version=current --latest --allow-unsigned --output-dir=\"${IROHA_OPENAPI_STAGE}\""
+generator = ": \"${IROHA_OPENAPI_STAGE:?set an existing empty absolute private /private/tmp <run>/artifacts/<stage> directory}\" && IROHA_RELEASE_ARTIFACT_ROOT=\"${IROHA_OPENAPI_STAGE%/*}\" IROHA_RELEASE_CANCEL_REQUEST_PATH=\"${IROHA_OPENAPI_STAGE%/*/*}/cancel-request.json\" bash ci/run_openapi_generator.sh --output-dir \"${IROHA_OPENAPI_STAGE}\" --unsigned-manifest"
 generator_sources = [
   "ci/check_openapi_spec.sh",
   "ci/run_openapi_generator.sh",
@@ -133,6 +133,7 @@ generator_sources = [
   "scripts/seal_workspace_source.py",
   "scripts/sumeragi_v2_release_process_policy.sh",
   "tools/openapi/scripts/check-openapi-signatures.mjs",
+  "tools/openapi/scripts/generate-unsigned-openapi.mjs",
   "tools/openapi/scripts/lib/openapi-manifest-v2.mjs",
   "tools/openapi/scripts/lib/openapi-provenance.mjs",
   "tools/openapi/scripts/lib/openapi-safe-file.mjs",

@@ -1,9 +1,11 @@
 # Canonical Norito schema identity
 
 Norito typed frames now use one declared identity in both directions. The codec,
-derive, primitive, crypto and SoraFS migration is implemented; **complete model
-and workspace consumer migration and qualification remain pending**. This is a
-first-release cutover without alternate accepted hashes or compatibility paths.
+derive, model and workspace consumer migration compiles all workspace test
+targets. The [compilation repair](../docs/cargo_test_compile_validation.md)
+records focused regressions and separates these results from full runtime and
+feature qualification. This is a first-release cutover without alternate
+accepted hashes or compatibility paths.
 
 The enum-prefix correction passes 1,338 default tests and 1,340 tests with
 `schema-structural`, each with one existing ignored generator. The structural
@@ -48,6 +50,21 @@ fixed projection that erases its type or const arguments. Generic forwarding
 projections, such as an owned wrapper advertising its inner type's frame, need
 an explicit manual identity implementation. Markers used by `HashOf<T>` and
 `SignatureOf<T>` need an identity, not a payload codec.
+
+Manual borrowed producers declare the logical value they serialize. An iterator
+implementation parameter does not enter that identity: a slice iterator and a
+chained iterator producing the same element type share the borrowed sequence
+identity and project the same `Vec<T>` root frame. Element types still compose
+nominally. Their bare payload implementation requires only payload codecs;
+typed framing separately requires the declared identity.
+
+HTTP producers and typed consumers use one shared wire definition. SCCP
+capability and recent-message records are owned by `iroha_sccp::api`; bounded
+PoR status pages are owned by `sorafs_manifest::por`. Torii, the Rust SDK and
+CLI import these owners directly. Duplicate SDK/server declarations and their
+competing frame identities are removed, without aliases or alternate accepted
+hashes. Declared producer names remain protocol identities independent of the
+Rust module that now owns their implementation.
 
 There will be no source-path registry, alternate accepted header names,
 compatibility dispatch or opt-in framing mode. Actual pre-cutover names must be
@@ -129,9 +146,12 @@ errors and the existing strict constructors. Their private `PolicyFields` and
 `MemberFields` carriers retain only JSON decoding and acquire no binary frame
 identity. Moving the generated reconstruction implementation to
 `DeserializePayload` retains this validation behavior and one reconstruction
-owner. Remaining workspace owner/feature migration and qualification are pending.
+owner. Qualification of the remaining feature/runtime matrix is pending.
 
 ## Active identity cutover (2026-09-09)
+
+The source-bound checkpoints below precede the workspace compilation repair
+linked above and retain their original validation scopes.
 
 The stack-overflow correction removes recursive participant ownership and makes
 `HashOf<T>` export the schema of its stored hash without traversing phantom `T`.

@@ -1,4 +1,4 @@
-//! One-use native issuer enrollment before an account/device wallet-open ceremony.
+//! Test-only one-use native issuer enrollment before an account/device wallet-open ceremony.
 //!
 //! The native owner starts one suspend-inclusive deadline and creates its client nonce before
 //! HTTP. Completing this object proves a recent response by the independently pinned issuer
@@ -103,10 +103,6 @@ impl PendingIssuerEnrollmentV1 {
     pub(super) fn client_nonce(&self) -> Result<[u8; 32]> {
         self.require_unexpired()?;
         Ok(self.client_nonce)
-    }
-
-    pub(super) fn enrollment_binding(&self) -> &KagemushaRecoveryEnrollmentBindingV1 {
-        &self.enrollment
     }
 
     pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {

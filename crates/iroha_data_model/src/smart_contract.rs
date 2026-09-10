@@ -1,13 +1,12 @@
 //! This module contains data and structures related only to smart contract execution
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
-    error::ParseError,
     id::NetworkId,
-    name::Name,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
 use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::conststr::ConstString;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

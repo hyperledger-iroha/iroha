@@ -8,9 +8,9 @@ use core::{
 };
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
-    Level, compute::ComputePriceWeights, name::Name, prelude::Quantity,
-    soranet::vpn::VpnExitClassV1,
+    Level, compute::ComputePriceWeights, prelude::Quantity, soranet::vpn::VpnExitClassV1,
 };
+use iroha_model_base::name::Name;
 use norito::{
     Error as NoritoError,
     json::{self, Arena, FastFromJson, FastJsonWrite, JsonDeserialize, TapeWalker},

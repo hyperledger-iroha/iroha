@@ -15,7 +15,7 @@ use iroha_smart_contract_codec::decode_with_length_prefix_from_raw;
 pub use iroha_smart_contract_derive::main;
 use iroha_smart_contract_utils::encode_and_execute;
 pub use iroha_smart_contract_utils::{DebugExpectExt, DebugUnwrapExt, dbg, dbg_panic};
-use norito::{NoritoSerialize, SerializePayload};
+use norito::NoritoSerialize;
 use std::{boxed::Box, fmt::Debug, ptr};
 #[doc(hidden)]
 pub mod utils {

@@ -257,6 +257,10 @@ impl ProviderIngestFinalizedArchiveBoundsV1 {
 }
 include!("provider_ingest_finalized/archive_key.rs");
 /// One exact provider-scoped replication order at a finalized anchor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchivedOrderV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchivedOrderV1 {
     /// Chain-authoritative pin manifest used by the ingest operation.
@@ -287,6 +291,10 @@ pub struct ProviderIngestFinalizedProviderProjectionV1 {
     pub orders: Vec<ProviderIngestFinalizedArchivedOrderV1>,
 }
 /// Complete provider-indexed projection at one exact finalized anchor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedProjectionV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedProjectionV1 {
     /// Exact finalized identity of this projection.
@@ -433,6 +441,10 @@ impl ProviderIngestFinalizedProjectionV1 {
     }
 }
 /// One page row carrying every completion execution compare-and-set binding.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveAssignmentV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveAssignmentV1 {
     /// Provider whose index was queried.
@@ -500,6 +512,10 @@ pub enum ProviderIngestFinalizedArchiveInsertOutcomeV1 {
 ///
 /// The finality-artifact hash is supplied by the commit-owned caller and is
 /// reauthenticated against Kura before any prefix is removed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionFenceV1"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionFenceV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
@@ -549,6 +565,10 @@ impl ProviderIngestFinalizedArchiveRetentionFenceV1 {
     }
 }
 /// Public qualification of a deployment-owned sealed retention authority.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1"
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveRetentionAuthorityQualificationV1 {
     version: u16,
@@ -637,6 +657,10 @@ struct ProviderIngestFinalizedArchiveCompactionProposalMaterialV1 {
     checkpoint_canonical_digest: [u8; 32],
 }
 /// Exact canonical checkpoint and fence submitted for external approval.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveCompactionProposalV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ProviderIngestFinalizedArchiveCompactionProposalV1 {
     material: ProviderIngestFinalizedArchiveCompactionProposalMaterialV1,
@@ -1015,11 +1039,17 @@ impl ProviderIngestFinalizedArchiveReconcileOutcomeV1 {
         self.activation_floor_created
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::provider_ingest_finalized::ProviderProjectionDeltaV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderProjectionDeltaV1 {
     provider_id: ProviderId,
     next: Option<ProviderIngestFinalizedProviderProjectionV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchivePredecessorV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderIngestFinalizedArchivePredecessorV1 {
     key: ProviderIngestFinalizedArchiveKeyV1,
@@ -1199,11 +1229,19 @@ impl ProviderIngestFinalizedArchiveCheckpointV1 {
         Ok(())
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderPolicyDigestHistoryCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderPolicyDigestHistoryCheckpointV1 {
     policy_id: [u8; 32],
     policy_digests: Vec<[u8; 32]>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderPolicyHistoryCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderPolicyHistoryCheckpointV1 {
     provider_id: ProviderId,

@@ -19,7 +19,6 @@ use iroha_data_model::{
     block::SignedBlock,
     domain::DomainId,
     isi::{InstructionBox, OpenVpnLeaseEscrow, SettleVpnLease},
-    name::Name,
     permission::Permission,
     query::error::QueryExecutionFail,
     soranet::vpn::{
@@ -34,6 +33,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use iroha_torii_shared::configuration::Configuration;
 use mv::storage::StorageReadOnly;
@@ -130,6 +130,8 @@ impl VpnRelayTrust {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnProfileResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -171,6 +173,8 @@ pub struct VpnProfileResponseDto {
     pub relay_certificate_sha256_hex: String,
     pub directory_snapshot_digest_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnQuoteCreateRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -188,6 +192,8 @@ pub struct VpnQuoteCreateRequestDto {
     #[norito(default)]
     pub metering_public_key_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnQuoteResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -230,6 +236,8 @@ pub struct VpnQuoteResponseDto {
     pub metering_public_key_hex: String,
     pub open_lease_instruction: VpnTxInstructionDto,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnSessionCreateRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -251,6 +259,8 @@ pub struct VpnSessionCreateRequestDto {
     #[norito(default)]
     pub metering_public_key_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnSessionResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -300,6 +310,8 @@ pub struct VpnSessionResponseDto {
     pub bytes_out: u64,
     pub status: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnReceiptResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -336,6 +348,8 @@ pub struct VpnReceiptResponseDto {
     #[norito(default)]
     pub settle_lease_instruction: Option<VpnTxInstructionDto>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnReceiptSubmitRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -353,6 +367,8 @@ pub struct VpnReceiptSubmitRequestDto {
     #[norito(default)]
     pub lease_id_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnTxInstructionDto")]
 #[derive(
     Debug,
     Clone,
@@ -367,6 +383,8 @@ pub struct VpnTxInstructionDto {
     pub wire_id: String,
     pub payload_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::vpn::VpnReceiptListResponseDto")]
 #[derive(
     Debug,
     Clone,

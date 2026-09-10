@@ -1749,6 +1749,43 @@ fn ipfs_urls_cids_and_secret_debug_output_are_canonical() {
         )
         .expect("derive test authenticated wire-body bound"),
     };
+    for operation in ["api/v0/version", "api/v0/swarm/peers"] {
+        let url = endpoint
+            .ipfs_url(operation, &[])
+            .expect("construct canonical query-free Kubo URL");
+        assert_eq!(url.as_str(), format!("http://127.0.0.1:5001/{operation}"));
+        assert_eq!(url.query(), None, "empty queries must remain absent");
+        let request = endpoint
+            .request(Method::POST, url.clone())
+            .expect("construct query-free Kubo request")
+            .build()
+            .expect("build query-free Kubo request");
+        let descriptor = canonical_outbound_request_descriptor(
+            &request,
+            endpoint.authentication_scope,
+            endpoint.authenticated_wire_body_max_bytes,
+        )
+        .expect("admit query-free Kubo request before provider I/O");
+        endpoint
+            .authenticator
+            .authenticate(&descriptor)
+            .expect("authenticate exact query-free Kubo request");
+        let mut noncanonical = url;
+        noncanonical.set_query(Some(""));
+        assert!(noncanonical.as_str().ends_with('?'));
+        assert_eq!(
+            canonicalize_governance_dag_outbound_http_request_v1(
+                endpoint.authentication_scope,
+                "POST",
+                noncanonical.as_str(),
+                [("accept-encoding", b"identity".as_slice())],
+                &[],
+                endpoint.authenticated_wire_body_max_bytes,
+            )
+            .expect_err("explicit trailing query delimiter remains forbidden"),
+            GovernanceDagRequestAuthenticationErrorV1::NoncanonicalRequest,
+        );
+    }
     let url = endpoint
         .ipfs_url(
             "api/v0/cat",

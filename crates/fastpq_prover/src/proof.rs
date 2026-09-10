@@ -1156,49 +1156,9 @@ struct FriFinalVerification<'a> {
     round: usize,
 }
 
-/// Fixed FRI geometry shared with the bounded compact candidate verifier.
-/// Standalone prototype query verification remains test-only.
+/// Fixed FRI geometry shared with the bounded compact verifier.
 pub(crate) mod compact_fri_support {
     use super::*;
-
-    /// Caller-fixed FRI geometry and transcript challenges for one prototype opening.
-    #[cfg(test)]
-    #[derive(Clone, Copy)]
-    pub(crate) struct Context<'a> {
-        pub(crate) query_pos: usize,
-        pub(crate) initial_index: usize,
-        pub(crate) initial_value: GoldilocksFp4V1,
-        pub(crate) fri_layers: &'a [GoldilocksDigest384V1],
-        pub(crate) betas: &'a [GoldilocksFp4V1],
-        pub(crate) fri_layer_lengths: &'a [usize],
-        pub(crate) terminal_degree_bound: usize,
-        pub(crate) arity: u32,
-        pub(crate) domain: backend::FriDomain,
-    }
-
-    /// Apply the existing exact-index/path/fold/terminal checks without replaying a trace.
-    #[cfg(test)]
-    pub(crate) fn verify_query(
-        merkle_cache: &mut backend::MerkleNodeCache,
-        opening: &FriQueryOpening,
-        context: Context<'_>,
-    ) -> Result<()> {
-        super::verify_fri_query_chain(
-            merkle_cache,
-            opening,
-            FriQueryVerification {
-                query_pos: context.query_pos,
-                initial_index: context.initial_index,
-                initial_value: context.initial_value,
-                fri_layers: context.fri_layers,
-                betas: context.betas,
-                fri_layer_lengths: context.fri_layer_lengths,
-                terminal_degree_bound: context.terminal_degree_bound,
-                arity: context.arity,
-                domain: context.domain,
-            },
-        )
-    }
 
     /// Derive the existing bounded binary layer schedule from fixed geometry.
     pub(crate) fn layer_lengths(

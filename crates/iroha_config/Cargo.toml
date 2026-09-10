@@ -21,7 +21,12 @@ sm-ffi-openssl = ["sm", "iroha_crypto/sm-ffi-openssl"]
 name = "iroha_config_integration"
 path = "tests/iroha_config_integration.rs"
 
+[[test]]
+name = "taira_config_contracts"
+path = "tests/taira_config_contracts.rs"
+
 [dependencies]
+iroha_model_base = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
 iroha_service_model = { workspace = true }
 iroha_config_base = { workspace = true }

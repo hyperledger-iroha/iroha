@@ -98,6 +98,10 @@ fn settlement_namespace_v1(
 /// [`PrivateSettlementPoolGovernanceProjectionV1`]. Retaining the policy and
 /// lifecycle fields of every superseded revision lets recovery validate old
 /// finalized receipts against the policy that was effective when they committed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementPoolGovernanceRevisionV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub(crate) struct PrivateSettlementPoolGovernanceRevisionV1 {
     pub(crate) audit_policy_digest: Hash,
@@ -779,6 +783,10 @@ impl PrivateSettlementPoolStateV1 {
 }
 
 /// Fsync-backed availability evidence minted by the restricted sidecar store.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementDurableAvailabilityV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PrivateSettlementDurableAvailabilityV1 {
     payload_digest: Hash,
@@ -858,6 +866,10 @@ impl PrivateSettlementDurableAvailabilityV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::state::PrivateSettlementSuccessorFrontierV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct PrivateSettlementSuccessorFrontierV1 {
     pub(super) epoch: u64,
@@ -887,6 +899,8 @@ struct PrivateSettlementVerifiedLegDigestMaterialV1 {
 /// The fields remain private and the token is revalidated after decode.  It is
 /// deliberately persisted with staged locks so a restart can reconstruct and
 /// reject conflicting pool/nullifier/output reservations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::private_settlement::state::ValidatedPrivateSettlementLegV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct ValidatedPrivateSettlementLegV1 {
     route: PrivateSettlementRouteV1,

@@ -44,6 +44,7 @@ use iroha_data_model::{
     },
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
 use ivm::state_value::{
     MAX_STATE_VALUE_RECORD_BYTES, StateValueAtomV1, StateValueKindV1, StateValueNodeV1,

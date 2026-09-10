@@ -424,14 +424,17 @@ mod tests {
         assert!(status_reaches_height(&height_one, 1));
         assert!(!status_reaches_height(&height_one, 2));
     }
-    #[tokio::test]
-    async fn status_retry_async_returns_error_for_unreachable_host() {
-        let env_guard = lock_env_guard();
+    #[test]
+    fn status_retry_async_returns_error_for_unreachable_host() {
+        let _env_guard = lock_env_guard();
         let _restore = EnvRestore::remove("IROHA_TEST_STATUS_RETRY_BUDGET_MS");
         set_env_var("IROHA_TEST_STATUS_RETRY_BUDGET_MS", "5ms");
         let client = dummy_client();
-        drop(env_guard);
-        let result = get_status_with_retry_async(&client).await;
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("unreachable status test runtime");
+        let result = runtime.block_on(get_status_with_retry_async(&client));
         assert!(result.is_err());
         let error = result.expect_err("unreachable status endpoint must fail");
         assert!(

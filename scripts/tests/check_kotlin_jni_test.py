@@ -68,6 +68,9 @@ def release_methods():
             native("nativeValidateCompiledProfileCatalog", "([B)I"),
             native("nativeExact12FixtureBundle", "()[B"),
             native("nativeValidateExact12FixtureBundle", "([B)I"),
+            native("nativeValidateExact12CapabilityManifestForNetworkV1", "([B[B)I"),
+            native("nativeRequireExact12CapabilityTupleForNetworkV1", "([BI[B)Z"),
+            native("nativeValidateExact12SubmitProofConstructionForNetworkV1", "([BI[B[B)Z"),
         ),
         SIGNER: (
             JVM.Method("encodeRegisterZkAssetSignedTransaction",
@@ -280,7 +283,7 @@ def test_audit_seals_inputs_without_claiming_runtime_qualification(tmp_path, mon
     library.write_bytes(b"test export inventory")
     monkeypatch.setattr(GUARD.ARTIFACT, "inspect_exported_symbols", lambda *args, **kwargs: tuple(exports))
     report = GUARD.audit(roots, library)
-    assert report["valid"] and report["native_method_count"] == 5
+    assert report["valid"] and report["native_method_count"] == 8
     assert not report["native_execution_qualified"]
     assert not report["native_signatures_qualified"]
     assert not report["source_build_provenance_qualified"]
@@ -355,3 +358,80 @@ def test_report_rejects_input_aliases_and_replaces_its_own_inode(tmp_path):
     assert json.loads(report.read_text()) == result
     assert old_report.read_text() == "old report"
     assert not list(tmp_path.glob(".report.json.*"))
+
+
+@pytest.mark.parametrize("index", range(6))
+@pytest.mark.parametrize("mutation", ("missing", "return", "managed", "instance"))
+def test_privacy_class_contract_rejects_every_native_declaration_drift(index, mutation):
+    methods = list(release_methods()[PRIVACY])
+    current = methods[index]
+    if mutation == "missing":
+        del methods[index]
+    else:
+        descriptor = current.descriptor[:-1] + "J" if mutation == "return" else current.descriptor
+        flags = current.flags & ~JVM.ACC_NATIVE if mutation == "managed" else current.flags & ~JVM.ACC_STATIC if mutation == "instance" else current.flags
+        methods[index] = JVM.Method(current.name, descriptor, flags)
+    with pytest.raises(GUARD.AuditError, match="native declaration"):
+        GUARD.validate_privacy_api({PRIVACY: JVM.parse_class(class_bytes(PRIVACY, methods))})
+
+
+@pytest.mark.parametrize("name", ("nativeValidateExact12CapabilityManifest", "nativeRequireExact12CapabilityTuple", "nativeValidateExact12SubmitProofConstruction", "buildProof", "verifyProof", "nativeBuildProof", "nativeVerifyProof", "PrivacyProofRequest"))
+def test_privacy_class_contract_rejects_every_retired_method(name):
+    classes = {PRIVACY: JVM.parse_class(class_bytes(PRIVACY, release_methods()[PRIVACY]))}
+    classes[PRIVACY + "$Companion"] = JVM.parse_class(class_bytes(PRIVACY + "$Companion", [native(name, "()[B")]))
+    with pytest.raises(GUARD.AuditError):
+        GUARD.validate_privacy_api(classes)
+
+
+def test_scoped_privacy_classfile_contract_seals_actual_bytes(tmp_path):
+    for suffix in ("", "$Companion"):
+        name = PRIVACY + suffix
+        path = tmp_path / (name + ".class")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(class_bytes(name, release_methods()[PRIVACY] if not suffix else (), source="PrivacyNativeBridge.kt"))
+    report = GUARD.audit_privacy_classfiles(tmp_path)
+    assert len(report["classes"]) == 2
+    assert report["native_executed"] is False and report["release_qualified"] is False
+    (tmp_path / (PRIVACY + "$Companion.class")).unlink()
+    with pytest.raises(GUARD.AuditError):
+        GUARD.audit_privacy_classfiles(tmp_path)
+
+
+@pytest.mark.parametrize("owner,source", (
+    (SDK + "privacy/PrivacyConfidentialWitnessV1", "PrivacyConfidentialWitness.kt"),
+    (SDK + "privacy/PrivacyConfidentialNoteWitnessV1", "PrivacyConfidentialWitness.kt"),
+    (SDK + "privacy/NoteWitnessAdapter", "PrivacyConfidentialWitness.kt"),
+    (SDK + "privacy/fixtures/RetiredPrivacyConfidentialWitnessCodecs", "RetiredPrivacyConfidentialWitnessFixture.kt"),
+    (SDK + "privacy/Relocated", "RetiredPrivacyConfidentialWitnessFixture.kt"),
+    ("org/hyperledger/iroha/android/privacy/PrivacyConfidentialWitness", "PrivacyConfidentialWitness.java"),
+))
+def test_compiled_privacy_contract_rejects_retired_witnesses_and_test_fixtures(tmp_path, owner, source):
+    for name, methods, file in (
+        (PRIVACY, release_methods()[PRIVACY], "PrivacyNativeBridge.kt"),
+        (PRIVACY + "$Companion", (), "PrivacyNativeBridge.kt"),
+        (owner, (), source),
+    ):
+        path = tmp_path / (name + ".class")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(class_bytes(name, methods, source=file))
+    with pytest.raises(GUARD.AuditError, match="retired confidential witness or test fixture"):
+        GUARD.audit_privacy_classfiles(tmp_path)
+    classes = {owner: JVM.parse_class(class_bytes(owner, (), source=source))}
+    with pytest.raises(GUARD.AuditError, match="retired confidential witness or test fixture"):
+        GUARD.validate_retired_privacy_witness_classes(classes)
+
+
+def test_compiled_privacy_contract_seals_nonprivacy_main_classes_too(tmp_path):
+    for suffix in ("", "$Companion"):
+        name = PRIVACY + suffix
+        path = tmp_path / (name + ".class")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(class_bytes(name, release_methods()[PRIVACY] if not suffix else (), source="PrivacyNativeBridge.kt"))
+    owner = SDK + "privacy/PrivacyProtocolIdV1"
+    path = tmp_path / (owner + ".class")
+    path.write_bytes(class_bytes(owner, (), source="PrivacyNativeBridge.kt"))
+    assert len(GUARD.audit_privacy_classfiles(tmp_path)["classes"]) == 3
+    link = path.parent / "hidden"
+    link.symlink_to(tmp_path / "absent")
+    with pytest.raises(GUARD.AuditError, match="symlink"):
+        GUARD.audit_privacy_classfiles(tmp_path)

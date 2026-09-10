@@ -4,6 +4,7 @@ use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_config::base::toml::WriteExt as _;
+use iroha_model_base::name::Name;
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{
     NetworkBuilder, NetworkPeer, NetworkPeerBuilder, init_instruction_registry,

@@ -6,8 +6,9 @@
 //! messages across validators.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, error::ParseError, name::Name, nexus::UniversalAccountId};
+use crate::{account::AccountId, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, HashOf, SignatureOf};
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -31,6 +32,8 @@ pub const DEFI_ORACLE_DOMAIN_OPTIONS_SHOUT: u32 = 3;
 /// `DeFi` oracle domain for cover policy observation payloads.
 pub const DEFI_ORACLE_DOMAIN_COVER_POLICY: u32 = 4;
 /// Key used to store `DeFi` oracle attestations by contract ABI domain and subject id.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::DefiOracleAttestationKey")]
 #[derive(
     Clone,
     Copy,
@@ -127,6 +130,8 @@ pub struct DefiOracleAttestationSource {
 /// `source_events` can link the attestation back to retained native feed events for full
 /// auditability. Empty `source_events` are also valid for direct provider-signed attestations when
 /// the provider account is itself the submitting authority and signature controller.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::DefiOracleAttestation")]
 #[derive(
     Clone,
     Debug,
@@ -148,8 +153,7 @@ pub struct DefiOracleAttestationSource {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::oracle::DefiOracleAttestation")]
+
 pub struct DefiOracleAttestation {
     /// Domain and subject id this attestation is valid for.
     pub key: DefiOracleAttestationKey,
@@ -174,6 +178,8 @@ pub struct DefiOracleAttestation {
     pub source_events: Vec<DefiOracleAttestationSource>,
 }
 /// Identifier for an oracle feed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::FeedId")]
 #[derive(
     Clone,
     Debug,
@@ -196,8 +202,7 @@ pub struct DefiOracleAttestation {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::oracle::FeedId")]
+
 pub struct FeedId(pub Name);
 impl FeedId {
     /// Borrow the feed identifier as a string slice.
@@ -218,6 +223,8 @@ impl FromStr for FeedId {
     }
 }
 /// Version number for a feed configuration (monotonic per feed).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::FeedConfigVersion")]
 #[derive(
     Copy,
     Clone,
@@ -242,8 +249,7 @@ impl FromStr for FeedId {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::oracle::FeedConfigVersion")]
+
 pub struct FeedConfigVersion(pub u32);
 impl From<u32> for FeedConfigVersion {
     fn from(value: u32) -> Self {
@@ -465,6 +471,8 @@ impl OracleChangeStatus {
     }
 }
 /// Identifier for oracle change proposals (hash).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleChangeId")]
 #[derive(
     Clone,
     Copy,
@@ -1702,6 +1710,8 @@ pub struct OracleReward {
     pub amount: Quantity,
 }
 /// Key identifying per-provider aggregation statistics for a feed.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleProviderKey")]
 #[derive(
     Clone,
     Debug,
@@ -1837,6 +1847,8 @@ pub struct OracleProviderStatsRecord {
     pub stats: OracleProviderStats,
 }
 /// Identifier for an oracle dispute.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::oracle::OracleDisputeId")]
 #[derive(
     Clone,
     Copy,
@@ -1861,8 +1873,7 @@ pub struct OracleProviderStatsRecord {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::oracle::OracleDisputeId")]
+
 pub struct OracleDisputeId(pub u64);
 /// Resolution status for a dispute.
 #[derive(

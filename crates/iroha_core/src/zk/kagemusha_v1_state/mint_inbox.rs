@@ -229,6 +229,10 @@ impl MintInboxReservationV1 {
 }
 
 /// Exact non-monetary hardware reservation transaction, before online debit.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintReservationStatementV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct MintReservationStatementV1 {
     /// State format version.
@@ -254,6 +258,10 @@ pub struct MintReservationStatementV1 {
 }
 
 /// Qualified hardware evidence for pre-debit reservation; a signature-only backend is insufficient.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintReservationCertificateV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct MintReservationCertificateV1 {
     /// Exact reserved successor.
@@ -263,6 +271,8 @@ pub struct MintReservationCertificateV1 {
 }
 
 /// Exact independent inbox transaction accepting one already-finalized mint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintStageStatementV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct MintStageStatementV1 {
     /// State format version.
@@ -294,6 +304,8 @@ pub struct MintStageStatementV1 {
 }
 
 /// Qualified hardware evidence of irreversible, recoverable mint staging.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintStageCertificateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct MintStageCertificateV1 {
     /// Exact accepted successor.
@@ -305,6 +317,8 @@ pub struct MintStageCertificateV1 {
 /// An exact finalized mint retained in authenticated pending storage.
 ///
 /// Native-only confidential encoding; the enclosed reservation includes private opening material.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::StagedMintCreditV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct StagedMintCreditV1 {
     reservation: MintInboxReservationV1,
@@ -363,6 +377,8 @@ pub struct StagedMintRecoveryViewV1<'a> {
 }
 
 /// Compact historical exact-identity receipt retained after the mint has been folded.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::AcceptedMintReceiptV1")]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct AcceptedMintReceiptV1 {
     credit_id: CreditIdV1,
@@ -576,6 +592,8 @@ struct MintJournalProjectionV1 {
     accepted: Vec<MintReceiptProjectionV1>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::mint_inbox::MintReceiptProjectionV1")]
 #[derive(Encode)]
 struct MintReceiptProjectionV1 {
     credit_id: CreditIdV1,

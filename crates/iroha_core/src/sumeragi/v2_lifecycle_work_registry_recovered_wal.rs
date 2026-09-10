@@ -576,13 +576,13 @@ pub(super) struct RecoveredWalControlSignInstallError {
 #[allow(variant_size_differences)]
 enum RecoveredWalControlSignInstallFailure {
     Projection {
-        _projection: AuthenticatedRecoveredWalControlProjection,
+        _projection: AuthenticatedRecoveredWalStandaloneSignProjection,
     },
     Carrier {
         _carrier: DurableRecoveredWalControlSignCarrierV1,
     },
     BroadcastProjection {
-        _projection: AuthenticatedRecoveredWalControlProjection,
+        _projection: AuthenticatedRecoveredWalStandaloneSignProjection,
         _broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
     },
     BroadcastCarrier {
@@ -590,7 +590,7 @@ enum RecoveredWalControlSignInstallFailure {
         _broadcast: RecoveredLifecycleSignedBroadcastProjectionV1,
     },
     BroadcastAndSignProjection {
-        _projection: AuthenticatedRecoveredWalControlProjection,
+        _projection: AuthenticatedRecoveredWalStandaloneSignProjection,
         _combined: RecoveredLifecycleSignedBroadcastAndSignProjectionV1,
     },
 }
@@ -3084,8 +3084,7 @@ impl InstalledRecoveredWalControlSignRegistryCut<'_> {
     )> {
         let (next_sign_address, next_sign_digest) = self.next_sign?;
         let pair = self.pair.as_ref()?;
-        if pair.parent()
-            != super::ledger::RecoveredLifecycleSignedBroadcastAndSignParentV1::ControlProposal
+        if !pair.parent().is_standalone()
             || pair.broadcast_ordinal() != self.address.ordinal
             || pair.next_sign_ordinal() != next_sign_address.ordinal
             || self.address.owner == next_sign_address.owner

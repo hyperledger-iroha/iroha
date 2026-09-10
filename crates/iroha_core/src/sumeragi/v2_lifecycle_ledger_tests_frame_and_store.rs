@@ -1055,6 +1055,73 @@ fn committed_prepare_broadcast_and_next_sign_pair_retains_validate_lineage() {
     assert!(ledger.high_water() > pair.next_sign_ordinal());
 }
 #[test]
+fn committed_standalone_prepare_pair_preserves_inert_validate_without_a_link() {
+    // This tests frame classification, not executable WAL/body authority.
+    // The real cold owner test independently joins the retained success marker.
+    let mut ledger = committed_prepare_broadcast_and_sign_ledger();
+    let validate = ledger
+        .records
+        .iter_mut()
+        .find(|record| record.ordinal() == 1)
+        .expect("original Validate");
+    validate.continuation =
+        PersistedDurableContinuationV1::from_schema(DurableContinuation::AdvancedNoSuccessor);
+    let terminal_before = validate.encode();
+    ledger
+        .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+        .expect("removing the edge leaves a valid inert terminal frame");
+    assert!(
+        ledger
+            .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+            .expect("classify unlinked inherited owner")
+            .is_empty()
+    );
+
+    let standalone_root = digest(0xC7);
+    for record in ledger
+        .records
+        .iter_mut()
+        .filter(|record| matches!(record.ordinal(), 3 | 6))
+    {
+        record.causal_root = *standalone_root.as_bytes();
+        record.owner_first_ordinal = 3;
+        record.reconstruction_source = *standalone_root.as_bytes();
+    }
+    ledger
+        .validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)
+        .expect("standalone Sign and Broadcast have one independent WAL owner");
+    let pairs = ledger
+        .recovered_lifecycle_signed_broadcast_and_sign_pairs()
+        .expect("classify standalone Prepare pair");
+    let [pair] = pairs.as_slice() else {
+        panic!("one standalone Prepare pair");
+    };
+    assert_eq!(
+        pair.parent(),
+        RecoveredLifecycleSignedBroadcastAndSignParentV1::StandalonePrepare
+    );
+    assert!(pair.parent().is_standalone());
+    assert_eq!(pair.parent_ordinal(), 3);
+    assert_eq!(pair.broadcast_ordinal(), 6);
+    assert_eq!(pair.next_sign_ordinal(), 7);
+    assert!(pair.exactly_matches_ledger(&ledger));
+    assert_eq!(
+        ledger
+            .records
+            .iter()
+            .find(|record| record.ordinal() == 1)
+            .expect("original inert terminal remains")
+            .encode(),
+        terminal_before
+    );
+    assert!(
+        !RecoveredLifecycleSignedBroadcastAndSignParentV1::PhasePrepare {
+            validate_ordinal: 1,
+        }
+        .is_standalone()
+    );
+}
+#[test]
 fn combined_pair_classifier_rejects_nonadjacent_or_foreign_next_signs() {
     let mut nonadjacent = committed_proposal_broadcast_and_sign_ledger();
     let next_sign = nonadjacent

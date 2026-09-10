@@ -1,7 +1,7 @@
 //! Module with [`IpfsPath`] and related impls.
 pub use self::model::*;
-use crate::error::ParseError;
 use iroha_data_model_derive::model;
+use iroha_model_base::error::ParseError;
 use iroha_primitives::conststr::ConstString;
 use norito::{Decode, codec::Encode};
 use std::{format, str::FromStr, string::String, vec::Vec};
@@ -12,6 +12,8 @@ mod model {
     use iroha_schema::IntoSchema;
     /// Represents path in IPFS. Performs checks to ensure path validity.
     /// Construct using [`FromStr::from_str`] method.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::ipfs::model::IpfsPath")]
     #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]

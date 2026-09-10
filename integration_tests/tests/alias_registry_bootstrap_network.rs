@@ -6,6 +6,7 @@
 //! is a universal-domain control, NOT private-to-universal transition evidence.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
+use iroha_model_base::name::Name;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -1853,6 +1854,7 @@ fn inspect_stopped_peer(
         fsync_mode: FsyncMode::Batched,
         fsync_interval: defaults::kura::FSYNC_INTERVAL,
         lane_history_retention: defaults::kura::LANE_HISTORY_RETENTION,
+        fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
         replica_advert: defaults::kura::REPLICA_ADVERT_POLICY,
     };
     let (kura, _) = Kura::new_with_configured_lane_catalog(&config, &lanes, &catalog)?;

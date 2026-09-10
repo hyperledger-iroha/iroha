@@ -774,7 +774,7 @@ fn canonical_id_decode_profile(bytes: &[u8]) -> Result<CandidateDecodeProfile, E
     let name_wire = exact_length_prefixed_payload(identifier)?;
     let name = exact_length_prefixed_payload(name_wire)?;
     if name.is_empty()
-        || name.len() > iroha_data_model::name::MAX_NAME_BYTES
+        || name.len() > iroha_model_base::name::MAX_NAME_BYTES
         || core::str::from_utf8(name).is_err()
     {
         return Err(malformed());
@@ -1113,7 +1113,7 @@ mod tests {
                 let prefix = format!("decode{index:04x}");
                 let value = format!(
                     "{prefix}{}",
-                    "x".repeat(iroha_data_model::name::MAX_NAME_BYTES - prefix.len())
+                    "x".repeat(iroha_model_base::name::MAX_NAME_BYTES - prefix.len())
                 );
                 value.parse().expect("maximum-width role ID")
             })
@@ -1188,7 +1188,7 @@ mod tests {
     fn canonical_identifier_decode_limits_match_both_real_decoders() {
         let maximum_name = format!(
             "id{}",
-            "x".repeat(iroha_data_model::name::MAX_NAME_BYTES - 2)
+            "x".repeat(iroha_model_base::name::MAX_NAME_BYTES - 2)
         );
         let batches = [
             QueryOutputBatchBox::RoleId(vec![maximum_name.parse().expect("maximum-width role ID")]),
@@ -1235,7 +1235,7 @@ mod tests {
     }
     #[test]
     fn canonical_identifier_field_limit_binds_the_complete_root_payload() {
-        for length in [1, iroha_data_model::name::MAX_NAME_BYTES] {
+        for length in [1, iroha_model_base::name::MAX_NAME_BYTES] {
             let name = "x".repeat(length);
             for batch in [
                 QueryOutputBatchBox::RoleId(vec![name.parse().unwrap()]),

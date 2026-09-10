@@ -578,64 +578,6 @@ impl sorafs_node::evidence_viewer::EvidenceViewerReceiptSignerV1
             .map_err(map_evidence_error)
     }
 }
-/// External software signer for canonical stream-token bodies.
-#[derive(Clone, Debug)]
-pub struct ExternalSoftwareSignerStreamTokenAdapterV1 {
-    signer: DetachedSignerClientV1,
-}
-impl ExternalSoftwareSignerStreamTokenAdapterV1 {
-    /// Construct one exact stream-token signer.
-    ///
-    /// # Errors
-    /// Returns an error when qualification or the stream-token binding is not exact.
-    pub fn try_new(
-        client: SoftwareSignerClientV1,
-    ) -> Result<Self, ExternalSoftwareSignerAdapterErrorV1> {
-        let signer = DetachedSignerClientV1::try_new(client, SignerRoleV1::StreamToken)?;
-        if signer.binding.purpose_binding != SignerPurposeBindingV1::StreamToken {
-            return Err(ExternalSoftwareSignerAdapterErrorV1::BindingMismatch);
-        }
-        signer.ed25519_public_key()?;
-        Ok(Self { signer })
-    }
-    /// Exact public software-signer binding.
-    #[must_use]
-    pub fn signer_binding(&self) -> &SoftwareSignerPublicBindingV1 {
-        self.signer.binding()
-    }
-}
-impl iroha_torii::sorafs::StreamTokenRuntimeSigner for ExternalSoftwareSignerStreamTokenAdapterV1 {
-    fn handle(&self) -> &str {
-        &self.signer.binding.handle
-    }
-    fn public_key(&self) -> [u8; 32] {
-        self.signer
-            .ed25519_public_key()
-            .expect("constructor pins one canonical Ed25519 public key")
-    }
-    fn qualification(
-        &self,
-    ) -> Result<
-        iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1,
-        iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1,
-    > {
-        self.signer.qualify_live().map_err(map_stream_probe_error)?;
-        Ok(
-            iroha_torii::sorafs::StreamTokenRuntimeSignerQualificationV1::new(
-                self.signer.binding.policy_revision,
-                self.signer.binding.policy_digest,
-            ),
-        )
-    }
-    fn sign(
-        &self,
-        signing_payload: &[u8],
-    ) -> Result<[u8; 64], iroha_torii::sorafs::StreamTokenSigningError> {
-        self.signer
-            .sign_ed25519(SoftwareSignerPurposeV1::StreamToken, signing_payload)
-            .map_err(map_stream_error)
-    }
-}
 /// External software signer for `PoP` credential/root/revocation digests.
 #[derive(Clone, Debug)]
 pub struct ExternalSoftwareSignerPopIssuerAdapterV1 {
@@ -881,25 +823,5 @@ fn map_evidence_error(
             sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Unavailable
         }
         _ => sorafs_node::evidence_viewer::EvidenceViewerExternalErrorV1::Rejected,
-    }
-}
-fn map_stream_probe_error(
-    error: ExternalSoftwareSignerAdapterErrorV1,
-) -> iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1 {
-    match error {
-        ExternalSoftwareSignerAdapterErrorV1::Unavailable => {
-            iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::Unavailable
-        }
-        _ => iroha_torii::sorafs::StreamTokenRuntimeSignerProbeErrorV1::StaleOrRevoked,
-    }
-}
-fn map_stream_error(
-    error: ExternalSoftwareSignerAdapterErrorV1,
-) -> iroha_torii::sorafs::StreamTokenSigningError {
-    match error {
-        ExternalSoftwareSignerAdapterErrorV1::Unavailable => {
-            iroha_torii::sorafs::StreamTokenSigningError::Unavailable
-        }
-        _ => iroha_torii::sorafs::StreamTokenSigningError::Refused,
     }
 }

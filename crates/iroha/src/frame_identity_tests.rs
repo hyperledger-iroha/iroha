@@ -47,18 +47,9 @@ fn captured_public_frame_identities() {
     assert_bidirectional::<crate::client::MultisigSpecResponse>(
         "iroha::client::MultisigSpecResponse",
     );
-    assert_bidirectional::<crate::client::SccpRegistryLimits>("iroha::client::SccpRegistryLimits");
-    assert_bidirectional::<crate::client::SccpResourceLimits>("iroha::client::SccpResourceLimits");
-    assert_bidirectional::<crate::client::SccpCapabilities>("iroha::client::SccpCapabilities");
     assert_bidirectional::<crate::client::SccpBridgeSubmitResponse>(
         "iroha::client::SccpBridgeSubmitResponse",
     );
-    assert_bidirectional::<crate::client::SccpRecentMessageLinks>(
-        "iroha::client::SccpRecentMessageLinks",
-    );
-    assert_bidirectional::<crate::client::SccpRecentMessage>("iroha::client::SccpRecentMessage");
-    assert_bidirectional::<crate::client::SccpRecentCursor>("iroha::client::SccpRecentCursor");
-    assert_bidirectional::<crate::client::SccpRecentMessages>("iroha::client::SccpRecentMessages");
     assert_bidirectional::<crate::client::MultisigProposalsQueryRequest>(
         "iroha::client::MultisigProposalsQueryRequest",
     );
@@ -78,4 +69,38 @@ fn captured_public_frame_identities() {
         "iroha::client::MultisigProposeRequest",
     );
     assert_bidirectional::<crate::client::MultisigResponse>("iroha::client::MultisigResponse");
+}
+
+// SCCP capability and discovery records have one shared owner. The former SDK
+// declarations remain only in the immutable historical observation fixture;
+// their separate frame names are not accepted wire variants.
+#[test]
+fn shared_sccp_frames_have_one_canonical_producer_identity() {
+    fn assert_frame<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
+        expected: &str,
+    ) {
+        assert_eq!(<T as norito::NoritoSchema>::nominal_name(), expected);
+        assert_eq!(<T as norito::NoritoSchema>::frame_name(), expected);
+        assert_eq!(
+            norito::schema::identity::frame_hash::<T>(),
+            norito::core::schema_hash_for_name(expected),
+        );
+    }
+    assert_frame::<iroha_sccp::api::SccpRegistryLimits>(
+        "iroha_torii::routing::SccpRegistryLimitsDto",
+    );
+    assert_frame::<iroha_sccp::api::SccpResourceLimits>(
+        "iroha_torii::routing::SccpResourceLimitsDto",
+    );
+    assert_frame::<iroha_sccp::api::SccpCapabilities>("iroha_torii::routing::SccpCapabilitiesDto");
+    assert_frame::<iroha_sccp::api::SccpRecentMessageLinks>(
+        "iroha_torii::routing::SccpRecentMessageLinksDto",
+    );
+    assert_frame::<iroha_sccp::api::SccpRecentMessage>(
+        "iroha_torii::routing::SccpRecentMessageDto",
+    );
+    assert_frame::<iroha_sccp::api::SccpRecentCursor>("iroha_torii::routing::SccpRecentCursorDto");
+    assert_frame::<iroha_sccp::api::SccpRecentMessages>(
+        "iroha_torii::routing::SccpRecentMessagesDto",
+    );
 }

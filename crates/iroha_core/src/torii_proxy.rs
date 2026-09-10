@@ -105,6 +105,8 @@ pub fn queue_plan_synced_request_id_from_network_digest(
 }
 
 /// Globally unique registry key for one transaction-entrypoint admission.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionRegistryKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct QueuePlanAdmissionRegistryKeyV1 {
     /// Registry-key layout version.
@@ -430,6 +432,8 @@ impl QueuePlanAdmissionBindingV1 {
     }
 }
 /// One compact signature over a shared QueuePlan admission binding.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionAttestationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionAttestationV1 {
     /// Attestation layout version.
@@ -454,6 +458,8 @@ pub struct QueuePlanAdmissionCertificateV1 {
 ///
 /// The certificate stays as exact Norito bytes so every receiving validator can enforce the
 /// same bounded canonical-decoding boundary before publishing those bytes durably in Kura.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::QueuePlanAdmissionPublicationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionPublicationV1 {
     /// Publication envelope schema version.
@@ -619,6 +625,13 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v1(
     network_id: &NetworkId,
     bytes: &[u8],
 ) -> Result<ValidatedQueuePlanAdmissionCertificateV1, String> {
+    #[cfg(test)]
+    QUEUE_PLAN_AUTHENTICATION_OBSERVER.with(|observer| {
+        let callback = observer.borrow().clone();
+        if let Some(callback) = callback {
+            callback();
+        }
+    });
     let max_bytes = iroha_data_model::block::MAX_QUEUE_PLAN_ADMISSION_BYTES;
     if bytes.is_empty() || bytes.len() > max_bytes {
         return Err("QueuePlan admission certificate is empty or oversized".to_owned());
@@ -642,7 +655,36 @@ pub fn decode_and_validate_queue_plan_admission_certificate_v1(
     )
 }
 
+#[cfg(test)]
+thread_local! {
+    static QUEUE_PLAN_AUTHENTICATION_OBSERVER:
+        std::cell::RefCell<Option<std::rc::Rc<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Observe real certificate authentication calls on this test thread.
+#[cfg(test)]
+pub(crate) fn observe_queue_plan_authentication_for_test<T>(
+    observer: impl Fn() + 'static,
+    action: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<std::rc::Rc<dyn Fn()>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            QUEUE_PLAN_AUTHENTICATION_OBSERVER.with(|observer| {
+                observer.replace(self.0.take());
+            });
+        }
+    }
+    let _restore = Restore(
+        QUEUE_PLAN_AUTHENTICATION_OBSERVER
+            .with(|current| current.replace(Some(std::rc::Rc::new(observer)))),
+    );
+    action()
+}
+
 /// Stable lane/dataspace assignment determined at ingress.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRouteHintV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiRouteHintV1 {
     /// Nexus lane selected for the request.
@@ -664,6 +706,8 @@ impl From<ToriiRouteHintV1> for crate::queue::RoutingDecision {
     }
 }
 /// Role of one route in a Torii transaction routing plan hint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRouteLegRoleV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiRouteLegRoleV1 {
     /// Coordinator route for final admission and commit ordering.
@@ -688,6 +732,8 @@ impl From<ToriiRouteLegRoleV1> for crate::queue::RouteLegRole {
     }
 }
 /// One lane/dataspace leg in a Torii transaction routing plan hint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRouteLegHintV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiRouteLegHintV1 {
     /// Lane/dataspace route selected for this leg.
@@ -946,6 +992,8 @@ impl fmt::Display for ToriiRoutingPlanHintError {
 }
 impl std::error::Error for ToriiRoutingPlanHintError {}
 /// Stable full routing plan determined at ingress.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiRoutingPlanHintV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiRoutingPlanHintV1 {
     /// Single coordinator route.
@@ -1071,6 +1119,8 @@ impl TryFrom<ToriiRoutingPlanHintV1> for crate::queue::RoutingPlan {
     }
 }
 /// Encoded response format requested by the ingress node.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyResponseFormatV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyResponseFormatV1 {
     /// Serialize the response body as Norito.
@@ -1079,6 +1129,8 @@ pub enum ToriiProxyResponseFormatV1 {
     Json,
 }
 /// Supported read endpoints forwarded over the Torii control plane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadEndpointV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiReadEndpointV1 {
     /// `GET /v1/accounts/{account_id}`
@@ -1175,6 +1227,8 @@ pub enum ToriiReadEndpointV1 {
     AccountOnboardingCurrentState,
 }
 /// Canonical routed read executed on an authoritative Torii peer.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadProxyRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiReadProxyRequestV1 {
     /// Supported read endpoint identifier.
@@ -1193,6 +1247,8 @@ pub struct ToriiReadProxyRequestV1 {
     pub response_format: ToriiProxyResponseFormatV1,
 }
 /// Route set Nexus should recompute for a coordinated fanout request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiFanoutRouteScopeV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiFanoutRouteScopeV1 {
     /// Fan out across all configured dataspace routes.
@@ -1211,6 +1267,8 @@ pub enum ToriiFanoutRouteScopeV1 {
     },
 }
 /// Merge behavior requested for an App API read fanout.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadFanoutMergeV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiReadFanoutMergeV1 {
     /// Merge JSON list-style responses.
@@ -1236,6 +1294,8 @@ pub enum ToriiReadFanoutMergeV1 {
     },
 }
 /// App API read fanout coordinated by the Nexus/default route.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiReadFanoutProxyRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiReadFanoutProxyRequestV1 {
     /// Supported read endpoint identifier.
@@ -1254,6 +1314,8 @@ pub struct ToriiReadFanoutProxyRequestV1 {
     pub response_format: ToriiProxyResponseFormatV1,
 }
 /// Hosted HTTP request forwarded to a peer that may own a healthy Inrou target.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiHostedHttpProxyRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiHostedHttpProxyRequestV1 {
     /// Soracloud service name already resolved from the public route.
@@ -1277,6 +1339,8 @@ pub struct ToriiHostedHttpProxyRequestV1 {
     pub remote_ip: Option<String>,
 }
 /// First-release queue admission contract for a proxied transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyTransactionAdmissionV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyTransactionAdmissionV1 {
     /// Acknowledge after the exact `f + 1` QueuePlan certificate is durable.
@@ -1367,6 +1431,8 @@ pub struct ToriiProxyRequestV1 {
     pub request: ToriiProxyRequestKindV1,
 }
 /// One HTTP header preserved across the Torii proxy response snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyHeaderV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiProxyHeaderV1 {
     /// Lower- or mixed-case header name as received from the responder.
@@ -1375,6 +1441,8 @@ pub struct ToriiProxyHeaderV1 {
     pub value: Vec<u8>,
 }
 /// Serialized HTTP response sent back to the ingress node.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyHttpResponseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiProxyHttpResponseV1 {
     /// HTTP status code returned by the authoritative responder.
@@ -1385,6 +1453,8 @@ pub struct ToriiProxyHttpResponseV1 {
     pub body: Vec<u8>,
 }
 /// P2P Torii proxy response sent from the authoritative peer back to ingress.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::torii_proxy::ToriiProxyResponseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ToriiProxyResponseV1 {
     /// Version of the proxy response envelope.

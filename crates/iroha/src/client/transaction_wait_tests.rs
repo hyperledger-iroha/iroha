@@ -258,9 +258,13 @@ fn transaction_wait_backpressure_preserves_fixed_failure_and_hash_binding() {
         let error =
             wait(&client, asynchronous, Duration::from_secs(1)).expect_err("wrong hash must fail");
         assert!(
-            error
-                .to_string()
-                .contains("does not match requested transaction"),
+            matches!(
+                error.downcast_ref::<crate::Error>(),
+                Some(crate::Error::ResponseBinding {
+                    operation: "pipeline.transaction_status",
+                    field: "hash",
+                })
+            ),
             "{error:#}"
         );
         assert_eq!(snapshots.lock().expect("snapshots").len(), 2);

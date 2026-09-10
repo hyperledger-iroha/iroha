@@ -34,7 +34,6 @@ use iroha::{
         asset::AssetDefinitionId,
         isi::{InstructionBox, decode_instruction_from_pair},
         metadata::Metadata,
-        name::Name,
         prelude::{FindTransactions, QueryBuilderExt, TransactionEntrypoint},
         query::{
             CommittedTxFilters,
@@ -105,7 +104,6 @@ use iroha::{
         },
         transaction::{
             Executable, FeePaymentIntent, SignedTransaction, TransactionAdmissionIntent,
-            TransactionBuilder,
         },
     },
 };
@@ -115,6 +113,7 @@ use iroha_config::{
     parameters::{actual, defaults},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(test)]
 use iroha_torii_shared::{
@@ -16477,11 +16476,6 @@ fn prepare_built_sorafs_manifest_registration(
             binding.metadata(operation)?,
         ))
         .wrap_err("failed to build exact SoraFS pin-registration payload")?;
-    let payload = TransactionBuilder::from_payload(payload)
-        .wrap_err("failed to reconstruct exact SoraFS pin-registration payload")?
-        .with_admission_intent(TransactionAdmissionIntent::Ordinary)
-        .into_payload()
-        .wrap_err("failed to finalize exact SoraFS pin-registration payload")?;
     let quote = client
         .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
         .wrap_err("failed to quote exact SoraFS pin-registration payload")?;
@@ -19082,6 +19076,11 @@ impl PreparedSoracloudTransactionV1 {
         if actual_hash != self.tx_hash_hex {
             return Err(eyre!(
                 "prepared Soracloud transaction hash does not match its exact wire bytes"
+            ));
+        }
+        if transaction.admission_intent() != TransactionAdmissionIntent::QueuePlanSynced {
+            return Err(eyre!(
+                "prepared Soracloud public submission requires signature-bound QueuePlanSynced admission"
             ));
         }
         if transaction.fee_payment_intent() != &self.fee_payment {
@@ -24741,7 +24740,10 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         let shared = bundle.service.lease_volumes[1].max_total_bytes.get();
         assert_ne!(ephemeral, shared);
         assert_eq!(root + ephemeral, TAIRA_INROU_CANARY_HOST_STORAGE_BYTES_V1);
-        assert_eq!(root + ephemeral + shared, defaults::taira::INROU_MAX_STORAGE_BYTES);
+        assert_eq!(
+            root + ephemeral + shared,
+            defaults::taira::INROU_MAX_STORAGE_BYTES
+        );
         validate_taira_inrou_canary_storage(&bundle.container.resources, &bundle.service)
             .expect("canonical host and shared writable budgets are distinct");
 
@@ -25264,7 +25266,10 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         fs::hard_link(&path, &linked).expect("create hard-linked stage fixture");
         let error = taira_stage_owned_file_bytes(&path, "stage fixture", 128)
             .expect_err("frozen stage files must remain singly linked");
-        assert!(error.to_string().contains("exactly one hard link"), "{error}");
+        assert!(
+            error.to_string().contains("exactly one hard link"),
+            "{error}"
+        );
         fs::remove_file(&linked).expect("remove hard-linked fixture");
         symlink(&path, &linked).expect("create stage symlink fixture");
         let error = taira_stage_owned_file_bytes(&linked, "stage fixture", 128)
@@ -29366,6 +29371,43 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         assert_eq!(prepared.fee_payment, requested);
         assert_eq!(prepared.fee_quote.intent, requested);
         assert_eq!(prepared.fee_payment.sponsor_program(), Some((&sponsor, 7)));
+        let transaction = prepared
+            .decode_and_validate()
+            .expect("prepared public pin transaction");
+        assert_eq!(
+            transaction.admission_intent(),
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "every prepared pin is submitted through the public transaction API"
+        );
+        let requests = server.requests();
+        let quote_request = requests
+            .iter()
+            .find(|request| request.path == iroha_torii_shared::uri::FEES_QUOTE)
+            .expect("exact pin fee-quote request");
+        let quoted: FeeQuoteWireRequest =
+            json::from_slice(&quote_request.body).expect("decode pin fee-quote request");
+        assert_eq!(
+            quoted.payload.admission_intent,
+            TransactionAdmissionIntent::QueuePlanSynced,
+            "the public admission intent must already be bound during fee quoting"
+        );
+        let ordinary_transaction =
+            iroha::data_model::transaction::TransactionBuilder::from_payload(
+                transaction.payload().clone(),
+            )
+            .expect("reconstruct exact pin payload")
+            .with_admission_intent(TransactionAdmissionIntent::Ordinary)
+            .try_sign(config.key_pair.private_key())
+            .expect("sign genuinely Ordinary pin payload");
+        let mut ordinary = prepared.clone();
+        ordinary.wire = ordinary_transaction
+            .encode_wire_v1()
+            .expect("encode Ordinary pin transaction");
+        ordinary.tx_hash_hex = hex::encode(ordinary_transaction.hash().as_ref());
+        let error = submit_prepared_soracloud_transaction(&config, "://invalid", 1, &ordinary)
+            .expect_err("Ordinary prepared public submissions must fail before HTTP setup");
+        assert!(error.to_string().contains("QueuePlanSynced"));
+        assert_eq!(server.requests().len(), requests.len());
         assert!(prepared.tx_hash_hex.as_bytes().last().is_some_and(|byte| {
             matches!(byte, b'1' | b'3' | b'5' | b'7' | b'9' | b'b' | b'd' | b'f')
         }));
@@ -32151,17 +32193,18 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
         .expect("build unpublished dual-ISA Inrou bundle");
         source.service.placement_targets =
             test_inrou_placement_targets(usize::from(source.service.replicas.get()));
-        let bundle = source.into_admitted(BTreeMap::from([
-            (
-                SoraInrouGuestIsaV1::X8664,
-                sample_published_inrou_artifact(0x31),
-            ),
-            (
-                SoraInrouGuestIsaV1::Aarch64,
-                sample_published_inrou_artifact(0x32),
-            ),
-        ]))
-        .expect("construct admitted dual-ISA Inrou bundle");
+        let bundle = source
+            .into_admitted(BTreeMap::from([
+                (
+                    SoraInrouGuestIsaV1::X8664,
+                    sample_published_inrou_artifact(0x31),
+                ),
+                (
+                    SoraInrouGuestIsaV1::Aarch64,
+                    sample_published_inrou_artifact(0x32),
+                ),
+            ]))
+            .expect("construct admitted dual-ISA Inrou bundle");
         assert_eq!(
             bundle
                 .container

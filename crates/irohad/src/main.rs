@@ -8935,7 +8935,9 @@ impl Iroha {
                 config.common.peer.id.clone(),
                 TimeSource::new_system(),
                 telemetry_profile.metrics_enabled(),
-            );
+            )
+            .change_context(StartError::StartTorii)
+            .attach("register authoritative Kura resource telemetry before serving diagnostics")?;
             supervisor.monitor(child);
             telemetry
         };
@@ -9400,7 +9402,11 @@ impl Iroha {
         let sorafs_governance_dag_signer = runtime_deps.sorafs_governance_dag_signer.clone();
         let sorafs_governance_dag_checkpoint_store =
             runtime_deps.sorafs_governance_dag_checkpoint_store.clone();
-        let sorafs_stream_token_signer = runtime_deps.sorafs_stream_token_signer.clone();
+        let sorafs_stream_token_hardware_client =
+            runtime_deps.sorafs_stream_token_hardware_client.clone();
+        let sorafs_stream_token_state_observer =
+            runtime_deps.sorafs_stream_token_state_observer.clone();
+        let sorafs_stream_token_approved_anchor = runtime_deps.sorafs_stream_token_approved_anchor;
         let sorafs_stream_token_gateway_admission =
             runtime_deps.sorafs_stream_token_gateway_admission.clone();
         let sorafs_appeal_finance_runtime_signers =
@@ -10300,8 +10306,18 @@ impl Iroha {
         } else {
             runtime_deps
         };
-        let runtime_deps = if let Some(signer) = sorafs_stream_token_signer {
-            runtime_deps.with_sorafs_stream_token_signer(signer)
+        let runtime_deps = if let Some(client) = sorafs_stream_token_hardware_client {
+            runtime_deps.with_sorafs_stream_token_hardware_client(client)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(observer) = sorafs_stream_token_state_observer {
+            runtime_deps.with_sorafs_stream_token_state_observer(observer)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(anchor) = sorafs_stream_token_approved_anchor {
+            runtime_deps.with_sorafs_stream_token_approved_anchor(anchor)
         } else {
             runtime_deps
         };
@@ -15179,7 +15195,9 @@ mod tests {
     #[test]
     fn standard_launcher_does_not_derive_six_sorafs_authority_signers_from_node_key() {
         let dependencies = IrohaRuntimeDeps::default();
-        assert!(dependencies.sorafs_stream_token_signer.is_none());
+        assert!(dependencies.sorafs_stream_token_hardware_client.is_none());
+        assert!(dependencies.sorafs_stream_token_state_observer.is_none());
+        assert!(dependencies.sorafs_stream_token_approved_anchor.is_none());
         assert!(dependencies.sorafs_proof_outcome_signer.is_none());
         assert!(dependencies.sorafs_repair_transaction_signer.is_none());
         assert!(dependencies.sorafs_reserve_transaction_signer.is_none());
@@ -16133,7 +16151,9 @@ mod tests {
             .filter(|character| !character.is_whitespace())
             .collect();
         for builder in [
-            "with_sorafs_stream_token_signer",
+            "with_sorafs_stream_token_hardware_client",
+            "with_sorafs_stream_token_state_observer",
+            "with_sorafs_stream_token_approved_anchor",
             "with_sorafs_proof_outcome_signer",
             "with_sorafs_repair_transaction_signer",
             "with_sorafs_reserve_transaction_signer",
@@ -16147,118 +16167,7 @@ mod tests {
             );
         }
     }
-    #[test]
-    #[expect(
-        clippy::too_many_lines,
-        reason = "complete dependency-forwarding contract"
-    )]
-    fn standard_launcher_forwards_external_sorafs_runtime_dependencies() {
-        let compact_source: String = include_str!("main.rs")
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect();
-        for (field, builder) in [
-            (
-                "sorafs_appeal_finance_checkpoint_runtime",
-                "with_sorafs_appeal_finance_checkpoint_runtime",
-            ),
-            (
-                "sorafs_evidence_viewer_webauthn",
-                "with_sorafs_evidence_viewer_webauthn",
-            ),
-            (
-                "sorafs_moderation_panel_notification",
-                "with_sorafs_moderation_panel_notification",
-            ),
-            (
-                "sorafs_moderation_panel_notification_archive",
-                "with_sorafs_moderation_panel_notification_archive",
-            ),
-            (
-                "sorafs_evidence_viewer_grants",
-                "with_sorafs_evidence_viewer_grants",
-            ),
-            (
-                "sorafs_evidence_viewer_receipt_signer",
-                "with_sorafs_evidence_viewer_receipt_signer",
-            ),
-            (
-                "sorafs_evidence_viewer_erasure",
-                "with_sorafs_evidence_viewer_erasure",
-            ),
-            (
-                "sorafs_evidence_viewer_checkpoint_store",
-                "with_sorafs_evidence_viewer_checkpoint_store",
-            ),
-            (
-                "sorafs_evidence_viewer_compaction_archive",
-                "with_sorafs_evidence_viewer_compaction_archive",
-            ),
-            (
-                "sorafs_evidence_viewer_transparency_publisher",
-                "with_sorafs_evidence_viewer_transparency_publisher",
-            ),
-            (
-                "sorafs_gateway_acme_client",
-                "with_sorafs_gateway_acme_client",
-            ),
-            (
-                "sorafs_gateway_compliance_feed_transport",
-                "with_sorafs_gateway_compliance_feed_transport",
-            ),
-        ] {
-            let clone_from_external = ["runtime_deps.", field, ".clone()"].concat();
-            let forward_to_torii = [".", builder, "("].concat();
-            assert!(
-                compact_source.contains(&clone_from_external),
-                "standard launcher must clone external dependency `{field}` before Torii dependency assembly"
-            );
-            assert!(
-                compact_source.contains(&forward_to_torii),
-                "standard launcher must forward `{field}` through `{builder}`"
-            );
-        }
-        assert!(
-            compact_source.contains("runtime_deps.sorafs_pop_credential_provider_registry.clone()"),
-            "standard launcher must clone the deployment-owned PoP provider registry"
-        );
-        assert!(
-            compact_source.contains("sorafs_pop_runtime::build("),
-            "standard launcher must build the config-bound PoP runtime"
-        );
-        assert!(
-            compact_source.contains(".with_sorafs_pop_credentials("),
-            "standard launcher must forward only the qualified PoP runtime to Torii"
-        );
-        let forbidden_gateway_fallback =
-            ["ProductionGatewayComplianceFeedTransport", "::try_new"].concat();
-        assert!(
-            !compact_source.contains(&forbidden_gateway_fallback),
-            "standard launcher must not replace a missing deployment-owned compliance transport with an in-process fallback"
-        );
-        assert!(
-            compact_source.contains(
-                "enabledSoraFSgatewaycompliancerequirestheexactdeployment-ownedauthenticatedfeedtransport"
-            ),
-            "enabled gateway compliance must fail before Torii startup when its deployment transport is absent"
-        );
-        assert!(
-            compact_source.contains(
-                "configuredSoraFSgatewayACMEautomationrequirestheexactdeployment-ownedACMEclient"
-            ),
-            "configured ACME automation must fail before Torii startup when its deployment client is absent"
-        );
-        assert!(
-            compact_source
-                .contains("disabledSoraFSgatewaycompliancerejectsanunexpectedfeedtransport"),
-            "disabled gateway compliance must reject an injected transport"
-        );
-        assert!(
-            compact_source
-                .contains("unconfiguredSoraFSgatewayACMEautomationrejectsanunexpectedclient"),
-            "unconfigured ACME automation must reject an injected client"
-        );
-    }
+    include!("main/runtime_dependency_contract_tests.rs");
     #[test]
     fn standard_launcher_forwards_and_supervises_por_replay_archival() {
         let compact_source: String = include_str!("main.rs")

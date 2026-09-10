@@ -47,8 +47,8 @@ use iroha_data_model::{
         },
         reserve::ReserveLifecycleStage,
     },
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::DecodeLimits;

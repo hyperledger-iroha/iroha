@@ -2066,8 +2066,8 @@ pub struct SoraServiceLeaseStateV1 {
     /// Exact bytes settled from all finalized prior reporting epochs.
     pub settled_egress_bytes: u128,
     /// Canonically sorted reporter checkpoints keyed by reporting epoch,
-    /// revision, slot, and validator. Every retained checkpoint belongs to the
-    /// current reporting epoch.
+    /// revision, slot, placement incarnation, and validator. Every retained
+    /// checkpoint belongs to the current reporting epoch.
     pub egress_reporter_checkpoints: Vec<SoraServiceLeaseEgressCheckpointV1>,
     /// Cached exact sum of settled bytes and all current-epoch checkpoints.
     pub accounted_egress_bytes: u128,

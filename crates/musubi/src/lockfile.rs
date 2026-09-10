@@ -568,9 +568,9 @@ fn parse_root(value: &toml::Value) -> Result<LockedRootV1, LockfileError> {
         .as_table()
         .ok_or_else(|| LockfileError::invalid("root entries must be TOML tables"))?;
     reject_unknown(table, ROOT_ENTRY_KEYS, "root entry")?;
-    let package = required_string(table, "package")?
-        .parse()
-        .map_err(|error: iroha_data_model::ParseError| LockfileError::invalid(error.reason()))?;
+    let package = required_string(table, "package")?.parse().map_err(
+        |error: iroha_model_base::error::ParseError| LockfileError::invalid(error.reason()),
+    )?;
     let dependencies = parse_table_array(table, "dependency")?
         .iter()
         .map(parse_edge)
@@ -637,7 +637,7 @@ fn parse_edge(value: &toml::Value) -> Result<MusubiExactDependencyEdgeV1, Lockfi
     };
     Ok(MusubiExactDependencyEdgeV1 {
         alias: required_string(table, "alias")?.parse().map_err(
-            |error: iroha_data_model::ParseError| LockfileError::invalid(error.reason()),
+            |error: iroha_model_base::error::ParseError| LockfileError::invalid(error.reason()),
         )?,
         kind,
         package: package.clone(),
@@ -662,7 +662,7 @@ fn parse_package(table: &toml::Table) -> Result<MusubiPackageIdV1, LockfileError
         }
         "domain" => {
             MusubiPackageScopeV1::Domain(required_string(table, "domain")?.parse().map_err(
-                |error: iroha_data_model::ParseError| LockfileError::invalid(error.reason()),
+                |error: iroha_model_base::error::ParseError| LockfileError::invalid(error.reason()),
             )?)
         }
         other => {
@@ -671,9 +671,9 @@ fn parse_package(table: &toml::Table) -> Result<MusubiPackageIdV1, LockfileError
             )));
         }
     };
-    let name = required_string(table, "name")?
-        .parse()
-        .map_err(|error: iroha_data_model::ParseError| LockfileError::invalid(error.reason()))?;
+    let name = required_string(table, "name")?.parse().map_err(
+        |error: iroha_model_base::error::ParseError| LockfileError::invalid(error.reason()),
+    )?;
     Ok(MusubiPackageIdV1::new(
         DataSpaceId::new(home_dataspace),
         scope,
@@ -830,7 +830,9 @@ fn parse_table_array<'a>(
 }
 fn parse_version(raw: &str) -> Result<MusubiVersionV1, LockfileError> {
     raw.parse()
-        .map_err(|error: iroha_data_model::ParseError| LockfileError::invalid(error.reason()))
+        .map_err(|error: iroha_model_base::error::ParseError| {
+            LockfileError::invalid(error.reason())
+        })
 }
 fn parse_digest(raw: &str) -> Result<[u8; 32], LockfileError> {
     if raw.len() != 64 || raw.bytes().any(|byte| !byte.is_ascii_hexdigit()) {

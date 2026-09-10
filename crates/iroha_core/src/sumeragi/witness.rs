@@ -16,9 +16,9 @@ use iroha_data_model::{
     execution_witness::ExecutionWitnessKeyTagV1,
     fastpq::{TransferTranscript, TransferTranscriptBundle},
     isi::KagemushaReserveReceiptV1,
-    name::Name,
     nft::NftId,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use std::{

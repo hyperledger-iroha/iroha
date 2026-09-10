@@ -49,6 +49,7 @@ use iroha_data_model::{
         parameters::{DEFAULT_FETCH_SIZE, QueryParams, SortOrder},
     },
 };
+use iroha_model_base::name::Name;
 use norito::core::{Header, NoritoSerialize, SerializePayload};
 pub(crate) use ordinary_iterable::predicate_json_value_for_execution as ordinary_predicate_json_value;
 pub use ordinary_memory::{
@@ -63,6 +64,8 @@ pub(crate) use ordinary_memory::{
     ensure_stored_revalidation_admitted as ensure_ordinary_stored_revalidation_admitted,
 };
 pub use singular_memory::SingularQueryOutputLimits;
+#[cfg(test)]
+pub(crate) use singular_memory::encode_singular_query_source_for_test;
 pub(crate) use singular_memory::{
     BorrowedSingularOption, BorrowedSingularStruct, SingularQueryCurrentAllocation,
     SingularQueryRetainedVec, SingularQueryVecBuilder, own_singular_query_serialized_source,
@@ -3251,7 +3254,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     }
     #[test]
     fn postprocessing_reports_processed_items_for_sorted_queries() {
-        let key: iroha_data_model::name::Name = "rank".parse().expect("name");
+        let key: iroha_model_base::name::Name = "rank".parse().expect("name");
         let params = QueryParams {
             pagination: Pagination::new(Some(nonzero!(1_u64)), 0),
             sorting: Sorting::by_metadata_key(key),
@@ -3932,6 +3935,8 @@ mod tests {
             .insert("rank".parse().expect("metadata key"), Json::new(rank));
         domain
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::smartcontracts::isi::query::tests::StatefulLengthHint")]
     struct StatefulLengthHint {
         body: [u8; 32],
         actual: usize,
@@ -3962,6 +3967,10 @@ mod tests {
             Some(self.exact_hint)
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::smartcontracts::isi::query::tests::ErrorSwallowingSerializer"
+    )]
     struct ErrorSwallowingSerializer;
     impl SerializePayload for ErrorSwallowingSerializer {
         fn serialize(
@@ -4269,6 +4278,8 @@ mod tests {
         .expect_err("sorting must meter a value before inserting it into the heap");
         assert!(matches!(error, Error::GasBudgetExceeded));
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::smartcontracts::isi::query::tests::CountingTiebreakValue")]
     #[derive(norito::derive::NoritoSerialize)]
     struct CountingTiebreakValue {
         id: u8,

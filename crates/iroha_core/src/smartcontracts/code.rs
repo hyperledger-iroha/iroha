@@ -15,13 +15,13 @@ use iroha_data_model::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
     parameter::{CustomParameterId, Parameters},
-    prelude::{Name, ValidationFail},
+    prelude::ValidationFail,
     smart_contract::manifest::{ContractManifest, EntryPointKind},
     smart_contract::{
         ContractAddress, ContractAlias, ContractLifecycleControlV1, ContractLifecycleOwnerV1,
     },
-    state_path::StatePath,
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use mv::storage::StorageReadOnly;
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
@@ -30,6 +30,8 @@ use thiserror::Error;
 /// Bindings are retained after deactivation so every historical contract subject remains
 /// permanently non-signing. The first-release format has one hash-to-point derivation and no
 /// legacy version or migration metadata.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::code::ContractSubjectBinding")]
 #[derive(
     Clone,
     Debug,
@@ -383,6 +385,8 @@ pub fn protected_contract_namespaces(
 pub(crate) const CONTRACT_LIFECYCLE_STATE_PREFIX: &str = "lc";
 const CONTRACT_LIFECYCLE_RECORD_MAGIC: [u8; 4] = *b"KLC1";
 /// Consensus-bound lifecycle transition awaiting its branded hook.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::code::PendingContractLifecycle")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::codec::Decode, norito::codec::Encode)]
 pub(crate) enum PendingContractLifecycle {
     /// A newly activated instance must execute its `hajimari`/`始まり` hook once.

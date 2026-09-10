@@ -3,14 +3,12 @@
 //! binary so tests and CLI fixtures stay in sync.
 use iroha_config::parameters::defaults::compute as compute_defaults;
 use iroha_crypto::Hash;
-use iroha_data_model::{
-    compute::{
-        ComputeAuthPolicy, ComputeCall, ComputeCodec, ComputeManifest, ComputeMetering,
-        ComputeOutcome, ComputeOutcomeKind, ComputePriceAmplifiers, ComputePriceWeights,
-        ComputeRoute, ComputeRouteId, ComputeSandboxRules, ComputeValidationError,
-    },
-    name::Name,
+use iroha_data_model::compute::{
+    ComputeAuthPolicy, ComputeCall, ComputeCodec, ComputeManifest, ComputeMetering, ComputeOutcome,
+    ComputeOutcomeKind, ComputePriceAmplifiers, ComputePriceWeights, ComputeRoute, ComputeRouteId,
+    ComputeSandboxRules, ComputeValidationError,
 };
+use iroha_model_base::name::Name;
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},

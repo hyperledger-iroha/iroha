@@ -17,6 +17,12 @@ import { computeIvmArtifactHashes } from "./ivmArtifact.js";
 import { verifyCompiledContractArtifact } from "./kotodamaCompiler/normalize.js";
 import { networkIdBytes } from "./networkId.js";
 
+const TEXT_DEPLOYMENT_OPTIONS = "deployment options.";
+const TEXT_CHAIN_DISCRIMINANT = "chainDiscriminant";
+const TEXT_CONTRACT_ADDRESS_DERIVATION = "contract-address derivation ";
+const TEXT_INTEGER_BIGINT_OR_CANONICAL_DECIMAL_STRING = " integer, bigint, or canonical decimal string";
+
+
 export const SMART_CONTRACT_CODE_CHUNK_BYTES = 65_536;
 const U16_MAX = 0xffffn;
 const U32_MAX = 0xffff_ffffn;
@@ -37,7 +43,7 @@ const BROWSER_DEPLOYMENT_OPTION_KEYS = Object.freeze([
   "compilerCodeHash",
   "compilerAbiHash",
   "networkId",
-  "chainDiscriminant",
+  TEXT_CHAIN_DISCRIMINANT,
   "authority",
   "contractAlias",
   "leaseExpiryMs",
@@ -97,7 +103,7 @@ function normalizeUnsigned(value, maximum, context) {
   } else if (typeof value === "number") {
     if (!Number.isSafeInteger(value)) {
       throw new TypeError(
-        `${context} must be a safe integer, bigint, or canonical decimal string`,
+        `${context} must be a safe${TEXT_INTEGER_BIGINT_OR_CANONICAL_DECIMAL_STRING}`,
       );
     }
     normalized = BigInt(value);
@@ -105,7 +111,7 @@ function normalizeUnsigned(value, maximum, context) {
     normalized = BigInt(value);
   } else {
     throw new TypeError(
-      `${context} must be an unsigned integer, bigint, or canonical decimal string`,
+      `${context} must be an unsigned${TEXT_INTEGER_BIGINT_OR_CANONICAL_DECIMAL_STRING}`,
     );
   }
   if (normalized < 0n || normalized > maximum) {
@@ -232,7 +238,7 @@ function authorityDetails(authority, expectedDiscriminant) {
   if (parsed.address.toI105(Number(expectedDiscriminant)) !== literal) {
     throw new TypeError("authority must use its exact canonical I105 literal");
   }
-  const controller = parsed.address._controller;
+  const controller = parsed.address.controllerInfo();
   if (
     !controller ||
     controller.tag !== 0 ||
@@ -252,19 +258,19 @@ function authorityDetails(authority, expectedDiscriminant) {
 
 /** Derive the exact current V1 Bech32m contract address locally. */
 export function deriveContractAddress(input) {
-  const source = requirePlainObject(input, "contract-address derivation input");
+  const source = requirePlainObject(input, (TEXT_CONTRACT_ADDRESS_DERIVATION + "input"));
   assertOnlyObjectKeys(
     source,
-    ["networkId", "chainDiscriminant", "authority", "deployNonce", "dataspaceId"],
-    "contract-address derivation input",
+    ["networkId", TEXT_CHAIN_DISCRIMINANT, "authority", "deployNonce", "dataspaceId"],
+    (TEXT_CONTRACT_ADDRESS_DERIVATION + "input"),
   );
   const networkBytes = Buffer.from(
-    networkIdBytes(source.networkId, "contract-address derivation input.networkId"),
+    networkIdBytes(source.networkId, (TEXT_CONTRACT_ADDRESS_DERIVATION + "input.networkId")),
   );
   const discriminant = normalizeUnsigned(
     source.chainDiscriminant,
     U16_MAX,
-    "chainDiscriminant",
+    TEXT_CHAIN_DISCRIMINANT,
   );
   const nonce = normalizeUnsigned(source.deployNonce, U64_MAX, "deployNonce");
   const dataspace = normalizeUnsigned(source.dataspaceId, U64_MAX, "dataspaceId");
@@ -389,29 +395,29 @@ export async function deploySmartContractBrowser(options) {
     BROWSER_DEPLOYMENT_OPTION_KEYS,
     "deployment options",
   );
-  networkIdBytes(source.networkId, "deployment options.networkId");
+  networkIdBytes(source.networkId, (TEXT_DEPLOYMENT_OPTIONS + "networkId"));
   const networkId = source.networkId;
   if (typeof source.sign !== "function") {
-    throw new TypeError("deployment options.sign must be a local signer callback");
+    throw new TypeError((TEXT_DEPLOYMENT_OPTIONS + "sign must be a local signer callback"));
   }
   if (typeof source.submitAndWait !== "function") {
     throw new TypeError(
-      "deployment options.submitAndWait must submit signed bytes and await finality",
+      (TEXT_DEPLOYMENT_OPTIONS + "submitAndWait must submit signed bytes and await finality"),
     );
   }
   if (typeof source.signManifest !== "function") {
     throw new TypeError(
-      "deployment options.signManifest must be a local manifest signer callback",
+      (TEXT_DEPLOYMENT_OPTIONS + "signManifest must be a local manifest signer callback"),
     );
   }
   if (typeof source.readNodeCapabilities !== "function") {
     throw new TypeError(
-      "deployment options.readNodeCapabilities must fetch fresh node capabilities",
+      (TEXT_DEPLOYMENT_OPTIONS + "readNodeCapabilities must fetch fresh node capabilities"),
     );
   }
   if (typeof source.readDeploymentState !== "function") {
     throw new TypeError(
-      "deployment options.readDeploymentState must call the authenticated deployment-state endpoint",
+      (TEXT_DEPLOYMENT_OPTIONS + "readDeploymentState must call the authenticated deployment-state endpoint"),
     );
   }
   if (
@@ -425,7 +431,7 @@ export async function deploySmartContractBrowser(options) {
   const chainDiscriminant = normalizeUnsigned(
     source.chainDiscriminant,
     U16_MAX,
-    "chainDiscriminant",
+    TEXT_CHAIN_DISCRIMINANT,
   );
   const authority = authorityDetails(source.authority, chainDiscriminant);
   const contractAlias = normalizeContractAlias(source.contractAlias);

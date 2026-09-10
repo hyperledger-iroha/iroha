@@ -12,6 +12,8 @@ use norito::{
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Map, Value},
 };
 /// A field path such as `authority`, `timestamp_ms`, or `metadata.display_name`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::FieldPath")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldPath(pub String);
 impl JsonSerialize for FieldPath {
@@ -28,6 +30,8 @@ impl JsonDeserialize for FieldPath {
     }
 }
 /// Filter expression AST.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::FilterExpr")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterExpr {
     /// Logical conjunction of nested predicates.
@@ -70,6 +74,8 @@ impl FastJsonWrite for FilterExpr {
     }
 }
 /// Selector (projection) definition as a flat list of field paths.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::Selector")]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Selector(pub Vec<FieldPath>);
 impl JsonSerialize for Selector {
@@ -85,6 +91,8 @@ impl JsonDeserialize for Selector {
     }
 }
 /// Sorting key descriptor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::SortKey")]
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SortKey {
     /// Field path to sort by.
@@ -94,6 +102,8 @@ pub struct SortKey {
     pub order: Order,
 }
 /// Sort direction for a single key.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::Order")]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Order {
     /// Sort values in ascending order.

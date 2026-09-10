@@ -34,11 +34,11 @@ use iroha_data_model::{
             ProofOutcomeRecordV1, ProofOutcomeSignerPolicyRecordV1, ProofOutcomeSignerPolicyV1,
         },
     },
-    state_path::StatePath,
 };
 use iroha_executor_data_model::permission::sorafs::{
     CanManageSorafsProofOutcomePolicy, CanRecordSorafsProofOutcome,
 };
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_from_bytes_with_limits};
 use sorafs_manifest::{

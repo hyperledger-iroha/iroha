@@ -2835,3 +2835,52 @@ fn finalized_merge_retry_rejects_corrupt_finality_before_republishing_index() {
         "rejected retry must retain the exact occupied corruption and all durable evidence"
     );
 }
+
+#[test]
+fn canonical_association_stage_counts_real_publication_and_removal_once() {
+    let (kura, mut blocks) = blank_kura_with_blocks();
+    let block = blocks.next();
+    kura.refresh_disk_usage_bytes()
+        .expect("initialize both disk caches");
+    let before = kura
+        .disk_usage_accounting_snapshot_for_tests()
+        .expect("raw baseline");
+    assert!(before.enforced_initialized && before.total_initialized);
+    assert_eq!(before.cached_total_bytes, before.exact_total_bytes);
+    let path = kura.canonical_association_stage_path();
+    assert!(!path.exists());
+    kura.write_canonical_association_stage(&block, None)
+        .expect("publish real canonical stage");
+    let length = fs::metadata(&path).expect("canonical stage metadata").len();
+    assert!(length > 0);
+    for _ in 0..2 {
+        let published = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("raw published caches");
+        assert!(published.enforced_initialized && published.total_initialized);
+        assert_eq!(
+            published.cached_enforced_bytes,
+            published.exact_enforced_bytes
+        );
+        assert_eq!(published.cached_total_bytes, published.exact_total_bytes);
+        assert_eq!(
+            published.cached_total_bytes,
+            before.cached_total_bytes + length
+        );
+        // Idempotent retry must not publish the same file delta a second time.
+        kura.write_canonical_association_stage(&block, None)
+            .expect("retry exact stage");
+    }
+    for _ in 0..2 {
+        kura.remove_canonical_association_stage()
+            .expect("remove or retry absent stage");
+        let removed = kura
+            .disk_usage_accounting_snapshot_for_tests()
+            .expect("raw removed caches");
+        assert!(!path.exists());
+        assert!(removed.enforced_initialized && removed.total_initialized);
+        assert_eq!(removed.cached_enforced_bytes, removed.exact_enforced_bytes);
+        assert_eq!(removed.cached_total_bytes, removed.exact_total_bytes);
+        assert_eq!(removed.cached_total_bytes, before.cached_total_bytes);
+    }
+}

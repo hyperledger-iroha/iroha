@@ -17,6 +17,56 @@ import {
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
 } from "./sumeragiTypedLimits.js";
 
+const TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS = "status.lane_settlement_commitments[";
+const TEXT_CONTAINS_UNKNOWN_FIELD = " contains unknown field ";
+const TEXT_IS_MISSING_REQUIRED_FIELD = " is missing required field ";
+const TEXT_PARTICIPANT = "participant_";
+const TEXT_LANE_INCARNATION = "lane_incarnation";
+const TEXT_LANE_INCARNATION_2 = ".lane_incarnation";
+const TEXT_LANE_BLOCK_DESCRIPTOR = ".lane_block_descriptor_";
+const TEXT_DATASPACE_ID = ".dataspace_id";
+const TEXT_DATASPACE_ID_2 = "dataspace_id";
+const TEXT_NATIVE_AMX_APPLICATION_MANIFEST = ".native_amx_application_manifest_";
+const TEXT_PREVIOUS_LANE_BLOCK_DESCRIPTOR_HASH = "previous_lane_block_descriptor_hash";
+const TEXT_PARTICIPANT_2 = ".participant_";
+const TEXT_LANE_BLOCK_HEIGHT = "lane_block_height";
+const TEXT_MUST_BE_A_CANONICAL = " must be a canonical ";
+const TEXT_LANE_BLOCK_VIEW = "lane_block_view";
+const TEXT_SUMERAGI_DIAGNOSTICS = "sumeragi diagnostics.";
+const TEXT_AUTHORITY_CONTEXT_HEIGHT = "authority_context_height";
+const TEXT_LANE_BLOCK_HEIGHT_2 = ".lane_block_height";
+const TEXT_ACCEPTED_CANDIDATE = ".accepted_candidate_";
+const TEXT_DETACHED_FALLBACK = "detached_fallback_";
+const TEXT_VALIDATOR = ".validator_";
+const TEXT_LANE_ID = ".lane_id";
+const TEXT_IROHA_DATA_MODEL_BLOCK_CONSENSUS = "iroha_data_model::block::consensus::";
+const TEXT_APPLICATION_BLOCK_HEIGHT_AND_HASH_MUST_APPEAR_TOGETHER = " application block height and hash must appear together";
+const TEXT_PREVIOUS_LANE_BLOCK = ".previous_lane_block_";
+const TEXT_LANE_BLOCK_VIEW_2 = ".lane_block_view";
+const TEXT_APPLICATION_BLOCK = "application_block_";
+const TEXT_AWAITING_EXECUTABLE_PAYLOAD = "awaiting_executable_payload";
+const TEXT_PROPOSAL_HASH = "proposal_hash";
+const TEXT_VALIDATOR_SET_HASH_VERSION = "validator_set_hash_version";
+const TEXT_DESCRIPTOR_HASH = "descriptor_hash";
+const TEXT_NATIVE_AMX_APPLICATION_MANIFEST_2 = "native_amx_application_manifest_";
+const TEXT_COORDINATOR_PROPOSAL_HASH = "coordinator_proposal_hash";
+const TEXT_AUTHORITY_CONTEXT_HEIGHT_2 = ".authority_context_height";
+const TEXT_COORDINATOR_LANE = "coordinator_lane_";
+const TEXT_MUST_BE_STRICTLY_ORDERED_BY = " must be strictly ordered by ";
+const TEXT_ACCEPTED_TRANSACTION = ".accepted_transaction_";
+const TEXT_PAYLOAD_OWNERSHIP_HASH = ".payload_ownership_hash";
+const TEXT_LANE_BLOCK_DESCRIPTOR_2 = "lane_block_descriptor_";
+const TEXT_CARRIES_IMPOSSIBLE_SESSION_QUORUM_COUNTS = " carries impossible session quorum counts";
+const TEXT_BLOCK_HEIGHT = ".block_height";
+const TEXT_MUST_NOT_CONTAIN_SURROUNDING_WHITESPACE = " must not contain surrounding whitespace";
+const TEXT_PREVIOUS_NATIVE_SETTLEMENT = ".previous_native_settlement_";
+const TEXT_PAYLOAD_OWNERSHIP_HASH_2 = "payload_ownership_hash";
+const TEXT_EXECUTION_COMMITMENT = ".execution_commitment";
+const TEXT_PROPOSAL_HEIGHT = "proposal_height";
+const TEXT_RESERVATIONS_DURABLE = "reservations_durable";
+const TEXT_EXECUTION_COMMITMENT_2 = "execution_commitment";
+
+
 export {
   SUMERAGI_DIAGNOSTICS_TYPED_JSON_MAX_BYTES,
   SUMERAGI_STATUS_TYPED_JSON_MAX_BYTES,
@@ -62,7 +112,7 @@ function parseSumeragiNexusFeeReceipt(value, context) {
     [
       "version",
       "source_id",
-      "dataspace_id",
+      TEXT_DATASPACE_ID_2,
       "lane_id",
       "block_height",
       "payer_account_id",
@@ -79,11 +129,11 @@ function parseSumeragiNexusFeeReceipt(value, context) {
   return Object.freeze({
     version,
     source_id: parseSumeragiByte32(record.source_id, `${context}.source_id`),
-    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
-    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
+    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}${TEXT_DATASPACE_ID}`),
+    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}${TEXT_LANE_ID}`, {
       max: 0xffffffff,
     }),
-    block_height: parseSumeragiUnsigned(record.block_height, `${context}.block_height`),
+    block_height: parseSumeragiUnsigned(record.block_height, `${context}${TEXT_BLOCK_HEIGHT}`),
     payer_account_id: requireExactNonEmptyString(
       record.payer_account_id,
       `${context}.payer_account_id`,
@@ -107,25 +157,25 @@ function parseSumeragiNativeAmxBody(value, context) {
       "tx_entrypoint_hash",
       "plan_digest",
       "phase",
-      "coordinator_lane_id",
+      (TEXT_COORDINATOR_LANE + "id"),
       "coordinator_dataspace_id",
-      "coordinator_lane_incarnation",
-      "participant_lane_id",
-      "participant_dataspace_id",
-      "participant_lane_incarnation",
-      "participant_previous_block_height",
-      "participant_previous_block_descriptor_hash",
-      "participant_lane_block_height",
-      "participant_lane_block_view",
-      "participant_proposal_hash",
-      "participant_settlement_commitment",
-      "participant_validator_set_hash",
-      "participant_validator_count",
-      "participant_min_quorum",
-      "authority_context_height",
+      (TEXT_COORDINATOR_LANE + "incarnation"),
+      (TEXT_PARTICIPANT + "lane_id"),
+      (TEXT_PARTICIPANT + "dataspace_id"),
+      (TEXT_PARTICIPANT + "lane_incarnation"),
+      (TEXT_PARTICIPANT + "previous_block_height"),
+      (TEXT_PARTICIPANT + "previous_block_descriptor_hash"),
+      (TEXT_PARTICIPANT + "lane_block_height"),
+      (TEXT_PARTICIPANT + "lane_block_view"),
+      (TEXT_PARTICIPANT + "proposal_hash"),
+      (TEXT_PARTICIPANT + "settlement_commitment"),
+      (TEXT_PARTICIPANT + "validator_set_hash"),
+      (TEXT_PARTICIPANT + "validator_count"),
+      (TEXT_PARTICIPANT + "min_quorum"),
+      TEXT_AUTHORITY_CONTEXT_HEIGHT,
       "planned_coordinator_block_height",
-      "coordinator_lane_block_view",
-      "coordinator_proposal_hash",
+      (TEXT_COORDINATOR_LANE + "block_view"),
+      TEXT_COORDINATOR_PROPOSAL_HASH,
     ],
     context,
   );
@@ -140,18 +190,18 @@ function parseSumeragiNativeAmxBody(value, context) {
   );
   const validatorCount = parseSumeragiUnsigned(
     record.participant_validator_count,
-    `${context}.participant_validator_count`,
+    `${context}${TEXT_PARTICIPANT_2}validator_count`,
     { positive: true, max: 128 },
   );
   const minQuorum = parseSumeragiUnsigned(
     record.participant_min_quorum,
-    `${context}.participant_min_quorum`,
+    `${context}${TEXT_PARTICIPANT_2}min_quorum`,
     { positive: true, max: 128 },
   );
   const expectedQuorum = validatorCount - Math.floor((validatorCount - 1) / 3);
   const authorityHeight = parseSumeragiUnsigned(
     record.authority_context_height,
-    `${context}.authority_context_height`,
+    `${context}${TEXT_AUTHORITY_CONTEXT_HEIGHT_2}`,
     { positive: true },
   );
   const plannedHeight = parseSumeragiUnsigned(
@@ -165,23 +215,23 @@ function parseSumeragiNativeAmxBody(value, context) {
   );
   const participantPreviousHeight = parseSumeragiUnsigned(
     record.participant_previous_block_height,
-    `${context}.participant_previous_block_height`,
+    `${context}${TEXT_PARTICIPANT_2}previous_block_height`,
   );
   const participantPreviousDescriptorHash =
     record.participant_previous_block_descriptor_hash === null
       ? null
       : parseSumeragiNonzeroHash(
           record.participant_previous_block_descriptor_hash,
-          `${context}.participant_previous_block_descriptor_hash`,
+          `${context}${TEXT_PARTICIPANT_2}previous_block_descriptor_hash`,
         );
   const participantHeight = parseSumeragiUnsigned(
     record.participant_lane_block_height,
-    `${context}.participant_lane_block_height`,
+    `${context}${TEXT_PARTICIPANT_2}lane_block_height`,
     { positive: true },
   );
   const participantView = parseSumeragiUnsigned(
     record.participant_lane_block_view,
-    `${context}.participant_lane_block_view`,
+    `${context}${TEXT_PARTICIPANT_2}lane_block_view`,
   );
   const sourceId = parseSumeragiByte32(record.source_id, `${context}.source_id`);
   const entrypointHash = parseSumeragiHash(
@@ -219,16 +269,16 @@ function parseSumeragiNativeAmxBody(value, context) {
     ),
     participant_lane_id: parseSumeragiUnsigned(
       record.participant_lane_id,
-      `${context}.participant_lane_id`,
+      `${context}${TEXT_PARTICIPANT_2}lane_id`,
       { max: 0xffffffff },
     ),
     participant_dataspace_id: parseSumeragiUnsigned(
       record.participant_dataspace_id,
-      `${context}.participant_dataspace_id`,
+      `${context}${TEXT_PARTICIPANT_2}dataspace_id`,
     ),
     participant_lane_incarnation: parseSumeragiNonzeroHash(
       record.participant_lane_incarnation,
-      `${context}.participant_lane_incarnation`,
+      `${context}${TEXT_PARTICIPANT_2}lane_incarnation`,
     ),
     participant_previous_block_height: participantPreviousHeight,
     participant_previous_block_descriptor_hash: participantPreviousDescriptorHash,
@@ -236,15 +286,15 @@ function parseSumeragiNativeAmxBody(value, context) {
     participant_lane_block_view: participantView,
     participant_proposal_hash: parseSumeragiNonzeroHash(
       record.participant_proposal_hash,
-      `${context}.participant_proposal_hash`,
+      `${context}${TEXT_PARTICIPANT_2}proposal_hash`,
     ),
     participant_settlement_commitment: parseSumeragiNonzeroHash(
       record.participant_settlement_commitment,
-      `${context}.participant_settlement_commitment`,
+      `${context}${TEXT_PARTICIPANT_2}settlement_commitment`,
     ),
     participant_validator_set_hash: parseSumeragiHash(
       record.participant_validator_set_hash,
-      `${context}.participant_validator_set_hash`,
+      `${context}${TEXT_PARTICIPANT_2}validator_set_hash`,
     ),
     participant_validator_count: validatorCount,
     participant_min_quorum: minQuorum,
@@ -265,25 +315,25 @@ function sumeragiNativeAmxBodyIdentityEqual(left, right) {
     "source_id",
     "tx_entrypoint_hash",
     "plan_digest",
-    "coordinator_lane_id",
+    (TEXT_COORDINATOR_LANE + "id"),
     "coordinator_dataspace_id",
-    "coordinator_lane_incarnation",
-    "participant_lane_id",
-    "participant_dataspace_id",
-    "participant_lane_incarnation",
-    "participant_previous_block_height",
-    "participant_previous_block_descriptor_hash",
-    "participant_lane_block_height",
-    "participant_lane_block_view",
-    "participant_proposal_hash",
-    "participant_settlement_commitment",
-    "participant_validator_set_hash",
-    "participant_validator_count",
-    "participant_min_quorum",
-    "authority_context_height",
+    (TEXT_COORDINATOR_LANE + "incarnation"),
+    (TEXT_PARTICIPANT + "lane_id"),
+    (TEXT_PARTICIPANT + "dataspace_id"),
+    (TEXT_PARTICIPANT + "lane_incarnation"),
+    (TEXT_PARTICIPANT + "previous_block_height"),
+    (TEXT_PARTICIPANT + "previous_block_descriptor_hash"),
+    (TEXT_PARTICIPANT + "lane_block_height"),
+    (TEXT_PARTICIPANT + "lane_block_view"),
+    (TEXT_PARTICIPANT + "proposal_hash"),
+    (TEXT_PARTICIPANT + "settlement_commitment"),
+    (TEXT_PARTICIPANT + "validator_set_hash"),
+    (TEXT_PARTICIPANT + "validator_count"),
+    (TEXT_PARTICIPANT + "min_quorum"),
+    TEXT_AUTHORITY_CONTEXT_HEIGHT,
     "planned_coordinator_block_height",
-    "coordinator_lane_block_view",
-    "coordinator_proposal_hash",
+    (TEXT_COORDINATOR_LANE + "block_view"),
+    TEXT_COORDINATOR_PROPOSAL_HASH,
   ];
   return sumeragiRoundsEqual(left.round, right.round)
     && fields.every((field) => left[field] === right[field]);
@@ -309,13 +359,13 @@ const SUMERAGI_BLS_NORMAL_VALIDATION_CACHE_MAX = 256;
 const validatedSumeragiBlsNormalPublicKeys = new Set();
 
 const SUMERAGI_NATIVE_DESCRIPTOR_PREIMAGE_TYPE =
-  "iroha_data_model::block::consensus::LaneBlockDescriptorPreimage";
+  (TEXT_IROHA_DATA_MODEL_BLOCK_CONSENSUS + "LaneBlockDescriptorPreimage");
 
 const SUMERAGI_NATIVE_PROPOSAL_PREIMAGE_TYPE =
-  "iroha_data_model::block::consensus::LaneBlockProposalPreimage";
+  (TEXT_IROHA_DATA_MODEL_BLOCK_CONSENSUS + "LaneBlockProposalPreimage");
 
 const SUMERAGI_NATIVE_SETTLEMENT_TYPE =
-  "iroha_data_model::block::consensus::NativeAmxParticipantSettlement";
+  (TEXT_IROHA_DATA_MODEL_BLOCK_CONSENSUS + "NativeAmxParticipantSettlement");
 
 const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
   "iroha:native-amx:participant-settlement:v1",
@@ -324,14 +374,14 @@ const SUMERAGI_NATIVE_SETTLEMENT_HASH_DOMAIN = Buffer.from(
 
 function parseSumeragiBlsNormalPeerId(value, context) {
   if (typeof value !== "string") {
-    rejectType(`${context} must be a canonical BLS-Normal PeerId string`);
+    rejectType(`${context}${TEXT_MUST_BE_A_CANONICAL}BLS-Normal PeerId string`);
   }
   if (value.trim() !== value) {
-    rejectType(`${context} must not contain surrounding whitespace`);
+    rejectType(`${context}${TEXT_MUST_NOT_CONTAIN_SURROUNDING_WHITESPACE}`);
   }
   const matched = SUMERAGI_BLS_NORMAL_PEER_ID_PATTERN.exec(value);
   if (matched === null) {
-    rejectType(`${context} must be a canonical BLS-Normal PeerId`);
+    rejectType(`${context}${TEXT_MUST_BE_A_CANONICAL}BLS-Normal PeerId`);
   }
   const publicKeyHex = matched[1].slice(6);
   const compressed = Buffer.from(publicKeyHex, "hex");
@@ -370,7 +420,7 @@ function parseSumeragiBlsNormalValidatorSet(value, context) {
         Buffer.compare(parsed[index - 1].orderingKey, validator.orderingKey) >= 0,
     )
   ) {
-    rejectType(`${context} must be strictly ordered by canonical validator id`);
+    rejectType(`${context}${TEXT_MUST_BE_STRICTLY_ORDERED_BY}canonical validator id`);
   }
   return Object.freeze(parsed.map((validator) => validator.literal));
 }
@@ -535,8 +585,8 @@ function computeSumeragiNativeProposalHash(descriptor) {
 
 function parseSumeragiNativeParticipantSettlement(value, context) {
   const record = assertExactSumeragiRecord(value, [
-    "lane_id", "dataspace_id", "lane_incarnation",
-    "participant_lane_block_height", "authority_context_height",
+    "lane_id", TEXT_DATASPACE_ID_2, TEXT_LANE_INCARNATION,
+    (TEXT_PARTICIPANT + "lane_block_height"), TEXT_AUTHORITY_CONTEXT_HEIGHT,
     "previous_native_settlement_hash", "source_ids",
   ], context);
   const sourceIds = assertSumeragiArrayBound(
@@ -552,28 +602,28 @@ function parseSumeragiNativeParticipantSettlement(value, context) {
   if (new Set(sourceIds).size !== sourceIds.length) {
     throw new TypeError(`${context}.source_ids must be unique`);
   }
-  const incarnation = parseSumeragiNonzeroHash(record.lane_incarnation, `${context}.lane_incarnation`);
+  const incarnation = parseSumeragiNonzeroHash(record.lane_incarnation, `${context}${TEXT_LANE_INCARNATION_2}`);
   if (/^0{63}1$/u.test(incarnation.slice(5, 69))) {
     throw new TypeError(`${context}.lane_incarnation must not be the marked zero hash`);
   }
   const height = parseSumeragiUnsigned(record.participant_lane_block_height,
-    `${context}.participant_lane_block_height`, { positive: true });
+    `${context}${TEXT_PARTICIPANT_2}lane_block_height`, { positive: true });
   const previous = record.previous_native_settlement_hash === null ? null
     : parseSumeragiNonzeroHash(record.previous_native_settlement_hash,
-      `${context}.previous_native_settlement_hash`);
+      `${context}${TEXT_PREVIOUS_NATIVE_SETTLEMENT}hash`);
   if (previous !== null && /^0{63}1$/u.test(previous.slice(5, 69))) {
-    throw new TypeError(`${context}.previous_native_settlement_hash must not be the marked zero hash`);
+    throw new TypeError(`${context}${TEXT_PREVIOUS_NATIVE_SETTLEMENT}hash must not be the marked zero hash`);
   }
   if (BigInt(height) === 1n && previous !== null) {
-    throw new TypeError(`${context}.previous_native_settlement_hash must be null at participant height one`);
+    throw new TypeError(`${context}${TEXT_PREVIOUS_NATIVE_SETTLEMENT}hash must be null at participant height one`);
   }
   return Object.freeze({
-    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, { max: 0xffffffff }),
-    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`),
+    lane_id: parseSumeragiUnsigned(record.lane_id, `${context}${TEXT_LANE_ID}`, { max: 0xffffffff }),
+    dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${context}${TEXT_DATASPACE_ID}`),
     lane_incarnation: incarnation,
     participant_lane_block_height: height,
     authority_context_height: parseSumeragiUnsigned(record.authority_context_height,
-      `${context}.authority_context_height`, { positive: true }),
+      `${context}${TEXT_AUTHORITY_CONTEXT_HEIGHT_2}`, { positive: true }),
     previous_native_settlement_hash: previous,
     source_ids: Object.freeze(sourceIds),
   });
@@ -606,7 +656,7 @@ function parseSumeragiNativeAmxQc(value, context) {
     value,
     [
       "body",
-      "validator_set_hash_version",
+      TEXT_VALIDATOR_SET_HASH_VERSION,
       "validator_set_hash",
       "validator_set",
       "validator_set_pops",
@@ -618,24 +668,24 @@ function parseSumeragiNativeAmxQc(value, context) {
   const body = parseSumeragiNativeAmxBody(record.body, `${context}.body`);
   const version = parseSumeragiUnsigned(
     record.validator_set_hash_version,
-    `${context}.validator_set_hash_version`,
+    `${context}${TEXT_VALIDATOR}set_hash_version`,
     { max: 0xffff },
   );
   if (version !== 1) {
-    rejectRange(`${context}.validator_set_hash_version must equal 1`);
+    rejectRange(`${context}${TEXT_VALIDATOR}set_hash_version must equal 1`);
   }
   const validators = parseSumeragiBlsNormalValidatorSet(
     assertSumeragiArrayBound(
       record.validator_set,
       128,
-      `${context}.validator_set`,
+      `${context}${TEXT_VALIDATOR}set`,
       1,
     ),
-    `${context}.validator_set`,
+    `${context}${TEXT_VALIDATOR}set`,
   );
   const validatorSetHash = parseSumeragiHash(
     record.validator_set_hash,
-    `${context}.validator_set_hash`,
+    `${context}${TEXT_VALIDATOR}set_hash`,
   );
   const computedValidatorSetHash =
     computeSumeragiNativeValidatorSetHash(validators);
@@ -652,14 +702,14 @@ function parseSumeragiNativeAmxQc(value, context) {
     assertSumeragiArrayBound(
       record.validator_set_pops,
       validators.length,
-      `${context}.validator_set_pops`,
+      `${context}${TEXT_VALIDATOR}set_pops`,
       validators.length,
     ).map((pop, index) =>
-      parseSumeragiByteVector(pop, 96, `${context}.validator_set_pops[${index}]`),
+      parseSumeragiByteVector(pop, 96, `${context}${TEXT_VALIDATOR}set_pops[${index}]`),
     ),
   );
   if (pops.some((pop) => pop.every((byte) => byte === 0))) {
-    rejectType(`${context}.validator_set_pops contains an all-zero proof`);
+    rejectType(`${context}${TEXT_VALIDATOR}set_pops contains an all-zero proof`);
   }
   const bitmapLength = Math.ceil(validators.length / 8);
   const bitmap = parseSumeragiByteVector(
@@ -696,7 +746,7 @@ function parseSumeragiNativeAmxQc(value, context) {
 function parseSumeragiNativeAmxParticipantProposal(value, context) {
   const proposal = assertExactSumeragiRecord(
     value,
-    ["descriptor", "proposal_hash", "payload_block_hint"],
+    ["descriptor", TEXT_PROPOSAL_HASH, "payload_block_hint"],
     context,
   );
   if (proposal.payload_block_hint !== null) {
@@ -706,61 +756,61 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   const descriptor = ensureRecord(proposal.descriptor, descriptorContext);
   const requiredFields = [
     "lane_id",
-    "dataspace_id",
-    "lane_incarnation",
-    "proposal_height",
+    TEXT_DATASPACE_ID_2,
+    TEXT_LANE_INCARNATION,
+    TEXT_PROPOSAL_HEIGHT,
     "previous_lane_block_height",
-    "lane_block_height",
-    "lane_block_view",
+    TEXT_LANE_BLOCK_HEIGHT,
+    TEXT_LANE_BLOCK_VIEW,
     "subject_hash",
-    "payload_ownership_hash",
+    TEXT_PAYLOAD_OWNERSHIP_HASH_2,
     "rbc_instance_hash",
     "accepted_candidate_indices",
     "accepted_transaction_hashes",
-    "validator_set_hash_version",
+    TEXT_VALIDATOR_SET_HASH_VERSION,
     "validator_set_hash",
     "validator_set",
     "validator_count",
     "min_quorum",
     "qc_mode_tag",
-    "descriptor_hash",
+    TEXT_DESCRIPTOR_HASH,
   ];
   const allowedFields = new Set([
     ...requiredFields,
-    "previous_lane_block_descriptor_hash",
+    TEXT_PREVIOUS_LANE_BLOCK_DESCRIPTOR_HASH,
   ]);
   for (const field of requiredFields) {
     if (!Object.prototype.hasOwnProperty.call(descriptor, field)) {
-      rejectType(`${descriptorContext} is missing required field ${field}`);
+      rejectType(`${descriptorContext}${TEXT_IS_MISSING_REQUIRED_FIELD}${field}`);
     }
   }
   for (const field of Object.keys(descriptor)) {
     if (!allowedFields.has(field)) {
-      rejectType(`${descriptorContext} contains unknown field ${field}`);
+      rejectType(`${descriptorContext}${TEXT_CONTAINS_UNKNOWN_FIELD}${field}`);
     }
   }
 
   const previousHeight = parseSumeragiUnsigned(
     descriptor.previous_lane_block_height,
-    `${descriptorContext}.previous_lane_block_height`,
+    `${descriptorContext}${TEXT_PREVIOUS_LANE_BLOCK}height`,
   );
   let previousDescriptorHash = null;
   if (previousHeight === 0) {
-    if (Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
+    if (Object.prototype.hasOwnProperty.call(descriptor, TEXT_PREVIOUS_LANE_BLOCK_DESCRIPTOR_HASH)) {
       rejectType(`${descriptorContext} must omit the genesis predecessor hash`);
     }
   } else {
-    if (!Object.prototype.hasOwnProperty.call(descriptor, "previous_lane_block_descriptor_hash")) {
+    if (!Object.prototype.hasOwnProperty.call(descriptor, TEXT_PREVIOUS_LANE_BLOCK_DESCRIPTOR_HASH)) {
       rejectType(`${descriptorContext} must carry a predecessor descriptor hash`);
     }
     previousDescriptorHash = parseSumeragiNonzeroHash(
       descriptor.previous_lane_block_descriptor_hash,
-      `${descriptorContext}.previous_lane_block_descriptor_hash`,
+      `${descriptorContext}${TEXT_PREVIOUS_LANE_BLOCK}descriptor_hash`,
     );
   }
   const laneBlockHeight = parseSumeragiUnsigned(
     descriptor.lane_block_height,
-    `${descriptorContext}.lane_block_height`,
+    `${descriptorContext}${TEXT_LANE_BLOCK_HEIGHT_2}`,
     { positive: true },
   );
   if (!sumeragiUnsignedSuccessorOf(laneBlockHeight, previousHeight)) {
@@ -771,12 +821,12 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     assertSumeragiArrayBound(
       descriptor.accepted_candidate_indices,
       4096,
-      `${descriptorContext}.accepted_candidate_indices`,
+      `${descriptorContext}${TEXT_ACCEPTED_CANDIDATE}indices`,
       1,
     ).map((candidate, index) =>
       parseSumeragiUnsigned(
         candidate,
-        `${descriptorContext}.accepted_candidate_indices[${index}]`,
+        `${descriptorContext}${TEXT_ACCEPTED_CANDIDATE}indices[${index}]`,
       ),
     ),
   );
@@ -784,12 +834,12 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     assertSumeragiArrayBound(
       descriptor.accepted_transaction_hashes,
       4096,
-      `${descriptorContext}.accepted_transaction_hashes`,
+      `${descriptorContext}${TEXT_ACCEPTED_TRANSACTION}hashes`,
       1,
     ).map((hash, index) =>
       parseSumeragiNonzeroHash(
         hash,
-        `${descriptorContext}.accepted_transaction_hashes[${index}]`,
+        `${descriptorContext}${TEXT_ACCEPTED_TRANSACTION}hashes[${index}]`,
       ),
     ),
   );
@@ -805,14 +855,14 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     assertSumeragiArrayBound(
       descriptor.validator_set,
       128,
-      `${descriptorContext}.validator_set`,
+      `${descriptorContext}${TEXT_VALIDATOR}set`,
       1,
     ),
-    `${descriptorContext}.validator_set`,
+    `${descriptorContext}${TEXT_VALIDATOR}set`,
   );
   const validatorCount = parseSumeragiExactUnsigned(
     descriptor.validator_count,
-    `${descriptorContext}.validator_count`,
+    `${descriptorContext}${TEXT_VALIDATOR}count`,
     { positive: true, max: 128 },
   );
   const minQuorum = parseSumeragiExactUnsigned(
@@ -823,7 +873,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   const expectedQuorum = validators.length - Math.floor((validators.length - 1) / 3);
   const validatorSetHashVersion = parseSumeragiExactUnsigned(
     descriptor.validator_set_hash_version,
-    `${descriptorContext}.validator_set_hash_version`,
+    `${descriptorContext}${TEXT_VALIDATOR}set_hash_version`,
     { max: 0xffff },
   );
   if (
@@ -835,16 +885,16 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
   }
 
   const normalizedDescriptor = {
-    lane_id: parseSumeragiExactUnsigned(descriptor.lane_id, `${descriptorContext}.lane_id`, {
+    lane_id: parseSumeragiExactUnsigned(descriptor.lane_id, `${descriptorContext}${TEXT_LANE_ID}`, {
       max: 0xffffffff,
     }),
     dataspace_id: parseSumeragiUnsigned(
       descriptor.dataspace_id,
-      `${descriptorContext}.dataspace_id`,
+      `${descriptorContext}${TEXT_DATASPACE_ID}`,
     ),
     lane_incarnation: parseSumeragiNonzeroHash(
       descriptor.lane_incarnation,
-      `${descriptorContext}.lane_incarnation`,
+      `${descriptorContext}${TEXT_LANE_INCARNATION_2}`,
     ),
     proposal_height: parseSumeragiUnsigned(
       descriptor.proposal_height,
@@ -858,7 +908,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     lane_block_height: laneBlockHeight,
     lane_block_view: parseSumeragiUnsigned(
       descriptor.lane_block_view,
-      `${descriptorContext}.lane_block_view`,
+      `${descriptorContext}${TEXT_LANE_BLOCK_VIEW_2}`,
     ),
     subject_hash: parseSumeragiNonzeroHash(
       descriptor.subject_hash,
@@ -866,7 +916,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     ),
     payload_ownership_hash: parseSumeragiNonzeroHash(
       descriptor.payload_ownership_hash,
-      `${descriptorContext}.payload_ownership_hash`,
+      `${descriptorContext}${TEXT_PAYLOAD_OWNERSHIP_HASH}`,
     ),
     rbc_instance_hash: parseSumeragiNonzeroHash(
       descriptor.rbc_instance_hash,
@@ -877,7 +927,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     validator_set_hash_version: validatorSetHashVersion,
     validator_set_hash: parseSumeragiHash(
       descriptor.validator_set_hash,
-      `${descriptorContext}.validator_set_hash`,
+      `${descriptorContext}${TEXT_VALIDATOR}set_hash`,
     ),
     validator_set: validators,
     validator_count: validatorCount,
@@ -895,7 +945,7 @@ function parseSumeragiNativeAmxParticipantProposal(value, context) {
     normalizedDescriptor.validator_set_hash !==
     computeSumeragiNativeValidatorSetHash(validators)
   ) {
-    rejectType(`${descriptorContext}.validator_set_hash does not match the canonical committee`);
+    rejectType(`${descriptorContext}${TEXT_VALIDATOR}set_hash does not match the canonical committee`);
   }
   if (
     normalizedDescriptor.descriptor_hash !==
@@ -963,35 +1013,35 @@ function parseSumeragiNativeAmxLeg(value, context) {
     value,
     [
       "lane_id",
-      "dataspace_id",
-      "participant_proposal",
-      "participant_settlement",
-      "participant_settlement_hash",
+      TEXT_DATASPACE_ID_2,
+      (TEXT_PARTICIPANT + "proposal"),
+      (TEXT_PARTICIPANT + "settlement"),
+      (TEXT_PARTICIPANT + "settlement_hash"),
       "prepare_qc",
       "commit_qc",
     ],
     context,
   );
-  const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
+  const laneId = parseSumeragiUnsigned(record.lane_id, `${context}${TEXT_LANE_ID}`, {
     max: 0xffffffff,
   });
-  const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
+  const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}${TEXT_DATASPACE_ID}`);
   const participantProposal = parseSumeragiNativeAmxParticipantProposal(
     record.participant_proposal,
-    `${context}.participant_proposal`,
+    `${context}${TEXT_PARTICIPANT_2}proposal`,
   );
   const participantSettlement = parseSumeragiNativeParticipantSettlement(
-    record.participant_settlement, `${context}.participant_settlement`,
+    record.participant_settlement, `${context}${TEXT_PARTICIPANT_2}settlement`,
   );
   const participantSettlementHash = parseSumeragiNonzeroHash(
     record.participant_settlement_hash,
-    `${context}.participant_settlement_hash`,
+    `${context}${TEXT_PARTICIPANT_2}settlement_hash`,
   );
   if (
     participantSettlementHash !==
     computeSumeragiNativeParticipantSettlementHash(participantSettlement)
   ) {
-    rejectType(`${context}.participant_settlement_hash does not match its canonical commitment`);
+    rejectType(`${context}${TEXT_PARTICIPANT_2}settlement_hash does not match its canonical commitment`);
   }
   const prepareQc = parseSumeragiNativeAmxQc(record.prepare_qc, `${context}.prepare_qc`);
   const commitQc = parseSumeragiNativeAmxQc(record.commit_qc, `${context}.commit_qc`);
@@ -1005,7 +1055,7 @@ function parseSumeragiNativeAmxLeg(value, context) {
     rejectType(`${context} prepare and commit identities differ`);
   }
   for (const field of [
-    "validator_set_hash_version",
+    TEXT_VALIDATOR_SET_HASH_VERSION,
     "validator_set_hash",
     "validator_set",
     "validator_set_pops",
@@ -1086,12 +1136,12 @@ function parseSumeragiNativeAmxReceipt(value, context) {
       "network_id",
       "plan_digest",
       "lane_id",
-      "dataspace_id",
-      "lane_incarnation",
-      "authority_context_height",
-      "lane_block_height",
-      "lane_block_view",
-      "coordinator_proposal_hash",
+      TEXT_DATASPACE_ID_2,
+      TEXT_LANE_INCARNATION,
+      TEXT_AUTHORITY_CONTEXT_HEIGHT,
+      TEXT_LANE_BLOCK_HEIGHT,
+      TEXT_LANE_BLOCK_VIEW,
+      TEXT_COORDINATOR_PROPOSAL_HASH,
       "legs",
     ],
     context,
@@ -1103,27 +1153,27 @@ function parseSumeragiNativeAmxReceipt(value, context) {
   const sourceId = parseSumeragiByte32(record.source_id, `${context}.source_id`);
   const networkId = parseSumeragiHash(record.network_id, `${context}.network_id`);
   const planDigest = parseSumeragiHash(record.plan_digest, `${context}.plan_digest`);
-  const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
+  const laneId = parseSumeragiUnsigned(record.lane_id, `${context}${TEXT_LANE_ID}`, {
     max: 0xffffffff,
   });
-  const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
+  const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}${TEXT_DATASPACE_ID}`);
   const laneIncarnation = parseSumeragiNonzeroHash(
     record.lane_incarnation,
-    `${context}.lane_incarnation`,
+    `${context}${TEXT_LANE_INCARNATION_2}`,
   );
   const authorityHeight = parseSumeragiUnsigned(
     record.authority_context_height,
-    `${context}.authority_context_height`,
+    `${context}${TEXT_AUTHORITY_CONTEXT_HEIGHT_2}`,
     { positive: true },
   );
   const laneBlockHeight = parseSumeragiUnsigned(
     record.lane_block_height,
-    `${context}.lane_block_height`,
+    `${context}${TEXT_LANE_BLOCK_HEIGHT_2}`,
     { positive: true },
   );
   const laneBlockView = parseSumeragiUnsigned(
     record.lane_block_view,
-    `${context}.lane_block_view`,
+    `${context}${TEXT_LANE_BLOCK_VIEW_2}`,
   );
   const proposalHash = parseSumeragiNonzeroHash(
     record.coordinator_proposal_hash,
@@ -1192,14 +1242,14 @@ function parseLaneSettlementCommitments(payload) {
     "status.lane_settlement_commitments",
   );
   return payload.map((entry, index) => {
-    const context = `status.lane_settlement_commitments[${index}]`;
+    const context = `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}]`;
     const record = assertExactSumeragiRecord(
       entry,
       [
         "block_height",
         "lane_id",
-        "lane_incarnation",
-        "dataspace_id",
+        TEXT_LANE_INCARNATION,
+        TEXT_DATASPACE_ID_2,
         "tx_count",
         "total_local_amount",
         "total_xor_due",
@@ -1224,17 +1274,17 @@ function parseLaneSettlementCommitments(payload) {
           "twap_local_per_xor",
           "volatility_class",
         ],
-        `status.lane_settlement_commitments[${index}].swap_metadata`,
+        `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].swap_metadata`,
       );
       swapMetadata = {
         epsilon_bps: parseSumeragiUnsigned(
           metadata.epsilon_bps,
-          `status.lane_settlement_commitments[${index}].swap_metadata.epsilon_bps`,
+          `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].swap_metadata.epsilon_bps`,
           { max: 0xffff },
         ),
         twap_window_seconds: parseSumeragiUnsigned(
           metadata.twap_window_seconds,
-          `status.lane_settlement_commitments[${index}].swap_metadata.twap_window_seconds`,
+          `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].swap_metadata.twap_window_seconds`,
           { max: 0xffffffff },
         ),
         liquidity_profile: parseSumeragiTaggedUnitWithContent(
@@ -1242,24 +1292,24 @@ function parseLaneSettlementCommitments(payload) {
           "profile",
           "state",
           ["Tier1", "Tier2", "Tier3"],
-          `status.lane_settlement_commitments[${index}].swap_metadata.liquidity_profile`,
+          `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].swap_metadata.liquidity_profile`,
         ),
         twap_local_per_xor: requireCanonicalNumeric(
           metadata.twap_local_per_xor,
-          `status.lane_settlement_commitments[${index}].swap_metadata.twap_local_per_xor`,
+          `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].swap_metadata.twap_local_per_xor`,
         ),
         volatility_class: parseSumeragiTaggedUnitWithContent(
           metadata.volatility_class,
           "bucket",
           "state",
           ["Stable", "Elevated", "Dislocated"],
-          `status.lane_settlement_commitments[${index}].swap_metadata.volatility_class`,
+          `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].swap_metadata.volatility_class`,
         ),
       };
     }
     const receiptsRecord = record.receipts;
     if (!Array.isArray(receiptsRecord)) {
-      rejectType(`status.lane_settlement_commitments[${index}].receipts must be an array`);
+      rejectType(`${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].receipts must be an array`);
     }
     const receipts = receiptsRecord.map((receipt, receiptIndex) =>
       parseSumeragiLaneSettlementReceipt(receipt, `${context}.receipts[${receiptIndex}]`),
@@ -1288,15 +1338,15 @@ function parseLaneSettlementCommitments(payload) {
         ),
       ),
     );
-    const blockHeight = parseSumeragiUnsigned(record.block_height, `${context}.block_height`);
-    const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
+    const blockHeight = parseSumeragiUnsigned(record.block_height, `${context}${TEXT_BLOCK_HEIGHT}`);
+    const laneId = parseSumeragiUnsigned(record.lane_id, `${context}${TEXT_LANE_ID}`, {
       max: 0xffffffff,
     });
     const laneIncarnation = parseSumeragiNonzeroHash(
       record.lane_incarnation,
-      `${context}.lane_incarnation`,
+      `${context}${TEXT_LANE_INCARNATION_2}`,
     );
-    const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
+    const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}${TEXT_DATASPACE_ID}`);
     if (new Set(nexusFeeReceipts.map((receipt) => receipt.source_id)).size !== nexusFeeReceipts.length) {
       rejectType(`${context} contains duplicate Nexus fee receipt sources`);
     }
@@ -1342,23 +1392,23 @@ function parseLaneSettlementCommitments(payload) {
       dataspace_id: dataspaceId,
       tx_count: parseSumeragiUnsigned(
         record.tx_count,
-        `status.lane_settlement_commitments[${index}].tx_count`,
+        `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].tx_count`,
       ),
       total_local_amount: requireCanonicalQuantity(
         record.total_local_amount,
-        `status.lane_settlement_commitments[${index}].total_local_amount`,
+        `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].total_local_amount`,
       ),
       total_xor_due: requireCanonicalQuantity(
         record.total_xor_due,
-        `status.lane_settlement_commitments[${index}].total_xor_due`,
+        `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].total_xor_due`,
       ),
       total_xor_after_haircut: requireCanonicalQuantity(
         record.total_xor_after_haircut,
-        `status.lane_settlement_commitments[${index}].total_xor_after_haircut`,
+        `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].total_xor_after_haircut`,
       ),
       total_xor_variance: requireCanonicalQuantity(
         record.total_xor_variance,
-        `status.lane_settlement_commitments[${index}].total_xor_variance`,
+        `${TEXT_STATUS_LANE_SETTLEMENT_COMMITMENTS}${index}].total_xor_variance`,
       ),
       swap_metadata: swapMetadata,
       receipts,
@@ -1382,15 +1432,15 @@ function parseLaneRelayEnvelopes(payload) {
     if (settlementCommitments.length !== 1) {
       rejectType(`${context}.settlement_commitment must be an object`);
     }
-    const laneId = parseSumeragiUnsigned(record.lane_id, `${context}.lane_id`, {
+    const laneId = parseSumeragiUnsigned(record.lane_id, `${context}${TEXT_LANE_ID}`, {
       max: 0xffffffff,
     });
     const laneIncarnation = parseSumeragiNonzeroHash(
       record.lane_incarnation,
-      `${context}.lane_incarnation`,
+      `${context}${TEXT_LANE_INCARNATION_2}`,
     );
-    const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}.dataspace_id`);
-    const blockHeight = parseSumeragiUnsigned(record.block_height, `${context}.block_height`);
+    const dataspaceId = parseSumeragiUnsigned(record.dataspace_id, `${context}${TEXT_DATASPACE_ID}`);
+    const blockHeight = parseSumeragiUnsigned(record.block_height, `${context}${TEXT_BLOCK_HEIGHT}`);
     const settlementHash = parseSumeragiHash(
       record.settlement_hash,
       `${context}.settlement_hash`,
@@ -1439,7 +1489,7 @@ function parseLaneRelayEnvelopes(payload) {
           ? null
           : parseSumeragiHash(
               record.lane_block_descriptor_hash,
-              `${context}.lane_block_descriptor_hash`,
+              `${context}${TEXT_LANE_BLOCK_DESCRIPTOR}hash`,
             ),
       settlement_commitment: settlement,
       settlement_hash: settlementHash,
@@ -1638,13 +1688,13 @@ const SUMERAGI_PIPELINE_EXECUTION_FIELDS = Object.freeze([
   "rbc_bytes_total",
   "detached_prepared_total",
   "detached_merged_total",
-  "detached_fallback_total",
-  "detached_fallback_fee_postprocessing_total",
-  "detached_fallback_user_executor_total",
-  "detached_fallback_durable_state_total",
-  "detached_fallback_unsupported_instruction_total",
-  "detached_fallback_rejected_eval_total",
-  "detached_fallback_overlay_error_total",
+  (TEXT_DETACHED_FALLBACK + "total"),
+  (TEXT_DETACHED_FALLBACK + "fee_postprocessing_total"),
+  (TEXT_DETACHED_FALLBACK + "user_executor_total"),
+  (TEXT_DETACHED_FALLBACK + "durable_state_total"),
+  (TEXT_DETACHED_FALLBACK + "unsupported_instruction_total"),
+  (TEXT_DETACHED_FALLBACK + "rejected_eval_total"),
+  (TEXT_DETACHED_FALLBACK + "overlay_error_total"),
   "quarantine_executed_total",
 ]);
 
@@ -1678,13 +1728,13 @@ function parseSumeragiDiagnosticsPayload(payload) {
   const allowedFields = new Set([...requiredFields, "npos"]);
   const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
-    rejectType(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknown}`);
   }
   const missing = requiredFields.find(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
   );
   if (missing !== undefined) {
-    rejectType(`${context} is missing required field ${missing}`);
+    rejectType(`${context}${TEXT_IS_MISSING_REQUIRED_FIELD}${missing}`);
   }
 
   const pipelineRecord = assertExactSumeragiRecord(
@@ -1809,7 +1859,7 @@ function parseSumeragiDiagnosticsPayload(payload) {
 }
 
 function parseSumeragiNposDiagnostics(value) {
-  const context = "sumeragi diagnostics.npos";
+  const context = (TEXT_SUMERAGI_DIAGNOSTICS + "npos");
   const fields = [
     "epoch_length_blocks",
     "epoch_seed",
@@ -1839,7 +1889,7 @@ function parseSumeragiNposDiagnostics(value) {
 }
 
 function parseSumeragiDiagnosticLaneCommitments(value) {
-  const context = "sumeragi diagnostics.lane_commitments";
+  const context = (TEXT_SUMERAGI_DIAGNOSTICS + "lane_commitments");
   const fields = [
     "block_height",
     "lane_id",
@@ -1856,9 +1906,9 @@ function parseSumeragiDiagnosticLaneCommitments(value) {
       return Object.freeze({
         block_height: parseSumeragiUnsigned(
           record.block_height,
-          `${itemContext}.block_height`,
+          `${itemContext}${TEXT_BLOCK_HEIGHT}`,
         ),
-        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
+        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}${TEXT_LANE_ID}`, {
           max: 0xffffffff,
         }),
         tx_count: parseSumeragiUnsigned(record.tx_count, `${itemContext}.tx_count`),
@@ -1878,11 +1928,11 @@ function parseSumeragiDiagnosticLaneCommitments(value) {
 }
 
 function parseSumeragiDiagnosticDataspaceCommitments(value) {
-  const context = "sumeragi diagnostics.dataspace_commitments";
+  const context = (TEXT_SUMERAGI_DIAGNOSTICS + "dataspace_commitments");
   const fields = [
     "block_height",
     "lane_id",
-    "dataspace_id",
+    TEXT_DATASPACE_ID_2,
     "tx_count",
     "total_chunks",
     "rbc_bytes_total",
@@ -1896,14 +1946,14 @@ function parseSumeragiDiagnosticDataspaceCommitments(value) {
       return Object.freeze({
         block_height: parseSumeragiUnsigned(
           record.block_height,
-          `${itemContext}.block_height`,
+          `${itemContext}${TEXT_BLOCK_HEIGHT}`,
         ),
-        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
+        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}${TEXT_LANE_ID}`, {
           max: 0xffffffff,
         }),
         dataspace_id: parseSumeragiUnsigned(
           record.dataspace_id,
-          `${itemContext}.dataspace_id`,
+          `${itemContext}${TEXT_DATASPACE_ID}`,
         ),
         tx_count: parseSumeragiUnsigned(record.tx_count, `${itemContext}.tx_count`),
         total_chunks: parseSumeragiUnsigned(
@@ -1922,7 +1972,7 @@ function parseSumeragiDiagnosticDataspaceCommitments(value) {
 }
 
 function parseSumeragiDiagnosticLaneGovernance(value) {
-  const context = "sumeragi diagnostics.lane_governance";
+  const context = (TEXT_SUMERAGI_DIAGNOSTICS + "lane_governance");
   const fields = [
     "lane_id",
     "alias",
@@ -1941,14 +1991,14 @@ function parseSumeragiDiagnosticLaneGovernance(value) {
       const record = assertExactSumeragiRecord(item, fields, itemContext);
       const validatorIds = parseSumeragiDiagnosticStringArray(
         record.validator_ids,
-        `${itemContext}.validator_ids`,
+        `${itemContext}${TEXT_VALIDATOR}ids`,
       );
       const namespaces = parseSumeragiDiagnosticStringArray(
         record.protected_namespaces,
         `${itemContext}.protected_namespaces`,
       );
       if (new Set(validatorIds).size !== validatorIds.length) {
-        rejectType(`${itemContext}.validator_ids contains duplicates`);
+        rejectType(`${itemContext}${TEXT_VALIDATOR}ids contains duplicates`);
       }
       if (new Set(namespaces).size !== namespaces.length) {
         rejectType(`${itemContext}.protected_namespaces contains duplicates`);
@@ -1963,7 +2013,7 @@ function parseSumeragiDiagnosticLaneGovernance(value) {
         rejectRange(`${itemContext}.quorum exceeds the validator roster`);
       }
       return Object.freeze({
-        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
+        lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}${TEXT_LANE_ID}`, {
           max: 0xffffffff,
         }),
         alias: requireExactNonEmptyString(record.alias, `${itemContext}.alias`),
@@ -2033,24 +2083,24 @@ function parseSumeragiDiagnosticStringArray(value, context) {
 }
 
 function parseSumeragiNativeParticipantApplications(value) {
-  const context = "sumeragi diagnostics.native_amx_participant_applications";
+  const context = (TEXT_SUMERAGI_DIAGNOSTICS + "native_amx_participant_applications");
   const requiredFields = [
     "lane_id",
-    "dataspace_id",
-    "lane_incarnation",
-    "participant_height",
-    "participant_view",
+    TEXT_DATASPACE_ID_2,
+    TEXT_LANE_INCARNATION,
+    (TEXT_PARTICIPANT + "height"),
+    (TEXT_PARTICIPANT + "view"),
     "predecessor_height",
-    "descriptor_hash",
-    "proposal_hash",
+    TEXT_DESCRIPTOR_HASH,
+    TEXT_PROPOSAL_HASH,
     "settlement_hash",
     "source_count",
     "state",
   ];
   const optionalFields = [
     "predecessor_descriptor_hash",
-    "application_block_height",
-    "application_block_hash",
+    (TEXT_APPLICATION_BLOCK + "height"),
+    (TEXT_APPLICATION_BLOCK + "hash"),
   ];
   let previousKey = null;
   return Object.freeze(
@@ -2064,28 +2114,28 @@ function parseSumeragiNativeParticipantApplications(value) {
       );
       if (unknown !== undefined || missing !== undefined) {
         rejectType(unknown !== undefined
-            ? `${itemContext} contains unknown field ${unknown}`
-            : `${itemContext} is missing required field ${missing}`);
+            ? `${itemContext}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknown}`
+            : `${itemContext}${TEXT_IS_MISSING_REQUIRED_FIELD}${missing}`);
       }
-      const laneId = parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, {
+      const laneId = parseSumeragiUnsigned(record.lane_id, `${itemContext}${TEXT_LANE_ID}`, {
         max: 0xffffffff,
       });
       const dataspaceId = parseSumeragiUnsigned(
         record.dataspace_id,
-        `${itemContext}.dataspace_id`,
+        `${itemContext}${TEXT_DATASPACE_ID}`,
       );
       const laneIncarnation = parseSumeragiNonzeroHash(
         record.lane_incarnation,
-        `${itemContext}.lane_incarnation`,
+        `${itemContext}${TEXT_LANE_INCARNATION_2}`,
       );
       const key = [laneId, dataspaceId, laneIncarnation];
       if (previousKey !== null && compareSumeragiDiagnosticRouteKeys(previousKey, key) >= 0) {
-        rejectType(`${context} must be strictly ordered by route and incarnation`);
+        rejectType(`${context}${TEXT_MUST_BE_STRICTLY_ORDERED_BY}route and incarnation`);
       }
       previousKey = key;
       const participantHeight = parseSumeragiUnsigned(
         record.participant_height,
-        `${itemContext}.participant_height`,
+        `${itemContext}${TEXT_PARTICIPANT_2}height`,
         { positive: true },
       );
       const predecessorHeight = parseSumeragiUnsigned(
@@ -2118,7 +2168,7 @@ function parseSumeragiNativeParticipantApplications(value) {
           `${itemContext}.application_block_hash`,
         );
       if ((applicationHeight === null) !== (applicationHash === null)) {
-        rejectType(`${itemContext} application block height and hash must appear together`);
+        rejectType(`${itemContext}${TEXT_APPLICATION_BLOCK_HEIGHT_AND_HASH_MUST_APPEAR_TOGETHER}`);
       }
       const state = requireExactNonEmptyString(record.state, `${itemContext}.state`);
       const states = new Set([
@@ -2142,7 +2192,7 @@ function parseSumeragiNativeParticipantApplications(value) {
         participant_height: participantHeight,
         participant_view: parseSumeragiUnsigned(
           record.participant_view,
-          `${itemContext}.participant_view`,
+          `${itemContext}${TEXT_PARTICIPANT_2}view`,
         ),
         predecessor_height: predecessorHeight,
         predecessor_descriptor_hash: predecessorHash,
@@ -2172,28 +2222,28 @@ function parseSumeragiNativeParticipantApplications(value) {
 }
 
 function parseSumeragiAutonomousLaneExecutions(value) {
-  const context = "sumeragi diagnostics.autonomous_lane_executions";
+  const context = (TEXT_SUMERAGI_DIAGNOSTICS + "autonomous_lane_executions");
   const required = [
-    "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
-    "lane_block_view", "proposal_height",
+    "lane_id", TEXT_DATASPACE_ID_2, TEXT_LANE_INCARNATION, TEXT_LANE_BLOCK_HEIGHT,
+    TEXT_LANE_BLOCK_VIEW, TEXT_PROPOSAL_HEIGHT,
     "reservation_owner_hash", "proposal_identity_hash", "reservation_group_hash",
     "reservation_count", "transaction_count",
     "highest_durable_stage",
   ];
   const optional = [
-    "proposal_view", "proposal_hash", "descriptor_hash",
+    "proposal_view", TEXT_PROPOSAL_HASH, TEXT_DESCRIPTOR_HASH,
     "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
-    "application_block_height", "application_block_hash", "stuck_reason",
+    (TEXT_APPLICATION_BLOCK + "height"), (TEXT_APPLICATION_BLOCK + "hash"), "stuck_reason",
   ];
   const stages = new Set([
-    "reservations_durable", "executable_payload_durable",
+    TEXT_RESERVATIONS_DURABLE, "executable_payload_durable",
     "payload_availability_certified", "lane_certified",
     "certified_bundle_durable", "merge_candidate_durable",
     "global_carrier_committed", "kura_wsv_application_receipt_durable",
     "queue_finalized", "conflict",
   ]);
   const reasons = new Set([
-    "awaiting_executable_payload", "awaiting_payload_availability",
+    TEXT_AWAITING_EXECUTABLE_PAYLOAD, "awaiting_payload_availability",
     "awaiting_lane_certification",
     "certified_bundle_unavailable", "awaiting_merge_selection",
     "awaiting_global_carrier", "awaiting_application_receipt",
@@ -2210,8 +2260,8 @@ function parseSumeragiAutonomousLaneExecutions(value) {
     );
     if (unknown !== undefined || missing !== undefined) {
       rejectType(unknown !== undefined
-        ? `${itemContext} contains unknown field ${unknown}`
-        : `${itemContext} is missing required field ${missing}`);
+        ? `${itemContext}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknown}`
+        : `${itemContext}${TEXT_IS_MISSING_REQUIRED_FIELD}${missing}`);
     }
     const u64 = (field, options = {}) => parseSumeragiUnsigned(
       record[field], `${itemContext}.${field}`, options,
@@ -2223,30 +2273,30 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       record[field], `${itemContext}.${field}`,
     );
     const laneId = u64("lane_id", { max: 0xffffffff });
-    const dataspaceId = u64("dataspace_id");
-    const incarnation = requiredHash("lane_incarnation");
-    const laneHeight = u64("lane_block_height", { positive: true });
-    const laneView = u64("lane_block_view");
-    const proposalHeight = u64("proposal_height", { positive: true });
+    const dataspaceId = u64(TEXT_DATASPACE_ID_2);
+    const incarnation = requiredHash(TEXT_LANE_INCARNATION);
+    const laneHeight = u64(TEXT_LANE_BLOCK_HEIGHT, { positive: true });
+    const laneView = u64(TEXT_LANE_BLOCK_VIEW);
+    const proposalHeight = u64(TEXT_PROPOSAL_HEIGHT, { positive: true });
     const proposalView = record.proposal_view == null ? null : u64("proposal_view");
     const reservationOwnerHash = requiredHash("reservation_owner_hash");
     const proposalIdentityHash = requiredHash("proposal_identity_hash");
     const reservationGroupHash = requiredHash("reservation_group_hash");
-    const proposalHash = hash("proposal_hash");
-    const descriptorHash = hash("descriptor_hash");
+    const proposalHash = hash(TEXT_PROPOSAL_HASH);
+    const descriptorHash = hash(TEXT_DESCRIPTOR_HASH);
     const key = [
       laneId, dataspaceId, incarnation, laneHeight, laneView,
       proposalHeight, proposalIdentityHash,
     ];
     if (previousKey !== null && compareSumeragiDiagnosticKeys(previousKey, key) >= 0) {
-      rejectType(`${context} must be strictly ordered by exact identity`);
+      rejectType(`${context}${TEXT_MUST_BE_STRICTLY_ORDERED_BY}exact identity`);
     }
     previousKey = key;
     const applicationHeight = record.application_block_height == null
-      ? null : u64("application_block_height", { positive: true });
-    const applicationHash = hash("application_block_hash");
+      ? null : u64((TEXT_APPLICATION_BLOCK + "height"), { positive: true });
+    const applicationHash = hash((TEXT_APPLICATION_BLOCK + "hash"));
     if ((applicationHeight === null) !== (applicationHash === null)) {
-      rejectType(`${itemContext} application block height and hash must appear together`);
+      rejectType(`${itemContext}${TEXT_APPLICATION_BLOCK_HEIGHT_AND_HASH_MUST_APPEAR_TOGETHER}`);
     }
     const reservationCount = u64("reservation_count", { max: 4096 });
     const transactionCount = u64("transaction_count", { positive: true, max: 4096 });
@@ -2263,7 +2313,7 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       rejectType(`${itemContext}.stuck_reason has an unknown variant`);
     }
     const expectedReasons = {
-      reservations_durable: "awaiting_executable_payload",
+      reservations_durable: TEXT_AWAITING_EXECUTABLE_PAYLOAD,
       executable_payload_durable: "awaiting_payload_availability",
       payload_availability_certified: "awaiting_lane_certification",
       lane_certified: "certified_bundle_unavailable",
@@ -2284,10 +2334,10 @@ function parseSumeragiAutonomousLaneExecutions(value) {
       rejectType(`${itemContext} proposal and descriptor hashes must appear together`);
     }
     if (stage !== "conflict"
-      && ((stage === "reservations_durable") !== (proposalHash === null))) {
+      && ((stage === TEXT_RESERVATIONS_DURABLE) !== (proposalHash === null))) {
       rejectType(`${itemContext} finalized identity disagrees with durable stage`);
     }
-    if (stage === "reservations_durable" && proposalView !== null) {
+    if (stage === TEXT_RESERVATIONS_DURABLE && proposalView !== null) {
       rejectType(`${itemContext} proposal view disagrees with durable stage`);
     }
     const payloadHash = hash("executable_payload_hash");
@@ -2367,12 +2417,12 @@ function parseSumeragiLivenessStatus(value, context, active) {
   ]);
   const unknown = Object.keys(record).find((field) => !fields.has(field));
   if (unknown !== undefined) {
-    rejectType(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknown}`);
   }
   for (const field of fields) {
     if (field !== "last_progress" && field !== "blocker" &&
         !Object.prototype.hasOwnProperty.call(record, field)) {
-      rejectType(`${context} is missing required field ${field}`);
+      rejectType(`${context}${TEXT_IS_MISSING_REQUIRED_FIELD}${field}`);
     }
   }
 
@@ -2412,7 +2462,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
           "round",
           "proposal_round",
           "subject",
-          "execution_commitment",
+          TEXT_EXECUTION_COMMITMENT_2,
           "signer_count",
           "signed_power",
           "min_signers",
@@ -2477,7 +2527,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
       subject: parseSumeragiBlockSubject(item.subject, `${itemContext}.subject`),
       execution_commitment: parseSumeragiExecutionCommitment(
         item.execution_commitment,
-        `${itemContext}.execution_commitment`,
+        `${itemContext}${TEXT_EXECUTION_COMMITMENT}`,
       ),
       signer_count: signerCount,
       signed_power: signedPower,
@@ -2529,16 +2579,16 @@ function parseSumeragiLivenessStatus(value, context, active) {
         "round",
         "proposal_round",
         "subject",
-        "execution_commitment",
+        TEXT_EXECUTION_COMMITMENT_2,
         "stage",
       ]);
       const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
       if (unknownField !== undefined) {
-        rejectType(`${itemContext} contains unknown field ${unknownField}`);
+        rejectType(`${itemContext}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknownField}`);
       }
       for (const field of ["kind", "round", "stage"]) {
         if (!Object.prototype.hasOwnProperty.call(item, field)) {
-          rejectType(`${itemContext} is missing required field ${field}`);
+          rejectType(`${itemContext}${TEXT_IS_MISSING_REQUIRED_FIELD}${field}`);
         }
       }
       const kind = parseSumeragiTaggedUnit(
@@ -2568,7 +2618,7 @@ function parseSumeragiLivenessStatus(value, context, active) {
         ? null
         : parseSumeragiExecutionCommitment(
             item.execution_commitment,
-            `${itemContext}.execution_commitment`,
+            `${itemContext}${TEXT_EXECUTION_COMMITMENT}`,
           );
       const carriesProposalRound = subjectKinds.has(kind.kind);
       if (carriesProposalRound !== (item.proposal_round != null)) {
@@ -2634,11 +2684,11 @@ function parseSumeragiLivenessStatus(value, context, active) {
       ]);
       const unknownField = Object.keys(item).find((field) => !allowedFields.has(field));
       if (unknownField !== undefined) {
-        rejectType(`${itemContext} contains unknown field ${unknownField}`);
+        rejectType(`${itemContext}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknownField}`);
       }
       for (const field of ["queue", "depth", "capacity", "service_debt"]) {
         if (!Object.prototype.hasOwnProperty.call(item, field)) {
-          rejectType(`${itemContext} is missing required field ${field}`);
+          rejectType(`${itemContext}${TEXT_IS_MISSING_REQUIRED_FIELD}${field}`);
         }
       }
       const queue = parseSumeragiTaggedUnit(
@@ -2871,7 +2921,7 @@ function parseSumeragiBoolean(value, context) {
 
 function parseSumeragiHash(value, context) {
   if (typeof value !== "string" || !/^hash:[0-9A-F]{64}#[0-9A-F]{4}$/u.test(value)) {
-    rejectType(`${context} must be a canonical Iroha hash literal`);
+    rejectType(`${context}${TEXT_MUST_BE_A_CANONICAL}Iroha hash literal`);
   }
   const body = parseHashLiteralToHex(value, context);
   if ((Number.parseInt(body.slice(-2), 16) & 1) === 0) {
@@ -2926,12 +2976,12 @@ function assertExactSumeragiRecord(value, fields, context) {
   const expected = new Set(fields);
   for (const field of Object.keys(record)) {
     if (!expected.has(field)) {
-      rejectType(`${context} contains unknown field ${field}`);
+      rejectType(`${context}${TEXT_CONTAINS_UNKNOWN_FIELD}${field}`);
     }
   }
   for (const field of fields) {
     if (!Object.prototype.hasOwnProperty.call(record, field)) {
-      rejectType(`${context} is missing required field ${field}`);
+      rejectType(`${context}${TEXT_IS_MISSING_REQUIRED_FIELD}${field}`);
     }
   }
   return record;
@@ -3021,9 +3071,9 @@ function parseSumeragiExecutionCommitment(value, context) {
     "ordinary_writes_root",
     "kagemusha_top_up_root",
     "kagemusha_top_up_count",
-    "native_amx_application_manifest_version",
-    "native_amx_application_manifest_root",
-    "native_amx_application_manifest_count",
+    (TEXT_NATIVE_AMX_APPLICATION_MANIFEST_2 + "version"),
+    (TEXT_NATIVE_AMX_APPLICATION_MANIFEST_2 + "root"),
+    (TEXT_NATIVE_AMX_APPLICATION_MANIFEST_2 + "count"),
     "lane_finality_manifest",
     "merge_carrier",
     "executed_block_wire_len",
@@ -3031,7 +3081,7 @@ function parseSumeragiExecutionCommitment(value, context) {
   ]);
   const unknown = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknown !== undefined) {
-    rejectType(`${context} contains unknown field ${unknown}`);
+    rejectType(`${context}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknown}`);
   }
   for (const field of [
     "kagemusha_top_up_root",
@@ -3059,26 +3109,26 @@ function parseSumeragiExecutionCommitment(value, context) {
   }
   const nativeManifestVersion = parseSumeragiUnsigned(
     record.native_amx_application_manifest_version,
-    `${context}.native_amx_application_manifest_version`,
+    `${context}${TEXT_NATIVE_AMX_APPLICATION_MANIFEST}version`,
     { max: 0xffff },
   );
   if (nativeManifestVersion !== SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION) {
-    rejectRange(`${context}.native_amx_application_manifest_version must equal ${SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION}`);
+    rejectRange(`${context}${TEXT_NATIVE_AMX_APPLICATION_MANIFEST}version must equal ${SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_VERSION}`);
   }
   const nativeManifestRoot = parseSumeragiHash(
     record.native_amx_application_manifest_root,
-    `${context}.native_amx_application_manifest_root`,
+    `${context}${TEXT_NATIVE_AMX_APPLICATION_MANIFEST}root`,
   );
   const nativeManifestCount = parseSumeragiUnsigned(
     record.native_amx_application_manifest_count,
-    `${context}.native_amx_application_manifest_count`,
+    `${context}${TEXT_NATIVE_AMX_APPLICATION_MANIFEST}count`,
     { max: SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_MAX_LEAVES },
   );
   if (
     (nativeManifestCount === 0) !==
     (nativeManifestRoot === SUMERAGI_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT)
   ) {
-    rejectRange(`${context}.native_amx_application_manifest_count must be zero exactly for the canonical empty root`);
+    rejectRange(`${context}${TEXT_NATIVE_AMX_APPLICATION_MANIFEST}count must be zero exactly for the canonical empty root`);
   }
   let laneFinalityManifest = null;
   if (record.lane_finality_manifest !== null) {
@@ -3095,7 +3145,7 @@ function parseSumeragiExecutionCommitment(value, context) {
       (field) => !laneFields.has(field),
     );
     if (unknownLaneField !== undefined) {
-      rejectType(`${laneContext} contains unknown field ${unknownLaneField}`);
+      rejectType(`${laneContext}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknownLaneField}`);
     }
     laneFinalityManifest = Object.freeze({
       root: parseSumeragiHash(laneRecord.root, `${laneContext}.root`),
@@ -3121,7 +3171,7 @@ function parseSumeragiExecutionCommitment(value, context) {
       (field) => !mergeFields.has(field),
     );
     if (unknownMergeField !== undefined) {
-      rejectType(`${mergeContext} contains unknown field ${unknownMergeField}`);
+      rejectType(`${mergeContext}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknownMergeField}`);
     }
     const mergeVersion = parseSumeragiUnsigned(
       mergeRecord.version,
@@ -3174,7 +3224,7 @@ function parseSumeragiExecutionCommitment(value, context) {
 function parseSumeragiQcReference(value, context) {
   const record = assertExactSumeragiRecord(
     value,
-    ["round", "proposal_round", "phase", "subject", "execution_commitment"],
+    ["round", "proposal_round", "phase", "subject", TEXT_EXECUTION_COMMITMENT_2],
     context,
   );
   const round = parseSumeragiRound(record.round, `${context}.round`);
@@ -3196,7 +3246,7 @@ function parseSumeragiQcReference(value, context) {
     subject: parseSumeragiBlockSubject(record.subject, `${context}.subject`),
     execution_commitment: parseSumeragiExecutionCommitment(
       record.execution_commitment,
-      `${context}.execution_commitment`,
+      `${context}${TEXT_EXECUTION_COMMITMENT}`,
     ),
   });
 }
@@ -3207,7 +3257,7 @@ export function parseSumeragiV2QcResponse(payload) {
   const allowedFields = new Set(["highest_prepare_qc", "locked_prepare_qc"]);
   const unknownField = Object.keys(record).find((field) => !allowedFields.has(field));
   if (unknownField !== undefined) {
-    rejectType(`${context} contains unknown field ${unknownField}`);
+    rejectType(`${context}${TEXT_CONTAINS_UNKNOWN_FIELD}${unknownField}`);
   }
   const missingField = [...allowedFields].find(
     (field) => !Object.prototype.hasOwnProperty.call(record, field),
@@ -3258,7 +3308,7 @@ function parseSumeragiHeightContext(value, context) {
   const record = ensureRecord(value, context);
   const validatorCount = parseSumeragiUnsigned(
     record.validator_count,
-    `${context}.validator_count`,
+    `${context}${TEXT_VALIDATOR}count`,
     { positive: true, max: 31 },
   );
   const quorumRecord = ensureRecord(record.quorum, `${context}.quorum`);
@@ -3307,7 +3357,7 @@ function parseSumeragiCommitQcStatus(value, context) {
   const record = ensureRecord(value, context);
   const validatorCount = parseSumeragiUnsigned(
     record.validator_count,
-    `${context}.validator_count`,
+    `${context}${TEXT_VALIDATOR}count`,
     { positive: true, max: 31 },
   );
   const signerCount = parseSumeragiUnsigned(
@@ -3359,52 +3409,52 @@ function parseSumeragiLanePayloadOwnerships(value) {
     const record = assertExactSumeragiRecord(
       entry,
       [
-        "proposal_height",
+        TEXT_PROPOSAL_HEIGHT,
         "proposal_view",
         "lane_id",
-        "dataspace_id",
-        "lane_incarnation",
-        "lane_block_height",
-        "lane_block_view",
+        TEXT_DATASPACE_ID_2,
+        TEXT_LANE_INCARNATION,
+        TEXT_LANE_BLOCK_HEIGHT,
+        TEXT_LANE_BLOCK_VIEW,
         "subject_hash",
         "qc_mode_tag",
         "accepted_candidate_indices",
         "accepted_transaction_hashes",
         "previous_lane_block_height",
-        "previous_lane_block_descriptor_hash",
-        "lane_block_descriptor_hash",
-        "lane_block_descriptor_validator_set",
-        "lane_block_descriptor_validator_count",
-        "lane_block_descriptor_min_quorum",
-        "payload_ownership_hash",
+        TEXT_PREVIOUS_LANE_BLOCK_DESCRIPTOR_HASH,
+        (TEXT_LANE_BLOCK_DESCRIPTOR_2 + "hash"),
+        (TEXT_LANE_BLOCK_DESCRIPTOR_2 + "validator_set"),
+        (TEXT_LANE_BLOCK_DESCRIPTOR_2 + "validator_count"),
+        (TEXT_LANE_BLOCK_DESCRIPTOR_2 + "min_quorum"),
+        TEXT_PAYLOAD_OWNERSHIP_HASH_2,
         "rbc_instance_hash",
       ],
       itemContext,
     );
     const laneBlockHeight = parseSumeragiUnsigned(
       record.lane_block_height,
-      `${itemContext}.lane_block_height`,
+      `${itemContext}${TEXT_LANE_BLOCK_HEIGHT_2}`,
       { positive: true },
     );
     if (!Array.isArray(record.accepted_candidate_indices)) {
-      rejectType(`${itemContext}.accepted_candidate_indices must be an array`);
+      rejectType(`${itemContext}${TEXT_ACCEPTED_CANDIDATE}indices must be an array`);
     }
     const acceptedCandidateIndices = record.accepted_candidate_indices.map((candidate, offset) =>
-      parseSumeragiUnsigned(candidate, `${itemContext}.accepted_candidate_indices[${offset}]`),
+      parseSumeragiUnsigned(candidate, `${itemContext}${TEXT_ACCEPTED_CANDIDATE}indices[${offset}]`),
     );
     if (acceptedCandidateIndices.length === 0) {
-      rejectType(`${itemContext}.accepted_candidate_indices must not be empty`);
+      rejectType(`${itemContext}${TEXT_ACCEPTED_CANDIDATE}indices must not be empty`);
     }
     for (let offset = 1; offset < acceptedCandidateIndices.length; offset += 1) {
       if (acceptedCandidateIndices[offset - 1] >= acceptedCandidateIndices[offset]) {
-        rejectType(`${itemContext}.accepted_candidate_indices must be strictly ordered`);
+        rejectType(`${itemContext}${TEXT_ACCEPTED_CANDIDATE}indices must be strictly ordered`);
       }
     }
     if (!Array.isArray(record.accepted_transaction_hashes)) {
-      rejectType(`${itemContext}.accepted_transaction_hashes must be an array`);
+      rejectType(`${itemContext}${TEXT_ACCEPTED_TRANSACTION}hashes must be an array`);
     }
     const acceptedTransactionHashes = record.accepted_transaction_hashes.map((hash, offset) =>
-      parseSumeragiHash(hash, `${itemContext}.accepted_transaction_hashes[${offset}]`),
+      parseSumeragiHash(hash, `${itemContext}${TEXT_ACCEPTED_TRANSACTION}hashes[${offset}]`),
     );
     if (acceptedTransactionHashes.length !== acceptedCandidateIndices.length) {
       rejectType(`${itemContext} candidate/hash counts must match`);
@@ -3412,28 +3462,28 @@ function parseSumeragiLanePayloadOwnerships(value) {
     const validators = assertSumeragiArrayBound(
       record.lane_block_descriptor_validator_set,
       128,
-      `${itemContext}.lane_block_descriptor_validator_set`,
+      `${itemContext}${TEXT_LANE_BLOCK_DESCRIPTOR}validator_set`,
       1,
     ).map((peer, offset) =>
       requireExactNonEmptyString(
         peer,
-        `${itemContext}.lane_block_descriptor_validator_set[${offset}]`,
+        `${itemContext}${TEXT_LANE_BLOCK_DESCRIPTOR}validator_set[${offset}]`,
       ),
     );
     if (
       new Set(validators).size !== validators.length ||
       validators.some((validator, offset) => offset > 0 && validators[offset - 1] >= validator)
     ) {
-      rejectType(`${itemContext}.lane_block_descriptor_validator_set must be canonical and unique`);
+      rejectType(`${itemContext}${TEXT_LANE_BLOCK_DESCRIPTOR}validator_set must be canonical and unique`);
     }
     const validatorCount = parseSumeragiUnsigned(
       record.lane_block_descriptor_validator_count,
-      `${itemContext}.lane_block_descriptor_validator_count`,
+      `${itemContext}${TEXT_LANE_BLOCK_DESCRIPTOR}validator_count`,
       { positive: true, max: 128 },
     );
     const minQuorum = parseSumeragiUnsigned(
       record.lane_block_descriptor_min_quorum,
-      `${itemContext}.lane_block_descriptor_min_quorum`,
+      `${itemContext}${TEXT_LANE_BLOCK_DESCRIPTOR}min_quorum`,
       { positive: true, max: 128 },
     );
     if (validatorCount !== validators.length || minQuorum > validatorCount) {
@@ -3441,32 +3491,32 @@ function parseSumeragiLanePayloadOwnerships(value) {
     }
     const previousHeight = parseSumeragiUnsigned(
       record.previous_lane_block_height,
-      `${itemContext}.previous_lane_block_height`,
+      `${itemContext}${TEXT_PREVIOUS_LANE_BLOCK}height`,
     );
     if (!sumeragiUnsignedSuccessorOf(laneBlockHeight, previousHeight)) {
-      rejectRange(`${itemContext}.previous_lane_block_height must precede lane_block_height`);
+      rejectRange(`${itemContext}${TEXT_PREVIOUS_LANE_BLOCK}height must precede lane_block_height`);
     }
     const previousDescriptor =
       record.previous_lane_block_descriptor_hash == null
         ? null
         : parseSumeragiHash(
             record.previous_lane_block_descriptor_hash,
-            `${itemContext}.previous_lane_block_descriptor_hash`,
+            `${itemContext}${TEXT_PREVIOUS_LANE_BLOCK}descriptor_hash`,
           );
     if (previousHeight === 0 && previousDescriptor !== null) {
       rejectType(`${itemContext} genesis lane block must not name a predecessor descriptor`);
     }
     if (record.lane_block_descriptor_hash == null) {
-      rejectType(`${itemContext}.lane_block_descriptor_hash is required`);
+      rejectType(`${itemContext}${TEXT_LANE_BLOCK_DESCRIPTOR}hash is required`);
     }
     return Object.freeze({
       proposal_height: parseSumeragiUnsigned(record.proposal_height, `${itemContext}.proposal_height`),
       proposal_view: parseSumeragiUnsigned(record.proposal_view, `${itemContext}.proposal_view`),
-      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
-      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
-      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
+      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}${TEXT_LANE_ID}`, { max: 0xffffffff }),
+      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}${TEXT_DATASPACE_ID}`),
+      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}${TEXT_LANE_INCARNATION_2}`),
       lane_block_height: laneBlockHeight,
-      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
+      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}${TEXT_LANE_BLOCK_VIEW_2}`),
       subject_hash: parseSumeragiHash(record.subject_hash, `${itemContext}.subject_hash`),
       qc_mode_tag: requireNonEmptyString(record.qc_mode_tag, `${itemContext}.qc_mode_tag`),
       accepted_candidate_indices: Object.freeze(acceptedCandidateIndices),
@@ -3475,14 +3525,14 @@ function parseSumeragiLanePayloadOwnerships(value) {
       previous_lane_block_descriptor_hash: previousDescriptor,
       lane_block_descriptor_hash: parseSumeragiHash(
         record.lane_block_descriptor_hash,
-        `${itemContext}.lane_block_descriptor_hash`,
+        `${itemContext}${TEXT_LANE_BLOCK_DESCRIPTOR}hash`,
       ),
       lane_block_descriptor_validator_set: Object.freeze(validators),
       lane_block_descriptor_validator_count: validatorCount,
       lane_block_descriptor_min_quorum: minQuorum,
       payload_ownership_hash: parseSumeragiHash(
         record.payload_ownership_hash,
-        `${itemContext}.payload_ownership_hash`,
+        `${itemContext}${TEXT_PAYLOAD_OWNERSHIP_HASH}`,
       ),
       rbc_instance_hash: parseSumeragiHash(
         record.rbc_instance_hash,
@@ -3501,16 +3551,16 @@ function parseSumeragiCommittedLaneBlocks(value) {
       entry,
       [
         "lane_id",
-        "dataspace_id",
-        "lane_incarnation",
-        "lane_block_height",
-        "lane_block_view",
-        "descriptor_hash",
-        "proposal_hash",
+        TEXT_DATASPACE_ID_2,
+        TEXT_LANE_INCARNATION,
+        TEXT_LANE_BLOCK_HEIGHT,
+        TEXT_LANE_BLOCK_VIEW,
+        TEXT_DESCRIPTOR_HASH,
+        TEXT_PROPOSAL_HASH,
         "execution_status",
         "executable_payload_available",
         "subject_hash",
-        "payload_ownership_hash",
+        TEXT_PAYLOAD_OWNERSHIP_HASH_2,
         "rbc_instance_hash",
         "qc_mode_tag",
         "validator_count",
@@ -3522,7 +3572,7 @@ function parseSumeragiCommittedLaneBlocks(value) {
     );
     const validatorCount = parseSumeragiUnsigned(
       record.validator_count,
-      `${itemContext}.validator_count`,
+      `${itemContext}${TEXT_VALIDATOR}count`,
       { positive: true, max: 128 },
     );
     const minQuorum = parseSumeragiUnsigned(
@@ -3549,7 +3599,7 @@ function parseSumeragiCommittedLaneBlocks(value) {
       `${itemContext}.executable_payload_available`,
     );
     const unavailableStatuses = new Set([
-      "awaiting_executable_payload",
+      TEXT_AWAITING_EXECUTABLE_PAYLOAD,
       "application_receipt_conflicts_with_preflight",
       "payload_preflight_rejected_awaiting_state_application",
       "awaiting_predecessor_application",
@@ -3574,17 +3624,17 @@ function parseSumeragiCommittedLaneBlocks(value) {
       rejectRange(`${itemContext} carries an impossible certified quorum`);
     }
     return Object.freeze({
-      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
-      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
-      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
-      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}.lane_block_height`, { positive: true }),
-      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
+      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}${TEXT_LANE_ID}`, { max: 0xffffffff }),
+      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}${TEXT_DATASPACE_ID}`),
+      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}${TEXT_LANE_INCARNATION_2}`),
+      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}${TEXT_LANE_BLOCK_HEIGHT_2}`, { positive: true }),
+      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}${TEXT_LANE_BLOCK_VIEW_2}`),
       descriptor_hash: parseSumeragiHash(record.descriptor_hash, `${itemContext}.descriptor_hash`),
       proposal_hash: parseSumeragiHash(record.proposal_hash, `${itemContext}.proposal_hash`),
       execution_status: executionStatus,
       executable_payload_available: executablePayloadAvailable,
       subject_hash: parseSumeragiHash(record.subject_hash, `${itemContext}.subject_hash`),
-      payload_ownership_hash: parseSumeragiHash(record.payload_ownership_hash, `${itemContext}.payload_ownership_hash`),
+      payload_ownership_hash: parseSumeragiHash(record.payload_ownership_hash, `${itemContext}${TEXT_PAYLOAD_OWNERSHIP_HASH}`),
       rbc_instance_hash: parseSumeragiHash(record.rbc_instance_hash, `${itemContext}.rbc_instance_hash`),
       qc_mode_tag: requireNonEmptyString(record.qc_mode_tag, `${itemContext}.qc_mode_tag`),
       validator_count: validatorCount,
@@ -3604,11 +3654,11 @@ function parseSumeragiLaneBlockSessions(value) {
       entry,
       [
         "lane_id",
-        "dataspace_id",
-        "lane_incarnation",
-        "lane_block_height",
-        "lane_block_view",
-        "proposal_hash",
+        TEXT_DATASPACE_ID_2,
+        TEXT_LANE_INCARNATION,
+        TEXT_LANE_BLOCK_HEIGHT,
+        TEXT_LANE_BLOCK_VIEW,
+        TEXT_PROPOSAL_HASH,
         "has_proposal",
         "prepare_vote_count",
         "commit_vote_count",
@@ -3624,7 +3674,7 @@ function parseSumeragiLaneBlockSessions(value) {
     );
     const validatorCount = parseSumeragiUnsigned(
       record.validator_count,
-      `${itemContext}.validator_count`,
+      `${itemContext}${TEXT_VALIDATOR}count`,
       { max: 128 },
     );
     const minQuorum = parseSumeragiUnsigned(
@@ -3644,7 +3694,7 @@ function parseSumeragiLaneBlockSessions(value) {
     );
     if (validatorCount === 0) {
       if (minQuorum !== 0 || prepareVotes !== 0 || commitVotes !== 0) {
-        rejectRange(`${itemContext} carries impossible session quorum counts`);
+        rejectRange(`${itemContext}${TEXT_CARRIES_IMPOSSIBLE_SESSION_QUORUM_COUNTS}`);
       }
     } else if (
       minQuorum === 0 ||
@@ -3652,14 +3702,14 @@ function parseSumeragiLaneBlockSessions(value) {
       prepareVotes > validatorCount ||
       commitVotes > validatorCount
     ) {
-      rejectRange(`${itemContext} carries impossible session quorum counts`);
+      rejectRange(`${itemContext}${TEXT_CARRIES_IMPOSSIBLE_SESSION_QUORUM_COUNTS}`);
     }
     return Object.freeze({
-      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}.lane_id`, { max: 0xffffffff }),
-      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}.dataspace_id`),
-      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}.lane_incarnation`),
-      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}.lane_block_height`),
-      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}.lane_block_view`),
+      lane_id: parseSumeragiUnsigned(record.lane_id, `${itemContext}${TEXT_LANE_ID}`, { max: 0xffffffff }),
+      dataspace_id: parseSumeragiUnsigned(record.dataspace_id, `${itemContext}${TEXT_DATASPACE_ID}`),
+      lane_incarnation: parseSumeragiNonzeroHash(record.lane_incarnation, `${itemContext}${TEXT_LANE_INCARNATION_2}`),
+      lane_block_height: parseSumeragiUnsigned(record.lane_block_height, `${itemContext}${TEXT_LANE_BLOCK_HEIGHT_2}`),
+      lane_block_view: parseSumeragiUnsigned(record.lane_block_view, `${itemContext}${TEXT_LANE_BLOCK_VIEW_2}`),
       proposal_hash: parseSumeragiHash(record.proposal_hash, `${itemContext}.proposal_hash`),
       has_proposal: parseSumeragiBoolean(record.has_proposal, `${itemContext}.has_proposal`),
       prepare_vote_count: prepareVotes,
@@ -3739,7 +3789,7 @@ function requireExactNonEmptyString(value, name) {
   if (trimmed !== value) {
     throw createValidationError(
       ValidationErrorCode.INVALID_STRING,
-      `${name} must not contain surrounding whitespace`,
+      `${name}${TEXT_MUST_NOT_CONTAIN_SURROUNDING_WHITESPACE}`,
       name,
     );
   }
@@ -3750,7 +3800,7 @@ function requireCanonicalQuantity(value, name) {
   if (typeof value !== "string") {
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
-      `${name} must be a canonical Kotodama V1 quantity string`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL}Kotodama V1 quantity string`,
       name,
     );
   }
@@ -3760,7 +3810,7 @@ function requireCanonicalQuantity(value, name) {
     if (!(error instanceof NumericV1Error)) throw error;
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
-      `${name} must be a canonical non-negative Kotodama V1 quantity (${error.code})`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL}non-negative Kotodama V1 quantity (${error.code})`,
       name,
     );
   }
@@ -3780,7 +3830,7 @@ function requireCanonicalNumeric(value, name) {
     if (!(error instanceof NumericV1Error)) throw error;
     throw createValidationError(
       ValidationErrorCode.INVALID_NUMERIC,
-      `${name} must be a canonical signed Numeric (${error.code})`,
+      `${name}${TEXT_MUST_BE_A_CANONICAL}signed Numeric (${error.code})`,
       name,
     );
   }
@@ -3789,7 +3839,7 @@ function requireCanonicalNumeric(value, name) {
 function parseHashLiteralToHex(literal, name) {
   const match = /^hash:([0-9A-Fa-f]{64})#([0-9A-Fa-f]{4})$/.exec(literal);
   if (!match) {
-    rejectType(`${name} must be a canonical "hash:<HEX>#<CRC>" literal or hex string`);
+    rejectType(`${name}${TEXT_MUST_BE_A_CANONICAL}"hash:<HEX>#<CRC>" literal or hex string`);
   }
   const [, body, checksum] = match;
   const expected = computeHashLiteralCrc("hash", body.toUpperCase());

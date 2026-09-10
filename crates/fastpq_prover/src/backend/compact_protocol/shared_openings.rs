@@ -5,9 +5,8 @@
 //! round numbers, node levels and indices inherited from the existing hashes.
 //! Complete terminal values appear once; their sole-leaf root still hashes the
 //! leaf with itself. No witness, trace, FFT, path expansion or authentication
-//! bypass is used by verification. This is a distinct Norito DTO, preserving the
-//! prototype's Fiat-Shamir messages and challenges exactly. A distinct candidate
-//! frame uses the same equations with a caller-fixed SHAKE transcript and hashes.
+//! bypass is used by verification. One canonical V1 DTO uses the fixed complete
+//! context and six-lane transcript for every commitment and verifier message.
 //!
 //! TODO: Qualify the selected transcript profile and complete resource envelope
 //! before production admission. The candidate verifier raises no default limit;
@@ -21,20 +20,15 @@ use crate::backend::{
     merkle_multiproof::{MultiproofLimits, MultiproofPlan, SiblingPosition},
 };
 
-#[cfg(test)]
-use crate::backend::{hash_fri_chunk, merkle_node_hash};
-
 #[path = "shared_openings/codec.rs"]
 pub(in crate::backend) mod codec;
 
 /// Internal complete-opening payload shared by candidate verification and test codecs.
-/// Canonical serialization counts its fixed-layout frame; prototype decoding is test-only.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize)]
-#[cfg_attr(test, derive(NoritoDeserialize))]
-#[derive(norito::NoritoSchema)]
+/// Canonical serialization advertises the final fixed layout and full six-lane roots.
+#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "fastpq_prover::backend::compact_protocol::shared_openings::SharedProof",
-    frame = "fastpq_prover::compact_prototype::SharedProofV1"
+    frame = "fastpq_prover::compact_v1::SharedProofV1"
 )]
 pub(in crate::backend) struct SharedProof {
     row_root: WireDigest,
@@ -48,61 +42,6 @@ pub(in crate::backend) struct SharedProof {
     quotient_siblings: Vec<WireDigest>,
     rounds: Vec<SharedRound>,
     terminal_values: Vec<GoldilocksFp4V1>,
-}
-
-/// Distinct candidate frame with the same bounded payload layout.
-/// No qualified production entry point currently admits this schema.
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
-#[norito_schema(
-    name = "fastpq_prover::backend::compact_protocol::shared_openings::ShakeSharedProof",
-    frame = "fastpq_prover::compact_candidate::ShakeSharedProofV1"
-)]
-pub(in crate::backend) struct ShakeSharedProof {
-    row_root: WireDigest,
-    mixed_root: WireDigest,
-    quotient_root: WireDigest,
-    fri_roots: Vec<WireDigest>,
-    rows: Vec<SharedRow>,
-    queries: Vec<SharedQuery>,
-    row_siblings: Vec<WireDigest>,
-    mixed_siblings: Vec<WireDigest>,
-    quotient_siblings: Vec<WireDigest>,
-    rounds: Vec<SharedRound>,
-    terminal_values: Vec<GoldilocksFp4V1>,
-}
-
-impl ShakeSharedProof {
-    fn from_shared(proof: SharedProof) -> Self {
-        Self {
-            row_root: proof.row_root,
-            mixed_root: proof.mixed_root,
-            quotient_root: proof.quotient_root,
-            fri_roots: proof.fri_roots,
-            rows: proof.rows,
-            queries: proof.queries,
-            row_siblings: proof.row_siblings,
-            mixed_siblings: proof.mixed_siblings,
-            quotient_siblings: proof.quotient_siblings,
-            rounds: proof.rounds,
-            terminal_values: proof.terminal_values,
-        }
-    }
-
-    fn into_shared(self) -> SharedProof {
-        SharedProof {
-            row_root: self.row_root,
-            mixed_root: self.mixed_root,
-            quotient_root: self.quotient_root,
-            fri_roots: self.fri_roots,
-            rows: self.rows,
-            queries: self.queries,
-            row_siblings: self.row_siblings,
-            mixed_siblings: self.mixed_siblings,
-            quotient_siblings: self.quotient_siblings,
-            rounds: self.rounds,
-            terminal_values: self.terminal_values,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -317,29 +256,12 @@ fn exact_frontier(siblings: &[WireDigest], plan: &MultiproofPlan) -> Result<()> 
     }
     Ok(())
 }
-
-/// Convert canonical legacy openings without changing commitments or challenges.
-///
-/// Every duplicate occurrence, path coordinate and discarded fold/index field is
-/// checked. Selected ancestors are recomputed once to ensure redundant legacy
-/// path material is consistent before it is omitted. A false AIR/degree claim
-/// may still convert: the shared verifier independently rejects that claim.
-#[cfg(test)]
 pub(in crate::backend) fn from_compact(
     relation: &impl FixedAir,
     proof: &CompactProof,
     limits: VerifyLimits,
 ) -> Result<SharedProof> {
-    from_compact_for(relation, proof, limits, Protocol::Prototype)
-}
-
-fn from_compact_for(
-    relation: &impl FixedAir,
-    proof: &CompactProof,
-    limits: VerifyLimits,
-    protocol: Protocol,
-) -> Result<SharedProof> {
-    let geometry = Geometry::for_protocol(relation, protocol)?;
+    let geometry = Geometry::new(relation)?;
     preflight(relation, proof, limits, &geometry)?;
     let binding = Binding::new(relation, &geometry)?;
     let challenges = replay_bound_challenges(
@@ -687,7 +609,7 @@ fn preflight_shared(
         proof.fri_roots.len(),
         limits.max_fri_layers,
     )?;
-    let query_count = geometry.protocol.query_count(geometry.lde_rows);
+    let query_count = profile::QUERY_COUNT;
     check_limit("max_queries", proof.queries.len(), limits.max_queries)?;
     if proof.queries.len() != query_count
         || proof.fri_roots.len() != geometry.fri_lengths.len()
@@ -813,7 +735,6 @@ fn bounded_frontier(
 }
 
 /// Verify exact shared openings directly, using only bounded authenticated data.
-#[cfg(test)]
 pub(in crate::backend) fn verify_shared(
     relation: &impl FixedAir,
     proof: &SharedProof,
@@ -848,7 +769,7 @@ fn maximal_frontier(leaves: usize, opened: usize) -> Result<usize> {
 /// Independent per-tree maxima need not occur together; their sum still bounds
 /// every query set. This is tighter than the decoder's invalid loose shapes.
 fn shared_prover_wire_bound(geometry: &Geometry) -> Result<usize> {
-    let queries = geometry.protocol.query_count(geometry.lde_rows);
+    let queries = profile::QUERY_COUNT;
     let rows = queries
         .checked_mul(2)
         .ok_or_else(|| shape("compact shared row count overflow"))?
@@ -890,11 +811,8 @@ fn shared_prover_wire_bound(geometry: &Geometry) -> Result<usize> {
     )
 }
 
-fn checked_shake_prover_geometry(
-    relation: &impl FixedAir,
-    limits: VerifyLimits,
-) -> Result<Geometry> {
-    let geometry = Geometry::for_protocol(relation, Protocol::ShakeCandidate)?;
+fn checked_prover_geometry(relation: &impl FixedAir, limits: VerifyLimits) -> Result<Geometry> {
+    let geometry = Geometry::new(relation)?;
     for (limit, actual, maximum) in [
         (
             "max_compact_statement_bytes",
@@ -911,11 +829,7 @@ fn checked_shake_prover_geometry(
             geometry.fri_lengths.len(),
             limits.max_fri_layers,
         ),
-        (
-            "max_queries",
-            geometry.protocol.query_count(geometry.lde_rows),
-            limits.max_queries,
-        ),
+        ("max_queries", profile::QUERY_COUNT, limits.max_queries),
         (
             "max_query_path_len",
             geometry.lde_rows.ilog2() as usize,
@@ -949,69 +863,40 @@ fn checked_shake_prover_geometry(
 /// generated query set, even when a particular proof would be smaller. The
 /// temporary repeated representation has a separate geometry-derived ceiling.
 /// Trace workspace limits belong to the enclosing typed producer.
-pub(in crate::backend) fn preflight_shake_prover(
+pub(in crate::backend) fn preflight_prover(
     relation: &impl FixedAir,
     limits: VerifyLimits,
 ) -> Result<()> {
-    checked_shake_prover_geometry(relation, limits).map(|_| ())
+    checked_prover_geometry(relation, limits).map(|_| ())
 }
 
-/// Prove the fixed SHAKE candidate with separately bounded internal/output frames.
+/// Prove the fixed six-lane compact V1 with separately bounded internal/output frames.
 /// This does not qualify a production profile or grant ledger admission authority.
-pub(in crate::backend) fn prove_shake_shared(
+pub(in crate::backend) fn prove_shared(
     relation: &impl FixedAir,
     columns: &[Vec<u64>],
     limits: VerifyLimits,
-) -> Result<ShakeSharedProof> {
-    let geometry = checked_shake_prover_geometry(relation, limits)?;
-    let trace = prepare_trace_for(relation, columns, Protocol::ShakeCandidate)?;
+) -> Result<SharedProof> {
+    let geometry = checked_prover_geometry(relation, limits)?;
+    let trace = prepare_trace(relation, columns)?;
     let proof = prove_prepared(relation, &trace)?;
     drop(trace);
     let internal_limits = VerifyLimits {
         max_proof_bytes: repeated_wire_bytes(&geometry)?,
         ..limits
     };
-    let shared = from_compact_for(relation, &proof, internal_limits, Protocol::ShakeCandidate)?;
+    let shared = from_compact(relation, &proof, internal_limits)?;
     drop(proof);
     preflight_shared(relation, &shared, limits, &geometry)?;
-    Ok(ShakeSharedProof::from_shared(shared))
+    Ok(shared)
 }
-
-/// Consume a candidate DTO and verify it through the common bounded engine.
-pub(in crate::backend) fn verify_shake_shared(
-    relation: &impl FixedAir,
-    proof: ShakeSharedProof,
-    limits: VerifyLimits,
-) -> Result<SharedVerificationWork> {
-    let mut work = SharedVerificationWork::default();
-    verify_shared_recorded_for(
-        relation,
-        &proof.into_shared(),
-        limits,
-        Protocol::ShakeCandidate,
-        &mut work,
-    )?;
-    Ok(work)
-}
-
-#[cfg(test)]
-fn verify_shared_recorded(
+pub(super) fn verify_shared_recorded(
     relation: &impl FixedAir,
     proof: &SharedProof,
     limits: VerifyLimits,
     work: &mut SharedVerificationWork,
 ) -> Result<()> {
-    verify_shared_recorded_for(relation, proof, limits, Protocol::Prototype, work)
-}
-
-fn verify_shared_recorded_for(
-    relation: &impl FixedAir,
-    proof: &SharedProof,
-    limits: VerifyLimits,
-    protocol: Protocol,
-    work: &mut SharedVerificationWork,
-) -> Result<()> {
-    let geometry = Geometry::for_protocol(relation, protocol)?;
+    let geometry = Geometry::new(relation)?;
     work.proof_bytes = preflight_shared(relation, proof, limits, &geometry)?;
     let binding = Binding::new(relation, &geometry)?;
     work.transcripts += 1;
@@ -1224,7 +1109,6 @@ fn authenticate_shared(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
 
     use super::*;
 
@@ -1282,7 +1166,7 @@ mod tests {
     fn candidate_prover_preflight_rejects_limits_before_private_columns_and_ntt() {
         let air = candidate_prover_air();
         let limits = candidate_prover_limits();
-        preflight_shake_prover(&air, limits).unwrap();
+        preflight_prover(&air, limits).unwrap();
         let cases = [
             (
                 VerifyLimits {
@@ -1345,13 +1229,13 @@ mod tests {
             // Empty columns cannot enter an NTT. The policy error must precede
             // even their shape rejection, and the AIR preparation above panics.
             assert!(matches!(
-                prove_shake_shared(&air, &[], restricted),
+                prove_shared(&air, &[], restricted),
                 Err(Error::VerifierLimitExceeded { limit, actual, .. })
                     if limit == expected_limit && actual == expected_actual
             ));
         }
         assert!(matches!(
-            prove_shake_shared(&air, &[], limits),
+            prove_shared(&air, &[], limits),
             Err(Error::InvalidTraceShape { .. })
         ));
         let mut malformed = candidate_prover_air();
@@ -1370,17 +1254,17 @@ mod tests {
             },
         ] {
             malformed.schema = schema;
-            assert!(preflight_shake_prover(&malformed, limits).is_err());
+            assert!(preflight_prover(&malformed, limits).is_err());
         }
         let mut columns = vec![Vec::new(); 342];
         assert!(matches!(
-            prove_shake_shared(&air, &columns, limits),
+            prove_shared(&air, &columns, limits),
             Err(Error::InvalidTraceShape { .. })
         ));
         columns[0] = vec![0; 65_536];
         columns[0][0] = GOLDILOCKS_MODULUS;
         assert!(matches!(
-            prove_shake_shared(&air, &columns, limits),
+            prove_shared(&air, &columns, limits),
             Err(Error::NonCanonicalGoldilocksElement {
                 context: "compact_base_trace",
                 ..
@@ -1398,12 +1282,12 @@ mod tests {
         };
         // Raw public bytes meet both limits; the encoded context adds fields.
         assert!(matches!(
-            preflight_shake_prover(&air, limits),
+            preflight_prover(&air, limits),
             Err(Error::InvalidTraceShape { .. })
         ));
         air.statement.push(0);
         assert!(matches!(
-            preflight_shake_prover(
+            preflight_prover(
                 &air,
                 VerifyLimits {
                     max_batch_bytes: air.statement.len(),
@@ -1411,7 +1295,7 @@ mod tests {
                 }
             ),
             Err(Error::VerifierLimitExceeded {
-                limit: "max_shake_public_bytes",
+                limit: "max_compact_public_bytes",
                 ..
             })
         ));
@@ -1466,7 +1350,7 @@ mod tests {
     #[test]
     fn candidate_prover_shared_wire_bound_matches_canonical_shape_and_final_cap() {
         let air = candidate_prover_air();
-        let geometry = Geometry::for_protocol(&air, Protocol::ShakeCandidate).unwrap();
+        let geometry = Geometry::new(&air).unwrap();
         let bound = shared_prover_wire_bound(&geometry).unwrap();
         assert_eq!(bound, 4_279_877);
         assert_eq!(repeated_wire_bytes(&geometry).unwrap(), 7_791_716);
@@ -1527,7 +1411,7 @@ mod tests {
             Err(Error::VerifierLimitExceeded { limit: "max_proof_bytes", actual, max })
                 if actual == bound && max == bound - 1
         ));
-        let candidate = ShakeSharedProof::from_shared(shared);
+        let candidate = shared;
         let _canonical =
             norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
         assert_eq!(norito::core::encoded_frame_len(&candidate).unwrap(), bound);
@@ -1538,68 +1422,16 @@ mod tests {
         assert_eq!(maximal_frontier(8, 8).unwrap(), 0);
     }
 
-    pub(super) struct TinyAir {
-        public: [u8; 1],
-        trace_rows: usize,
+    use super::super::test_fixture::FixedColumnsAir;
+    pub(super) use super::super::test_fixture::fixture;
+    pub(super) fn air() -> FixedColumnsAir {
+        FixedColumnsAir::new(7)
     }
-
-    impl FixedAir for TinyAir {
-        fn schema(&self) -> FixedAirSchema {
-            FixedAirSchema {
-                trace_rows: self.trace_rows,
-                width: 1,
-                constraints: 1,
-                identity: "shared-opening-test:constant-column:v1",
-            }
-        }
-
-        fn statement_bytes(&self) -> &[u8] {
-            &self.public
-        }
-
-        fn evaluate(&self, _: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
-            if current.len() != 1 || next.len() != 1 {
-                return Err(shape("test constant AIR needs complete one-cell rows"));
-            }
-            canonical_base(current[0], "shared_test_row", &[0])?;
-            canonical_base(next[0], "shared_test_next", &[0])?;
-            Ok(vec![crate::backend::sub_mod(
-                current[0],
-                u64::from(self.public[0]),
-            )])
-        }
-    }
-
-    pub(super) fn air() -> TinyAir {
-        TinyAir {
-            public: [7],
-            trace_rows: 32,
-        }
-    }
-
-    pub(super) struct Fixture {
-        compact: CompactProof,
-        pub(super) shared: SharedProof,
-    }
-
     fn conversion_limits() -> VerifyLimits {
-        // Only the legacy source representation uses this explicit diagnostic
-        // envelope. The resulting small shared proof uses unchanged defaults.
-        VerifyLimits {
-            max_proof_bytes: 2 * 1024 * 1024,
-            ..VerifyLimits::default()
-        }
+        super::super::test_fixture::limits()
     }
-
-    pub(super) fn fixture() -> &'static Fixture {
-        static FIXTURE: OnceLock<Fixture> = OnceLock::new();
-        FIXTURE.get_or_init(|| {
-            let relation = air();
-            let compact = prove(&relation, &[vec![7; 32]]).unwrap();
-            verify(&relation, &compact, conversion_limits()).unwrap();
-            let shared = from_compact(&relation, &compact, conversion_limits()).unwrap();
-            Fixture { compact, shared }
-        })
+    fn diagnostic_limits() -> VerifyLimits {
+        super::super::test_fixture::limits()
     }
 
     fn changed_field(value: GoldilocksFp4V1, coefficient: usize) -> GoldilocksFp4V1 {
@@ -1641,11 +1473,11 @@ mod tests {
                 .map(|query| query.index as usize)
                 .collect::<Vec<_>>()
         );
-        let work = verify_shared(&relation, &converted, VerifyLimits::default()).unwrap();
-        let plans = opening_plans(&geometry, &challenges.indices, VerifyLimits::default()).unwrap();
+        let work = verify_shared(&relation, &converted, diagnostic_limits()).unwrap();
+        let plans = opening_plans(&geometry, &challenges.indices, diagnostic_limits()).unwrap();
         assert_eq!(work.transcripts, 1);
         assert_eq!(work.row_leaves, plans.rows.indices.len());
-        assert!(work.row_leaves < 2 * challenges.indices.len());
+        assert!(work.row_leaves <= 2 * challenges.indices.len());
         assert_eq!(work.oracle_leaves, 2 * challenges.indices.len());
         assert_eq!(work.air_evaluations, challenges.indices.len());
         assert_eq!(work.terminal_degree_checks, 1);
@@ -1692,7 +1524,7 @@ mod tests {
                 };
                 *value = changed_digest(*value, coefficient);
                 assert!(
-                    verify_shared(&relation, &proof, VerifyLimits::default()).is_err(),
+                    verify_shared(&relation, &proof, diagnostic_limits()).is_err(),
                     "root={root}, coefficient={coefficient}"
                 );
             }
@@ -1709,19 +1541,16 @@ mod tests {
                 };
                 *value = changed_field(*value, coefficient);
                 assert!(
-                    verify_shared(&relation, &proof, VerifyLimits::default()).is_err(),
+                    verify_shared(&relation, &proof, diagnostic_limits()).is_err(),
                     "field={field}, coefficient={coefficient}"
                 );
             }
         }
         let mut changed_row = baseline.clone();
         changed_row.rows[0].values[0] += 1;
-        assert!(verify_shared(&relation, &changed_row, VerifyLimits::default()).is_err());
-        let false_statement = TinyAir {
-            public: [8],
-            trace_rows: 32,
-        };
-        assert!(verify_shared(&false_statement, baseline, VerifyLimits::default()).is_err());
+        assert!(verify_shared(&relation, &changed_row, diagnostic_limits()).is_err());
+        let false_statement = FixedColumnsAir::new(8);
+        assert!(verify_shared(&false_statement, baseline, diagnostic_limits()).is_err());
     }
 
     #[test]
@@ -1741,8 +1570,7 @@ mod tests {
             select(&mut extra, frontier).push(WireDigest::new([1; 6]).unwrap());
             let mut work = SharedVerificationWork::default();
             assert!(
-                verify_shared_recorded(&relation, &extra, VerifyLimits::default(), &mut work)
-                    .is_err()
+                verify_shared_recorded(&relation, &extra, diagnostic_limits(), &mut work).is_err()
             );
             assert_eq!(
                 work.row_leaves + work.oracle_leaves + work.fri_leaves + work.parent_hashes,
@@ -1755,7 +1583,7 @@ mod tests {
             select(&mut missing, frontier).pop();
             let mut work = SharedVerificationWork::default();
             assert!(
-                verify_shared_recorded(&relation, &missing, VerifyLimits::default(), &mut work)
+                verify_shared_recorded(&relation, &missing, diagnostic_limits(), &mut work)
                     .is_err()
             );
             assert_eq!(
@@ -1767,7 +1595,7 @@ mod tests {
                 let values = select(&mut changed, frontier);
                 values[0] = changed_digest(values[0], coefficient);
                 assert!(
-                    verify_shared(&relation, &changed, VerifyLimits::default()).is_err(),
+                    verify_shared(&relation, &changed, diagnostic_limits()).is_err(),
                     "frontier={frontier}, coefficient={coefficient}"
                 );
             }
@@ -1808,12 +1636,12 @@ mod tests {
                     duplicate.rounds[0].groups[1].index = duplicate.rounds[0].groups[0].index;
                 }
             }
-            assert_preflight_rejection(&reordered, VerifyLimits::default());
-            assert_preflight_rejection(&duplicate, VerifyLimits::default());
+            assert_preflight_rejection(&reordered, diagnostic_limits());
+            assert_preflight_rejection(&duplicate, diagnostic_limits());
         }
         let mut noncanonical_row = baseline.clone();
         noncanonical_row.rows[0].values[0] = GOLDILOCKS_MODULUS;
-        assert_preflight_rejection(&noncanonical_row, VerifyLimits::default());
+        assert_preflight_rejection(&noncanonical_row, diagnostic_limits());
         for lane in 0..4 {
             for field in 0..4 {
                 let mut proof = baseline.clone();
@@ -1826,39 +1654,39 @@ mod tests {
                     2 => proof.rounds[0].groups[0].values[1] = invalid,
                     _ => proof.terminal_values[3] = invalid,
                 }
-                assert_preflight_rejection(&proof, VerifyLimits::default());
+                assert_preflight_rejection(&proof, diagnostic_limits());
             }
         }
         let mut wrong_width = baseline.clone();
         wrong_width.rows[0].values.push(0);
-        assert_preflight_rejection(&wrong_width, VerifyLimits::default());
+        assert_preflight_rejection(&wrong_width, diagnostic_limits());
         let mut wrong_terminal = baseline.clone();
         wrong_terminal.terminal_values.pop();
-        assert_preflight_rejection(&wrong_terminal, VerifyLimits::default());
+        assert_preflight_rejection(&wrong_terminal, diagnostic_limits());
         let mut huge_frontier = baseline.clone();
-        huge_frontier.row_siblings = vec![WireDigest::new([0; 6]).unwrap(); 4096];
-        assert_preflight_rejection(&huge_frontier, VerifyLimits::default());
+        huge_frontier.row_siblings = vec![WireDigest::new([0; 6]).unwrap(); 14_251];
+        assert_preflight_rejection(&huge_frontier, diagnostic_limits());
         let exact_bytes = norito::core::to_bytes(baseline).unwrap().len();
         for limits in [
             VerifyLimits {
                 max_proof_bytes: exact_bytes - 1,
-                ..VerifyLimits::default()
+                ..diagnostic_limits()
             },
             VerifyLimits {
-                max_queries: 135,
-                ..VerifyLimits::default()
+                max_queries: 374,
+                ..diagnostic_limits()
             },
             VerifyLimits {
-                max_query_path_len: 7,
-                ..VerifyLimits::default()
+                max_query_path_len: 18,
+                ..diagnostic_limits()
             },
             VerifyLimits {
                 max_fri_round_values: 1,
-                ..VerifyLimits::default()
+                ..diagnostic_limits()
             },
             VerifyLimits {
                 max_air_row_values: 0,
-                ..VerifyLimits::default()
+                ..diagnostic_limits()
             },
         ] {
             assert_preflight_rejection(baseline, limits);
@@ -1871,16 +1699,16 @@ mod tests {
         let mut missing = baseline.clone();
         missing.rows.pop();
         let mut extra = baseline.clone();
-        let absent = (0..256)
+        let absent = (0..524_288)
             .find(|index| !extra.rows.iter().any(|row| row.index == *index))
             .unwrap();
         extra.rows.push(SharedRow {
             index: absent,
-            values: vec![7],
+            values: air().row(),
         });
         extra.rows.sort_by_key(|row| row.index);
         let mut other_query = baseline.clone();
-        let absent_query = (0..256)
+        let absent_query = (0..524_288)
             .find(|index| {
                 !other_query
                     .queries
@@ -1895,7 +1723,7 @@ mod tests {
         for proof in [missing, extra, other_query, missing_group] {
             let mut work = SharedVerificationWork::default();
             assert!(
-                verify_shared_recorded(&air(), &proof, VerifyLimits::default(), &mut work).is_err()
+                verify_shared_recorded(&air(), &proof, diagnostic_limits(), &mut work).is_err()
             );
             assert_eq!(
                 work.row_leaves + work.oracle_leaves + work.fri_leaves + work.parent_hashes,
@@ -1908,19 +1736,13 @@ mod tests {
     fn converter_rejects_conflicting_duplicates_and_discarded_legacy_fields() {
         let baseline = &fixture().compact;
         let relation = air();
-        let duplicate_query = baseline
-            .queries
-            .iter()
-            .position(|query| {
-                baseline
-                    .queries
-                    .iter()
-                    .any(|other| other.index as usize == next_index(query.index as usize, 256))
-            })
-            .unwrap();
-        let mut row_conflict = baseline.clone();
-        row_conflict.queries[duplicate_query].next[0] += 1;
-        assert!(from_compact(&relation, &row_conflict, conversion_limits()).is_err());
+        let mut rows = BTreeMap::new();
+        let row = air().row();
+        insert_equal(&mut rows, 17, row.clone()).unwrap();
+        insert_equal(&mut rows, 17, row.clone()).unwrap();
+        let mut conflict = row;
+        conflict[341] += 1;
+        assert!(insert_equal(&mut rows, 17, conflict).is_err());
         for mutation in 0..8 {
             let mut proof = baseline.clone();
             match mutation {
@@ -1951,8 +1773,15 @@ mod tests {
                 "mutation={mutation}"
             );
         }
-        // The first-round leaf count is128 with136 distinct initial queries:
-        // at least two queries name the same strided coset group.
+        // The first layer with fewer than375 group positions guarantees a
+        // duplicated group, without an assumption about transcript collisions.
+        let geometry = Geometry::new(&relation).unwrap();
+        let round = geometry
+            .fri_lengths
+            .iter()
+            .position(|&length| length / 2 < 375)
+            .unwrap();
+        let leaves = geometry.fri_lengths[round] / 2;
         let duplicate_group = baseline
             .queries
             .iter()
@@ -1960,12 +1789,12 @@ mod tests {
             .find_map(|(position, query)| {
                 baseline.queries[..position]
                     .iter()
-                    .any(|other| other.index % 128 == query.index % 128)
+                    .any(|other| other.index as usize % leaves == query.index as usize % leaves)
                     .then_some(position)
             })
             .unwrap();
         let mut group_conflict = baseline.clone();
-        let values = &mut group_conflict.queries[duplicate_group].fri.rounds[0].values;
+        let values = &mut group_conflict.queries[duplicate_group].fri.rounds[round].values;
         values[0] = changed_field(values[0], 1);
         assert!(from_compact(&relation, &group_conflict, conversion_limits()).is_err());
     }
@@ -1973,30 +1802,43 @@ mod tests {
     #[test]
     fn freshly_proved_false_claim_passes_openings_and_fails_actual_terminal_degree() {
         let relation = air();
-        let false_compact = prove(&relation, &[vec![8; 32]]).unwrap();
+        let false_compact = prove(&relation, &FixedColumnsAir::new(8).columns()).unwrap();
         let false_shared = from_compact(&relation, &false_compact, conversion_limits()).unwrap();
         let mut work = SharedVerificationWork::default();
         assert!(matches!(
-            verify_shared_recorded(&relation, &false_shared, VerifyLimits::default(), &mut work),
+            verify_shared_recorded(&relation, &false_shared, diagnostic_limits(), &mut work),
             Err(Error::FriTerminalDegreeMismatch { degree_bound: 1 })
         ));
-        assert_eq!(work.air_evaluations, 136);
+        assert_eq!(work.air_evaluations, 375);
         assert_eq!(work.terminal_degree_checks, 1);
         assert!(work.parent_hashes > 0 && work.fri_leaves > 0);
     }
 
     #[test]
     fn nonconstant_next_row_relation_rejects_coherently_reproved_stride_one_and_swapped_rows() {
-        use crate::backend::{field_pow, mul_mod, sub_mod, verify_merkle_path_for_role};
+        use crate::backend::{field_pow, mul_mod, sub_mod};
 
-        const TRACE_ROWS: usize = 16;
-        const LDE_ROWS: usize = 128;
+        const TRACE_ROWS: usize = 65_536;
+        const LDE_ROWS: usize = 524_288;
 
         #[derive(Clone, Copy, Debug)]
         enum NextMapping {
             Correct,
             StrideOne,
             Swapped,
+        }
+
+        // All923 test slots are real polynomials: the selected recurrence,
+        // 341 zero current columns,341 zero next columns, then240 nonzero
+        // multiples of the recurrence. No production relation is replaced.
+        fn slots(recurrence: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
+            let mut slots = Vec::with_capacity(923);
+            slots.push(recurrence);
+            slots.extend_from_slice(&current[1..]);
+            slots.extend_from_slice(&next[1..]);
+            slots.extend((2..=241).map(|scale| mul_mod(recurrence, scale)));
+            assert_eq!(slots.len(), 923);
+            Ok(slots)
         }
 
         struct RecurrenceAir {
@@ -2017,14 +1859,22 @@ mod tests {
                     // The real engine always supplies physical stride-eight
                     // rows. Select the deliberately wrong committed row here
                     // to model the faulty producer mapping explicitly.
-                    assert_eq!(current, &[self.values[index]]);
-                    assert_eq!(next, &[self.values[(index + 8) % LDE_ROWS]]);
-                    let (current, next) = match self.mapping {
+                    assert_eq!(current.len(), 342);
+                    assert_eq!(current[0], self.values[index]);
+                    assert!(current[1..].iter().all(|&value| value == 0));
+                    assert_eq!(next.len(), 342);
+                    assert_eq!(next[0], self.values[(index + 8) % LDE_ROWS]);
+                    assert!(next[1..].iter().all(|&value| value == 0));
+                    let (left, right) = match self.mapping {
                         NextMapping::Correct => (current[0], next[0]),
                         NextMapping::StrideOne => (current[0], self.values[(index + 1) % LDE_ROWS]),
                         NextMapping::Swapped => (next[0], current[0]),
                     };
-                    Ok(vec![sub_mod(next, mul_mod(self.trace_generator, current))])
+                    slots(
+                        sub_mod(right, mul_mod(self.trace_generator, left)),
+                        current,
+                        next,
+                    )
                 })
             }
         }
@@ -2033,8 +1883,8 @@ mod tests {
             fn schema(&self) -> FixedAirSchema {
                 FixedAirSchema {
                     trace_rows: TRACE_ROWS,
-                    width: 1,
-                    constraints: 1,
+                    width: 342,
+                    constraints: 923,
                     identity: "shared-opening-test:next-row-recurrence:v1",
                 }
             }
@@ -2044,30 +1894,32 @@ mod tests {
             }
 
             fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
-                let ([current], [next]) = (current, next) else {
-                    return Err(shape(
-                        "recurrence AIR requires two complete one-column rows",
-                    ));
-                };
+                if current.len() != 342 || next.len() != 342 {
+                    return Err(shape("recurrence fixture requires complete342-column rows"));
+                }
                 let (left, right) = match self.mapping {
-                    NextMapping::Correct => (*next, *current),
+                    NextMapping::Correct => (next[0], current[0]),
                     // This adversarial producer uses f(X)=X^8. Its alternate
                     // next value is known exactly at x*g_L, so all quotient,
                     // FRI and Merkle data can be recomputed coherently for the
                     // wrong stride instead of merely corrupting a path.
                     NextMapping::StrideOne => {
-                        (field_pow(mul_mod(point, self.lde_generator), 8), *current)
+                        (field_pow(mul_mod(point, self.lde_generator), 8), current[0])
                     }
-                    NextMapping::Swapped => (*current, *next),
+                    NextMapping::Swapped => (current[0], next[0]),
                 };
-                Ok(vec![sub_mod(left, mul_mod(self.trace_generator, right))])
+                slots(
+                    sub_mod(left, mul_mod(self.trace_generator, right)),
+                    current,
+                    next,
+                )
             }
 
             fn prepare_prover(&self) -> Result<Box<dyn PreparedAir + '_>> {
                 let exponent = match self.mapping {
                     NextMapping::Correct => 1,
                     NextMapping::StrideOne => 8,
-                    NextMapping::Swapped => 15,
+                    NextMapping::Swapped => TRACE_ROWS - 1,
                 };
                 let values = (0..LDE_ROWS)
                     .map(|index| {
@@ -2075,7 +1927,7 @@ mod tests {
                             FASTPQ_FINAL_V1.omega_coset,
                             field_pow(self.lde_generator, index as u64),
                         );
-                        field_pow(point, exponent)
+                        field_pow(point, exponent as u64)
                     })
                     .collect();
                 Ok(Box::new(PreparedRecurrence {
@@ -2107,7 +1959,7 @@ mod tests {
         for (mapping, exponent) in [
             (NextMapping::Correct, 1),
             (NextMapping::StrideOne, 8),
-            (NextMapping::Swapped, 15),
+            (NextMapping::Swapped, TRACE_ROWS - 1),
         ] {
             let producer = RecurrenceAir {
                 mapping,
@@ -2122,25 +1974,27 @@ mod tests {
                 .map(|index| field_pow(trace_generator, (index * exponent) as u64))
                 .collect::<Vec<_>>();
             assert_ne!(trace[0], trace[1], "each probe must be nonconstant");
-            let prepared = prepare_trace(&producer, &[trace]).unwrap();
+            let mut columns = vec![vec![0; TRACE_ROWS]; 342];
+            columns[0] = trace;
+            let prepared = prepare_trace(&producer, &columns).unwrap();
+            drop(columns);
             let compact = prove_prepared(&producer, &prepared).unwrap();
             let shared = from_compact(&producer, &compact, conversion_limits()).unwrap();
             // Each exponent is below N. The deliberately wrong recurrence is
             // satisfied by its own monomial, so even its full FRI degree check
             // passes; the intended next-row relation must be what rejects it.
-            let producer_work = verify_shared(&producer, &shared, VerifyLimits::default()).unwrap();
+            let producer_work = verify_shared(&producer, &shared, diagnostic_limits()).unwrap();
             assert_eq!(producer_work.terminal_degree_checks, 1);
-            assert_eq!(producer_work.air_evaluations, LDE_ROWS);
-            assert_eq!(shared.rows.len(), LDE_ROWS);
-            for index in 0..LDE_ROWS {
-                assert_eq!(
-                    shared_row(&shared.rows, index).unwrap(),
-                    &[field_pow(domain.point(index), exponent as u64)]
-                );
+            assert_eq!(producer_work.air_evaluations, 375);
+            assert!((375..=750).contains(&shared.rows.len()));
+            for index in shared.rows.iter().map(|row| row.index as usize) {
+                let row = shared_row(&shared.rows, index).unwrap();
+                assert_eq!(row.len(), 342);
+                assert_eq!(row[0], field_pow(domain.point(index), exponent as u64));
+                assert!(row[1..].iter().all(|&value| value == 0));
             }
             let mut work = SharedVerificationWork::default();
-            let result =
-                verify_shared_recorded(&intended, &shared, VerifyLimits::default(), &mut work);
+            let result = verify_shared_recorded(&intended, &shared, diagnostic_limits(), &mut work);
             match mapping {
                 NextMapping::Correct => {
                     result.unwrap();
@@ -2168,32 +2022,51 @@ mod tests {
                                  path: &mut Vec<WireDigest>,
                                  intended_index,
                                  mapped_index| {
-                        *values = vec![prepared.columns[0][mapped_index]];
+                        *values = prepared
+                            .columns
+                            .iter()
+                            .map(|column| column[mapped_index])
+                            .collect();
                         *path = prepared.rows.path(mapped_index).unwrap();
                         let native_path = path
                             .iter()
                             .copied()
                             .map(WireDigest::as_fastpq)
                             .collect::<Vec<_>>();
-                        assert!(
-                            verify_merkle_path_for_role(
-                                MerkleTreeRoleV1::AirTrace,
-                                prepared.rows.root(),
-                                hash_air_trace_row(mapped_index, values).unwrap(),
-                                mapped_index,
-                                &native_path,
+                        let plan = |index| {
+                            MultiproofPlan::new(
+                                LDE_ROWS,
+                                &[index],
+                                MultiproofLimits {
+                                    max_depth: 19,
+                                    max_queried_leaves: 1,
+                                    max_siblings: 19,
+                                    max_parent_hashes: 19,
+                                },
                             )
                             .unwrap()
-                        );
-                        assert!(
-                            !verify_merkle_path_for_role(
+                        };
+                        prepared
+                            .binding
+                            .verify_tree(
+                                &plan(mapped_index),
                                 MerkleTreeRoleV1::AirTrace,
                                 prepared.rows.root(),
-                                hash_air_trace_row(intended_index, values).unwrap(),
-                                intended_index,
+                                &[prepared.binding.row(mapped_index, values).unwrap()],
                                 &native_path,
                             )
-                            .unwrap()
+                            .unwrap();
+                        assert!(
+                            prepared
+                                .binding
+                                .verify_tree(
+                                    &plan(intended_index),
+                                    MerkleTreeRoleV1::AirTrace,
+                                    prepared.rows.root(),
+                                    &[prepared.binding.row(intended_index, values).unwrap()],
+                                    &native_path
+                                )
+                                .is_err()
                         );
                     };
                     for query in &mut remapped.queries {
@@ -2225,26 +2098,36 @@ mod tests {
     }
 
     #[test]
-    fn smallest_domain_retains_sole_terminal_duplicate_node_and_complete_values() {
-        let relation = TinyAir {
-            public: [7],
-            trace_rows: 1,
-        };
-        let compact = prove(&relation, &[vec![7]]).unwrap();
-        let proof = from_compact(&relation, &compact, conversion_limits()).unwrap();
+    fn final_domain_retains_sole_terminal_duplicate_node_and_complete_values() {
+        let relation = air();
+        let proof = &fixture().shared;
         assert_eq!(proof.terminal_values.len(), 4);
-        assert_eq!(proof.rounds.len(), 1);
-        assert!(proof.row_siblings.is_empty());
-        assert!(proof.mixed_siblings.is_empty());
-        assert!(proof.quotient_siblings.is_empty());
-        assert!(proof.rounds[0].siblings.is_empty());
-        let work = verify_shared(&relation, &proof, VerifyLimits::default()).unwrap();
-        assert_eq!(work.air_evaluations, 8);
+        assert_eq!(proof.rounds.len(), 17);
+        let geometry = Geometry::new(&relation).unwrap();
+        let binding = Binding::new(&relation, &geometry).unwrap();
+        let work = verify_shared(&relation, proof, diagnostic_limits()).unwrap();
+        assert_eq!(work.air_evaluations, 375);
         assert_eq!(work.terminal_degree_checks, 1);
-        let terminal = hash_fri_chunk(1, 0, &proof.terminal_values).unwrap();
-        let root = merkle_node_hash(MerkleTreeRoleV1::Fri(1), 1, 0, terminal, terminal).unwrap();
-        assert_eq!(root, proof.fri_roots[1].as_fastpq());
-        assert_ne!(terminal, root);
+        let leaf = binding.fri(17, 0, &proof.terminal_values).unwrap();
+        let root = binding
+            .parent(MerkleTreeRoleV1::Fri(17), 1, 0, leaf, leaf)
+            .unwrap();
+        assert_eq!(root, proof.fri_roots[17].as_fastpq());
+        assert_ne!(leaf, root);
+        // Full-coverage empty-frontier law is a plan invariant independent of
+        // an accepted proof geometry; preserve it without a small proof path.
+        let full = MultiproofPlan::new(
+            8,
+            &(0..8).collect::<Vec<_>>(),
+            MultiproofLimits {
+                max_depth: 3,
+                max_queried_leaves: 8,
+                max_siblings: 0,
+                max_parent_hashes: 7,
+            },
+        )
+        .unwrap();
+        assert_eq!(full.work().siblings, 0);
     }
 
     #[test]
@@ -2263,7 +2146,7 @@ mod tests {
             (u8::MIN..=u8::MAX).filter(|&flags| norito::core::validate_header_flags(flags).is_ok())
         {
             let _ambient = norito::core::DecodeFlagsGuard::enter(flags);
-            let work = verify_shared(&air(), &decoded, VerifyLimits::default()).unwrap();
+            let work = verify_shared(&air(), &decoded, diagnostic_limits()).unwrap();
             assert_eq!(work.proof_bytes, expected.len());
             assert_eq!(canonical(), expected);
             assert_eq!(norito::core::get_decode_flags(), flags);
@@ -2272,5 +2155,5 @@ mod tests {
 }
 
 #[cfg(test)]
-#[path = "shared_openings/shake_diagnostic.rs"]
-mod shake_diagnostic;
+#[path = "shared_openings/compact_diagnostic.rs"]
+mod compact_diagnostic;

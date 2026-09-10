@@ -31,8 +31,8 @@ use iroha_data_model::{
         PopRegistryStatusV1, PopRevocationPublicationRecordV1, PopRevocationRecordV1,
         pop_registry_payload_digest_v1, pop_revocation_nonce_commitment_v1,
     },
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use norito::{DecodeLimits, decode_canonical_with_limits};
 use sorafs_manifest::pop_credentials::{

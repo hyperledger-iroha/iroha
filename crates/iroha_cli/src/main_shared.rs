@@ -31,6 +31,7 @@ mod subscriptions;
 mod sumeragi;
 mod taira;
 mod taira_public_reset;
+mod transaction_load;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
 use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
 use error_stack::{IntoReportCompat, Report, ResultExt, fmt::ColorMode};
@@ -4744,7 +4745,8 @@ mod query {
 }
 mod transaction {
     use super::*;
-    use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, name::Name};
+    use iroha_model_base::name::Name;
+use iroha::data_model::{Level as LogLevel, isi::Log, metadata::Metadata, };
     use std::{
         sync::{
             Arc, LazyLock, Mutex,
@@ -4761,6 +4763,8 @@ mod transaction {
         Get(Get),
         /// Send an empty transaction that logs a message
         Ping(Ping),
+        /// Collect an exact fixed-schedule transaction trace for multilane qualification
+        Load(crate::transaction_load::Args),
         /// Send a transaction using IVM bytecode
         Ivm(Ivm),
         /// Send a transaction using JSON input from stdin
@@ -4775,6 +4779,7 @@ mod transaction {
                 Status(cmd) => cmd.run(context),
                 Get(cmd) => cmd.run(context),
                 Ping(cmd) => cmd.run(context),
+                Load(cmd) => cmd.run(context),
                 Ivm(cmd) => cmd.run(context),
                 Stdin(cmd) => cmd.run(context),
                 SignedSize(cmd) => cmd.run(context),
@@ -6959,7 +6964,8 @@ mod repo {
 mod settlement {
     use super::*;
     use clap::ValueEnum;
-    use iroha::data_model::{
+    use iroha_model_base::name::Name;
+use iroha::data_model::{
         domain::DomainId,
         isi::{
             InstructionBox,
@@ -6973,7 +6979,7 @@ mod settlement {
         metadata::Metadata,
         nexus::DataSpaceId,
         oracle::{FeedConfigVersion, FeedEvent, FeedId},
-        prelude::{AssetDefinitionId, Name},
+        prelude::{AssetDefinitionId, },
         query::settlement::prelude::{FindFxCorridorPolicyById, FindFxCorridorPolicyRegistry},
     };
     use std::collections::BTreeSet;

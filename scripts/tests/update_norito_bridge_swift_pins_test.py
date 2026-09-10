@@ -80,6 +80,7 @@ def reject_duplicates(pairs):
 def validate(
     *,
     root,
+    lockfile_path,
     xcframework,
     manifest_path,
     manifest_link,
@@ -92,6 +93,8 @@ def validate(
         raise ValidationError("full repository provenance was not requested")
     if os.environ.get("PIN_OWNER_TEST_REJECT_PROVENANCE") == "1":
         raise ValidationError("simulated stale repository provenance")
+    if lockfile_path != root / "Cargo.lock":
+        raise ValidationError("pin owner failed to propagate explicit selected lock")
     lock_path = manifest_path.parent.parent / ".NoritoBridge.publish.lockfile"
     if os.environ.get("PIN_OWNER_TEST_ASSERT_LOCK_HELD") == "1":
         descriptor = os.open(lock_path, os.O_RDWR)
@@ -120,6 +123,10 @@ def validate(
             json.dumps(changed, sort_keys=True) + "\\n",
             encoding="utf-8",
         )
+    if os.environ.get("PIN_OWNER_TEST_REPLACE_SELECTED_LOCK") == "1":
+        replacement = lockfile_path.with_name("replacement-Cargo.lock")
+        replacement.write_bytes(lockfile_path.read_bytes())
+        replacement.replace(lockfile_path)
     if os.environ.get("PIN_OWNER_TEST_REPLACE_LOCK") == "1":
         lock_path.unlink()
         lock_path.write_bytes(b"")
@@ -293,6 +300,7 @@ def validate(
                 str(OWNER),
                 "--root",
                 str(self.root),
+                "--lockfile-path", str(self.root / "Cargo.lock"),
                 "--artifact-dir",
                 str(artifact or self.artifact),
                 *arguments,
@@ -323,6 +331,20 @@ def validate(
 
         self.write_loader(self.hashes)
         self.assertEqual(self.run_owner("--check").returncode, 0)
+
+    def test_selected_build_lock_replacement_aborts_before_pin_output(self) -> None:
+        preimage = self.loader.read_bytes()
+        output = self.output_root / "selected-lock-replaced.swift"
+        environment = os.environ.copy()
+        environment["PIN_OWNER_TEST_REPLACE_SELECTED_LOCK"] = "1"
+        result = self.run_owner(
+            "--output", str(output), "--expected-preimage-sha256",
+            hashlib.sha256(preimage).hexdigest(), environment=environment,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("selected Cargo lock changed during Swift pin projection", result.stderr)
+        self.assertFalse(output.exists())
+        self.assertEqual(self.loader.read_bytes(), preimage)
 
     def test_output_mode_never_mutates_the_loader(self) -> None:
         preimage = self.loader.read_bytes()
@@ -469,6 +491,7 @@ def validate(
         environment = {
             "PATH": "/usr/bin:/bin",
             "ROOT_DIR": "/repo with spaces",
+            "CARGO_LOCKFILE": "/reviewed graph/Cargo.lock",
             "PUBLISH_ROOT": "/external artifacts",
             "PUBLISH_PROSPECTIVE_LOADER": "/external artifacts/prospective.swift",
             "SWIFT_PIN_PREIMAGE_SHA256": "a" * 64,
@@ -476,6 +499,7 @@ def validate(
         expected = [
             "--root", environment["ROOT_DIR"],
             "--artifact-dir", environment["PUBLISH_ROOT"],
+            "--lockfile-path", environment["CARGO_LOCKFILE"],
             "--output", environment["PUBLISH_PROSPECTIVE_LOADER"],
             "--expected-preimage-sha256", environment["SWIFT_PIN_PREIMAGE_SHA256"],
         ]

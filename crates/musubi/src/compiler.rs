@@ -2,10 +2,11 @@
 //!
 //! Registry sources cross this boundary only after the immutable cache has
 //! re-authenticated the complete bundle against an exact lock node. Local path
-//! packages remain explicit `local:` identities, while every registry import
-//! uses the exact structural release identity selected by the consumer lock.
+//! packages and registry releases have distinct canonical compiler identities derived from
+//! their structural fields. Every registry import binds to the exact consumer-lock selection.
 use crate::{
     cache::{CachedCompilerPackageV1, MusubiCache},
+    compiler_identity::{local_package, registry_release},
     graph::{GraphErrorV1, collect_local_members},
     lockfile::LockfileV1,
     manifest::{ConcreteDependency, DependencySpec, LocalTarget, PortablePath, parse_manifest},
@@ -250,11 +251,11 @@ fn validate_packaged_with_source<S: RegistryCompilerSourceV1>(
         .iter()
         .map(|edge| ImportBinding {
             alias: edge.alias.to_string(),
-            package: edge.selected.to_string(),
+            package: registry_release(&edge.selected),
         })
         .collect::<Vec<_>>();
     let root = SourcePackageUnit {
-        identity: verification_lock.root.to_string(),
+        identity: registry_release(&verification_lock.root),
         modules,
         exports: library.exports.iter().map(ToString::to_string).collect(),
         imports: imports.clone(),
@@ -331,7 +332,7 @@ pub fn validate_exact_registry_interfaces_v1<'node>(
     let graph = ModuleBuildGraph::default();
     let session = CompilerSession::new(options);
     for node in nodes {
-        let identity = node.release.to_string();
+        let identity = registry_release(&node.release);
         let package_index = packages_by_identity.get(identity.as_str()).ok_or_else(|| {
             format!(
                 "release `{}` has no authenticated source package in the exact graph",
@@ -558,7 +559,12 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     let selected_set = selected.iter().cloned().collect::<BTreeSet<_>>();
     let local_identities = local_members
         .iter()
-        .map(|member| (member.manifest_path.clone(), local_identity(member)))
+        .map(|member| {
+            (
+                member.manifest_path.clone(),
+                local_package(&member.package.selector, &member.package.version),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     if local_identities.len() != local_members.len() {
         return Err(CompilerBridgeErrorV1::Package(
@@ -572,7 +578,7 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
         if local_units.insert(unit.identity.clone(), unit).is_some() {
             return Err(CompilerBridgeErrorV1::Package(format!(
                 "duplicate local identity `{}`",
-                local_identity(member)
+                local_package(&member.package.selector, &member.package.version)
             )));
         }
     }
@@ -607,7 +613,7 @@ fn execute_with_source<S: RegistryCompilerSourceV1>(
     let driver = BuildDriver::for_current_executable(CompilerSession::new(options))
         .map_err(|error| CompilerBridgeErrorV1::Compiler(error.to_string()))?;
     for member in &local_members {
-        let identity = local_identity(member);
+        let identity = local_package(&member.package.selector, &member.package.version);
         let package = local_units.get(&identity).cloned().ok_or_else(|| {
             CompilerBridgeErrorV1::Package(format!("local package `{identity}` disappeared"))
         })?;
@@ -706,15 +712,6 @@ fn package_target_root(workspace: &Workspace, member: &WorkspaceMember) -> PathB
 fn graph_error(error: &GraphErrorV1) -> CompilerBridgeErrorV1 {
     CompilerBridgeErrorV1::Workspace(error.to_string())
 }
-fn local_identity(member: &WorkspaceMember) -> String {
-    format!(
-        "local:{}@{}",
-        member.package.selector, member.package.version
-    )
-}
-fn exact_registry_identity(node: &MusubiVerificationNodeV1) -> String {
-    node.release.to_string()
-}
 fn local_source_package(
     member: &WorkspaceMember,
     lock: &LockfileV1,
@@ -736,7 +733,7 @@ fn local_source_package(
         )));
     }
     Ok(SourcePackageUnit {
-        identity: local_identity(member),
+        identity: local_package(&member.package.selector, &member.package.version),
         modules,
         exports: library.exports.iter().map(ToString::to_string).collect(),
         imports: local_imports(member, lock, local_identities)?,
@@ -814,7 +811,7 @@ fn exact_edge_identity(
             )));
         }
     }
-    Ok(edge.selected.to_string())
+    Ok(registry_release(&edge.selected))
 }
 fn cached_source_package(
     node: &MusubiVerificationNodeV1,
@@ -885,11 +882,11 @@ fn cached_source_package(
         .iter()
         .map(|edge| ImportBinding {
             alias: edge.alias.to_string(),
-            package: edge.selected.to_string(),
+            package: registry_release(&edge.selected),
         })
         .collect();
     Ok(SourcePackageUnit {
-        identity: exact_registry_identity(node),
+        identity: registry_release(&node.release),
         modules,
         exports: semantic_exports,
         imports,
@@ -898,7 +895,7 @@ fn cached_source_package(
 fn validate_manifest_dependency_edges(
     release: &iroha_data_model::musubi::MusubiReleaseIdV1,
     edges: &[iroha_data_model::musubi::MusubiExactDependencyEdgeV1],
-    dependencies: &BTreeMap<iroha_data_model::name::Name, DependencySpec>,
+    dependencies: &BTreeMap<iroha_model_base::name::Name, DependencySpec>,
 ) -> Result<(), CompilerBridgeErrorV1> {
     if dependencies.len() != edges.len() {
         return Err(CompilerBridgeErrorV1::Package(format!(

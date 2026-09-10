@@ -304,6 +304,7 @@ pub mod isi {
             query::error::FindError,
             role::{Role, RoleId},
         };
+        use iroha_model_base::name::Name;
         use iroha_test_samples::ALICE_ID;
         fn checked_keypair() -> KeyPair {
             KeyPair::try_random().expect("NFT ISI fixture key generation should succeed")

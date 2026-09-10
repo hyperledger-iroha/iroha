@@ -978,6 +978,8 @@ pub struct PrivacyCompositionBudgetChainV1 {
     pub charges: Vec<PrivacyCompositionBudgetChargeV1>,
 }
 /// Durable multi-policy composition-budget ledger.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::transparency::PrivacyCompositionBudgetLedgerV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PrivacyCompositionBudgetLedgerV1 {
     /// Schema version.
@@ -1169,6 +1171,8 @@ impl std::fmt::Debug for PrivacyReleaseRecordV1 {
     }
 }
 /// Internal hash-chained privacy release ledger persisted with the outbox.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::transparency::PrivacyReleaseLedgerV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct PrivacyReleaseLedgerV1 {
     pub(crate) version: u8,

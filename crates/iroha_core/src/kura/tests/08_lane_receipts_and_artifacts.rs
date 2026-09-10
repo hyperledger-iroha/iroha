@@ -658,6 +658,8 @@ fn lane_block_application_receipt_read_rejects_tampered_sidecar() {
 }
 #[test]
 fn lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evidence() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::lane_block_application_receipt_reader_rejects_pre_release_omitted_merge_evidence::PreReleaseLaneBlockApplicationReceiptArtifact")]
     #[derive(Encode)]
     struct PreReleaseLaneBlockApplicationReceiptArtifact {
         format: LaneBlockApplicationReceiptArtifactFormat,
@@ -972,6 +974,8 @@ fn lane_block_execution_input_read_rejects_tampered_sidecar() {
 }
 #[test]
 fn lane_block_execution_input_reader_rejects_pre_release_correlated_source_layout() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::lane_block_execution_input_reader_rejects_pre_release_correlated_source_layout::PreReleaseLaneBlockExecutionInputArtifact")]
     #[derive(Encode)]
     struct PreReleaseLaneBlockExecutionInputArtifact {
         format: LaneBlockExecutionInputArtifactFormat,

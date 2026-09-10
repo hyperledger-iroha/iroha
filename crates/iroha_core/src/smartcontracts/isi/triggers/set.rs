@@ -1149,6 +1149,8 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
     }
 }
 // Norito DTOs for Set serialization
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::ExecutableRefDto")]
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum ExecutableRefDto {
     Ivm(HashOf<IvmBytecode>),
@@ -1179,6 +1181,8 @@ impl TryFrom<ExecutableRefDto> for ExecutableRef {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::IvmBytecodeEntryDto")]
 #[derive(Encode, Decode)]
 struct IvmBytecodeEntryDto {
     original_contract: IvmBytecode,
@@ -1210,6 +1214,8 @@ impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::LoadedActionDto")]
 #[derive(Encode, Decode, Clone)]
 struct LoadedActionDto<F> {
     executable: ExecutableRefDto,
@@ -2692,6 +2698,22 @@ mod tests {
         assert_eq!(checked_keypair().algorithm(), Algorithm::default());
     }
     #[test]
+    fn borrowed_enum_variants_preserve_the_owned_frame_identity() {
+        #[derive(norito::Encode, norito::NoritoSchema)]
+        #[norito_schema(name = "iroha_core::triggers::tests::BorrowedVariantProjection")]
+        enum Projection {
+            Value(u64),
+        }
+        let value = 31_u64;
+        let borrowed = BorrowedEnumVariant::new(0, &value);
+        assert_eq!(
+            crate::smartcontracts::isi::query::encode_singular_query_source_for_test::<_, Projection>(
+                &borrowed
+            ),
+            norito::encode_canonical(&Projection::Value(value)).unwrap(),
+        );
+    }
+    #[test]
     fn inspect_by_id_skips_missing_entry() {
         let mut set = Set::default();
         let trigger_id: TriggerId = "missing_trigger".parse().expect("valid trigger id");
@@ -3802,7 +3824,7 @@ mod dto_tests {
                 status: Some(BlockStatus::Committed),
             };
             let pipe_filter: dm::PipelineEventFilterBox = block_filter.into();
-            let key: dm::Name = "k1".parse().unwrap();
+            let key: iroha_model_base::name::Name = "k1".parse().unwrap();
             let val = dm::Json::new("v1");
             let set_kv = SetKeyValue::account(authority.clone(), key, val);
             let log = Log::new(dm::Level::INFO, "pipeline".to_string());

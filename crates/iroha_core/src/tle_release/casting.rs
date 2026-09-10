@@ -38,6 +38,8 @@ pub const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_VERSION_V1: u16 = 1;
 pub const PARLIAMENT_TIMED_OVN_CASTING_CONTEXT_ARCHIVE_MAX_BYTES_V1: usize = 4 * 1024 * 1024;
 
 /// Cast-capable prefix phases represented in the public wallet archive.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tle_release::casting::ParliamentTimedOvnCastingPhaseV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ParliamentTimedOvnCastingPhaseV1 {
     /// Authenticated participant registrations are still accumulating.

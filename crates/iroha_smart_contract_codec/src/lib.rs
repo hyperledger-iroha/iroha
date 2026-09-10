@@ -5,7 +5,7 @@
 //! Norito-encoded payloads without duplicating pointer-handling logic.
 #![allow(unsafe_code)]
 use core::{convert::TryInto, mem, ops::RangeFrom};
-use norito::{NoritoDeserialize, NoritoSerialize, SerializePayload, decode_from_bytes, to_bytes};
+use norito::{NoritoDeserialize, NoritoSerialize, decode_from_bytes, to_bytes};
 /// Encode the given value with a `usize` length prefix.
 ///
 /// The returned allocation owns the encoded bytes and is suitable for passing across the IVM FFI
@@ -61,7 +61,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode)]
+    #[derive(Debug, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_smart_contract_codec::tests::Dummy")]
     #[norito(decode_from_slice)]
     struct Dummy {
         a: u32,

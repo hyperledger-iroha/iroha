@@ -80,7 +80,6 @@ use iroha_data_model::{
         pin_intent::DaPinIntentWithLocation,
         types::{BlobDigest, StorageTicketId},
     },
-    error::ParseError,
     escrow::{AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     events::{
         EventBox, SharedDataEvent,
@@ -133,7 +132,6 @@ use iroha_data_model::{
         MusubiReplicationOrderLocationReferenceV1, MusubiResolverReleaseRowV1,
         MusubiStorageAvailabilityV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
-    name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, AxtAssetIncarnationV1, AxtEnvelopeRecord, AxtHandleBudgetKey,
@@ -199,7 +197,6 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
-    state_path::StatePath,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use iroha_executor_data_model::permission::{
@@ -209,6 +206,7 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_logger::prelude::*;
+use iroha_model_base::{error::ParseError, name::Name, state_path::StatePath};
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -4183,6 +4181,8 @@ pub enum BlockProofError {
     ExecutedBlockWireHashUnavailable(NonZeroU64),
 }
 /// Consensus key identifying one authority-owned pending contract-code upload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::SmartContractCodeUploadKey")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct SmartContractCodeUploadKey {
     /// Account that owns and may finalize or cancel the upload.
@@ -4250,6 +4250,8 @@ fn decode_contract_upload_key_hash(encoded: &str) -> Result<Hash, json::Error> {
     Ok(Hash::prehashed(bytes))
 }
 /// Consensus key identifying one chunk within an authority-owned pending upload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::SmartContractCodeUploadChunkKey")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub struct SmartContractCodeUploadChunkKey {
     /// Pending upload that owns the chunk.
@@ -4317,6 +4319,8 @@ impl mv::json::JsonKeyCodec for SmartContractCodeUploadChunkKey {
     }
 }
 /// Immutable shape descriptor for a pending contract-code upload.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::SmartContractCodeUploadDescriptor")]
 #[derive(
     Debug,
     Clone,
@@ -4343,6 +4347,8 @@ pub struct SmartContractCodeUploadProgress {
     pub received_chunks: u32,
 }
 /// Non-zero universal Musubi resolver-index revision persisted in world state.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::MusubiResolverIndexRevisionV1")]
 #[derive(
     Debug,
     Clone,
@@ -4402,6 +4408,8 @@ impl mv::json::JsonKeyCodec for MusubiResolverIndexRevisionV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentTimedOvnResourceReservationV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ParliamentTimedOvnResourceReservationV1 {
     governance_attempt_id: GovernanceAttemptId,
@@ -4410,6 +4418,8 @@ struct ParliamentTimedOvnResourceReservationV1 {
 }
 
 /// One active hidden-ballot phase window eligible for the compact casting snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentTimedOvnCastingCandidateV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 pub(crate) struct ParliamentTimedOvnCastingCandidateV1 {
     pub(crate) governance_attempt_id: GovernanceAttemptId,
@@ -4418,6 +4428,8 @@ pub(crate) struct ParliamentTimedOvnCastingCandidateV1 {
 }
 
 /// Counts of distinct Parliament attempts that reference one account.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentMemberReferenceCountsV1")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode)]
 pub(crate) struct ParliamentMemberReferenceCountsV1 {
     /// Attempts with a live candidate snapshot or immutable sealed assignment.
@@ -4444,6 +4456,8 @@ impl ParliamentMemberReferenceCountsV1 {
 }
 
 /// Exact counts of canonical Parliament attempts by status and current stage.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ParliamentAttemptCountsV1")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode)]
 pub(crate) struct ParliamentAttemptCountsV1 {
     status_counts: [u64; 6],
@@ -10258,6 +10272,8 @@ mod private_settlement_ledger_evidence_tests {
 }
 
 /// Verifying-key binding enforced for a ZK asset operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ZkAssetVerifierBinding")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10272,6 +10288,8 @@ pub struct ZkAssetVerifierBinding {
 /// Iroha 3 has one first-release profile. Persisting it in world state makes the
 /// hash construction an authenticated ledger property instead of inferring it
 /// from whichever verifier key or node configuration happens to be present.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ConfidentialTreeProfile")]
 #[derive(
     Copy,
     Clone,
@@ -10416,6 +10434,8 @@ impl json::JsonDeserialize for ZkAssetState {
     }
 }
 /// Election state for anonymous voting.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ElectionState")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10448,6 +10468,8 @@ pub struct ElectionState {
     pub domain_tag: String,
 }
 /// Canonical first-release projection of one typed governance proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceProposalRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
 pub struct GovernanceProposalRecord {
@@ -10660,6 +10682,8 @@ impl GovernanceProposalRecord {
     }
 }
 /// Lifecycle status of a governance proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceProposalStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum GovernanceProposalStatus {
     /// Proposal has been submitted and its latest attempt is active or certified.
@@ -10848,6 +10872,8 @@ fn update_oracle_change_pipeline(
     }
 }
 /// Referendum record for governance (status and schedule)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceReferendumRecord")]
 #[derive(
     Copy,
     Clone,
@@ -10871,6 +10897,8 @@ pub struct GovernanceReferendumRecord {
     pub mode: GovernanceReferendumMode,
 }
 /// Lifecycle status of a referendum
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceReferendumStatus")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum GovernanceReferendumStatus {
     /// Referendum proposed but not yet open for voting
@@ -10904,6 +10932,8 @@ impl json::JsonDeserialize for GovernanceReferendumStatus {
     }
 }
 /// Voting mode for a referendum
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceReferendumMode")]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum GovernanceReferendumMode {
     /// Zero-knowledge verified (ZK) voting mode
@@ -10934,6 +10964,8 @@ impl json::JsonDeserialize for GovernanceReferendumMode {
     }
 }
 /// Immutable asset-custody identities retained with a governance lock.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceLockCustody")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10948,6 +10980,8 @@ pub struct GovernanceLockCustody {
     pub slash_receiver_account: iroha_data_model::account::AccountId,
 }
 /// Lock record for governance voting (plain mode)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceLockRecord")]
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize)]
 pub struct GovernanceLockRecord {
     /// Account that owns the lock.
@@ -10968,6 +11002,8 @@ pub struct GovernanceLockRecord {
     pub custody: GovernanceLockCustody,
 }
 /// Locks for a single referendum keyed by voter account id
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceLocksForReferendum")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -10978,6 +11014,8 @@ pub struct GovernanceLocksForReferendum {
         std::collections::BTreeMap<iroha_data_model::account::AccountId, GovernanceLockRecord>,
 }
 /// Persisted O(1) projection of the latest authoritative governance unlock sweep.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceUnlockStatsSnapshot")]
 #[derive(
     Clone,
     Copy,
@@ -11053,6 +11091,8 @@ pub enum AssetDefinitionAliasLeaseStatus {
     ExpiredPendingCleanup,
 }
 /// On-chain alias lease metadata for an asset definition.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AssetDefinitionAliasBindingRecord")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -11114,6 +11154,8 @@ pub enum ContractAliasLeaseStatus {
     ExpiredPendingCleanup,
 }
 /// On-chain alias lease metadata for a contract address.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::ContractAliasBindingRecord")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -11163,6 +11205,8 @@ impl ContractAliasBindingRecord {
     }
 }
 /// Citizenship registry entry (bonded amount held in escrow).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::CitizenshipRecord")]
 #[derive(
     Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -11233,6 +11277,8 @@ mod governance_locks_map_json {
     }
 }
 /// Record of slashing/restitution applied to a specific voter for a referendum.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceSlashEntry")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -11247,6 +11293,8 @@ pub struct GovernanceSlashEntry {
     pub last_height: u64,
 }
 /// Slashing ledger for a single referendum keyed by voter account id.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::GovernanceSlashLedger")]
 #[derive(
     Clone, Debug, Default, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize,
 )]
@@ -12482,11 +12530,22 @@ fn load_state_journals(
             ),
         };
     }
-    let accounting_mutation = kura.begin_total_disk_usage_mutation();
     let query_index_path = QueryIndexJournal::journal_path(&store_root);
+    let query_projection_checkpoint_path =
+        QueryProjectionCheckpointJournal::journal_path(&store_root);
+    let accounting_mutation = kura
+        .begin_total_disk_usage_mutation()
+        .with_resource_paths(vec![
+            query_index_path.clone(),
+            query_index_path.with_extension("norito.tmp"),
+            query_projection_checkpoint_path.clone(),
+            query_projection_checkpoint_path.with_extension("norito.tmp"),
+        ]);
+    let mut journals_loaded = true;
     let mut query_index = match QueryIndexJournal::load(query_index_path.clone()) {
         Ok(journal) => journal,
         Err(err) => {
+            journals_loaded = false;
             warn!(
                 ?err,
                 path = %query_index_path.display(),
@@ -12498,12 +12557,11 @@ fn load_state_journals(
     if let Some(status) = canonical_query_index_status {
         query_index.set_latest(status.indexed_height, status.indexed_block_hash);
     }
-    let query_projection_checkpoint_path =
-        QueryProjectionCheckpointJournal::journal_path(&store_root);
     let query_projection_checkpoint =
         match QueryProjectionCheckpointJournal::load(query_projection_checkpoint_path.clone()) {
             Ok(journal) => journal,
             Err(err) => {
+                journals_loaded = false;
                 warn!(
                     ?err,
                     path = %query_projection_checkpoint_path.display(),
@@ -12512,9 +12570,14 @@ fn load_state_journals(
                 QueryProjectionCheckpointJournal::new(query_projection_checkpoint_path)
             }
         };
-    // Loading a valid temp journal can replace and remove files. Dropping an unpublished
-    // mutation invalidates both caches before the synchronous stable scan republishes them.
-    drop(accounting_mutation);
+    // A successful recovery publishes exact marker deltas while preserving the existing
+    // disk-cache invalidation before its stable rescan. A failed loader leaves resource
+    // accounting unavailable even when State can continue with a process-local journal.
+    if journals_loaded {
+        accounting_mutation.finish_resources_before_disk_rescan();
+    } else {
+        drop(accounting_mutation);
+    }
     if !kura.emergency_fast_startup_enabled()
         && let Err(err) = kura.refresh_disk_usage_bytes()
     {
@@ -17163,9 +17226,9 @@ mod storage_migration_tests {
         },
         domain::DomainId,
         metadata::Metadata,
-        name::Name,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
+    use iroha_model_base::name::Name;
     use std::{
         collections::{BTreeMap, BTreeSet},
         sync::Arc,
@@ -17791,7 +17854,7 @@ mod custom_parameter_tests {
     fn params_with_gas_limit(payload: Option<Json>) -> Parameters {
         let mut params = Parameters::default();
         if let Some(payload) = payload {
-            let name = iroha_data_model::name::Name::from_str("ivm_gas_limit_per_block")
+            let name = iroha_model_base::name::Name::from_str("ivm_gas_limit_per_block")
                 .expect("constant parameter name is valid");
             let id = CustomParameterId::new(name);
             let custom = iroha_data_model::parameter::CustomParameter::new(id, payload);
@@ -27579,21 +27642,33 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
-        if let Err(err) = self.query_index_journal.read().persist() {
-            warn!(
-                ?err,
-                path = %path.display(),
-                "failed to persist query index journal"
-            );
-        }
+        let accounting_mutation = self
+            .kura
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.to_path_buf(), tmp_path.clone()]);
+        let persistence_succeeded = match self.query_index_journal.read().persist() {
+            Ok(()) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to persist query index journal"
+                );
+                false
+            }
+        };
         let after_bytes = match (measure_bytes(path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
+            if persistence_succeeded {
+                accounting_mutation.finish();
+            } else {
+                // A measurable residue is not a completed journal publication.
+                drop(accounting_mutation);
+            }
         } else {
             drop(accounting_mutation);
             if let Err(err) = self.kura.refresh_disk_usage_bytes() {
@@ -27647,21 +27722,33 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        let accounting_mutation = self.kura.begin_total_disk_usage_mutation();
-        if let Err(err) = journal.persist() {
-            warn!(
-                ?err,
-                path = %path.display(),
-                "failed to persist query projection checkpoint journal"
-            );
-        }
+        let accounting_mutation = self
+            .kura
+            .begin_total_disk_usage_mutation()
+            .with_resource_paths(vec![path.clone(), tmp_path.clone()]);
+        let persistence_succeeded = match journal.persist() {
+            Ok(()) => true,
+            Err(err) => {
+                warn!(
+                    ?err,
+                    path = %path.display(),
+                    "failed to persist query projection checkpoint journal"
+                );
+                false
+            }
+        };
         let after_bytes = match (measure_bytes(&path), measure_bytes(&tmp_path)) {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
         if let (Some(before_bytes), Some(after_bytes)) = (before_bytes, after_bytes) {
             self.kura.update_disk_usage_delta(before_bytes, after_bytes);
-            accounting_mutation.finish();
+            if persistence_succeeded {
+                accounting_mutation.finish();
+            } else {
+                // A measurable residue is not a completed journal publication.
+                drop(accounting_mutation);
+            }
         } else {
             drop(accounting_mutation);
             if let Err(err) = self.kura.refresh_disk_usage_bytes() {
@@ -29701,6 +29788,7 @@ impl State {
             blocks_in_memory: iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
             debug_output_new_blocks: false,
             merge_ledger_cache_capacity:
@@ -35287,12 +35375,15 @@ impl State {
                 "queue-plan admission controls exceed their count or byte bounds".to_owned(),
             ));
         }
+        // Validate the frontier even when the carrier has no admission controls.
+        // The private single-admission path repeats these inexpensive bounds so
+        // every caller preserves the same state-dependent validation contract.
         let committed_height = u64::try_from(state_view.height()).map_err(|_| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
                 "committed height does not fit QueuePlan admission validation".to_owned(),
             )
         })?;
-        let current_proposal_height = committed_height.checked_add(1).ok_or_else(|| {
+        committed_height.checked_add(1).ok_or_else(|| {
             MergeLedgerCommitError::ExecutionBatchInvalid(
                 "current QueuePlan authority height overflows its proposal height".to_owned(),
             )
@@ -35320,93 +35411,102 @@ impl State {
                 ));
             }
             previous_registry_key = Some(admission.registry_key.clone());
-            let context = &admission.certificate.binding.admission_context;
-            if context.proposal_height > carrier_height {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "queue-plan admission proposal height is after its merge carrier".to_owned(),
-                ));
-            }
-            let exact_predecessor = if context.authority_height == 0 {
-                None
-            } else {
-                usize::try_from(context.authority_height)
-                    .ok()
-                    .and_then(|height| height.checked_sub(1))
-                    .and_then(|index| state_view.block_hashes().get(index).copied())
-            };
-            if exact_predecessor != context.predecessor_block_hash {
-                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                    "queue-plan admission predecessor is absent or differs from canonical history"
-                        .to_owned(),
-                ));
-            }
-            // WSV does not retain immutable historical committee snapshots for
-            // QueuePlan admission. A delayed certificate may nevertheless be
-            // carried after a height-only advance when every signed source
-            // identity still equals the exact current source. Under the static
-            // `f` adversary assumed by the committee protocol, its `f + 1`
-            // availability quorum then still contains a current honest signer.
-            // Any roster, route, or incarnation drift fails closed below.
-            let source_proposal_height = if context.authority_height < committed_height {
-                current_proposal_height
-            } else {
-                context.proposal_height
-            };
-            for route in &context.route_incarnations {
-                let active = active_lanes.iter().find(|binding| {
-                    binding.lane_id == route.leg.route.lane_id
-                        && binding.dataspace_id == route.leg.route.dataspace_id
-                });
-                let Some(active) = active else {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission names a route outside the merge active-lane set"
-                            .to_owned(),
-                    ));
-                };
-                if active.incarnation != route.lane_incarnation
-                    || context.proposal_height < active.activation_height
-                {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission route incarnation is stale or not yet active"
-                            .to_owned(),
-                    ));
-                }
-                let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
-                    state_view,
-                    route.leg.route,
-                    source_proposal_height,
-                );
-                if authority.as_ref().ok() != Some(&route.validator_set) {
-                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
-                        "queue-plan admission validator set is not authoritative at the required source proposal height"
-                            .to_owned(),
-                    ));
-                }
-            }
+            Self::validate_authenticated_queue_plan_admission_for_carrier_in_view(
+                state_view,
+                &admission,
+                active_lanes,
+                carrier_height,
+            )?;
             validated.push(admission);
         }
         Ok(validated)
     }
+    // The admission is authenticated locally before this private helper is called.
+    // Historical membership and live route authority still belong to this exact view.
+    fn validate_authenticated_queue_plan_admission_for_carrier_in_view(
+        state_view: &impl StateReadOnly,
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+        active_lanes: &[MergeLaneBinding],
+        carrier_height: u64,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let committed_height = u64::try_from(state_view.height()).map_err(|_| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "committed height does not fit QueuePlan admission validation".to_owned(),
+            )
+        })?;
+        let current_proposal_height = committed_height.checked_add(1).ok_or_else(|| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(
+                "current QueuePlan authority height overflows its proposal height".to_owned(),
+            )
+        })?;
+        let context = &admission.certificate.binding.admission_context;
+        if context.proposal_height > carrier_height {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "queue-plan admission proposal height is after its merge carrier".to_owned(),
+            ));
+        }
+        let exact_predecessor = if context.authority_height == 0 {
+            None
+        } else {
+            usize::try_from(context.authority_height)
+                .ok()
+                .and_then(|height| height.checked_sub(1))
+                .and_then(|index| state_view.block_hashes().get(index).copied())
+        };
+        if exact_predecessor != context.predecessor_block_hash {
+            return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                "queue-plan admission predecessor is absent or differs from canonical history"
+                    .to_owned(),
+            ));
+        }
+        // WSV does not retain immutable historical committee snapshots for
+        // QueuePlan admission. A delayed certificate may nevertheless be
+        // carried after a height-only advance when every signed source
+        // identity still equals the exact current source. Under the static
+        // `f` adversary assumed by the committee protocol, its `f + 1`
+        // availability quorum then still contains a current honest signer.
+        // Any roster, route, or incarnation drift fails closed below.
+        let source_proposal_height = if context.authority_height < committed_height {
+            current_proposal_height
+        } else {
+            context.proposal_height
+        };
+        for route in &context.route_incarnations {
+            let active = active_lanes.iter().find(|binding| {
+                binding.lane_id == route.leg.route.lane_id
+                    && binding.dataspace_id == route.leg.route.dataspace_id
+            });
+            let Some(active) = active else {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "queue-plan admission names a route outside the merge active-lane set"
+                        .to_owned(),
+                ));
+            };
+            if active.incarnation != route.lane_incarnation
+                || context.proposal_height < active.activation_height
+            {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "queue-plan admission route incarnation is stale or not yet active".to_owned(),
+                ));
+            }
+            let authority = crate::queue::queue_plan_authoritative_peers_in_view_at_height(
+                state_view,
+                route.leg.route,
+                source_proposal_height,
+            );
+            if authority.as_ref().ok() != Some(&route.validator_set) {
+                return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
+                    "queue-plan admission validator set is not authoritative at the required source proposal height"
+                        .to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
     fn pending_queue_plan_admission_registry_lookup_in_view(
         state_view: &impl StateReadOnlyWithTransactions,
-        bytes: &[u8],
-    ) -> Result<
-        (
-            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
-            QueuePlanAdmissionRegistryMatch,
-        ),
-        MergeLedgerCommitError,
-    > {
-        let admission =
-            crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-                state_view.network_id(),
-                bytes,
-            )
-            .map_err(|error| {
-                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                    "pending queue-plan admission certificate is invalid: {error}"
-                ))
-            })?;
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
+    ) -> Result<QueuePlanAdmissionRegistryMatch, MergeLedgerCommitError> {
         let lookup = Self::queue_plan_admission_registry_match_in_view(
             state_view,
             admission.registry_key.entrypoint_hash.clone(),
@@ -35414,9 +35514,24 @@ impl State {
         )
         .map_err(MergeLedgerCommitError::ExecutionMarkerConflict)?;
         if lookup == QueuePlanAdmissionRegistryMatch::Exact {
-            Self::queue_plan_admission_application_state(state_view, &admission)?;
+            Self::queue_plan_admission_application_state(state_view, admission)?;
         }
-        Ok((admission, lookup))
+        Ok(lookup)
+    }
+    fn authenticate_pending_queue_plan_admission(
+        &self,
+        bytes: &[u8],
+    ) -> Result<crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1, MergeLedgerCommitError>
+    {
+        crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
+            &self.network_id,
+            bytes,
+        )
+        .map_err(|error| {
+            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                "pending queue-plan admission certificate is invalid: {error}"
+            ))
+        })
     }
     #[cfg(test)]
     pub(crate) fn pending_queue_plan_admission_registry_lookup(
@@ -35429,8 +35544,11 @@ impl State {
         ),
         MergeLedgerCommitError,
     > {
+        let admission = self.authenticate_pending_queue_plan_admission(bytes)?;
         let state_view = self.view();
-        Self::pending_queue_plan_admission_registry_lookup_in_view(&state_view, bytes)
+        let lookup =
+            Self::pending_queue_plan_admission_registry_lookup_in_view(&state_view, &admission)?;
+        Ok((admission, lookup))
     }
     /// Classify one durable pending QueuePlan certificate against canonical
     /// WSV, history, and the complete current lane lifecycle.
@@ -35450,26 +35568,26 @@ impl State {
         ),
         MergeLedgerCommitError,
     > {
+        let admission = self.authenticate_pending_queue_plan_admission(bytes)?;
         let state_view = self.view();
-        Self::classify_pending_queue_plan_admission_in_view(&state_view, bytes, carrier_height)
+        let disposition = Self::classify_pending_queue_plan_admission_in_view(
+            &state_view,
+            &admission,
+            carrier_height,
+        )?;
+        Ok((admission, disposition))
     }
     fn classify_pending_queue_plan_admission_in_view(
         state_view: &StateView<'_>,
-        bytes: &[u8],
+        admission: &crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
         carrier_height: u64,
-    ) -> Result<
-        (
-            crate::torii_proxy::ValidatedQueuePlanAdmissionCertificateV1,
-            PendingQueuePlanAdmissionDisposition,
-        ),
-        MergeLedgerCommitError,
-    > {
-        let (admission, registry_match) =
-            Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, bytes)?;
+    ) -> Result<PendingQueuePlanAdmissionDisposition, MergeLedgerCommitError> {
+        let registry_match =
+            Self::pending_queue_plan_admission_registry_lookup_in_view(state_view, admission)?;
         let disposition =
             match registry_match {
                 QueuePlanAdmissionRegistryMatch::Exact => {
-                    match Self::queue_plan_admission_application_state(state_view, &admission)? {
+                    match Self::queue_plan_admission_application_state(state_view, admission)? {
                         QueuePlanAdmissionApplicationState::PendingStale => {
                             PendingQueuePlanAdmissionDisposition::Stale
                         }
@@ -35516,7 +35634,6 @@ impl State {
                             Ok(_) | Err(_) => PendingQueuePlanAdmissionDisposition::Stale,
                         }
                     } else {
-                        let encoded = vec![bytes.to_vec()];
                         let active_lanes = Self::queue_plan_active_lane_bindings_from_snapshot(
                             state_view.nexus(),
                             &state_view.lane_incarnations,
@@ -35533,9 +35650,9 @@ impl State {
                                     .to_owned(),
                             )
                             })?;
-                        if Self::validate_queue_plan_admissions_for_carrier_in_view(
+                        if Self::validate_authenticated_queue_plan_admission_for_carrier_in_view(
                             state_view,
-                            &encoded,
+                            admission,
                             &active_lanes,
                             carrier_height.max(current_proposal_height),
                         )
@@ -35562,10 +35679,14 @@ impl State {
                     }
                 }
             };
-        Ok((admission, disposition))
+        Ok(disposition)
     }
     /// Classify and retain one QueuePlan certificate under the block-finality fence.
     ///
+    /// Immutable certificate bytes and signatures are authenticated before opening a State view
+    /// or taking the publication fence. Only canonical history, route authority, registry and
+    /// application state are rechecked under each fresh view; frontier retries reuse the same
+    /// authenticated certificate without extending the lock with repeated signature verification.
     /// State publication is excluded while classification runs, and Kura checks its exact durable
     /// height while holding the same canonical-chain lock used by block publication. Admission
     /// therefore either linearizes before the next irreversible block write or observes frontier
@@ -35587,15 +35708,7 @@ impl State {
 
         let _admission_persistence = self.queue_plan_admission_persistence_lock.lock();
         let incoming_hash = Hash::new(bytes);
-        let incoming = crate::torii_proxy::decode_and_validate_queue_plan_admission_certificate_v1(
-            &self.network_id,
-            bytes,
-        )
-        .map_err(|error| {
-            MergeLedgerCommitError::ExecutionBatchInvalid(format!(
-                "pending queue-plan admission certificate is invalid: {error}"
-            ))
-        })?;
+        let incoming = self.authenticate_pending_queue_plan_admission(bytes)?;
 
         // Preserve the exact-hash idempotent fast path. Otherwise authenticate
         // the bounded inventory before taking the block-publication fence; only
@@ -35633,7 +35746,7 @@ impl State {
                         duplicate_same_binding.push(hash);
                     }
                 } else {
-                    conflicting_bindings.push((hash, existing_bytes));
+                    conflicting_bindings.push((hash, existing));
                 }
             }
         }
@@ -35652,9 +35765,10 @@ impl State {
                 )
             })?;
             let state_view = self.view();
-            let (admission, disposition) = Self::classify_pending_queue_plan_admission_in_view(
+            let admission = incoming.clone();
+            let disposition = Self::classify_pending_queue_plan_admission_in_view(
                 &state_view,
-                bytes,
+                &admission,
                 carrier_height,
             )?;
             match disposition {
@@ -35686,13 +35800,12 @@ impl State {
                     })
             } else {
                 let mut retire = duplicate_same_binding.clone();
-                for (hash, existing_bytes) in &conflicting_bindings {
-                    let (existing, existing_disposition) =
-                        Self::classify_pending_queue_plan_admission_in_view(
-                            &state_view,
-                            existing_bytes,
-                            carrier_height,
-                        )?;
+                for (hash, existing) in &conflicting_bindings {
+                    let existing_disposition = Self::classify_pending_queue_plan_admission_in_view(
+                        &state_view,
+                        existing,
+                        carrier_height,
+                    )?;
                     debug_assert_eq!(existing.registry_key, admission.registry_key);
                     if matches!(
                         existing_disposition,
@@ -48361,7 +48474,7 @@ fn kagemusha_mint_finality_next_epoch_parameter_from_parameters(
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
 pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
     use core::str::FromStr;
-    let name = match iroha_data_model::name::Name::from_str("ivm_gas_limit_per_block") {
+    let name = match iroha_model_base::name::Name::from_str("ivm_gas_limit_per_block") {
         Ok(name) => name,
         Err(error) => {
             warn!(?error, "Failed to parse hardcoded gas limit parameter name");
@@ -57544,6 +57657,7 @@ mod tiered_snapshot_diff_tests {
             fsync_interval: iroha_config::parameters::defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         };
         let kura =

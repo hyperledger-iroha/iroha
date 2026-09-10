@@ -8,6 +8,7 @@
 #![allow(clippy::missing_errors_doc)]
 use iroha_data_model::prelude::*;
 pub use iroha_executor_data_model_derive::Permission;
+use iroha_model_base::name::Name;
 use iroha_schema::{Ident, IntoSchema};
 use norito::json::{JsonDeserializeOwned, JsonSerialize};
 use std::{format, string::String, vec::Vec};

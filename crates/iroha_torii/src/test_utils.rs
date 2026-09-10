@@ -29,13 +29,13 @@ use iroha_data_model::{
     nexus::{DataSpaceId, LaneId},
     permission,
     prelude::{
-        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Name, Register,
-        TransactionBuilder,
+        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Register, TransactionBuilder,
     },
     smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
 use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
+use iroha_model_base::name::Name;
 use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
@@ -489,16 +489,15 @@ pub fn enqueue_locally_signed_contract_deployment_with_subject_permissions(
         hex::encode(verified.abi_hash.as_ref()),
     )
 }
-/// Build JSON string for contract call request body.
+/// Build an unsigned public contract-call prepare request.
+/// Signing keys stay with the caller; detached submission signs the exact returned payload.
 pub fn contract_call_request_json(
     account: &AccountId,
-    private_key: &ExposedPrivateKey,
     contract_address: &str,
     options: ContractCallOptions<'_>,
 ) -> String {
     let mut entries = vec![
         crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("contract_address", contract_address),
     ];
     entries.push(crate::json_entry("entrypoint", options.entrypoint));
@@ -987,6 +986,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             fsync_interval: defaults::kura::FSYNC_INTERVAL,
             lane_history_retention:
                 iroha_config::parameters::defaults::kura::LANE_HISTORY_RETENTION,
+            fastpq_artifacts: iroha_config::parameters::defaults::kura::FASTPQ_ARTIFACT_POLICY,
             replica_advert: iroha_config::parameters::defaults::kura::REPLICA_ADVERT_POLICY,
         },
         sumeragi: A::Sumeragi::default(),

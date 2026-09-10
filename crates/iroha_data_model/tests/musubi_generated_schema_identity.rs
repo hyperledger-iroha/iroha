@@ -24,6 +24,14 @@ where
     let bytes = norito::to_bytes(value).expect("encode generated Musubi frame");
     let decoded: T = norito::decode_from_bytes(&bytes).expect("decode generated Musubi frame");
     assert_eq!(&decoded, value);
+    let header = norito::core::Header::read(bytes.as_slice()).expect("read frame header");
+    assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+    let mut wrong_schema = bytes.clone();
+    wrong_schema[6] ^= 1;
+    assert!(matches!(
+        norito::decode_from_bytes::<T>(&wrong_schema),
+        Err(norito::Error::SchemaMismatch)
+    ));
     hex(&bytes)
 }
 
@@ -38,8 +46,6 @@ where
         + PartialEq,
 {
     let identity_hash = norito::schema::identity::frame_hash::<T>();
-    assert_eq!(<T as NoritoSerialize>::schema_hash(), identity_hash);
-    assert_eq!(<T as NoritoDeserialize>::schema_hash(), identity_hash);
     assert_eq!(T::frame_name(), T::nominal_name());
     let cases = values
         .into_iter()
@@ -62,14 +68,8 @@ where
         .collect();
     json::object([
         ("nominal", Value::String(T::nominal_name())),
-        (
-            "serialize_hash",
-            Value::String(hex(&<T as NoritoSerialize>::schema_hash())),
-        ),
-        (
-            "deserialize_hash",
-            Value::String(hex(&<T as NoritoDeserialize>::schema_hash())),
-        ),
+        ("serialize_hash", Value::String(hex(&identity_hash))),
+        ("deserialize_hash", Value::String(hex(&identity_hash))),
         ("cases", Value::Array(cases)),
     ])
     .expect("captured type")

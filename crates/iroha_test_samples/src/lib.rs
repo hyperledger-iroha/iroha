@@ -20,7 +20,7 @@ use std::{
 ///
 /// # Panics
 ///
-/// Panics if the given `domain` is invalid as [`Name`](iroha_data_model::name::Name).
+/// Panics if the given `domain` is invalid as a [`DomainId`] label.
 #[cfg(feature = "rand")]
 pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
     try_gen_account_in(domain).expect("test sample account key generation should succeed")
@@ -34,7 +34,7 @@ pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
 ///
 /// # Panics
 ///
-/// Panics if the given `domain` is invalid as [`Name`](iroha_data_model::name::Name).
+/// Panics if the given `domain` is invalid as a [`DomainId`] label.
 #[cfg(feature = "rand")]
 pub fn try_gen_account_in(
     domain: impl core::fmt::Display,

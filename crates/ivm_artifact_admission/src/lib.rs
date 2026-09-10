@@ -8,13 +8,13 @@ use iroha_data_model::{
     account::AccountId,
     asset::id::{AssetDefinitionId, AssetId},
     domain::DomainId,
-    name::Name,
     nexus::DataSpaceId,
     nft::NftId,
     prelude::{DecimalValueV1, IntValueV1, Json, QuantityValueV1},
     smart_contract::manifest::{ContractManifest, StateDescriptor},
     soracloud::{SoracloudHostRequestEnvelopeV1, SoracloudHostResponseEnvelopeV1},
 };
+use iroha_model_base::name::Name;
 use ivm_abi::{
     SyscallPolicy, VMError,
     axt::{
@@ -29,7 +29,7 @@ use ivm_abi::{
     },
 };
 #[cfg(test)]
-use norito::{NoritoSerialize, SerializePayload};
+use norito::NoritoSerialize;
 use std::{error::Error as StdError, fmt, fmt::Write as _};
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.

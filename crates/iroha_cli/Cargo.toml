@@ -73,6 +73,7 @@ path = "src/bin/taira_fee_sponsor_program.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std"] }
 iroha_service_model = { workspace = true }
 soranet_incentives = { workspace = true }

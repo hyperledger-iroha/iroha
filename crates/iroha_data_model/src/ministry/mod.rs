@@ -211,6 +211,8 @@ impl AgendaProposalV1 {
     }
 }
 /// Persisted Ministry agenda submission record keyed by `proposal_id`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::ministry::AgendaProposalRecordV1")]
 #[derive(
     Debug,
     Clone,

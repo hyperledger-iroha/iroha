@@ -57,6 +57,10 @@ pub enum KagemushaStateCheckpointErrorV1 {
 }
 
 /// Role-separated identities obtained only from the authenticated verifier loader.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::state_checkpoint::KagemushaStateCheckpointBindingV1"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct KagemushaStateCheckpointBindingV1 {
     pub(super) release_id: DigestV1,
@@ -680,6 +684,10 @@ mod tests {
         assert_eq!(
             norito::schema::identity::frame_hash::<CheckpointWire>(),
             SCHEMA
+        );
+        assert_eq!(
+            <CheckpointWire as norito::NoritoSchema>::nominal_name(),
+            "iroha_core::zk::kagemusha_v1_recursion::state_checkpoint::CheckpointWire"
         );
         assert_eq!(
             <CheckpointWire as norito::NoritoSchema>::frame_name(),

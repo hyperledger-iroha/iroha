@@ -179,7 +179,7 @@ struct LocalRootSpecV1 {
 }
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct LocalDependencySpecV1 {
-    alias: iroha_data_model::name::Name,
+    alias: iroha_model_base::name::Name,
     kind: MusubiDependencyKindV1,
     package: MusubiPackageSelectorV1,
     requirement: MusubiVersionReqV1,

@@ -16,8 +16,8 @@ use iroha_data_model::{
         MusubiRegistrySnapshotV1, MusubiReleaseIdV1, MusubiResolverReleaseRowV1,
         MusubiStorageAvailabilityV1, MusubiVerificationNodeV1, MusubiVersionReqV1, MusubiVersionV1,
     },
-    name::Name,
 };
+use iroha_model_base::name::Name;
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,

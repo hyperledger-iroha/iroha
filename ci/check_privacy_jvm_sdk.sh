@@ -2,12 +2,12 @@
 set -euo pipefail
 
 ROOT_DIR="${PRIVACY_JVM_SDK_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+# shellcheck source=ci/privacy_sdk_cargo_lockfile.sh
+source "${ROOT_DIR}/ci/privacy_sdk_cargo_lockfile.sh"
 JAVA_HOME_OVERRIDE="${PRIVACY_JVM_SDK_JAVA_HOME:-}"
 PYTHON_BIN="${PRIVACY_JVM_SDK_PYTHON_BIN:-python3}"
 CARGO_BIN="${PRIVACY_JVM_SDK_CARGO_BIN:-cargo}"
 RUSTC_BIN="${PRIVACY_JVM_SDK_RUSTC_BIN:-rustc}"
-FROZEN_CARGO_LOCK_SHA256="cd9e829e454171f17540abeb7fd1aa14129252082bd8b076a0199b0ffa4e3f79"
-TRACKED_ROOT_CARGO_LOCK_SHA256="051423addf3830895e208c6276429a0e8f46c61954159b0ef913e8cfed33d3aa"
 ABI23_CHECKER="${ROOT_DIR}/scripts/check_native_sdk_abi23_artifact.py"
 JAVA_OUT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-java-sdk-test.XXXXXX")"
 NATIVE_BUILD_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/iroha-privacy-jvm-native.XXXXXX")"
@@ -47,12 +47,12 @@ SELECTED_CARGO_LOCK="${IROHA_PRIVACY_AUTHENTICATED_CARGO_LOCKFILE_PATH:-}"
   || fail "the authenticated privacy Cargo.lock is unavailable"
 [[ "${SELECTED_CARGO_LOCK}" != "${ROOT_DIR}/Cargo.lock" ]] \
   || fail "the privacy release Cargo.lock must remain distinct from the tracked root lock"
-[[ "$(sha256_file "${SELECTED_CARGO_LOCK}")" == "${FROZEN_CARGO_LOCK_SHA256}" ]] \
-  || fail "the authenticated privacy Cargo.lock does not match the frozen release digest"
+[[ "$(sha256_file "${SELECTED_CARGO_LOCK}")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]] \
+  || fail "the authenticated privacy Cargo.lock does not match the canonical reviewed graph"
 [[ -f "${ROOT_DIR}/Cargo.lock" && ! -L "${ROOT_DIR}/Cargo.lock" ]] \
   || fail "the tracked root Cargo.lock is unavailable"
-[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
-  || fail "the tracked root Cargo.lock does not match its release authority"
+[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]] \
+  || fail "the tracked root Cargo.lock does not match the canonical reviewed graph"
 
 RUSTC_VERSION="$("${RUSTC_BIN}" --version)"
 [[ "${RUSTC_VERSION}" == rustc\ 1.93.1\ * ]] \
@@ -87,7 +87,7 @@ NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi23.json"
 CSHARP_NATIVE_MANIFEST="${NATIVE_BUILD_ROOT}/native-sdk-abi23-csharp.json"
 
 # Native evidence binds the clean source tree, including the tracked root lock.
-# The distinct frozen privacy-release lock remains selected externally for all
+# The independently sealed canonical graph snapshot remains external for all
 # wrapped Cargo invocations and is authenticated independently above.
 
 "${PYTHON_BIN}" -I -S "${ABI23_CHECKER}" record \
@@ -173,8 +173,7 @@ resolve_java_home() {
 
 JAVA_HOME="$(resolve_java_home)"
 export JAVA_HOME
-export PATH="${JAVA_HOME}/bin:${PATH}"
-java -version
+"${JAVA_HOME}/bin/java" -version
 
 cd "${ROOT_DIR}/kotlin"
 ./gradlew --no-daemon -q :core-jvm:jar :core-jvm:test \
@@ -184,7 +183,21 @@ cd "${ROOT_DIR}/kotlin"
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyBackendTagTest \
   --tests org.hyperledger.iroha.sdk.core.model.zk.VerifyingKeyRecordDescriptionTest \
   --tests org.hyperledger.iroha.sdk.core.model.instructions.VerifyingKeyInstructionBuildersTest \
-  --tests org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachmentTest
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.ProofAttachmentTest \
+  --tests org.hyperledger.iroha.sdk.address.AccountAddressNativeTest \
+  --tests org.hyperledger.iroha.sdk.address.AccountAddressNativeUnavailableTest \
+  --tests org.hyperledger.iroha.sdk.address.AccountAddressTest \
+  --tests org.hyperledger.iroha.sdk.address.AccountIdLiteralTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.CanonicalMultisigWireParityTest \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.KaigiWirePayloadV1Test \
+  --tests org.hyperledger.iroha.sdk.core.model.instructions.KaigiInstructionValidationTest \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyNativeBridgeJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.privacy.ConfidentialNoteJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.privacy.ZkAssetMerklePathJavaConsumerTest \
+  --tests org.hyperledger.iroha.sdk.privacy.PrivacyRetiredWitnessBoundaryJavaConsumerTest
+
+"${PYTHON_BIN}" -I -S "${ROOT_DIR}/scripts/check_privacy_jvm_class_contract.py" \
+  --classes "${ROOT_DIR}/kotlin/core-jvm/build/classes/kotlin/main"
 
 cd "${ROOT_DIR}/java/iroha_android"
 ./gradlew --no-daemon -q :core:test \
@@ -213,16 +226,12 @@ NORITO_RUNTIME_CLASSPATH_FILE="${NORITO_PROJECT_DIR}/build/runtime-classpath.txt
 NORITO_RUNTIME_CLASSPATH="$(<"${NORITO_RUNTIME_CLASSPATH_FILE}")"
 [[ -n "${NORITO_RUNTIME_CLASSPATH}" ]] \
   || fail "Norito runtime classpath is empty"
-javac \
+"${JAVA_HOME}/bin/javac" \
   -cp "${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
   -sourcepath "java/iroha_android/src/main/java:java/iroha_android/src/test/java:java/norito_java/src/main/java" \
   -d "${JAVA_OUT}" \
-  java/iroha_android/src/test/java/org/hyperledger/iroha/android/privacy/PrivacyNativeBridgeTest.java \
   java/iroha_android/src/test/java/org/hyperledger/iroha/android/model/instructions/VerifyingKeyInstructionUtilsTests.java
-java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
-  -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
-  org.hyperledger.iroha.android.privacy.PrivacyNativeBridgeTest
-java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
+"${JAVA_HOME}/bin/java" -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
   -cp "${JAVA_OUT}:${PRIVACY_CORE_JVM_JAR}:${NORITO_RUNTIME_CLASSPATH}" \
   org.hyperledger.iroha.android.model.instructions.VerifyingKeyInstructionUtilsTests
 
@@ -234,7 +243,7 @@ java -ea -Djava.library.path="${NATIVE_LIBRARY_DIR}" \
   --artifact "${NATIVE_LIBRARY}" \
   --manifest "${CSHARP_NATIVE_MANIFEST}" \
   --source-root "${ROOT_DIR}"
-[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${TRACKED_ROOT_CARGO_LOCK_SHA256}" ]] \
+[[ "$(sha256_file "${ROOT_DIR}/Cargo.lock")" == "${PRIVACY_SDK_CANONICAL_CARGO_LOCK_SHA256}" ]] \
   || fail "tracked root Cargo.lock changed during privacy JVM native execution"
 
 if [[ -n "${PRIVACY_JVM_NATIVE_EXPORT_DIR:-}" ]]; then

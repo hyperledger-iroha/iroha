@@ -824,6 +824,8 @@ pub mod profiling {
     use pprof::protos::Message;
     use std::num::{NonZeroU16, NonZeroU64};
     /// Query params used to configure profile gathering
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_torii::routing::profiling::ProfileParams")]
     #[allow(clippy::unsafe_derive_deserialize)]
     #[derive(
         crate::json_macros::JsonSerialize,
