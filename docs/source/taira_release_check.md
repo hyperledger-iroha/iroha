@@ -27,14 +27,13 @@ After the standalone FSM and lifecycle source checks, the dedicated
 `iroha_config --test taira_config_contracts` target checks production descriptor
 defaults, malformed collection values and the maintained Taira Nexus profile.
 It loads no runtime signers and has no Core or test-network dependency. These
-four unchanged contracts execute before the shared Core/library build, so schema
-failures stop before that compilation. Storage-budget and ambient-client isolation
+four contracts execute first after the combined native harness build, so schema
+failures stop before other runtime tests. Storage-budget and ambient-client isolation
 checks remain in the test-network harness. The gate computes and reports the
 complete native census from its required test selections. The configuration target uses the same source capture, Cargo environment,
-warm target, profile and inherited locks; it retains all package defaults. Its real
-model/crypto/codec dependency graph may require a separate first warm compilation
-when its feature union differs from the later node graph. No first-run or total
-runtime improvement is claimed without measurement.
+warm target, profile and inherited locks; it retains all package defaults in the
+same Cargo graph as the other harnesses. No first-run or total runtime improvement
+is claimed without measurement.
 
 The combined native test build selects the exact `iroha_cli --bin iroha`
 and `irohad --lib` test harnesses. The daemon cases execute signed genesis
@@ -47,10 +46,18 @@ build and four-validator test. It needs no second Cargo test build. Its manifest
 bin target kind and test profile distinguish it from the Rust SDK's `iroha`
 library harness and the production CLI. Each completed test copy is released
 through its existing owner. Any collected test failure stops before production
-compilation or network execution; production snapshots remain retained. Configuration and proof checks retain their
-existing separate gates. Adding the CLI changes the combined test feature union,
+compilation or network execution; production snapshots remain retained. Configuration
+and proof checks retain their selected cases. Adding the CLI changes the combined test feature union,
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
+
+After configuration and CLI checks, the short Core snapshot-owner and daemon
+startup-policy groups execute before proof, transport and long consensus tests.
+Both startup groups report their failures before stopping expensive work. On
+success, the remaining groups execute each other selection once; the original
+complete census and exact-artifact checkpoint remain authoritative. Core and daemon
+copies stay retained until their final selected stage. A failed startup preflight
+never publishes independent-check success.
 
 CLI client admission binds the configured chain, genesis NetworkId and account
 address discriminant to the signed inventory during assembly, apply and recovery.
@@ -144,9 +151,13 @@ failures remain errors. Confirmation never resubmits the transaction.
 
 The next gate launches four validators from the freshly emitted native
 `iroha3d` binary using the same three-route fixture as the consensus integration
-suite. It submits a signature-bound `QueuePlanSynced` public transaction, as
+suite. It submits three consecutive signature-bound `QueuePlanSynced` public transactions, as
 required by public Torii admission, and requires state-resolved Applied
-in both local and global status on every validator at the same committed height.
+in both local and global status on every validator at each transaction's committed height.
+Between the second and third transactions it waits for a signed snapshot, stops
+and restarts one validator with the same storage, and requires the new process to
+load that snapshot and serve status. An unchanged idle height is valid; the third
+transaction must then reach Applied on all four validators.
 The CLI gate also checks that prepared Inrou pin operations preserve sponsored
 fees and the public QueuePlanSynced intent through signing and replay validation.
 Dedicated service-owned Ordinary admission remains a separate contract.
@@ -249,15 +260,17 @@ daemon within the original deadline, without submitting another manager job.
 Changed launcher commands remain immediate failures.
 The active journaled restart path also waits for four actual Torii backends before
 onboarding, using the deadline captured before its one restart submission.
-Convergence waits within that deadline until the active height has advanced beyond
-a positive committed frontier. A CommitQC or an `Applied` body at the same height
+Signed convergence uses its own bounded phase and requires an opened successor
+context above a positive committed frontier, without requiring an empty block.
+A CommitQC or an `Applied` body at the same height
 can still precede the durable application anchor needed by onboarding. Tests keep
 both intermediate states out of retained proof; identity mismatches and restart
 requirements remain immediate failures, with public progress in deadline errors.
 Converged certificates use Core's committed-decision comparison, allowing
 different re-proposal rounds for the same subject and execution commitment while
-retaining each validator's actual certificate and requiring a higher committed
-height after restart.
+retaining each validator's actual certificate. A higher committed height is
+required only after each restart wave's three Applied canaries. Iroha does not
+create empty blocks; HTTP restart readiness does not require idle tip growth.
 Candidate tests exercise the real HTTP producer and strict host receipt consumer,
 direct signed probe origins, private signer descriptor lifetime, ordered recovery
 and failure before edge cutover. Prepared-envelope tests cross the actual typed
@@ -275,9 +288,10 @@ Linux also runs a real OpenSSH
 configuration-only check that verifies parent-held descriptor paths survive its
 descriptor cleanup and replacement of the original paths. Every selected test
 must exist and execute exactly once. Missing,
-ignored, failed or empty selections fail the command. All independent cases in each combined library, daemon and CLI harness run
-before reporting their combined failures, so one bad fixture cannot hide
-another defect until the next build. Missing selected tests, artifact custody
+ignored, failed or empty selections fail the command. After the mandatory startup
+preflight passes, remaining independent cases report their combined failures.
+The short startup groups instead stop expensive work after collecting both groups'
+failures. Missing selected tests, artifact custody
 failures and infrastructure errors still stop immediately. Fix the named failures and
 rerun the same command to reuse compiled dependencies.
 

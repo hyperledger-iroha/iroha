@@ -107,8 +107,25 @@ fn snapshot_owner_policy_fixture() -> (
         &keypair,
         1_000_000,
     );
+    {
+        let mut world = state.world.block();
+        world
+            .public_lane_validators
+            .get_mut(&(LaneId::new(3), validator))
+            .expect("fixture validator exists")
+            .activation_height = 1;
+        world.commit();
+    }
     seed_committed_height_for_state_test(&state, 5);
     seed_autoscale_sample_history_for_snapshot_test(&state);
+    state
+        .world
+        .validate_numeric_asset_invariants()
+        .expect("snapshot fixture asset references and quantities are valid");
+    state
+        .world
+        .validate_quantity_ledger_invariants()
+        .expect("snapshot fixture staking tenure and quantity ledgers are valid");
     let value = norito::json::to_value(&state).expect("serialize live staking snapshot");
     let expected_runtime = value
         .as_object()

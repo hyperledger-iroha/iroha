@@ -344,16 +344,16 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(batch.call_args.kwargs, {"lock_fds": (77,), "harnesses": names})
         compile.assert_not_called()
-        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("cli",) + names[1:-2]])
+        self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("cli", "core", "daemon") + names[1:-2]])
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, gate.DAEMON_STAGES])
+                         [gate.STAGES, gate.CORE_STARTUP_STAGES, gate.DAEMON_STARTUP_STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, tuple(stage for stage in gate.CORE_STAGES if stage not in gate.CORE_STARTUP_STAGES), gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, tuple(stage for stage in gate.DAEMON_STAGES if stage not in gate.DAEMON_STARTUP_STAGES)])
 
     def test_transport_or_fixture_failure_stops_before_network_and_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
         names = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
-        for failed, expected in (("crypto", ["cli", "proof", "proof-flows", "crypto"]),
-                                 ("p2p", ["cli", "proof", "proof-flows", "crypto", "p2p"]),
-                                 ("fixture", ["cli", "proof", "proof-flows", "crypto", "p2p", "core", "test-network"])):
+        for failed, expected in (("crypto", ["cli", "core", "daemon", "proof", "proof-flows", "crypto"]),
+                                 ("p2p", ["cli", "core", "daemon", "proof", "proof-flows", "crypto", "p2p"]),
+                                 ("fixture", ["cli", "core", "daemon", "proof", "proof-flows", "crypto", "p2p", "core", "test-network"])):
             outcomes = [None] * (len(expected) - 1) + [gate.CheckError(failed + " failed")]
             output = io.StringIO()
             with self.subTest(failed=failed), \
@@ -503,7 +503,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
         separate.assert_not_called()
         self.assertEqual(batch.call_count, 1)
         self.assertEqual(events, ["fsm", "source", "library-build", "config-pass",
-                                  *["/warm/" + name for name in ("cli",) + libraries[1:-2]]])
+                                  *["/warm/" + name for name in ("cli", "core", "daemon") + libraries[1:-2]]])
 
     def test_batch_or_configuration_failure_stops_all_later_execution_and_passes(self):
         for phase in ("build", "schema"):

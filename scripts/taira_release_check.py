@@ -494,10 +494,11 @@ DAEMON_STAGES = (("offline final genesis deployment authority", (
     "tests::manifest_crypto_checks::check_config_inrou_authority_requires_canonical_account_and_signed_genesis",
 )),)
 
-DAEMON_STAGES += (("frozen startup policy before snapshot authentication and replay", (
+DAEMON_STARTUP_STAGES = (("frozen startup policy before snapshot authentication and replay", (
     "startup_runtime_policy_tests::startup_compliance_is_installed_before_execution_policy_derivation_and_reused",
     "startup_runtime_policy_tests::startup_compliance_rejects_missing_and_wrong_lane_policy_before_replay",
 )),)
+DAEMON_STAGES += DAEMON_STARTUP_STAGES
 
 TORII_UNIT_STAGES = (("public contract retained payload and certified ingress", (
     "routing::multisig_selector_tests::contract_call_detached_submission_retains_exact_queue_plan_payload",
@@ -569,7 +570,7 @@ CORE_STAGES += (("authenticated admission and coherent State publication", (
     "state::tests::queue_plan_carrier_validation_uses_one_generation_coherent_state_view",
 )),)
 
-CORE_STAGES += (("authenticated snapshot owner policy and startup custody", (
+CORE_STARTUP_STAGES = (("authenticated snapshot owner policy and startup custody", (
     "state::tests::snapshot_owner_policy_survives_startup_with_live_nondefault_staking",
     "state::tests::snapshot_owner_policy_rejects_changed_owner_before_and_after_hydration",
     "state::tests::snapshot_owner_policy_requires_complete_canonical_fields",
@@ -587,6 +588,7 @@ CORE_STAGES += (("authenticated snapshot owner policy and startup custody", (
     "state::tests::startup_sumeragi_key_policy_matches_canonical_state_without_mutation",
     "state::tests::startup_sumeragi_key_policy_rejects_each_mismatch_without_mutation",
 )),)
+CORE_STAGES += CORE_STARTUP_STAGES
 
 PROOF_STAGES = (("canonical proof resource bounds", (
     "proof::tests::default_resource_profile_covers_canonical_opening_shapes_and_wire_frames",
@@ -1356,10 +1358,36 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
                 # Retire a mismatched old pass before a failed rerun could leave
                 # it available to a later attempt whose artifacts happen to match.
                 update_independent_checks(None)
-            for name, stages in independent_stages:
+            # Startup fixtures are part of the same canonical census/checkpoint, but
+            # execute before long consensus/proof groups. Retain each immutable copy
+            # until its remaining stages finish; no test runs twice or gains a skip flag.
+            startup = {"core": CORE_STARTUP_STAGES, "daemon": DAEMON_STARTUP_STAGES}
+            preflight = tuple((name, tuple(stage for stage in stages if stage in startup.get(name, ())))
+                              for name, stages in early_stages)
+            if STAGES:
                 if not reuse_independent:
                     try:
-                        run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+                        run_stages(harnesses["cli"], fixture_root, env, STAGES, lock_fds)
+                    except SelectedRegressionFailures as error:
+                        failures.extend(error.failures)
+                harnesses.release("cli")
+            if not reuse_independent:
+                startup_failures = []
+                for name, stages in preflight:
+                    if stages:
+                        try:
+                            run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+                        except SelectedRegressionFailures as error:
+                            startup_failures.extend(error.failures)
+                # Collect both startup groups, then avoid expensive unrelated tests
+                # when a restart's mandatory policy boundary already failed.
+                if startup_failures:
+                    raise SelectedRegressionFailures(failures + startup_failures)
+            for name, stages in early_stages:
+                remaining = tuple(stage for stage in stages if stage not in startup.get(name, ()))
+                if not reuse_independent and remaining:
+                    try:
+                        run_stages(harnesses[name], fixture_root, env, remaining, lock_fds)
                     except SelectedRegressionFailures as error:
                         failures.extend(error.failures)
                 harnesses.release(name)

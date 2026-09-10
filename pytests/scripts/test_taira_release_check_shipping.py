@@ -42,7 +42,7 @@ class ShippingSourceTests(unittest.TestCase):
     def test_real_shipping_table_manifests_and_defaults_have_exact_native_coverage(self):
         self.assertEqual(ACTUAL_SHIPPING_AUDIT(existing.SCRIPT.parent.parent), SHIPPING)
         self.assertEqual(ACTUAL_SHIPPING_AUDIT(self.root), SHIPPING)
-        self.assertEqual(gate.selected_regression_count(), 426)
+        self.assertEqual(gate.selected_regression_count(), existing.EXPECTED_REGRESSION_COUNT)
 
     def test_new_shipping_target_requires_explicit_early_coverage(self):
         table = self.root / "scripts/taira_release.py"
