@@ -537,6 +537,9 @@ TORII_STAGES += (("public contract HTTP preparation and strict admission", (
 )),)
 
 CORE_STAGES += (("authenticated admission and coherent State publication", (
+    "state::tests::ordinary_lane_frontier_publishes_once_and_rejects_invalid_successors_atomically",
+    "state::tests::ordinary_lane_frontier_extends_autonomous_application_and_unblocks_next_merge",
+    "sumeragi::v2_apply::tests::ordinary_lane_frontier_unblocks_third_autonomous_source_after_timeout_views",
     "state::tests::pending_queue_plan_authentication_does_not_hold_the_publication_fence",
     "state::tests::pending_queue_plan_admission_accepts_unchanged_source_after_height_only_advance",
     "state::tests::pending_queue_plan_admission_is_future_until_its_canonical_frontier_arrives",

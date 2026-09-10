@@ -11548,6 +11548,13 @@ pub(crate) mod valid {
                 Self::validate_sccp_commitment_root(block)?;
             }
             state_block
+                .stage_ordinary_lane_frontiers(block)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "ordinary lane application frontier is invalid: {error}"
+                    ))
+                })?;
+            state_block
                 .stage_canonical_carrier_membership(
                     crate::tx::canonical_carrier_membership_hashes(
                         state_block,
@@ -15486,6 +15493,13 @@ pub(crate) mod valid {
                 timings.execution_tx_apply_results_ms = apply_results_ms;
                 timings.execution_tx_apply_other_ms = apply_ms.saturating_sub(known_apply_ms);
             }
+            state_block
+                .stage_ordinary_lane_frontiers(block)
+                .map_err(|error| {
+                    Self::execution_context_error(format!(
+                        "ordinary lane application frontier is invalid: {error}"
+                    ))
+                })?;
             state_block
                 .stage_canonical_carrier_membership(
                     crate::tx::canonical_carrier_membership_hashes(

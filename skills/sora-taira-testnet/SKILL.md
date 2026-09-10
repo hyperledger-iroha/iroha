@@ -212,8 +212,13 @@ Before long or stateful writes, sample:
 - `iroha.transactions.status` or `iroha.transactions.wait`
 - `GET https://taira.sora.org/status`
 
-Proceed only when blocks advance, the queue is not saturated, and the relevant
-dataspace backlog is not climbing.
+Iroha does not create empty blocks. An unchanged block height is healthy when
+there is no pending work; do not require idle height advancement or submit
+transactions just to make height increase. Check queue saturation and the
+relevant dataspace backlog. For an authorized write, prove that its exact
+transaction hash reaches state-resolved `Applied`. If certified lane work is
+pending without a canonical application, inspect lane frontiers and merge
+selection as well as consensus status.
 
 Interpret common failures narrowly:
 

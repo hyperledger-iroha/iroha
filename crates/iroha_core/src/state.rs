@@ -2199,7 +2199,8 @@ struct AppliedMergeLaneExecutionMarker {
     application_write_set_root: Hash,
     lane_execution_hash: Hash,
 }
-/// Replicated exact per-lane frontier used by the two-phase autoscale drain.
+/// Replicated exact applied lane frontier shared by ordinary execution, autonomous
+/// merges, Native AMX participants, and the two-phase autoscale drain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
 struct AppliedMergeLaneFrontierMarker {
@@ -41976,16 +41977,33 @@ impl State {
         world: &impl WorldReadOnly,
         descriptor: &iroha_data_model::block::consensus::LaneBlockDescriptorV1,
     ) -> Result<(), MergeLedgerCommitError> {
+        Self::validate_lane_frontier_successor(
+            world,
+            &AppliedMergeLaneFrontierMarker {
+                version: 1,
+                lane_id: descriptor.lane_id,
+                dataspace_id: descriptor.dataspace_id,
+                lane_incarnation: descriptor.lane_incarnation,
+                lane_block_height: descriptor.lane_block_height,
+                lane_block_descriptor_hash: descriptor.descriptor_hash,
+            },
+            descriptor.previous_lane_block_height,
+            descriptor.previous_lane_block_descriptor_hash,
+        )
+    }
+    fn validate_lane_frontier_successor(
+        world: &impl WorldReadOnly,
+        descriptor: &AppliedMergeLaneFrontierMarker,
+        previous_height: u64,
+        previous_hash: Option<Hash>,
+    ) -> Result<(), MergeLedgerCommitError> {
         let expected_predecessor = Self::canonical_merged_lane_frontier_from_world(
             world,
             descriptor.lane_id,
             descriptor.dataspace_id,
             descriptor.lane_incarnation,
         )?;
-        let actual_predecessor = (
-            descriptor.previous_lane_block_height,
-            descriptor.previous_lane_block_descriptor_hash,
-        );
+        let actual_predecessor = (previous_height, previous_hash);
         if actual_predecessor != expected_predecessor {
             return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
                 "lane {} dataspace {} incarnation {} predecessor {:?} does not match replicated frontier {:?}",
@@ -53224,6 +53242,101 @@ impl<'state> StateBlock<'state> {
             .collect::<BTreeSet<_>>();
         self.resolve_required_queue_plan_pending_obligations(required, committed_signed_identities)
     }
+    /// Project ordinary execution ownerships onto the shared canonical lane frontier.
+    /// The block validation boundary authenticates the ownership, route and payload;
+    /// this projection additionally requires its exact replicated predecessor.
+    fn ordinary_lane_frontier_updates(
+        block: &SignedBlock,
+    ) -> Result<Vec<(AppliedMergeLaneFrontierMarker, u64, Option<Hash>)>, MergeLedgerCommitError>
+    {
+        let Some(context) = block.execution_context() else {
+            return Ok(Vec::new());
+        };
+        let mut updates = Vec::with_capacity(context.lane_payload_ownerships.len());
+        for ownership in &context.lane_payload_ownerships {
+            // State-free fixture ownership is explicitly not durable lane authority,
+            // matching the existing block-validation and Kura publication boundary.
+            #[cfg(any(test, feature = "iroha-core-tests"))]
+            if crate::block::is_default_test_execution_context_ownership(ownership) {
+                continue;
+            }
+            ownership.validate_replay_material().map_err(|error| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "ordinary lane frontier has invalid ownership: {error}"
+                ))
+            })?;
+            if ownership.proposal_height != block.header().height().get()
+                || ownership.proposal_view != block.header().view_change_index()
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "ordinary lane frontier ownership differs from its carrier round".to_owned(),
+                ));
+            }
+            let descriptor_hash = ownership.lane_block_descriptor_hash.ok_or_else(|| {
+                MergeLedgerCommitError::ExecutionMarkerConflict(
+                    "ordinary lane frontier ownership has no descriptor hash".to_owned(),
+                )
+            })?;
+            updates.push((
+                AppliedMergeLaneFrontierMarker {
+                    version: 1,
+                    lane_id: ownership.lane_id,
+                    dataspace_id: ownership.dataspace_id,
+                    lane_incarnation: ownership.lane_incarnation,
+                    lane_block_height: ownership.lane_block_height,
+                    lane_block_descriptor_hash: descriptor_hash,
+                },
+                ownership.previous_lane_block_height,
+                ownership.previous_lane_block_descriptor_hash,
+            ));
+        }
+        Ok(updates)
+    }
+    /// Stage ordinary lane application before the execution witness and global vote.
+    /// No local lane artifact or uncommitted autonomous payload can advance this frontier.
+    pub(crate) fn stage_ordinary_lane_frontiers(
+        &mut self,
+        block: &SignedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        let updates = Self::ordinary_lane_frontier_updates(block)?;
+        let mut markers = Vec::with_capacity(updates.len());
+        for (marker, previous_height, previous_hash) in updates {
+            State::validate_lane_frontier_successor(
+                &self.world,
+                &marker,
+                previous_height,
+                previous_hash,
+            )?;
+            markers.push(State::encode_merge_lane_frontier_marker(marker)?);
+        }
+        // Validate the whole transition before writing any lane in this block.
+        self.stage_merge_lane_frontier_markers(markers)
+    }
+    fn verify_ordinary_lane_frontiers(
+        &self,
+        block: &SignedBlock,
+    ) -> Result<(), MergeLedgerCommitError> {
+        for (marker, _, _) in Self::ordinary_lane_frontier_updates(block)? {
+            let actual = State::canonical_merged_lane_frontier_from_world(
+                &self.world,
+                marker.lane_id,
+                marker.dataspace_id,
+                marker.lane_incarnation,
+            )?;
+            if actual
+                != (
+                    marker.lane_block_height,
+                    Some(marker.lane_block_descriptor_hash),
+                )
+            {
+                return Err(MergeLedgerCommitError::ExecutionMarkerConflict(format!(
+                    "ordinary lane {} application is missing its exact executed frontier",
+                    marker.lane_id,
+                )));
+            }
+        }
+        Ok(())
+    }
     fn stage_merge_execution_markers(
         &mut self,
         epoch_id: u64,
@@ -54892,6 +55005,7 @@ impl<'state> StateBlock<'state> {
                     .to_owned(),
             )
         })?;
+        self.verify_ordinary_lane_frontiers(block.as_ref())?;
         let height = block.as_ref().header().height().get();
         if artifact.height_context.network_id != self.network_id {
             return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(

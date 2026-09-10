@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-10.
+Last updated: 2026-09-11.
 
 This is the outstanding-outcome view for Iroha 3's first release. Component owners
 below are code responsibilities, not invented individual assignments. Local
@@ -15,7 +15,7 @@ migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
 
-The immediate Taira outcome is a basic testnet for BPNG. Bind the explicit `core_testnet` qualification scope throughout public-reset admission and durable execution. Complete four-validator convergence, onboarding, faucet and an Applied write, restart persistence, public Torii/MCP access and application connectivity before advanced feature qualification. Preserve genesis/network identity, private runtime custody, host staging/preseed and rollback checks. Inrou deployment and workload checks belong to the separate `inrou` scope. Preparation38 passed the native transaction and Linux gates; complete the four-peer observation with the corrected routed request budget, then qualify the repaired CLI predecessor policy and FD-only handoff in the live rollout, then deploy using the already-qualified genesis. Reuse exact-request independent-test checkpoints and the warm build lane, and check backing-disk capacity before deployment. Release85 remains rolled back with no public cutover.
+The immediate Taira outcome is a basic testnet for BPNG. Qualify ordinary lane execution followed by autonomous execution on the same route, including an empty ordinary queue and certified view changes, before releasing the shared-frontier correction. Use a fresh first-release state; do not repair release87's missing frontier through a compatibility path. Complete four-validator convergence, onboarding, faucet and exact Applied writes, restart persistence, public Torii/MCP access and BPNG/test.inori connectivity under the `core_testnet` scope. Preserve the qualified genesis/network identity and private runtime custody. Advanced Inrou workloads remain separate. Reuse the warm build lane and exact-request checkpoints. Idle block heights are expected; use pending-work and exact transaction evidence to judge progress. Release87 is fully rolled back with no public cutover.
 
 ## Architecture and build ownership
 

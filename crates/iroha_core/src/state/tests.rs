@@ -9695,6 +9695,7 @@ fn sample_committed_lane_block_session_with_payload_for_state_test(
     )
 }
 include!("autonomous_predecessor_application_tests.rs");
+include!("ordinary_lane_frontier_tests.rs");
 fn lane_artifact_block_and_session_for_state_test(
     previous_block: Option<&SignedBlock>,
     lane_id: LaneId,
