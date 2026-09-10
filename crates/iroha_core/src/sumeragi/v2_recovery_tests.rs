@@ -871,6 +871,37 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
     restored
         .install_authenticated_snapshot_bootstrap_payload(payload)
         .expect("retain externally authenticated payload");
+    let decoded_policy = V2SnapshotStartupPolicy::from_configured_runtime(
+        &restored,
+        &nexus,
+        frozen_manifests.as_ref(),
+        frozen_compliance.as_deref(),
+    )
+    .expect("decoded process policy is structurally valid");
+    assert_ne!(
+        decoded_policy.execution_policy_hash, record.context.execution_policy_hash,
+        "snapshot decoding does not install the fixture's configured process policy"
+    );
+    // Mirror daemon startup's pre-authentication process-policy installation. The fixture
+    // constructor changes governance and pipeline defaults; none of these fields belongs to
+    // canonical snapshot state. Copy the complete execution-policy input set, not only the
+    // fields that happen to differ in today's fixture defaults. Nexus and frozen registries
+    // remain explicit candidate inputs, so their placeholder/rejection checks stay meaningful.
+    restored
+        .set_zk(state.zk.clone())
+        .expect("configured ZK policy");
+    restored.set_crypto(state.crypto().as_ref().clone());
+    restored.set_pipeline(state.pipeline.clone());
+    restored.set_oracle(state.oracle.clone());
+    restored.set_fraud_monitoring(state.fraud_monitoring.clone());
+    restored.set_gov(state.gov.clone());
+    restored.content = state.content.clone();
+    restored.set_settlement(state.settlement().clone());
+    assert_eq!(
+        crate::snapshot::canonical_state_snapshot_hash(&restored),
+        state_hash,
+        "runtime policy installation cannot change authenticated canonical state"
+    );
     let candidate = V2SnapshotStartupPolicy::from_configured_runtime(
         &restored,
         &nexus,
@@ -879,12 +910,12 @@ fn imported_snapshot_authenticates_explicit_frozen_policy_without_replacing_stat
     )
     .expect("configured frozen projection");
     assert_eq!(
-        candidate.execution_policy_hash,
-        record.context.execution_policy_hash
+        candidate.execution_policy_hash, record.context.execution_policy_hash,
+        "configured execution-policy commitment matches the signed snapshot"
     );
     assert_eq!(
-        candidate.nexus_amx_context_hash,
-        record.context.nexus_amx_context_hash
+        candidate.nexus_amx_context_hash, record.context.nexus_amx_context_hash,
+        "configured AMX commitment matches the signed snapshot"
     );
     let placeholder = V2SnapshotStartupPolicy::from_state(&restored).expect("placeholder digest");
     assert_ne!(

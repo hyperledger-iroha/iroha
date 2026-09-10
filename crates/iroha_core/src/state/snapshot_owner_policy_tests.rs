@@ -91,8 +91,9 @@ fn snapshot_owner_policy_fixture() -> (
     .expect("nondefault dataspace policy");
     configured.staking.max_validators = nonzero!(7_u32);
     configured.autoscale.enabled = false;
-    configured.autoscale.min_lane_id = nonzero!(16_u32);
-    configured.autoscale.max_lane_id_exclusive = nonzero!(32_u32);
+    // Reserve a valid range above the static lanes; disabled autoscaling still validates its bounds.
+    configured.autoscale.min_lane_id = nonzero!(4_u32);
+    configured.autoscale.max_lane_id_exclusive = nonzero!(8_u32);
     let (kura, mut state) =
         authenticated_startup_state_for_testing(directory.path().join("kura"), &catalog);
     state
@@ -217,8 +218,11 @@ state_test! { sync snapshot_owner_policy_requires_complete_canonical_fields
     for (field, invalid) in [
         ("max_validators", norito::json::Value::from(0_u64)),
         ("autoscale_min_lane_id", norito::json::Value::from(0_u64)),
-        ("autoscale_max_lane_id_exclusive", norito::json::Value::from(16_u64)),
-        ("public_validator_mode", norito::json::Value::from("unknown-mode")),
+        ("autoscale_max_lane_id_exclusive", norito::json::Value::from(4_u64)),
+        ("autoscale_max_lane_id_exclusive", norito::json::Value::from(9_u64)),
+        ("public_validator_mode", norito::json::from_json::<norito::json::Value>(
+            r#"{"mode":"unknown-mode","value":null}"#,
+        ).expect("well-formed envelope with an unknown staking mode")),
         ("routing_default_lane", norito::json::Value::from(1_u64)),
         ("routing_default_dataspace", norito::json::Value::from(9_u64)),
         ("dataspaces", norito::json::Value::Array(Vec::new())),

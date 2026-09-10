@@ -4,7 +4,6 @@ use iroha_data_model::{
     metadata::Metadata,
     nexus::{AuditControls, DataSpaceId, JurisdictionSet, LaneCompliancePolicy, LaneCompliancePolicyId, LaneId},
 };
-use norito::codec::Encode as _;
 
 fn policy() -> LaneCompliancePolicy {
     LaneCompliancePolicy {
