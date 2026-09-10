@@ -2044,17 +2044,6 @@ pub(crate) trait EffectRuntime {
         ))
     }
 
-    /// Return whether the exact source-only Decision WAL Apply seal remains
-    /// available for a lifecycle Validate-to-Apply join. Synthetic runtimes
-    /// cannot mint this affine authority and retain the closed default.
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        _tag: EventTag,
-        _decision: DurableDecision,
-    ) -> bool {
-        false
-    }
-
     /// Decide whether the runtime accepts one exact fair-ingress ownership carrier.
     fn can_admit_network_message_with_ingress_ownership(
         &self,
@@ -2438,16 +2427,6 @@ impl EffectRuntime for SerializedV2Runtime {
             Ok(prepared) => Ok(prepared.commit()),
             Err((marker, error)) => Err((marker, error.to_string())),
         }
-    }
-
-    fn has_exact_pending_live_decision_apply(
-        &self,
-        tag: EventTag,
-        decision: DurableDecision,
-    ) -> bool {
-        SerializedV2Runtime::has_exact_pending_live_decision_apply(
-            self, tag, decision.0, decision.1, decision.2, decision.3,
-        )
     }
 
     fn can_admit_network_message_with_ingress_ownership(
@@ -7386,7 +7365,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             {
                 // A resolved row has no active physical stage. Reject overlap
                 // before adoption so a stronger incumbent cannot change the
-                // incoming authority used to qualify resolved readmission.
+                // incoming authority used to qualify resolved replay.
                 return Err(EffectExecutorError::Contract(
                     "resolved Validate retained an active body-stage lineage".to_owned(),
                 ));
@@ -7566,7 +7545,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                 continue;
             }
             if let AdapterEffect::ValidateBody {
-                tag,
+                tag: _,
                 round,
                 subject,
             } = effect
@@ -7575,11 +7554,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .cloned()
             {
                 // The direct lifecycle Validate remains the sole physical
-                // operation while its row is live or a same/stale retry merely
-                // rediscovers its terminal marker. One closed exception exists:
-                // an ordinal-free older marker plus the exact cached successful
-                // receipt may redispatch an exact Commit authority refinement so
-                // normal lifecycle admission can mint the missing Apply child.
+                // operation. A resolved terminal result can replay under the
+                // exact current protected certificate to select its next child;
+                // the original Validate row and outcome remain immutable.
                 let projected = marker
                     .project_retry(effect, evidence)
                     .map_err(EffectExecutorError::Contract)?;

@@ -1016,12 +1016,6 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
         self.lifecycle_ordinal.is_some()
     }
 
-    /// Return the exact terminal Validate ordinal after no-successor
-    /// publication released its executable row.
-    const fn terminal_no_successor_ordinal(&self) -> Option<u128> {
-        self.terminal_no_successor_ordinal
-    }
-
     fn bind_lifecycle_ordinal(&mut self, ordinal: u128) -> Result<(), String> {
         if ordinal == 0 {
             return Err("published lifecycle Validate received a zero ordinal".to_owned());
@@ -1137,65 +1131,6 @@ impl PublishedLifecycleValidateRetryMarkerV1 {
             terminal_no_successor_ordinal: self.terminal_no_successor_ordinal,
             resolved_outcome: self.resolved_outcome.clone(),
         })
-    }
-
-    /// Return whether this terminal marker is the exact Commit-authorized
-    /// Validate owner for one already-fsynced successful validation.
-    ///
-    /// This is comparison-only. It cannot create work and deliberately rejects
-    /// an ordinal-bound marker because that marker still has a concrete row
-    /// which must settle under its original lifecycle owner.
-    fn is_unbound_exact_decision_owner(
-        &self,
-        decision: DurableDecision,
-        validated_receipt: &ValidatedBodyReceipt,
-    ) -> bool {
-        let AdapterEffect::ValidateBody {
-            tag,
-            round,
-            subject,
-        } = &self.latest_effect
-        else {
-            return false;
-        };
-        !self.owns_live_lifecycle_row()
-            && tag.height() == decision.0.height
-            && *round == decision.1
-            && *subject == decision.2
-            && self.durable_receipt == *validated_receipt.durable()
-            && validated_receipt.execution_commitment() == decision.3
-            && self.latest_statement.context_id() == decision.0.context_id
-            && self.latest_statement.round() == decision.0
-            && self.latest_statement.proposal_round() == decision.1
-            && self.latest_statement.subject() == Some(decision.2)
-            && self.latest_statement.phase() == Some(wire::GlobalPhase::Commit)
-            && self.latest_statement.execution_commitment() == Some(decision.3)
-            && self
-                .store_terminal
-                .exactly_precedes_validate_marker(&self.latest_effect, self.latest_statement)
-    }
-
-    /// Return whether a resolved direct-lifecycle marker must redispatch one
-    /// exact Commit authority refinement into normal Validate admission.
-    ///
-    /// Projection already rejects tag regression. Authority can strengthen in
-    /// the same tag after a Prepare retry, so only its strict Upgrade relation
-    /// distinguishes a new Decision from an already-projected duplicate.
-    fn is_unbound_exact_decision_upgrade(
-        &self,
-        projected: &Self,
-        decision: DurableDecision,
-        validated_receipt: &ValidatedBodyReceipt,
-    ) -> bool {
-        !self.owns_live_lifecycle_row()
-            && !projected.owns_live_lifecycle_row()
-            && self.durable_receipt == projected.durable_receipt
-            && self.store_terminal == projected.store_terminal
-            && self
-                .latest_statement
-                .body_stage_authority_relation_to(projected.latest_statement)
-                == Some(RuntimeFetchAuthorityRelation::Upgrade)
-            && projected.is_unbound_exact_decision_owner(decision, validated_receipt)
     }
 
     fn project_store_retry(

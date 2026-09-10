@@ -91,6 +91,7 @@ impl SealedLiveWalPersistedEffectV1 {
     }
     /// Compare one still-source-only live Decision WAL seal without exposing
     /// or consuming its affine replay authority.
+    #[cfg(test)]
     pub(in crate::sumeragi) fn exactly_binds_pending_apply_decision(
         &self,
         tag: EventTag,

@@ -475,7 +475,7 @@ fn resolved_validate_owner_retries_commit_fixture(
             executor
                 .step(now + Duration::from_millis(turn), &mut current_services)
                 .expect("reconstruct the current historical Prepare body");
-            executor
+            let _settlement = executor
                 .settle_pending_lifecycle_output_admissions(
                     &mut fixture.owner,
                     &mut current_services,
@@ -568,7 +568,7 @@ fn resolved_validate_owner_retries_commit_fixture(
         executor
             .acknowledge_runner_decision_cleanup(executor.current_tag(), Some(key.1))
             .expect("acknowledge the empty process-local Decision handoff");
-        executor
+        let _settlement = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle unrelated exact TC/QC output ownership first");
         executor
@@ -908,7 +908,7 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
         executor
             .step(now + Duration::from_millis(turn), &mut current_services)
             .expect("retry the exact protected body after its rejected terminal cut");
-        executor
+        let _settlement = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle current Prepare/TC output ownership");
         executor

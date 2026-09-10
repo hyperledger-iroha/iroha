@@ -9701,6 +9701,7 @@ impl SumeragiV2Adapter {
     /// Return whether the exact live Decision WAL source still awaits its
     /// Validate-to-Apply body-frame join. This borrows the affine seal only;
     /// lifecycle publication remains its sole consuming path.
+    #[cfg(test)]
     pub(crate) fn has_exact_pending_live_decision_apply(
         &self,
         tag: reducer::EventTag,

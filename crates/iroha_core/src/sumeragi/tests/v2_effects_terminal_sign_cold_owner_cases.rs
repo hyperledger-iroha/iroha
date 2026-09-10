@@ -338,7 +338,7 @@ fn same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_ow
                 let executor = &mut fixture.transport.executor;
                 executor.step(now + Duration::from_millis(turn), &mut current_services)
                     .expect("service the actual new-generation Prepare/body FIFO");
-                executor.settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
+                let _settlement = executor.settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
                     .expect("persist exact current control output owners");
                 executor.settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
                     .expect("rejoin the current Validate owner to its immutable result");

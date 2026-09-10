@@ -271,6 +271,7 @@ P2P_STAGES = (("bounded peer authentication and validator retry ownership", (
 )),)
 
 P2P_STAGES += (("immutable reply identity and exact dynamic history", (
+    "network::tests::reply_source_key_shares_identity_without_retaining_delivery_tenure",
     "network::tests::dependent_test_fixture_mints_opaque_tenures_and_delivery_ordinals",
     "network::tests::reply_route_pruning_retains_equal_ordinal_tenure_tombstone",
     "network::tests::reply_route_binding_rejects_evicted_tombstone_collision",
