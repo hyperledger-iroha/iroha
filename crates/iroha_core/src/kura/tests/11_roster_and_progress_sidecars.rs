@@ -419,6 +419,8 @@ fn bound_progress_directory_chain_rejects_replaced_or_symlinked_ancestors() {
             &RuntimeLaneConfig::default(),
         )
         .expect("init Kura");
+        // Kura canonicalizes the configured path, including macOS /var aliases.
+        let root = kura.store_root();
         let ancestor = root.join("ancestor");
         let leaf = ancestor.join("leaf");
         fs::create_dir_all(&leaf).expect("create nested namespace");
