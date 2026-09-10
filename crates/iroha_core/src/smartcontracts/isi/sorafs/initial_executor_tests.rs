@@ -127,19 +127,22 @@ fn initial_executor_sorafs_unimplemented_citizen_bonds_are_closed_at_both_dispat
 
 #[test]
 fn initial_executor_sorafs_direct_provider_owner_instructions_remain_closed() {
+    use iroha_data_model::isi::Instruction as _;
     let state = make_state();
     let mut block = state.block(initial_sorafs_block_header());
     let mut stx = block.transaction();
     let provider = ProviderId::new([0xA1; 32]);
     stx.world.provider_owners.insert(provider, alice());
     for instruction in [
-        InstructionBox::from(RegisterProviderOwner {
+        Box::new(RegisterProviderOwner {
             provider_id: provider,
             owner: bob(),
-        }),
-        InstructionBox::from(UnregisterProviderOwner {
+        })
+        .into_instruction_box(),
+        Box::new(UnregisterProviderOwner {
             provider_id: provider,
-        }),
+        })
+        .into_instruction_box(),
     ] {
         let error = crate::executor::Executor::Initial
             .execute_instruction(&mut stx, &alice(), instruction)
