@@ -994,6 +994,7 @@ pub(in crate::sumeragi) struct AuthenticatedRecoveredWalDecisionFetchProjection 
     effect: AdapterEffect,
     pending: PendingRuntimeEffectBinding,
     candidate: CandidateAdmission,
+    apply_source_taken: bool,
 }
 /// Opaque first body-backed successor of one recovered WAL Decision Fetch.
 ///
@@ -1909,6 +1910,11 @@ impl DurableRecoveredWalControlSignCarrierV1 {
         recovery.owns_recovered_control_broadcast(&self.projection, broadcast)
     }
 }
+/// Non-clone permit for the Apply role of one authenticated recovered Decision.
+/// Only this module's checked projection handoff can mint it.
+pub(super) struct RecoveredDecisionApplySourceMintPermitV1 {
+    _private: (),
+}
 impl AuthenticatedRecoveredWalDecisionFetchProjection {
     /// Seal the runtime-private recovered Decision Fetch projection.
     pub(in crate::sumeragi) fn from_runtime_projection(
@@ -1924,6 +1930,7 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
             effect,
             pending,
             candidate: candidate.into_candidate(),
+            apply_source_taken: false,
         }
     }
     /// Revalidate the complete nested authority against one verified height.
@@ -1943,6 +1950,106 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
                     &self.candidate,
                 )
             && decision_fetch_candidate_shape_is_exact(&self.candidate)
+    }
+    /// Bind the source role to the exact final frame of its owning adapter.
+    pub(in crate::sumeragi) fn exactly_matches_recovered_wal_record(
+        &self,
+        record: &crate::sumeragi::safety_wal::RecoveredRecord,
+    ) -> bool {
+        self.wal_identity.exactly_matches_record(record)
+    }
+    /// Transfer the independent Apply role once while retaining the Fetch's
+    /// existing owner. The full current certificate/tag and canonical pending
+    /// root are rechecked before the private mint is consumed.
+    pub(in crate::sumeragi) fn take_pending_apply_source(
+        &mut self,
+        verified: &VerifiedHeightContext,
+        tag: crate::sumeragi::v2_core::EventTag,
+        certificate: &wire::QuorumCertificate,
+    ) -> Option<super::replay_authority::SealedLiveWalPersistedEffectV1> {
+        if self.apply_source_taken
+            || !self.is_exact(verified)
+            || !matches!(&self.effect, AdapterEffect::FetchBody { tag: fetch_tag, round, subject, certificate: Some(fetch_certificate), .. }
+                if *fetch_tag == tag && fetch_certificate == certificate
+                    && *round == certificate.proposal_round && *subject == certificate.subject)
+        {
+            return None;
+        }
+        let effect = AdapterEffect::Apply {
+            tag,
+            subject: certificate.subject,
+            certificate: certificate.clone(),
+        };
+        let pending = self
+            .pending
+            .project_decision_fetch_apply_source(&self.effect, &effect)?;
+        let sealed = super::replay_authority::SealedLiveWalPersistedEffectV1::from_authenticated_recovered_decision(
+            RecoveredDecisionApplySourceMintPermitV1 { _private: () }, self.wal_identity, effect, pending,
+        )?;
+        self.apply_source_taken = true;
+        Some(sealed)
+    }
+    /// Match the body of a still-live ordinary carrier without treating it as
+    /// the current Decision Fetch. Full old-source and body-store custody is
+    /// authenticated separately by the ordinary body-pipeline census.
+    pub(super) fn names_retained_body_record(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let Some(key) = record.key() else {
+            return false;
+        };
+        record.terminal() == Some(None)
+            && matches!(
+                record.work_class(),
+                Some(
+                    super::LifecycleWorkClass::Fetch
+                        | super::LifecycleWorkClass::Store
+                        | super::LifecycleWorkClass::Validate
+                )
+            )
+            && matches!(
+                record.durable_payload(),
+                Some(DurablePayloadReference::BodyFrame(_))
+            )
+            && record.owner().causal_root() != self.candidate.causal_root
+            && key.context() == self.candidate.key.context()
+            && key.proposal_round() == self.candidate.key.proposal_round()
+            && key.subject() == self.candidate.key.subject()
+            && key.execution_commitment().is_none_or(|commitment| {
+                Some(commitment) == self.candidate.key.execution_commitment()
+            })
+    }
+    /// Select an obsolete ordinary body execution under this exact recovered
+    /// Decision. Its signed origin and body frame are authenticated separately
+    /// by the complete ledger/body-store census before retirement is staged.
+    pub(super) fn supersedes_retained_body_record(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        let AdapterEffect::FetchBody { tag, .. } = &self.effect else {
+            return false;
+        };
+        let Some(key) = record.key() else {
+            return false;
+        };
+        let is_decided_body = key.proposal_round() == self.candidate.key.proposal_round()
+            && key.subject() == self.candidate.key.subject();
+        key.context() == self.candidate.key.context()
+            && record.terminal() == Some(None)
+            && matches!(
+                record.work_class(),
+                Some(
+                    LifecycleWorkClass::Fetch
+                        | LifecycleWorkClass::Store
+                        | LifecycleWorkClass::Validate
+                )
+            )
+            && matches!(
+                record.durable_payload(),
+                Some(DurablePayloadReference::BodyFrame(_))
+            )
+            && record.ordinary_body_is_obsolete_for_decision(*tag, is_decided_body)
     }
     /// Recheck that one closed Store/Validate/Apply lineage is the sole
     /// continuation of this exact payload-free Decision Fetch.
@@ -2202,6 +2309,15 @@ impl AuthenticatedRecoveredWalDecisionFetchProjection {
     /// Return whether one durable row names this exact Fetch key.
     pub(super) fn names_record(&self, record: &super::ledger::LifecycleLedgerRecordV1) -> bool {
         record.key() == Some(self.candidate.key)
+    }
+    /// Compare the exact Decision-WAL Fetch source independently of its owner
+    /// and terminal state. A corrupt current source cannot be dismissed as
+    /// unrelated history merely because its causal root was changed.
+    pub(super) fn names_replay_source(
+        &self,
+        record: &super::ledger::LifecycleLedgerRecordV1,
+    ) -> bool {
+        self.names_record(record) && record.replay_matches_candidate(&self.candidate)
     }
     /// Compare every persisted standalone admission field.
     pub(super) fn exactly_matches_record(
@@ -3352,7 +3468,7 @@ fn decision_fetch_candidate_shape_is_exact(candidate: &CandidateAdmission) -> bo
         return false;
     };
     candidate.work_class == LifecycleWorkClass::Fetch
-        && candidate.key.phase() == super::LifecyclePhase::Fetch
+        && candidate.key.phase() == super::LifecyclePhase::FetchDecision
         && candidate.stage.kind() == LifecycleStageKind::FetchBody
         && candidate.initial_state == InitialLifecycleState::Ready
         && candidate.stage.predecessor_scope() == PredecessorScope::Independent
@@ -3933,7 +4049,7 @@ fn authenticate_recovered_wal_vote_lifecycle(
         let parent = projection.parent();
         let child = projection.child();
         if !candidate_shape_is_exact(parent, LifecycleWorkClass::Validate)
-            || parent.key.phase() != super::LifecyclePhase::Validate
+            || !parent.key.phase().is_validate()
             || parent.stage.kind() != LifecycleStageKind::ValidateBody
         {
             Err(RecoveredWalVoteLifecycleRepairErrorKind::InvalidParent)

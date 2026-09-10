@@ -1036,6 +1036,8 @@ forbidden|derive_invalid_body_report_evidence|Decode|runtime seal InvalidBodyRep
 forbidden|derive_invalid_body_report_evidence|Encode|runtime seal InvalidBodyReportReplayEvidenceV1 became codec-constructible
 end
 case|live_wal_replay_seal_is_linear_nondecodable_and_has_only_specialized_production_mints
+region|recovered_source|wal_recovery|begin|-|end|-
+region|recovered_handoff|adapter|at|pub(in crate::sumeragi) fn retain_recovered_decision_apply_source(|before|/// Replay the exact terminal ordinary certified-body prefix
 region|production|replay_authority|begin|-|before|\n#[cfg(test)]\nmod tests {
 region|live|replay_authority|after|struct LiveWalPersistedReplaySealV1|before|/// Canonical inert replay evidence for one exact signed broadcast effect.
 region|adapter|adapter|begin|-|before|\n#[cfg(test)]\nmod tests {
@@ -1090,7 +1092,19 @@ forbidden|live|pub(super) fn source(|live WAL seal exposed or reserved forbidden
 forbidden|live|pub(super) fn effect(|live WAL seal exposed or reserved forbidden surface pub(super) fn effect(
 forbidden|live|pub(super) fn pending(|live WAL seal exposed or reserved forbidden surface pub(super) fn pending(
 forbidden|live|into_parts|live WAL seal exposed or reserved forbidden surface into_parts
-forbidden|live|RecoveredWalFrameIdentity|live WAL seal exposed or reserved forbidden surface RecoveredWalFrameIdentity
+required|live|enum PersistedWalExecutionOriginV1 {\n    LiveAppend(LiveWalFrameIdentity),\n    RecoveredDecision(RecoveredWalFrameIdentity),\n}|persisted execution origins must remain a closed live-append or authenticated recovered-Decision choice
+count|live|RecoveredWalFrameIdentity|2|only the closed recovered origin and private-permit constructor may name recovered identity
+required|live|if identity.is_exact() && matches!(effect, AdapterEffect::Apply { .. })|recovered persisted origin must authorize only exact Apply effects
+required|live|Self::RecoveredDecision(_) => None|every other recovered persisted action must fail closed
+required|live|_permit: super::wal_recovery::RecoveredDecisionApplySourceMintPermitV1|recovered Apply construction lost its private one-shot projection permit
+required|live|if stage != LifecycleStageKind::ApplyDecision|recovered Apply constructor lost its exact stage restriction
+forbidden|live|RecoveredWalFrameIdentity::for_test|persisted production execution must not fabricate a recovered WAL frame
+count|recovered_source|SealedLiveWalPersistedEffectV1::from_authenticated_recovered_decision(|1|only the exact recovered Decision projection may mint the deferred Apply source
+required|recovered_source|if self.apply_source_taken|recovered Decision Apply role must reject repeated transfer
+order|recovered_source|4|if self.apply_source_taken|.project_decision_fetch_apply_source(&self.effect, &effect)?|SealedLiveWalPersistedEffectV1::from_authenticated_recovered_decision(|self.apply_source_taken = true|recovered Apply transfer must verify source and binding before consuming its unique role
+required|recovered_handoff|adapter.pending_live_decision_apply.is_some()|cold handoff must reject an already installed Apply source
+required|recovered_handoff|fetch.exactly_matches_recovered_wal_record(record)|cold handoff must bind its actual owning adapter WAL frame
+order|recovered_handoff|3|fetch.exactly_matches_recovered_wal_record(record)|.take_pending_apply_source(verified, adapter.current_tag(), &certificate)|adapter.pending_live_decision_apply = Some(source)|the exact current adapter WAL must authenticate before deferred Apply ownership transfers
 forbidden|live|!= [0; 32]|live WAL seal exposed or reserved forbidden surface != [0; 32]
 forbidden|live|== [0; 32]|live WAL seal exposed or reserved forbidden surface == [0; 32]
 forbidden|live|is_zero()|live WAL seal exposed or reserved forbidden surface is_zero()
@@ -2276,7 +2290,7 @@ forbidden|live_sign_work|fn pending(|opaque live Sign work exposes forbidden sur
 forbidden|live_sign_work|fn receipt(|opaque live Sign work exposes forbidden surface {forbidden}
 forbidden|live_sign_work|fn candidate(|opaque live Sign work exposes forbidden surface {forbidden}
 required|preparation|LifecycleWorkClass::Validate|durable Validate preparation omitted {required}
-required|preparation|LifecyclePhase::Validate|durable Validate preparation omitted {required}
+required|preparation|lease.key().phase().is_validate()|durable Validate preparation omitted {required}
 required|preparation|LifecycleStageKind::ValidateBody|durable Validate preparation omitted {required}
 required|preparation|PredecessorScope::Independent|durable Validate preparation omitted {required}
 required|preparation|validate\n            .project_candidate(verified)|durable Validate preparation omitted {required}
@@ -3826,7 +3840,15 @@ order|released_apply|8|project_apply_candidate(|stage_durable_transaction()|redu
 forbidden|released_apply_post_fsync|?|released-Validate Apply post-fsync tail acquired fallible work
 forbidden|released_apply_post_fsync|return Err|released-Validate Apply post-fsync tail acquired fallible work
 forbidden|released_apply_post_fsync|persist_exact|released-Validate Apply post-fsync tail attempted a second persistence
-count|ledger_production|.persist_exact_successor(|9|the same staged transaction helper must be the sole exact-store successor caller
+region|decision_body_retirement|ledger|from|fn reconcile_recovered_decision_body_generation(|before|/// Stage exactly one standalone recovered Decision Fetch row.
+region|decision_body_startup|ledger|from|pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(|before|fn open_recovered_decision_validate_startup(
+required|decision_body_retirement|!projection.is_exact(verified)|body retirement requires authenticated Decision authority
+order|decision_body_retirement|4|authenticate_durable_certified_body_pipeline_startup(verified, body_store)|for index in eligible|census.contains_live_ordinal|Self::cancelled_record|body retirement must authenticate every source before terminalizing its exact live leaves
+forbidden|decision_body_retirement|persist_exact_successor|body retirement staging must not publish separately from its selected successor
+required|decision_body_startup|changed \p\p retired_body|fresh Decision admission must include the staged retirement in its one publication
+count|decision_body_startup|publish_retirement()?|3|retained body and canonical Store/Validate branches must publish retirement before installing ownership
+order|decision_body_startup|3|reconcile_recovered_decision_body_generation|.stage_authenticated_wal_decision_fetch(&projection)|.persist_exact_successor(&opened, &repaired)|fresh Decision must stage cancellation and admission before one exact successor publication
+count|ledger_production|.persist_exact_successor(|10|only reviewed staged transactions and authenticated startup retirement may publish exact ledger successors
 end
 case|production_scheduler_factory_has_no_raw_rank_mint
 region|scheduler|scheduler_inputs|begin|-|end|-
@@ -4539,7 +4561,7 @@ forbidden|preview_oracles|projection::admission_request|Ready Validate preview e
 forbidden|preview_oracles|CandidateAdmission|Ready Validate preview exposed body authority {forbidden}
 count|production|pub(super) fn prepare_ready_durable_validate_execution(|1|the exact Ready completion has one registry entrypoint
 required|preparation|LifecycleWorkClass::Validate|Ready Validate preflight omitted {required}
-required|preparation|LifecyclePhase::Validate|Ready Validate preflight omitted {required}
+required|preparation|lease.key().phase().is_validate()|Ready Validate preflight omitted {required}
 required|preparation|LifecycleStageKind::ValidateBody|Ready Validate preflight omitted {required}
 required|preparation|PredecessorScope::Independent|Ready Validate preflight omitted {required}
 required|preparation|validated_lease_address(lease, slot)|Ready Validate preflight omitted {required}

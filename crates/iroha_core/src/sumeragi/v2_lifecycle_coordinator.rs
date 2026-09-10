@@ -90,8 +90,9 @@ pub(in crate::sumeragi) use authority::{
 };
 use body_pipeline_transition::durable_validate_payload_is_exact;
 pub(in crate::sumeragi) use body_pipeline_transition::{
-    ReleasedValidateApplyPublicationPreflightV1, SealedInvalidBodyReportProjectionPermit,
-    SealedValidateApplyProjectionPermit, SealedValidateSignProjectionPermit,
+    ExistingResolvedReportCommitPermitV1, ReleasedValidateApplyPublicationPreflightV1,
+    SealedInvalidBodyReportProjectionPermit, SealedValidateApplyProjectionPermit,
+    SealedValidateSignProjectionPermit,
 };
 pub(crate) use concrete_admission::LifecycleWorkRegistryHolder;
 pub(in crate::sumeragi) use concrete_admission::{
@@ -140,10 +141,11 @@ pub(crate) use ledger::ProductionLifecycleStartupErrorV1;
 pub(crate) use ledger::WalVoteLedgerRepairTestSummary;
 pub(in crate::sumeragi) use ledger::{
     AuthenticatedCompleteTipPredecessorStorageV1, AuthenticatedRecoveredLifecycleSuccessorFloorV1,
-    CompleteTipPayloadStoreOpenTargetV1, CompleteTipPredecessorStorageErrorV1,
-    LaunchedRecoveredCompleteTipSuccessorLifecycleV1, LifecycleLedgerError, LifecycleLedgerV1,
-    PublishedFinalizedLifecycleRetainedFloorV1, RetiredRecoveredCompleteTipActivationAuthorityV1,
-    open_complete_tip_predecessor_storage, resolved_phase_vote_outcome_from_storage,
+    AuthenticatedRetainedBodyApplyLineageV1, CompleteTipPayloadStoreOpenTargetV1,
+    CompleteTipPredecessorStorageErrorV1, LaunchedRecoveredCompleteTipSuccessorLifecycleV1,
+    LifecycleLedgerError, LifecycleLedgerV1, PublishedFinalizedLifecycleRetainedFloorV1,
+    RetiredRecoveredCompleteTipActivationAuthorityV1, open_complete_tip_predecessor_storage,
+    resolved_phase_vote_outcome_from_storage,
 };
 pub(in crate::sumeragi) use work_registry::{
     CancelledCertifiedBodyWorkV1, CertifiedBodyRetirementMaterialV1,
@@ -1582,9 +1584,11 @@ mod tests {
             LifecyclePhase::Prepare => LifecycleStageKind::SignPrepareVote,
             LifecyclePhase::Commit => LifecycleStageKind::SignCommitVote,
             LifecyclePhase::Timeout => LifecycleStageKind::SignTimeoutVote,
-            LifecyclePhase::Fetch => LifecycleStageKind::FetchBody,
-            LifecyclePhase::Store => LifecycleStageKind::StoreBody,
-            LifecyclePhase::Validate => LifecycleStageKind::ValidateBody,
+            LifecyclePhase::Fetch | LifecyclePhase::FetchDecision => LifecycleStageKind::FetchBody,
+            LifecyclePhase::Store | LifecyclePhase::StoreDecision => LifecycleStageKind::StoreBody,
+            LifecyclePhase::Validate | LifecyclePhase::ValidateDecision => {
+                LifecycleStageKind::ValidateBody
+            }
             LifecyclePhase::Apply => LifecycleStageKind::ApplyDecision,
             LifecyclePhase::BroadcastProposal => LifecycleStageKind::BroadcastProposal,
             LifecyclePhase::BroadcastPrepareVote => LifecycleStageKind::BroadcastPrepareVote,
@@ -1609,8 +1613,21 @@ mod tests {
         }
     }
     fn key(seed: u8, phase: LifecyclePhase) -> LifecycleKey {
-        super::replay_authority::exact_record_fixture(context(), stage_kind_for_phase(phase), seed)
+        if phase.is_decision_body() {
+            super::replay_authority::exact_decision_body_record_fixture(
+                context(),
+                stage_kind_for_phase(phase),
+                seed,
+            )
             .key
+        } else {
+            super::replay_authority::exact_record_fixture(
+                context(),
+                stage_kind_for_phase(phase),
+                seed,
+            )
+            .key
+        }
     }
     fn stage(
         kind: LifecycleStageKind,
@@ -2198,7 +2215,11 @@ mod tests {
         predecessor_scope: PredecessorScope,
     ) -> CandidateAdmission {
         let kind = stage_kind_for_phase(phase);
-        let replay = super::replay_authority::exact_record_fixture(context(), kind, seed);
+        let replay = if phase.is_decision_body() {
+            super::replay_authority::exact_decision_body_record_fixture(context(), kind, seed)
+        } else {
+            super::replay_authority::exact_record_fixture(context(), kind, seed)
+        };
         assert_eq!((replay.work_class, replay.key.phase()), (work_class, phase));
         let mut candidate = CandidateAdmission::new(
             replay.key,
@@ -4205,7 +4226,7 @@ mod tests {
         );
         assert_eq!(coordinator.records.len(), 1);
     }
-    const EXPLORER_TEMPLATES: [(LifecycleWorkClass, LifecyclePhase, LifecycleStageKind); 21] = [
+    const EXPLORER_TEMPLATES: [(LifecycleWorkClass, LifecyclePhase, LifecycleStageKind); 24] = [
         (
             LifecycleWorkClass::SignProposal,
             LifecyclePhase::Proposal,
@@ -4232,13 +4253,28 @@ mod tests {
             LifecycleStageKind::FetchBody,
         ),
         (
+            LifecycleWorkClass::Fetch,
+            LifecyclePhase::FetchDecision,
+            LifecycleStageKind::FetchBody,
+        ),
+        (
             LifecycleWorkClass::Store,
             LifecyclePhase::Store,
             LifecycleStageKind::StoreBody,
         ),
         (
+            LifecycleWorkClass::Store,
+            LifecyclePhase::StoreDecision,
+            LifecycleStageKind::StoreBody,
+        ),
+        (
             LifecycleWorkClass::Validate,
             LifecyclePhase::Validate,
+            LifecycleStageKind::ValidateBody,
+        ),
+        (
+            LifecycleWorkClass::Validate,
+            LifecyclePhase::ValidateDecision,
             LifecycleStageKind::ValidateBody,
         ),
         (

@@ -2954,6 +2954,38 @@ impl PendingRuntimeEffectBinding {
         );
         pending.validate_exact(effect).then_some(pending)
     }
+    /// Project the Apply role of an already-authenticated Decision Fetch.
+    /// The source projection keeps its independent Fetch role; this inert
+    /// binding only becomes executable inside the sealed Apply handoff.
+    pub(in crate::sumeragi) fn project_decision_fetch_apply_source(
+        &self,
+        fetch: &AdapterEffect,
+        apply: &AdapterEffect,
+    ) -> Option<Self> {
+        let AdapterEffect::FetchBody {
+            tag,
+            round,
+            subject,
+            certificate: Some(certificate),
+            ..
+        } = fetch
+        else {
+            return None;
+        };
+        if !self.validate_exact(fetch)
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.proposal_round != *round
+            || certificate.subject != *subject
+            || !matches!(apply, AdapterEffect::Apply { tag: apply_tag, subject: apply_subject, certificate: apply_certificate }
+                if apply_tag == tag && apply_subject == subject && apply_certificate == certificate)
+        {
+            return None;
+        }
+        let candidate = production_adapter_effect_candidate_binding(apply, None).ok()??;
+        let pending =
+            Self::from_effect_candidate(*self.causal_lifecycle_key(), apply, Some(&candidate));
+        pending.validate_exact(apply).then_some(pending)
+    }
     /// Mint the unique pending owner of one recovered Proposal/Timeout control Sign.
     ///
     /// The one-shot permit is private to the consuming recovered-token join.

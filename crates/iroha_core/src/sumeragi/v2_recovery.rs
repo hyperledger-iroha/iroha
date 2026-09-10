@@ -1493,6 +1493,24 @@ impl RecoveredCompleteTipActivationAuthority {
                 &self.artifact.commit_qc,
             )
     }
+    /// Rejoin an original body Validate source to this exact Kura finality.
+    /// The old source and the current Apply remain private comparison inputs;
+    /// this operation cannot mint worker or successor-activation ownership.
+    pub(in crate::sumeragi) fn authorizes_retained_body_apply_origin(
+        &self,
+        validate: &crate::sumeragi::v2_first_release_recovery::LifecycleReplayAuthorityV1,
+        original_fetch: Option<
+            &crate::sumeragi::v2_first_release_recovery::LifecycleReplayAuthorityV1,
+        >,
+        apply: &crate::sumeragi::v2_first_release_recovery::LifecycleReplayAuthorityV1,
+    ) -> bool {
+        self.authorizes_terminal_apply_replay(apply)
+            && validate.authenticates_complete_tip_validate_origin(
+                &self.verified_predecessor,
+                original_fetch,
+                apply,
+            )
+    }
     /// Return whether height-one CompleteTip may retire an empty genesis ledger.
     ///
     /// Signed genesis uses the authenticated bootstrap rather than the ordinary

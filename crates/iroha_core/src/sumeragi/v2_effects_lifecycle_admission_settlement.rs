@@ -2753,10 +2753,10 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 Kind::ValidatedBusy | Kind::RejectedBusy => Ok(None),
                 Kind::ValidatedApply => Ok(Some(true)),
                 _ => {
-                    owner
+                    let settled = owner
                         .publish_resolved_validate_result(&pending, prepared)
                         .map_err(|reason| EffectExecutorError::Contract(reason.to_owned()))?;
-                    Ok(Some(false))
+                    Ok(settled.then_some(false))
                 }
             }
         })();

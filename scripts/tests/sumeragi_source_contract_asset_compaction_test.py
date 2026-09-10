@@ -14,65 +14,11 @@ ASSET_PATH = ROOT / "crates/iroha_core/src/sumeragi/source_contracts_v1.txt"
 SUPPORT_PATH = ROOT / "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs"
 SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
-MINIMUM_NET_REDUCTION = 2_161
-# The 54th case inspects eight sources outside the historical migration and
-# adds exactly 31 hash-pinned runner lines to resolve them. Count that broader
-# semantic surface on both sides of the historical comparison; this preserves
-# the original reduction floor while conservatively crediting the hypothetical
-# uncompacted tests with only the same 31-line growth.
-ORIGINAL_PREIMAGE_RUST_LINES = 5_779
-ORIGINAL_POSTIMAGE_RUST_LINES = 3_618
-# The actual WAL consumer now lives in its own already-existing source module.
-# Its closed source-provider enum, parser and resolver add exactly three Rust
-# lines. Credit those same three lines to both compared forms; retain the
-# original historical measurements and net-reduction floor unchanged.
-MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES = 31
-WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES = 3
-# The merged owner fixes add a 22-line inline-storage regression and 20 lines
-# for the complete adapter source projection plus bounded fixture runner.
-# Account for that independent coverage equally in both compared forms.
-OWNER_FIX_COVERAGE_GROWTH_RUST_LINES = 42
-# The 55th retirement case adds three source mappings, two include expansions,
-# and one macro test (20 lines), independently of the owner-fix coverage.
-SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES = 20
-CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES = (
-    MIGRATED_SOURCE_COVERAGE_GROWTH_RUST_LINES
-    + WAL_CONSUMER_SOURCE_COVERAGE_GROWTH_RUST_LINES
-    + OWNER_FIX_COVERAGE_GROWTH_RUST_LINES
-    + SUPERSEDED_BODY_RETIREMENT_COVERAGE_GROWTH_RUST_LINES
-)
-BASELINE_RUST_LINES = (
-    ORIGINAL_PREIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
-)
-MAX_POSTIMAGE_RUST_LINES = (
-    ORIGINAL_POSTIMAGE_RUST_LINES + CURRENT_SOURCE_COVERAGE_GROWTH_RUST_LINES
-)
-EXPECTED_ASSET_LENGTH = 651_128
-EXPECTED_ASSET_SHA256 = "72532589d1f44c91b6e7d7d575d85f86b24c1334b51d5f9d387638c0a87a7f75"
+# Pin the reviewed semantic asset. Historical compaction byte counts and host
+# hashes belong to Git history: current Rust hosts may add independent tests.
+EXPECTED_ASSET_LENGTH = 662_778
+EXPECTED_ASSET_SHA256 = "7c1316210d124f01d6eb47601e037c1c59804cf596c3c1a1b7a70c0e5772511c"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
-
-HOST_PREIMAGE_SHA256 = {
-    "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "fe0afaffcbabfeb1d2fdae88d871e380ca1484c80cc2cd0d3a8ce492c6949446",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "dd5da4ddcbba6cc3aff8faa86f6366ae0bab3bfa06189350e13e2f08db321a58",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "1b3cebc4dd29a624e970ca90f7fa8a2677eb650af9cdd05c48f498a5fd2e1a10",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "5af2c411d6d1c7d5579004760e8c9ae0b48f2335e1468f456f72e0d614dede6b",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "0afc9993189c5d118e5da3e9d1b37376687bfd316c66512b1605913b1a1908f4",
-}
-COMPACTED_HOST_POSTIMAGE_SHA256 = {
-    "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": "5b3988299c7873cb3cd0cf70f4007007d570cbb324c7c9adbf237ef4fbc6afda",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_replay_authority_cases.rs": "d380501e4efd09374acdfc2b7729bd095c7499a4d0dfdde355ef2296fa8de23d",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "d83e903bd0d2307896a2cc53ffb8c36aaf01cce3cb9178f88221009f44fe284c",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_replay_evidence_cases.rs": "c6427c6b098be208556e08222f31507d024f5c63524fb43a5e5c7822b65711e7",
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "41b23f0be77e4bcf5dda8374b27013a7daee201edccf043504ce7217a4fdab45",
-}
-
-# Preserve the original compacted host hashes as historical evidence. Pin the
-# current source provider, bounded runner and inline-storage regression separately.
-HOST_POSTIMAGE_SHA256 = {
-    **COMPACTED_HOST_POSTIMAGE_SHA256,
-    "crates/iroha_core/src/sumeragi/v2_lifecycle_coordinator_support.rs": "a99c34af832a7407a1e704fff6f9302550988685ad5c166727bf29dba73c5f2e",
-    "crates/iroha_core/src/sumeragi/tests/v2_lifecycle_work_registry_exact_registry_cases.rs": "0b1e3fae6fcf6a915b75013b880f952aba8034d3d938585d24c2952431fd8fcc",
-}
 
 MIGRATED_TESTS = {
     "crates/iroha_core/src/sumeragi/tests/v2_adapter_05_direct_lifecycle_recovered_wal_seal_case.rs": (
@@ -104,18 +50,18 @@ NEW_CASE_CONTRACT_COUNTS = {
     "registry_remains_inert_and_scheduler_free": 89,
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": 90,
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": 338,
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 306,
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": 312,
     "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": 196,
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": 35,
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": 92,
 }
 MIGRATED_CASE_SHA256 = {
-    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "f68343bea21598a841c338813841e7f43b578a6593b3920f66a74767a212b7ce",
+    "remote_proposal_replay_pre_admission_is_closed_exact_and_live": "77882a8e8fd37e5df2d4257614823819ada01e155c93502c4fd0c3e3a9e3d6df",
     "registry_remains_inert_and_scheduler_free": "941a48e2f28cc22d3167c86a9a9cd58a9e96e4a1d956537a28aa5527109183fe",
     "superseded_certified_body_retirement_is_exact_and_durably_sealed": "bca10f8cce321aba00188cfa24e3b78dd5aebb7fed15d6124bcd51bc6b144d3f",
     "recovered_wal_vote_sign_seal_is_move_only_exact_and_owner_wired": "7e61f7612fa106e3a3649ba8720b172f5d1ec4e901f35c4cf310038b46ba521e",
-    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "e0db04d44cf4862461ae89234c7d82361bb1b25491017f0a7869dec1a287c872",
-    "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "03b7d7a3a9843536bca8c686937561c0c12eea4281e9850de7ee7c841cf6ac48",
+    "stored_replay_store_coalescing_and_cleanup_are_owner_closed": "8f3f95091ffa52b95610e093ccd34c68bc48895034c13d4cad0ab6eaafc9330c",
+    "ready_validate_execution_surface_is_closed_borrow_bound_and_scheduler_owned": "a56c319557fc0fd0eda26924c60de29940a77cb38cbd11ba551a1ec15c131ad5",
     "certified_pipeline_replay_evidence_is_retained_by_every_closed_carrier": "dc5a58896a12211ec735952b05a411112a8fda45ed60923b1b5f114913a14a12",
     "nonqueue_replica_release_is_fifo_proved_move_only_and_restart_closed": "b6afba431c1205460d1601e0dd68f6688a9ca93bce808b88d9ab30733cb81f13",
 }
@@ -163,6 +109,35 @@ def parse_cases(asset: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     if current_id is not None:
         raise AssertionError(f"unclosed case {current_id}")
     return tuple(cases)
+
+
+def macro_inventory_failures(
+    sources: dict[str, str], expected_case_ids: set[str]
+) -> list[str]:
+    """Require one macro per case and preserve each migrated test's host."""
+
+    pattern = re.compile(
+        r"source_contract_test!\(\s*"
+        r"(?:#\[allow\(clippy::too_many_lines\)\]\s*)?"
+        r"([a-z_][a-z0-9_]*)\s*\)"
+    )
+    invocations = {
+        path: pattern.findall(source) for path, source in sources.items()
+    }
+    actual = [name for names in invocations.values() for name in names]
+    failures: list[str] = []
+    for name in sorted(expected_case_ids | set(actual)):
+        count = actual.count(name)
+        if name not in expected_case_ids or count != 1:
+            failures.append(f"{name}: expected one known macro, found {count}")
+    for path, names in MIGRATED_TESTS.items():
+        source = sources.get(path, "")
+        for name in names:
+            if invocations.get(path, []).count(name) != 1:
+                failures.append(f"{path}: missing unique migrated macro {name}")
+            if re.search(rf"\bfn\s+{re.escape(name)}\s*\(", source):
+                failures.append(f"{path}: re-inlined migrated test {name}")
+    return failures
 
 
 # These are the narrow production regions whose guards moved during the current
@@ -348,7 +323,7 @@ def boundary_contract_failures(
 
 
 class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
-    """Pin the semantic asset, migrated inventory, and honest Rust reduction."""
+    """Pin the semantic asset and migration inventory without freezing hosts."""
 
     def test_asset_bytes_case_inventory_and_new_contract_counts_are_exact(self) -> None:
         asset_bytes = ASSET_PATH.read_bytes()
@@ -366,40 +341,51 @@ class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
             self.assertEqual(len(contracts), expected_count)
             self.assertEqual(sha256(("\n".join(rows) + "\n").encode()), MIGRATED_CASE_SHA256[case_id])
 
-    def test_migrated_test_names_remain_exact_macro_tests(self) -> None:
-        for relative_path, names in MIGRATED_TESTS.items():
-            source = (ROOT / relative_path).read_text(encoding="utf-8")
-            for name in names:
-                self.assertNotRegex(source, rf"\bfn\s+{re.escape(name)}\s*\(")
-                invocations = re.findall(
-                    rf"source_contract_test!\(\s*{re.escape(name)}\s*\)", source
-                )
-                self.assertEqual(len(invocations), 1)
+    @staticmethod
+    def source_inventory() -> tuple[dict[str, str], set[str]]:
+        """Load only Sumeragi Rust source and the reviewed case identifiers."""
 
-    def test_every_asset_case_has_one_rust_macro_test(self) -> None:
+        sources = {
+            str(path.relative_to(ROOT)): path.read_text(encoding="utf-8")
+            for path in sorted(SUMERAGI_PATH.rglob("*.rs"))
+        }
         cases = parse_cases(ASSET_PATH.read_text(encoding="utf-8"))
-        expected = {case_id for case_id, _ in cases}
-        pattern = re.compile(
-            r"source_contract_test!\(\s*"
-            r"(?:#\[allow\(clippy::too_many_lines\)\]\s*)?"
-            r"([a-z_][a-z0-9_]*)\s*\)"
-        )
-        actual: list[str] = []
-        for source_path in sorted(SUMERAGI_PATH.rglob("*.rs")):
-            actual.extend(pattern.findall(source_path.read_text(encoding="utf-8")))
-        self.assertEqual(len(actual), EXPECTED_CASE_COUNT)
-        self.assertEqual(len(set(actual)), EXPECTED_CASE_COUNT)
-        self.assertEqual(set(actual), expected)
+        return sources, {case_id for case_id, _ in cases}
 
-    def test_postimages_and_line_reduction_are_frozen(self) -> None:
-        postimage_lines = 0
-        for relative_path, expected_hash in HOST_POSTIMAGE_SHA256.items():
-            data = (ROOT / relative_path).read_bytes()
-            self.assertEqual(sha256(data), expected_hash)
-            postimage_lines += len(data.decode("utf-8").splitlines())
-        self.assertLessEqual(postimage_lines, MAX_POSTIMAGE_RUST_LINES)
-        self.assertGreaterEqual(BASELINE_RUST_LINES - postimage_lines, MINIMUM_NET_REDUCTION)
-        self.assertTrue(all(len(value) == 64 for value in HOST_PREIMAGE_SHA256.values()))
+    def test_every_asset_case_has_one_rust_macro_test_in_its_host(self) -> None:
+        sources, expected = self.source_inventory()
+        self.assertEqual(macro_inventory_failures(sources, expected), [])
+
+    def test_macro_inventory_rejects_missing_duplicate_and_reinlined_tests(self) -> None:
+        sources, expected = self.source_inventory()
+        path = next(iter(MIGRATED_TESTS))
+        name = MIGRATED_TESTS[path][0]
+        match = re.search(
+            rf"source_contract_test!\(\s*{re.escape(name)}\s*\)", sources[path]
+        )
+        self.assertIsNotNone(match)
+        invocation = match.group()
+        mutations = {
+            "missing": sources[path].replace(invocation, "", 1),
+            "duplicate": sources[path] + "\n" + invocation + ";\n",
+            "re-inlined": sources[path] + f"\n#[test]\nfn {name}() {{}}\n",
+        }
+        for label, source in mutations.items():
+            with self.subTest(mutation=label):
+                mutated = dict(sources)
+                mutated[path] = source
+                failures = macro_inventory_failures(mutated, expected)
+                self.assertTrue(failures, f"inventory accepted {label} migrated test")
+                self.assertTrue(any(name in failure for failure in failures))
+
+    def test_macro_inventory_accepts_unrelated_test_addition(self) -> None:
+        sources, expected = self.source_inventory()
+        path = next(iter(MIGRATED_TESTS))
+        sources[path] += (
+            "\n#[test]\nfn unrelated_regression() {\n"
+            "    assert_eq!(2 + 2, 4);\n}\n"
+        )
+        self.assertEqual(macro_inventory_failures(sources, expected), [])
 
     def test_rust_runner_pins_the_same_closed_inventory(self) -> None:
         support = SUPPORT_PATH.read_text(encoding="utf-8")

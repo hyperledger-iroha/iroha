@@ -2956,7 +2956,7 @@ impl ReadyRecoveredDecisionFetchAttestationV1 {
     pub(super) fn matches_ready_record(&self, record: &super::LifecycleRecord) -> bool {
         record.state == super::LifecycleState::Ready
             && record.work_class == LifecycleWorkClass::Fetch
-            && record.key.phase() == LifecyclePhase::Fetch
+            && record.key.phase() == LifecyclePhase::FetchDecision
             && record.stage.kind() == LifecycleStageKind::FetchBody
             && record.stage.predecessor_scope() == PredecessorScope::Independent
             && record.physical_slots.len() == 1

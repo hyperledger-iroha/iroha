@@ -23,8 +23,28 @@ impl ReplayEventTagV1 {
 #[derive(PartialEq, Eq)]
 #[must_use = "a live WAL replay seal must remain joined to its persisted continuation"]
 struct LiveWalPersistedReplaySealV1 {
-    wal_identity: LiveWalFrameIdentity,
+    wal_identity: PersistedWalExecutionOriginV1,
     state: LiveWalPersistedReplayStateV1,
+}
+/// Closed provenance of a persisted continuation. Recovered authority is only
+/// minted by the authenticated Decision projection's one-shot Apply handoff.
+#[derive(PartialEq, Eq)]
+enum PersistedWalExecutionOriginV1 {
+    LiveAppend(LiveWalFrameIdentity),
+    RecoveredDecision(RecoveredWalFrameIdentity),
+}
+impl PersistedWalExecutionOriginV1 {
+    fn project(&self, effect: &AdapterEffect) -> Option<LiveWalReplayProjectionV1> {
+        match self {
+            Self::LiveAppend(identity) => exact_live_wal_replay_projection(identity, effect),
+            Self::RecoveredDecision(identity)
+                if identity.is_exact() && matches!(effect, AdapterEffect::Apply { .. }) =>
+            {
+                exact_persisted_wal_replay_projection(identity.persisted_locator(), effect)
+            }
+            Self::RecoveredDecision(_) => None,
+        }
+    }
 }
 #[derive(PartialEq, Eq)]
 enum LiveWalPersistedReplayStateV1 {
@@ -91,6 +111,37 @@ impl SealedLiveWalPersistedEffectV1 {
             effect,
             replay,
             pending,
+        };
+        sealed.exactly_matches_effect().then_some(sealed)
+    }
+    /// Receive the one-shot Apply role of an authenticated recovered Decision.
+    /// The minting projection checked the complete WAL/QC/roster and pending
+    /// binding before consuming its private permit; no live append is claimed.
+    pub(super) fn from_authenticated_recovered_decision(
+        _permit: super::wal_recovery::RecoveredDecisionApplySourceMintPermitV1,
+        wal_identity: RecoveredWalFrameIdentity,
+        effect: AdapterEffect,
+        pending: PendingRuntimeEffectBinding,
+    ) -> Option<Self> {
+        let origin = PersistedWalExecutionOriginV1::RecoveredDecision(wal_identity);
+        let LiveWalReplayProjectionV1 {
+            context,
+            stage,
+            source,
+        } = origin.project(&effect)?;
+        if stage != LifecycleStageKind::ApplyDecision
+            || !canonical_wal_source(&source)
+            || !pending.exactly_binds_adapter_effect(&effect)
+        {
+            return None;
+        }
+        let sealed = Self {
+            effect,
+            replay: LiveWalPersistedReplaySealV1 {
+                wal_identity: origin,
+                state: LiveWalPersistedReplayStateV1::ApplyPending { context, source },
+            },
+            pending: LiveWalPersistedPendingV1::ApplyPending(pending),
         };
         sealed.exactly_matches_effect().then_some(sealed)
     }
@@ -632,7 +683,7 @@ impl LiveWalPersistedReplaySealV1 {
             LiveWalPersistedReplayStateV1::Canonical { stage, authority }
         };
         let seal = Self {
-            wal_identity,
+            wal_identity: PersistedWalExecutionOriginV1::LiveAppend(wal_identity),
             state,
         };
         seal.exactly_matches_persisted_effect(effect)
@@ -724,7 +775,7 @@ impl LiveWalPersistedReplaySealV1 {
             context,
             stage: LifecycleStageKind::ApplyDecision,
             source,
-        }) = exact_live_wal_replay_projection(&self.wal_identity, effect)
+        }) = self.wal_identity.project(effect)
         else {
             return false;
         };
@@ -754,7 +805,7 @@ impl LiveWalPersistedReplaySealV1 {
             context,
             stage,
             source,
-        }) = exact_live_wal_replay_projection(&self.wal_identity, effect)
+        }) = self.wal_identity.project(effect)
         else {
             return false;
         };

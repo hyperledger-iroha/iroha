@@ -2,7 +2,7 @@
 
 use super::{
     CapacityClass, CausalRoot, LifecycleContext, LifecycleCoordinator, LifecycleDigest,
-    LifecycleKey, LifecyclePhase, LifecycleStage, LifecycleStageKind, LifecycleState,
+    LifecycleKey, LifecycleStage, LifecycleStageKind, LifecycleState,
     LifecycleValidateDispatchKeyV1, LifecycleWorkClass, OwnerId, PhysicalSlotId, PredecessorScope,
     ReadyEvent, ReadyValidateSuccessorV1, TerminalOutcome, WaitSource, WaitToken,
     concrete_admission::LifecycleWorkRegistryHolder,
@@ -94,7 +94,7 @@ impl LifecycleValidateSidecarRegistrationIdentityV1 {
         key.matches_consensus_round(&self.round)
             && self.lifecycle_key.context().as_bytes() == self.round.context_id.0.as_ref()
             && self.lifecycle_key.round().height() == self.round.height
-            && self.lifecycle_key.phase() == LifecyclePhase::Validate
+            && self.lifecycle_key.phase().is_validate()
             && self.lifecycle_stage.kind() == LifecycleStageKind::ValidateBody
             && self.lifecycle_stage.predecessor_scope() == PredecessorScope::Independent
             && key.lifecycle_ordinal() != 0
@@ -904,7 +904,7 @@ pub(super) fn cancel_registration_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sumeragi::v2_lifecycle_coordinator::LifecycleRound;
+    use crate::sumeragi::v2_lifecycle_coordinator::{LifecyclePhase, LifecycleRound};
     use iroha_crypto::Hash;
     use iroha_data_model::{
         block::{

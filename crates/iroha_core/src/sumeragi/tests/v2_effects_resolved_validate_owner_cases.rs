@@ -1111,6 +1111,74 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
             .expect("ledger after repeated report publication"),
         ledger_before
     );
+    // A later real TC clears the reducer's Invalid state but retains the exact
+    // protected PrepareQC. Its ordinary retransmit must replay the cached result
+    // into Invalid again while reusing the already durable Report owner.
+    let original_report = fixture
+        .owner
+        .invalid_body_report_snapshot_for_retry_test(reports[0], &ledger_root);
+    let reported_tag = fixture.transport.executor.current_tag();
+    now += Duration::from_millis(100);
+    install_timeout(&mut fixture, true, &mut current_services, now);
+    let mut repeated_settled = 0;
+    for turn in 0..48_u64 {
+        let executor = &mut fixture.transport.executor;
+        executor
+            .step(now + Duration::from_millis(turn), &mut current_services)
+            .expect("consume the later TC and normally retransmit its protected body");
+        executor
+            .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
+            .expect("settle only the actual later timeout output");
+        executor
+            .settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
+            .expect("retain the current protected validation occurrence");
+        let before_reuse = std::fs::read(ledger_root.join("lifecycle-ledger-v1.norito"))
+            .expect("ledger before current rejection replay");
+        repeated_settled += executor
+            .settle_pending_released_validate_apply_publication(
+                &mut fixture.owner,
+                &mut current_services,
+            )
+            .expect("the same rejected terminal reuses its original Report after EnterView");
+        assert_eq!(
+            std::fs::read(ledger_root.join("lifecycle-ledger-v1.norito"))
+                .expect("ledger after current rejection replay"),
+            before_reuse,
+            "the current reducer occurrence cannot append or rewrite its existing Report",
+        );
+        if executor.current_tag().strictly_advances(reported_tag)
+            && executor.runtime.driver().body_state_for_test(key.0, key.1)
+                == crate::sumeragi::v2_core::BodyState::Invalid
+        {
+            break;
+        }
+    }
+    assert!(
+        fixture
+            .transport
+            .executor
+            .current_tag()
+            .strictly_advances(reported_tag)
+    );
+    assert_eq!(
+        repeated_settled, 1,
+        "one actual current rejected-result replay"
+    );
+    assert_eq!(
+        fixture.owner.invalid_body_report_ordinals_for_retry_test(),
+        reports
+    );
+    fixture
+        .owner
+        .assert_invalid_body_report_retained_for_retry_test(&original_report, &ledger_root);
+    fixture
+        .owner
+        .assert_resolved_validate_owner_retained_for_test(&terminal, &ledger_root, 0);
+    assert_eq!(
+        fixture.planner_io.lifecycle_validate_io_snapshot(),
+        io_before
+    );
+    assert!(current_services.apply_tasks.is_empty());
     if cold_after_report {
         let report = fixture
             .owner
@@ -1291,3 +1359,5 @@ fn rejected_terminal_and_published_report_cold_reopen_preserves_one_output_owner
         std::panic::resume_unwind(payload);
     }
 }
+
+include!("v2_effects_active_prepare_decision_cold_cases.rs");

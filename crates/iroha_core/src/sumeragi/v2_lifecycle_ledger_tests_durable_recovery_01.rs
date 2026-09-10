@@ -94,9 +94,7 @@ impl RecoveryFixture {
             .collect::<Vec<_>>();
         let network_id = crate::sumeragi::synthetic_network_id(network);
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 1, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 1, &roster);
         let context = wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -875,6 +873,11 @@ impl RecoveredDecisionReleasedApplyStageProjectionV1
 
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
         record.key() == self.live_fetch.key()
+    }
+
+    fn names_current_fetch_source(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        record.key() == self.live_fetch.key()
+            && record.replay_authority == self.live_fetch.replay_authority
     }
 
     fn names_terminal_validate_record(
@@ -1702,6 +1705,52 @@ fn recovered_released_decision_apply_classifies_only_the_released_shape() {
 }
 
 #[test]
+fn recovered_released_decision_apply_does_not_hide_current_source_with_changed_owner() {
+    let fixture = RecoveryFixture::new("decision-released-current-source", 0x37);
+    let (released, projection) = recovered_released_decision_apply_fixture(&fixture);
+    let current = &projection.live_fetch;
+    let changed_root = CausalRoot::new(LifecycleDigest::new(
+        *Hash::new(b"changed current Decision Fetch owner").as_ref(),
+    ));
+    for terminal in [None, Some(TerminalOutcome::Cancelled)] {
+        let changed = LifecycleLedgerRecordV1::new(
+            current.key().expect("exact Fetch key"),
+            OwnerId::new(changed_root, 2),
+            2,
+            LifecycleWorkClass::Fetch,
+            current.stage().expect("exact Fetch stage"),
+            terminal,
+            changed_root.digest(),
+            current.durable_payload().expect("exact Fetch payload"),
+            current.replay_authority.clone(),
+            DurableContinuation::None,
+        )
+        .expect("structurally closed current-source comparison row");
+        let ledger = LifecycleLedgerV1::new(
+            released.context(),
+            2,
+            vec![projection.released_terminal.clone(), changed],
+            BTreeMap::new(),
+        )
+        .expect("one terminal result beside the same Fetch source");
+        let before = ledger.encode();
+        assert_eq!(
+            ledger
+                .classify_recovered_decision_apply_startup_projection(&projection)
+                .expect("current source remains the ordinary chain"),
+            RecoveredDecisionApplyStartupShapeV1::FullChain
+        );
+        assert!(
+            ledger
+                .stage_recovered_released_decision_apply_projection(&projection)
+                .is_err(),
+            "changing the current source owner cannot reclassify it as inert history"
+        );
+        assert_eq!(ledger.encode(), before);
+    }
+}
+
+#[test]
 fn recovered_released_decision_apply_appends_only_a_distinct_owned_apply() {
     let fixture = RecoveryFixture::new("decision-released-standalone-apply", 0x38);
     let (prefix, projection) = recovered_released_decision_apply_fixture(&fixture);
@@ -1899,6 +1948,78 @@ fn complete_tip_terminal_join_binds_the_full_finality_family() {
             .expect("join exact CompleteTip finality to terminal Apply"),
         4
     );
+
+    // Global lifecycle ordinals also contain unrelated owners. Only the
+    // exact typed edges, never ordinal adjacency, identify this body chain.
+    let ordinals = [2, 5, 9, 14];
+    let original_owner = ledger.records()[0].owner();
+    let owner = OwnerId::new(original_owner.causal_root(), ordinals[0]);
+    let mut interleaved_records = ledger
+        .records()
+        .iter()
+        .enumerate()
+        .map(|(index, record)| {
+            let continuation = match index {
+                0 => DurableContinuation::successor(
+                    DurableContinuationEdge::FetchToStore,
+                    ordinals[1],
+                ),
+                1 => DurableContinuation::successor(
+                    DurableContinuationEdge::StoreToValidate,
+                    ordinals[2],
+                ),
+                2 => DurableContinuation::successor(
+                    DurableContinuationEdge::ValidateToApply,
+                    ordinals[3],
+                ),
+                _ => DurableContinuation::None,
+            };
+            LifecycleLedgerRecordV1::new(
+                record.key().expect("terminal body key"),
+                owner,
+                ordinals[index],
+                record.work_class().expect("terminal body work class"),
+                record.stage().expect("terminal body stage"),
+                Some(TerminalOutcome::Advanced),
+                record.reconstruction_source(),
+                record.durable_payload().expect("terminal body payload"),
+                record.replay_authority.clone(),
+                continuation,
+            )
+            .expect("preserve the canonical row with its exact typed successor")
+        })
+        .collect::<Vec<_>>();
+    let unrelated_root = CausalRoot::new(LifecycleDigest::new(
+        *Hash::new(b"unrelated CompleteTip interleaved owner").as_ref(),
+    ));
+    interleaved_records.insert(
+        1,
+        unrelated_live_record(ledger.context(), OwnerId::new(unrelated_root, 3), 3, 0xD8),
+    );
+    let interleaved = LifecycleLedgerV1::new(
+        ledger.context(),
+        ordinals[3],
+        interleaved_records,
+        BTreeMap::new(),
+    )
+    .expect("canonical Decision family remains valid beside an unrelated owner");
+    let interleaved_bytes = interleaved.encode();
+    assert_eq!(
+        interleaved
+            .authenticate_complete_tip_terminal_apply(&complete_tip)
+            .expect("join canonical Decision terminal rows through actual typed edges"),
+        ordinals[3]
+    );
+    let (stutter, changed, evidence) = interleaved
+        .stage_complete_tip_terminal_apply_recovery(&complete_tip, None)
+        .expect("preserve the already-terminal canonical family with ordinal gaps");
+    assert!(!changed);
+    assert!(matches!(
+        evidence,
+        CompleteTipPredecessorLifecycleEvidenceV1::TerminalApply(14)
+    ));
+    assert_eq!(stutter.encode(), interleaved_bytes);
+    assert_eq!(interleaved.encode(), interleaved_bytes);
 
     let (foreign, _) = terminal_decision_chain_fixture_with_seed(&fixture, 0xE2);
     assert!(

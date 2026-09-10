@@ -1115,6 +1115,16 @@ impl LifecycleLedgerRecordV1 {
             }
             let claim =
                 super::open::terminal_validate_no_successor_claim(context, parent).ok()??;
+            if super::replay_authority::resolved_invalid_body_report_causal_key(
+                claim.causal_root(),
+                claim.ordinal(),
+                &self.replay_authority,
+            )?
+            .as_ref()
+                != self.owner().causal_root().digest().as_bytes()
+            {
+                return None;
+            }
             Origin::Resolved(claim)
         };
         self.replay_authority
@@ -1302,6 +1312,16 @@ impl LifecycleLedgerRecordV1 {
     pub(super) fn with_work_class_for_test(mut self, work_class: LifecycleWorkClass) -> Self {
         self.work_class_code = work_class_code(work_class);
         self
+    }
+    /// Compare an ordinary body's execution generation without exposing its
+    /// stored replay envelope. Authentication remains owned by the body census.
+    pub(super) fn ordinary_body_is_obsolete_for_decision(
+        &self,
+        tag: crate::sumeragi::v2_core::EventTag,
+        is_decided_body: bool,
+    ) -> bool {
+        self.replay_authority
+            .ordinary_body_is_obsolete_for_decision(tag, is_decided_body)
     }
     /// Decode the stable semantic key.
     pub(super) fn key(&self) -> Option<LifecycleKey> {
@@ -3673,7 +3693,7 @@ impl ProductionLifecycleOwnerV1 {
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(
         verified: VerifiedHeightContext,
-        projection: AuthenticatedRecoveredWalDecisionFetchProjection,
+        mut projection: AuthenticatedRecoveredWalDecisionFetchProjection,
         ledger_root: &Path,
         mut body_store: V2BodyStore,
         config: &SumeragiV2Config,
@@ -3709,16 +3729,86 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Fetch LedgerV1 open failed",
                 )
             })?;
-        let (repaired, ordinal, changed) = match opened
+        let adapter_startup = adapter_startup
+            .retain_recovered_decision_apply_source(&verified, &mut projection)
+            .map_err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new)?;
+        let (reconciled, retired_body) = opened
+            .reconcile_recovered_decision_body_generation(&verified, &projection, &body_store)
+            .map_err(|_| {
+                ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision obsolete body generation could not be retired",
+                )
+            })?;
+        let publish_retirement = || {
+            if retired_body {
+                ledger_store
+                    .persist_exact_successor(&opened, &reconciled)
+                    .map_err(|_| {
+                        ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                            "recovered Decision body retirement publication failed",
+                        )
+                    })?;
+                if !ledger_store.load().is_ok_and(|loaded| loaded == reconciled) {
+                    return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                        "recovered Decision body retirement changed after publication",
+                    ));
+                }
+            }
+            Ok(())
+        };
+        let retained = reconciled
+            .records()
+            .iter()
+            .filter(|record| {
+                projection.names_retained_body_record(record)
+                    && (record.replay_authority.is_local_body_origin()
+                        || record.replay_authority.is_remote_proposal_origin()
+                        || record.replay_authority.is_certified_body_origin())
+            })
+            .count();
+        if retained != 0 {
+            if retained != 1 {
+                return Err(ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                    "recovered Decision has multiple retained body stage owners",
+                ));
+            }
+            publish_retirement()?;
+            let storage = reconciled
+                .into_durable_certified_body_pipeline_storage_recovery_cut(
+                    verified,
+                    ledger_store,
+                    body_store,
+                )
+                .map_err(|_| {
+                    ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                        "recovered Decision retained body custody authentication failed",
+                    )
+                })?;
+            return storage
+                .open_production_owner(
+                    config,
+                    reply_route_source_capacity,
+                    payload_store,
+                    serve_payloads,
+                    adapter_startup,
+                )
+                .map_err(|_| {
+                    ProductionRecoveredWalDecisionFetchStartupErrorV1::new(
+                        "recovered Decision retained body owner startup failed",
+                    )
+                });
+        }
+        let (repaired, ordinal, changed) = match reconciled
             .stage_authenticated_wal_decision_fetch(&projection)
         {
-            Ok(staged) => staged,
-            Err(_) if opened.has_recovered_decision_live_validate_parent(&projection) => {
+            Ok((repaired, ordinal, changed)) => (repaired, ordinal, changed || retired_body),
+            Err(_) if reconciled.has_recovered_decision_live_validate_parent(&projection) => {
+                publish_retirement()?;
                 return Self::open_recovered_decision_validate_startup(
                     verified,
                     projection,
                     ledger_store,
-                    opened,
+                    reconciled,
                     body_store,
                     config,
                     reply_route_source_capacity,
@@ -3727,12 +3817,13 @@ impl ProductionLifecycleOwnerV1 {
                     adapter_startup,
                 );
             }
-            Err(_) if opened.has_exact_recovered_decision_fetch_store_parent(&projection) => {
+            Err(_) if reconciled.has_exact_recovered_decision_fetch_store_parent(&projection) => {
+                publish_retirement()?;
                 return Self::open_recovered_decision_store_startup(
                     verified,
                     projection,
                     ledger_store,
-                    opened,
+                    reconciled,
                     body_store,
                     config,
                     reply_route_source_capacity,
@@ -4077,7 +4168,7 @@ impl ProductionLifecycleOwnerV1 {
     #[allow(clippy::result_large_err, clippy::too_many_arguments)]
     pub(in crate::sumeragi) fn open_recovered_decision_apply_startup(
         verified: VerifiedHeightContext,
-        projection: Box<crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1>,
+        mut projection: Box<crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1>,
         effects: Vec<crate::sumeragi::v2::AdapterEffect>,
         ledger_root: &Path,
         mut body_store: V2BodyStore,
@@ -4098,6 +4189,9 @@ impl ProductionLifecycleOwnerV1 {
                     "recovered Decision Apply LedgerV1 open failed",
                 )
             })?;
+        projection
+            .bind_retained_body_lineage(&verified, &predecessor)
+            .map_err(ProductionRecoveredDecisionApplyStartupErrorV1::new)?;
         let startup_shape = predecessor
             .classify_recovered_decision_apply_startup(projection.as_ref())
             .map_err(|_error| {
@@ -4111,18 +4205,19 @@ impl ProductionLifecycleOwnerV1 {
                     .records
                     .iter()
                     .any(|record| projection.fetch().names_record(record));
-                let staged_predecessor = if fetch_is_present {
-                    predecessor.clone()
-                } else {
-                    predecessor
-                        .stage_authenticated_wal_decision_fetch(projection.fetch())
-                        .map_err(|_error| {
-                            ProductionRecoveredDecisionApplyStartupErrorV1::new(
-                                "recovered Decision Apply Fetch parent is not exact",
-                            )
-                        })?
-                        .0
-                };
+                let staged_predecessor =
+                    if fetch_is_present || projection.retained_body_lineage().is_some() {
+                        predecessor.clone()
+                    } else {
+                        predecessor
+                            .stage_authenticated_wal_decision_fetch(projection.fetch())
+                            .map_err(|_error| {
+                                ProductionRecoveredDecisionApplyStartupErrorV1::new(
+                                    "recovered Decision Apply Fetch parent is not exact",
+                                )
+                            })?
+                            .0
+                    };
                 staged_predecessor
                     .stage_recovered_decision_apply(projection.as_ref())
                     .map_err(|_error| {
@@ -4523,6 +4618,7 @@ pub(super) enum RecoveredDecisionApplyStartupShapeV1 {
 trait RecoveredDecisionReleasedApplyStageProjectionV1 {
     fn belongs_to_context(&self, context: LifecycleContext) -> bool;
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool;
+    fn names_current_fetch_source(&self, record: &LifecycleLedgerRecordV1) -> bool;
     fn names_terminal_validate_record(
         &self,
         context: LifecycleContext,
@@ -4556,6 +4652,9 @@ impl RecoveredDecisionReleasedApplyStageProjectionV1
         self.fetch.names_record(record)
     }
 
+    fn names_current_fetch_source(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch.names_replay_source(record)
+    }
     fn names_terminal_validate_record(
         &self,
         context: LifecycleContext,
@@ -4632,6 +4731,9 @@ impl RecoveredDecisionReleasedApplyStageProjectionV1
     }
     fn names_fetch_record(&self, record: &LifecycleLedgerRecordV1) -> bool {
         self.fetch().names_record(record)
+    }
+    fn names_current_fetch_source(&self, record: &LifecycleLedgerRecordV1) -> bool {
+        self.fetch().names_replay_source(record)
     }
     fn names_terminal_validate_record(
         &self,

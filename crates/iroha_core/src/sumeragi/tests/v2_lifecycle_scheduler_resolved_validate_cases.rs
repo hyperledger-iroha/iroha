@@ -421,6 +421,19 @@ impl ProductionLifecycleOwnerV1 {
         }
     }
 
+    /// Prove a later reducer occurrence preserves the original live Report in full.
+    pub(in crate::sumeragi) fn assert_invalid_body_report_retained_for_retry_test(
+        &self,
+        snapshot: &InvalidBodyReportOwnerSnapshotForTest,
+        root: &std::path::Path,
+    ) {
+        let current =
+            self.invalid_body_report_snapshot_for_retry_test(snapshot.record.ordinal, root);
+        assert_eq!(current.record, snapshot.record);
+        assert_eq!(current.metadata, snapshot.metadata);
+        assert_eq!(current.ledger_record, snapshot.ledger_record);
+    }
+
     /// Prove restart retains one executable cold output and no duplicate live carrier.
     pub(in crate::sumeragi) fn assert_invalid_body_report_recovered_for_retry_test(
         &self,

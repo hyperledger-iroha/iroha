@@ -2222,6 +2222,95 @@ fn certified_store_and_validate_inherit_authority_but_require_receipt_bound_stag
     assert!(coordinator.records.is_empty());
 }
 #[test]
+fn certified_body_keys_distinguish_prepare_and_decision_authority() {
+    let fixture = Fixture::new();
+    let mut families = Vec::new();
+    for (certificate, phases) in [
+        (
+            &fixture.prepare_qc,
+            [
+                LifecyclePhase::Fetch,
+                LifecyclePhase::Store,
+                LifecyclePhase::Validate,
+            ],
+        ),
+        (
+            &fixture.commit_qc,
+            [
+                LifecyclePhase::FetchDecision,
+                LifecyclePhase::StoreDecision,
+                LifecyclePhase::ValidateDecision,
+            ],
+        ),
+    ] {
+        let fetch = AdapterEffect::FetchBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+            manifest: None,
+            certified_sources: fixture
+                .context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate.clone()),
+        };
+        let fetch_owner = bound_ownership(&fetch, fixture.tag, 20);
+        let store = AdapterEffect::StoreBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+        };
+        let store_owner = fetch_owner
+            .rebind_as_inherited_adapter_effect(&store)
+            .expect("certificate authority is inherited by Store");
+        let validate = AdapterEffect::ValidateBody {
+            tag: fixture.tag,
+            round: fixture.round,
+            subject: fixture.subject,
+        };
+        let validate_owner = store_owner
+            .rebind_as_inherited_adapter_effect(&validate)
+            .expect("certificate authority is inherited by Validate");
+        let projected = [
+            candidate(&fixture, &fetch, &fetch_owner),
+            candidate(&fixture, &store, &store_owner),
+            candidate(&fixture, &validate, &validate_owner),
+        ];
+        for (candidate, phase) in projected.iter().zip(phases) {
+            assert_eq!(candidate.key.phase(), phase);
+            assert!(candidate.work_class.accepts_stage(phase, candidate.stage));
+            assert_eq!(
+                phase.is_decision_body(),
+                certificate.phase == wire::GlobalPhase::Commit
+            );
+        }
+        assert!(projected[0].key.phase().is_fetch());
+        assert!(projected[1].key.phase().is_store());
+        assert!(projected[2].key.phase().is_validate());
+        families.push(projected.map(|candidate| candidate.key));
+    }
+    for (prepare, decision) in families[0].iter().zip(families[1]) {
+        assert_ne!(
+            *prepare, decision,
+            "Prepare tombstones must not occupy a Decision key"
+        );
+        assert_eq!(
+            LifecycleKey::new(
+                prepare.context(),
+                prepare.round(),
+                prepare.proposal_round(),
+                prepare.subject(),
+                decision.phase(),
+                prepare.execution_commitment(),
+            ),
+            decision,
+            "certificate phase alone distinguishes the same-round body work",
+        );
+    }
+}
+#[test]
 fn future_view_commit_decision_retains_the_lagging_reducer_owner_through_application() {
     let fixture = Fixture::new();
     let future_round = wire::ConsensusRound {

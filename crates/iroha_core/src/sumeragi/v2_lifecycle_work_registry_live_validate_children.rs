@@ -300,7 +300,7 @@ impl DurableLiveWalApplyWork {
             && terminal.ordinal() < self.address.ordinal
             && durable == self.validated_receipt.durable()
             && key.context() == self.context().id()
-            && key.phase() == LifecyclePhase::Validate
+            && key.phase().is_validate()
             && key.proposal_round() == Some(LifecycleRound::new(round.height, round.view))
             && key.subject() == Some(projection::block_subject(durable.subject()))
             && key.execution_commitment().is_none_or(|commitment| {

@@ -1525,3 +1525,46 @@ fn unconsumed_certified_fetch_persistence_closes_output() {
     assert!(!transferred_output.restart_required());
     assert!(transferred_output.acquire().is_some());
 }
+
+/// Bind synchronous test I/O to the same authenticated fair-ingress instance.
+pub(in crate::sumeragi) fn install_lifecycle_ingress_for_test(
+    services: &mut ProductionV2Services,
+    ingress: Arc<crate::sumeragi::FairV2Ingress>,
+) {
+    services.leader_wire_ingress = ingress;
+}
+
+impl LifecyclePlannerIoFixture {
+    /// Persist a genuinely queued recovered Decision response using the production task.
+    pub(in crate::sumeragi) fn execute_one_recovered_decision_fetch_for_test(
+        &mut self,
+        output_guard: Arc<ConsensusOutputGuard>,
+    ) {
+        let V2IoCommand::PersistRecoveredDecisionFetchBody(task) = self
+            .command_rx
+            .try_recv()
+            .expect("one exact recovered Decision Fetch persistence command")
+        else {
+            panic!("the queue must retain the actual recovered response persistence task")
+        };
+        let key = task.dispatch_key();
+        let completion = task
+            .persist(&mut self.body_store)
+            .unwrap_or_else(|(error, _)| panic!("persist recovered Decision response: {error}"));
+        self.command_rx
+            .complete_recovered_decision_fetch_body(key, &completion)
+            .expect("retain the real response completion under its dedicated tracker");
+        try_send_tracked_completion_with_lifecycle_ordinal(
+            &self.completion_tx,
+            &self.admission,
+            V2IoCompletion::RecoveredDecisionFetchBodyPersisted(Box::new(
+                GuardedRecoveredDecisionFetchBodyPersistenceCompletionV1::new(
+                    completion,
+                    output_guard,
+                ),
+            )),
+            Some(key.lifecycle_ordinal()),
+        )
+        .expect("publish exactly one guarded recovered Fetch persistence result");
+    }
+}

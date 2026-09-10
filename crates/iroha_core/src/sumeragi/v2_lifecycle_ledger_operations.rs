@@ -358,7 +358,7 @@ impl LifecycleLedgerV1 {
                     || validate.owner() != parent_owner
                     || validate.ordinal() != parent_owner.first_admission_ordinal()
                     || validate.work_class() != Some(LifecycleWorkClass::Validate)
-                    || validate_key.phase() != LifecyclePhase::Validate
+                    || !validate_key.phase().is_validate()
                     || validate_stage
                         != LifecycleStage::new(
                             LifecycleStageKind::ValidateBody,
@@ -998,7 +998,7 @@ impl LifecycleLedgerV1 {
                 && key.round() == round
                 && key.proposal_round() == Some(proposal_round)
                 && key.subject() == Some(subject)
-                && key.phase() == LifecyclePhase::Validate
+                && key.phase().is_validate()
                 && authority_is_exact
                 && record.work_class() == Some(LifecycleWorkClass::Validate)
                 && record.stage()
@@ -1752,6 +1752,47 @@ impl LifecycleLedgerV1 {
         }
         Ok(pair)
     }
+    /// Retire obsolete ordinary body owners under the authenticated
+    /// Decision before staging its distinct current execution. The signed
+    /// original source, every linked prefix, and the retained body frame are
+    /// authenticated first. Only live leaves change; completed rows and
+    /// immutable ownership remain exact. The caller publishes retirement and
+    /// the current Decision admission in one durable ledger successor.
+    fn reconcile_recovered_decision_body_generation(
+        &self,
+        verified: &VerifiedHeightContext,
+        projection: &AuthenticatedRecoveredWalDecisionFetchProjection,
+        body_store: &V2BodyStore,
+    ) -> Result<(Self, bool), LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        if !projection.is_exact(verified) || !projection.belongs_to_context(self.context()) {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "Decision body retirement changed its verified context".to_owned(),
+            ));
+        }
+        let eligible = self.records.iter().enumerate()
+            .filter(|(_, record)| projection.supersedes_retained_body_record(record))
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if eligible.is_empty() {
+            return Ok((self.clone(), false));
+        }
+        let census = self.authenticate_durable_certified_body_pipeline_startup(verified, body_store)
+            .map_err(|_| LifecycleLedgerError::InvalidLedger(
+                "Decision body retirement cannot authenticate the original body census".to_owned(),
+            ))?;
+        let mut reconciled = self.clone();
+        for index in eligible {
+            if !census.contains_live_ordinal(self.records[index].ordinal()) {
+                return Err(LifecycleLedgerError::InvalidLedger(
+                    "Decision body retirement lost its authenticated live leaf".to_owned(),
+                ));
+            }
+            reconciled.records[index] = Self::cancelled_record(&self.records[index])?;
+        }
+        reconciled.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        Ok((reconciled, true))
+    }
     /// Stage exactly one standalone recovered Decision Fetch row.
     ///
     /// An exact existing row is a read-only stutter. Absence appends only the
@@ -2090,6 +2131,15 @@ impl LifecycleLedgerV1 {
         projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
     ) -> Result<(Self, u128, bool), LifecycleLedgerError> {
         self.reject_terminal_recovered_decision_apply(projection)?;
+        if let Some(retained) = projection.retained_body_lineage() {
+            return if retained.matches_ledger(self) {
+                Ok((self.clone(), retained.apply_ordinal(), false))
+            } else {
+                Err(LifecycleLedgerError::InvalidLedger(
+                    "retained body Apply changed its authenticated original ledger".to_owned(),
+                ))
+            };
+        }
         self.stage_recovered_decision_apply_projection(projection)
     }
     /// Classify whether cold Decision recovery must retain its ordinary
@@ -2099,7 +2149,38 @@ impl LifecycleLedgerV1 {
         &self,
         projection: &crate::sumeragi::v2::RecoveredDecisionApplyStagedStorageV1,
     ) -> Result<RecoveredDecisionApplyStartupShapeV1, LifecycleLedgerError> {
+        if let Some(retained) = projection.retained_body_lineage() {
+            return if retained.matches_ledger(self) {
+                Ok(RecoveredDecisionApplyStartupShapeV1::FullChain)
+            } else {
+                Err(LifecycleLedgerError::InvalidLedger(
+                    "retained body Apply changed its authenticated startup lineage".to_owned(),
+                ))
+            };
+        }
         self.classify_recovered_decision_apply_startup_projection(projection)
+    }
+    /// A completed older body acquisition can share the phase-neutral Fetch
+    /// key without belonging to this Decision. Retain it only as inert history:
+    /// its whole owner must be terminal and neither its root nor its exact WAL
+    /// source may name the current Decision lineage.
+    fn is_closed_historical_decision_fetch(
+        &self,
+        projection: &impl RecoveredDecisionReleasedApplyStageProjectionV1,
+        record: &LifecycleLedgerRecordV1,
+    ) -> bool {
+        projection.names_fetch_record(record)
+            && record.work_class() == Some(LifecycleWorkClass::Fetch)
+            && record.terminal().flatten().is_some()
+            && !projection
+                .lineage()
+                .has_causal_root(record.owner().causal_root())
+            && !projection.names_current_fetch_source(record)
+            && self
+                .records
+                .iter()
+                .filter(|row| row.owner() == record.owner())
+                .all(|row| row.terminal().flatten().is_some())
     }
     fn classify_recovered_decision_apply_startup_projection(
         &self,
@@ -2114,7 +2195,10 @@ impl LifecycleLedgerV1 {
         let fetch_count = self
             .records
             .iter()
-            .filter(|record| projection.names_fetch_record(record))
+            .filter(|record| {
+                projection.names_fetch_record(record)
+                    && !self.is_closed_historical_decision_fetch(projection, record)
+            })
             .count();
         if fetch_count != 0 {
             return Ok(RecoveredDecisionApplyStartupShapeV1::FullChain);
@@ -2168,11 +2252,10 @@ impl LifecycleLedgerV1 {
                 "released recovered Decision Apply belongs to another lifecycle context".to_owned(),
             ));
         }
-        if self
-            .records
-            .iter()
-            .any(|record| projection.names_fetch_record(record))
-        {
+        if self.records.iter().any(|record| {
+            projection.names_fetch_record(record)
+                && !self.is_closed_historical_decision_fetch(projection, record)
+        }) {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "released recovered Decision Apply cannot retain a current Fetch row".to_owned(),
             ));
@@ -2712,7 +2795,7 @@ impl LifecycleLedgerV1 {
     }
     /// Join one terminal recovered-Decision Apply row to the complete
     /// Kura-authenticated CompleteTip evidence retained for successor startup.
-    /// The Apply may end the ordinary adjacent four-row chain or may be the
+    /// The Apply may end the ordinary four-row chain with typed edge ordinals or be the
     /// sole row of a fresh owner whose exact replay envelope joins an older
     /// `AdvancedNoSuccessor` Validate tombstone.
     ///
@@ -2777,49 +2860,58 @@ impl LifecycleLedgerV1 {
                     && record.terminal() == Some(Some(TerminalOutcome::Advanced))
                     && record.continuation() == Some(DurableContinuation::AdvancedNoSuccessor)
                     && record.durable_payload().is_some_and(|validate_payload| {
-                        recovered_decision_body_continuation_is_exact(
-                            DurableContinuationEdge::ValidateToApply,
-                            &record.replay_authority,
-                            validate_payload,
-                            &apply.replay_authority,
-                            apply_payload,
-                        ) == Some(true)
+                        validate_payload == apply_payload
+                            && (recovered_decision_body_continuation_is_exact(
+                                DurableContinuationEdge::ValidateToApply,
+                                &record.replay_authority,
+                                validate_payload,
+                                &apply.replay_authority,
+                                apply_payload,
+                            ) == Some(true)
+                                || complete_tip.authorizes_retained_body_apply_origin(
+                                    &record.replay_authority,
+                                    None,
+                                    &apply.replay_authority,
+                                ))
                     })
             });
             if released_validates.next().is_some() && released_validates.next().is_none() {
                 return Ok(apply_ordinal);
             }
         }
-        let validate_ordinal = apply_ordinal.checked_sub(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal Decision Apply has no Validate predecessor".to_owned(),
-            )
-        })?;
-        let store_ordinal = validate_ordinal.checked_sub(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal Decision Apply has no Store predecessor".to_owned(),
-            )
-        })?;
-        let fetch_ordinal = store_ordinal.checked_sub(1).ok_or_else(|| {
-            LifecycleLedgerError::InvalidLedger(
-                "terminal Decision Apply has no Fetch predecessor".to_owned(),
-            )
-        })?;
-        let record_at = |ordinal| {
-            self.records
-                .binary_search_by_key(&ordinal, LifecycleLedgerRecordV1::ordinal)
-                .ok()
-                .and_then(|index| self.records.get(index))
-        };
-        let (Some(fetch), Some(store), Some(validate)) = (
-            record_at(fetch_ordinal),
-            record_at(store_ordinal),
-            record_at(validate_ordinal),
-        ) else {
+        // Original body owners use their actual typed edge ordinals, including
+        // standalone Validate and shared-ledger gaps. Current Decision-WAL
+        // chains continue through their stricter family-specific path below.
+        if let Ok(rows) = self.retained_body_apply_rows(apply, Some(TerminalOutcome::Advanced)) {
+            let validate = rows[rows.len() - 2];
+            let original_fetch = (rows.len() == 4).then(|| &rows[0].replay_authority);
+            if complete_tip.authorizes_retained_body_apply_origin(
+                &validate.replay_authority,
+                original_fetch,
+                &apply.replay_authority,
+            ) {
+                return Ok(apply_ordinal);
+            }
+        }
+        let owner_rows = self
+            .records
+            .iter()
+            .filter(|record| record.owner() == apply_owner)
+            .collect::<Vec<_>>();
+        let [fetch, store, validate, final_apply] = owner_rows.as_slice() else {
             return Err(LifecycleLedgerError::InvalidLedger(
                 "terminal CompleteTip lifecycle body chain is incomplete".to_owned(),
             ));
         };
+        if *final_apply != apply {
+            return Err(LifecycleLedgerError::InvalidLedger(
+                "terminal CompleteTip lifecycle owner does not end at its exact Apply".to_owned(),
+            ));
+        }
+        let (fetch, store, validate) = (*fetch, *store, *validate);
+        let fetch_ordinal = fetch.ordinal();
+        let store_ordinal = store.ordinal();
+        let validate_ordinal = validate.ordinal();
         let owner = apply.owner();
         if fetch.owner() != owner
             || store.owner() != owner
@@ -3402,5 +3494,252 @@ impl LifecycleLedgerV1 {
             }
         }
         Ok(())
+    }
+}
+
+/// Authenticated immutable original body prefix and its current Decision Apply.
+/// The retained ledger rows remain the only owner; this comparison proof creates
+/// no successor or replacement row and cannot reinterpret a terminal Apply.
+#[derive(Debug)]
+#[must_use = "retained body Apply proof must stay with its exact recovered carrier"]
+pub(in crate::sumeragi) struct AuthenticatedRetainedBodyApplyLineageV1 {
+    context: LifecycleContext,
+    rows: Vec<LifecycleLedgerRecordV1>,
+    candidate: CandidateAdmission,
+    effect: crate::sumeragi::v2::AdapterEffect,
+    canonical_pending: super::replay_authority::DirectSignedPendingBindingV1,
+    pending_fingerprint: super::replay_authority::DirectSignedPendingBindingV1,
+    pending: Option<PendingRuntimeEffectBinding>,
+}
+impl AuthenticatedRetainedBodyApplyLineageV1 {
+    /// Original owner retained by every unchanged prefix row.
+    pub(in crate::sumeragi) fn owner(&self) -> OwnerId {
+        self.rows[0].owner()
+    }
+    /// Exact existing Apply ordinal, never a newly allocated ordinal.
+    pub(in crate::sumeragi) fn apply_ordinal(&self) -> u128 {
+        self.rows
+            .last()
+            .expect("authenticated prefix includes Apply")
+            .ordinal()
+    }
+    /// Exact immutable linked Validate predecessor.
+    pub(in crate::sumeragi) fn validate_ordinal(&self) -> u128 {
+        self.rows[self.rows.len() - 2].ordinal()
+    }
+    /// Rejoin the complete immutable owner to a current ledger snapshot.
+    pub(in crate::sumeragi) fn matches_ledger(&self, ledger: &LifecycleLedgerV1) -> bool {
+        ledger.context() == self.context
+            && ledger
+                .records
+                .iter()
+                .filter(|row| row.owner() == self.owner())
+                .eq(self.rows.iter())
+    }
+    /// Rejoin the immutable prefix to the coordinator's current durable view.
+    pub(in crate::sumeragi) fn matches_coordinator(
+        &self,
+        coordinator: &LifecycleCoordinator,
+    ) -> bool {
+        LifecycleLedgerV1::from_coordinator(coordinator)
+            .is_ok_and(|ledger| self.matches_ledger(&ledger))
+    }
+    /// Replace only this exact canonical pending with the already sealed original
+    /// body-owner projection; no caller-supplied root enters this operation.
+    pub(in crate::sumeragi) fn rebind_apply_pending(
+        &mut self,
+        verified: &VerifiedHeightContext,
+        effect: &crate::sumeragi::v2::AdapterEffect,
+        canonical_pending: &PendingRuntimeEffectBinding,
+    ) -> Option<PendingRuntimeEffectBinding> {
+        if projection::lifecycle_context(verified.context()) != self.context
+            || effect != &self.effect
+            || !self
+                .canonical_pending
+                .exactly_matches(effect, canonical_pending)
+        {
+            return None;
+        }
+        self.pending.take()
+    }
+    /// Compare the actual carrier with its authenticated original owner projection.
+    pub(in crate::sumeragi) fn matches_apply_binding(
+        &self,
+        effect: &crate::sumeragi::v2::AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> bool {
+        effect == &self.effect && self.pending_fingerprint.exactly_matches(effect, pending)
+    }
+    /// Project only the already authenticated Apply after its move-only pending
+    /// has entered the exact carrier. Returning a candidate grants no execution.
+    pub(in crate::sumeragi) fn project_apply_candidate(
+        &self,
+        effect: &crate::sumeragi::v2::AdapterEffect,
+        pending: &PendingRuntimeEffectBinding,
+    ) -> Option<CandidateAdmission> {
+        self.matches_apply_binding(effect, pending)
+            .then(|| self.candidate.clone())
+    }
+    /// Compare the complete projected Apply candidate, including physical identity.
+    pub(in crate::sumeragi) fn matches_apply_candidate(
+        &self,
+        candidate: &CandidateAdmission,
+    ) -> bool {
+        candidate == &self.candidate
+    }
+    /// Install only the existing Apply candidate into the cold logical census.
+    pub(in crate::sumeragi) fn splice_apply_candidate(
+        &self,
+        candidates: &mut BTreeMap<LifecycleKey, CandidateAdmission>,
+    ) -> bool {
+        if candidates.contains_key(&self.candidate.key) {
+            return false;
+        }
+        candidates
+            .insert(self.candidate.key, self.candidate.clone())
+            .is_none()
+    }
+}
+impl LifecycleLedgerV1 {
+    /// Authenticate the complete original owner by its typed edges. Source/QC
+    /// authority is joined separately by either live recovery or CompleteTip.
+    fn retained_body_apply_rows<'ledger>(
+        &'ledger self,
+        apply: &'ledger LifecycleLedgerRecordV1,
+        terminal: Option<TerminalOutcome>,
+    ) -> Result<Vec<&'ledger LifecycleLedgerRecordV1>, LifecycleLedgerError> {
+        let fail = || {
+            LifecycleLedgerError::InvalidLedger(
+                "retained body Apply changed its exact immutable predecessor rows".to_owned(),
+            )
+        };
+        let rows = self
+            .records
+            .iter()
+            .filter(|row| row.owner() == apply.owner())
+            .collect::<Vec<_>>();
+        let validate = match rows.as_slice() {
+            [validate, final_apply] if *final_apply == apply => *validate,
+            [fetch, store, validate, final_apply] if *final_apply == apply => {
+                if fetch.work_class() != Some(LifecycleWorkClass::Fetch)
+                    || store.work_class() != Some(LifecycleWorkClass::Store)
+                    || fetch.continuation()
+                        != Some(DurableContinuation::successor(
+                            DurableContinuationEdge::FetchToStore,
+                            store.ordinal(),
+                        ))
+                    || store.continuation()
+                        != Some(DurableContinuation::successor(
+                            DurableContinuationEdge::StoreToValidate,
+                            validate.ordinal(),
+                        ))
+                    || !fetch
+                        .replay_authority
+                        .same_persisted_family(&store.replay_authority)
+                {
+                    return Err(fail());
+                }
+                *validate
+            }
+            _ => return Err(fail()),
+        };
+        if rows[0].ordinal() != apply.owner().first_admission_ordinal()
+            || validate.work_class() != Some(LifecycleWorkClass::Validate)
+            || validate.continuation()
+                != Some(DurableContinuation::successor(
+                    DurableContinuationEdge::ValidateToApply,
+                    apply.ordinal(),
+                ))
+            || apply.work_class() != Some(LifecycleWorkClass::Apply)
+            || apply.terminal() != Some(terminal)
+            || apply.continuation() != Some(DurableContinuation::None)
+            || rows[..rows.len() - 1].iter().any(|row| {
+                row.terminal() != Some(Some(TerminalOutcome::Advanced))
+                    || row.durable_payload() != apply.durable_payload()
+                    || row.reconstruction_source() != apply.owner().causal_root().digest()
+            })
+        {
+            return Err(fail());
+        }
+        Ok(rows)
+    }
+
+    /// Authenticate an already-present linked Apply under the complete original
+    /// body owner and the current actual Decision-WAL source. Prefix-only cuts
+    /// remain owned by the ordinary authenticated body census.
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::sumeragi) fn authenticate_retained_body_apply(
+        &self,
+        verified: &VerifiedHeightContext,
+        current: &RecoveredDecisionApplyCandidateLineageV1,
+        validated: &crate::sumeragi::v2_body_store::ValidatedBodyReceipt,
+        effect: &crate::sumeragi::v2::AdapterEffect,
+        canonical_pending: &PendingRuntimeEffectBinding,
+    ) -> Result<Option<AuthenticatedRetainedBodyApplyLineageV1>, LifecycleLedgerError> {
+        self.validate(MAX_LIFECYCLE_RECORDS_PER_HEIGHT)?;
+        let fail = || {
+            LifecycleLedgerError::InvalidLedger(
+                "retained body Apply lost its exact original prefix or current Decision source"
+                    .to_owned(),
+            )
+        };
+        if projection::lifecycle_context(verified.context()) != self.context() {
+            return Err(fail());
+        }
+        let matching = self
+            .records
+            .iter()
+            .filter(|row| current.names_retained_apply_record(row))
+            .collect::<Vec<_>>();
+        let apply = match matching.as_slice() {
+            [] => return Ok(None),
+            [apply] => *apply,
+            _ => return Err(fail()),
+        };
+        if current.has_causal_root(apply.owner().causal_root()) {
+            return Ok(None);
+        }
+        let rows = self.retained_body_apply_rows(apply, None)?;
+        let validate = rows[rows.len() - 2];
+        let original_fetch = (rows.len() == 4).then(|| &rows[0].replay_authority);
+        let (candidate, pending) = current
+            .authenticate_retained_body_apply_projection(
+                verified,
+                apply.owner(),
+                validate.key().ok_or_else(fail)?,
+                &validate.replay_authority,
+                validated,
+                effect,
+                canonical_pending,
+                original_fetch,
+            )
+            .ok_or_else(fail)?;
+        if apply.key() != Some(candidate.key)
+            || apply.work_class() != Some(candidate.work_class)
+            || apply.stage() != Some(candidate.stage)
+            || apply.reconstruction_source() != candidate.reconstruction_source
+            || apply.durable_payload() != Some(candidate.payload)
+            || !apply.replay_matches_candidate(&candidate)
+        {
+            return Err(fail());
+        }
+        Ok(Some(AuthenticatedRetainedBodyApplyLineageV1 {
+            context: self.context(),
+            rows: rows.into_iter().cloned().collect(),
+            candidate,
+            effect: effect.clone(),
+            canonical_pending:
+                super::replay_authority::DirectSignedPendingBindingV1::from_exact_effect(
+                    effect,
+                    canonical_pending,
+                )
+                .ok_or_else(fail)?,
+            pending_fingerprint:
+                super::replay_authority::DirectSignedPendingBindingV1::from_exact_effect(
+                    effect, &pending,
+                )
+                .ok_or_else(fail)?,
+            pending: Some(pending),
+        }))
     }
 }

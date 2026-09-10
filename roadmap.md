@@ -1,6 +1,6 @@
 # Roadmap
 
-Last updated: 2026-09-09.
+Last updated: 2026-09-10.
 
 This is the outstanding-outcome view for Iroha 3's first release. Component owners
 below are code responsibilities, not invented individual assignments. Local
@@ -15,14 +15,14 @@ migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
 
-Taira rollout is blocked by resolved-validation ownership and recovery failures
-in the native integration gate. Complete the source-first audit of retained
-terminal results, current Prepare and Decision authority, publication fencing
-and cold replay, then qualify the combined corrections in one native batch
-before Linux compilation. Prove
-exact application on all four validators, reset canaries, restart persistence,
-public cutover and application connectivity. Keep concurrent development in
-separate stable Cargo lanes and execute immutable copies of selected artifacts.
+Taira rollout requires qualification of the audited consensus recovery corrections.
+Prepare and Commit body work now have distinct durable identities; source review
+also covers retained results, obsolete-generation retirement, current certificate
+authority, exact publication fencing and cold replay. Execute the combined native
+regressions and prove application on all four validators before Linux preparation,
+then finish reset canaries, restart persistence, public cutover and application
+connectivity. Keep one warm build lane and reuse unchanged dependency artifacts;
+source guards must check semantics without freezing unrelated test-file bytes.
 Retain shared lifecycle and production configuration gates before Core compilation.
 
 ## Architecture and build ownership
