@@ -217,6 +217,10 @@ fn active_prepare_body_survives_decision_crash_fixture(
 }
 
 fn finish_current_decision_validate_and_reopen(mut fixture: ReadyBodyFixture, ordinal: u128) {
+    fixture
+        .transport
+        .executor
+        .assert_cold_decision_protection_for_test(fixture.transport.subject, false);
     assert_eq!(fixture.owner.dispatch_completion_for_test(
         &mut fixture.services, &mut fixture.transport.executor, 0,
     ).expect("queue the single real recovered Validate"),
@@ -265,6 +269,17 @@ fn finish_current_decision_validate_and_reopen(mut fixture: ReadyBodyFixture, or
         fixture.owner.apply_ordinals_for_retry_test(),
         vec![child_ordinal]
     );
+    fixture
+        .transport
+        .executor
+        .assert_cold_decision_protection_for_test(fixture.transport.subject, true);
+    let settled_validate = fixture.planner_io.lifecycle_validate_io_snapshot();
+    assert_eq!(settled_validate.command_depth(), 0);
+    assert_eq!(settled_validate.physical_admissions(), 0);
+    assert_eq!(settled_validate.queued(), 0);
+    assert_eq!(settled_validate.active(), 0);
+    assert_eq!(settled_validate.completion_pending(), 0);
+    assert_eq!(settled_validate.completion_owners(), 0);
     assert_active_prepare_linked_apply_cold_reopens(fixture, child_ordinal);
 }
 
@@ -446,6 +461,12 @@ fn recover_stale_prepare_decision_crash_fixture(
             services
                 .set_exact_output_shared_unit_capacity_for_test(64)
                 .expect("bind exact request fanout to the restored four-validator service context");
+            // The synchronous worker fixture has no runner-owned status/readiness
+            // authority. Mirror its final activation step only after the real
+            // WAL gate, shared ordinals, clocks, current tag and signer are bound.
+            ingress
+                .open()
+                .expect("open the exact recovered ingress before emitting its live Fetch");
             assert_eq!(
                 owner
                     .dispatch_completion_for_test(services, executor, 0)
@@ -471,15 +492,19 @@ fn recover_stale_prepare_decision_crash_fixture(
     )
     .payload()
     .to_vec();
-    assert!(matches!(
-        ingress.try_push(InboundBlockMessage::from_authenticated_peer(
-            BlockMessage::V2(wire::ConsensusMessageV2::new(
-                wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
-            )),
-            context.roster[0].validator.clone(),
+    let response_admission = ingress.try_push(InboundBlockMessage::from_authenticated_peer(
+        BlockMessage::V2(wire::ConsensusMessageV2::new(
+            wire::ConsensusMessageV2Payload::CertifiedBodyResponse(response),
         )),
-        Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        context.roster[0].validator.clone(),
     ));
+    assert!(
+        matches!(
+            response_admission,
+            Ok(crate::sumeragi::FairV2IngressPushDisposition::Enqueued)
+        ),
+        "the signed response must enter the activated recovery ingress: {response_admission:?}"
+    );
     with_lifecycle_current_runner_turn_for_test(
         &context,
         LifecycleRunnerRankTarget::Ingress,
@@ -508,6 +533,10 @@ fn recover_stale_prepare_decision_crash_fixture(
     assert_eq!(queued_fetch.completion_pending(), 0);
     planner_io.execute_one_recovered_decision_fetch_for_test(Arc::clone(&output_guard));
     launched.settle_decision_fetch_worker_for_test();
+    let settled_fetch = planner_io.lifecycle_validate_io_snapshot();
+    assert_eq!(settled_fetch.command_depth(), 0);
+    assert_eq!(settled_fetch.physical_admissions(), 0);
+    assert_eq!(settled_fetch.completion_owners(), 0);
     assert_eq!(
         ingress.len(),
         0,
