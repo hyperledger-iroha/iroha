@@ -149,8 +149,13 @@ mod certified_body_fence_supersession {
         services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
         let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
             &mut services,
+            leader,
             Arc::clone(&transport.executor.output_guard),
             1,
+        );
+        crate::sumeragi::v2_worker::tests::install_local_signer_for_test(
+            &mut services,
+            &transport.validator_keys[usize::try_from(leader).expect("local validator index")],
         );
         planner_io.install_output_guard_for_test(
             &mut services,

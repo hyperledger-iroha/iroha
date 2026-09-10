@@ -8,6 +8,9 @@ The existing sibling .taira-testnet-build-targets/routine lane is the default;
 lane. Both selectors must agree when supplied. No Cargo lane is created or cleaned.
 Native checks retain incremental compilation unless CARGO_INCREMENTAL=0 is
 explicitly selected. This preference never changes Linux release compilation.
+Private test-executable copies are released after their last subprocess exits,
+including failed checks; their observations and test logs remain available.
+Native node/client snapshots remain retained for network and CLI capture consumers.
 
 Configuration and compiler paths match authenticated preparation, while source
 remains the mutable checkout. These checks never qualify release artifacts and
@@ -522,14 +525,14 @@ def show_build_diagnostic(line: str) -> None:
 
 
 def compile_harness(root: Path, env: dict[str, str], *, lock_fds: tuple[int, ...] = (),
-                    harness: str = "cli") -> str:
+                    harness: str = "cli") -> NativeArtifactCopies:
     command = compile_command(root, env, harness=harness)
-    return _build_harnesses(root, command, env, (harness,), lock_fds)[harness]
+    return _build_harnesses(root, command, env, (harness,), lock_fds)
 
 
 def compile_test_harnesses(root: Path, env: dict[str, str], *,
                           harnesses: tuple[str, ...],
-                          lock_fds: tuple[int, ...] = ()) -> dict[str, str]:
+                          lock_fds: tuple[int, ...] = ()) -> NativeArtifactCopies:
     """Build selected library and integration harnesses with one feature graph."""
     if not harnesses or len(harnesses) != len(set(harnesses)):
         raise CheckError("native test batch requires distinct harness selections")
@@ -555,7 +558,7 @@ def compile_test_harnesses(root: Path, env: dict[str, str], *,
 
 
 def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
-                     harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> dict[str, str]:
+                     harnesses: tuple[str, ...], lock_fds: tuple[int, ...]) -> NativeArtifactCopies:
     label = "; ".join(HARNESS_TARGETS[harness][0] for harness in harnesses)
     print(f"[taira-check] build {label} test harness", flush=True)
     started = time.monotonic()
@@ -593,6 +596,69 @@ def _build_harnesses(root: Path, command: list[str], env: dict[str, str],
 NATIVE_ARTIFACT_MAX_BYTES = 4 * 1024**3
 
 
+class NativeArtifactCopies(dict[str, str]):
+    """Own only the private copied test files from one completed isolation call."""
+
+    def __init__(self, output: Path, copied: dict[str, str],
+                 identities: dict[Path, tuple[int, ...]], observations: list[dict[str, object]]):
+        super().__init__(copied)
+        self.output = output
+        self.pending = {row["selection"]: (identities[Path(row["path"])], row)
+                        for row in observations if row["selection"] in HARNESS_TARGETS
+                        and row["cargo_artifact"]["profile"].get("test") is True}
+        self.directory_fd = (os.open(output, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+                             if self.pending else None)
+
+    def __enter__(self):
+        return self
+
+    def release(self, selection: str) -> None:
+        """Release a completed test's exact copy; production snapshots are retained."""
+        if selection not in self.pending:
+            return
+        expected, observation = self.pending[selection]
+        fd = self.directory_fd
+        assert fd is not None
+        held, named = os.fstat(fd), self.output.lstat()
+        if ((held.st_dev, held.st_ino) != (named.st_dev, named.st_ino)
+                or held.st_uid != os.geteuid() or not stat.S_ISDIR(named.st_mode)
+                or stat.S_IMODE(named.st_mode) != 0o500):
+            raise CheckError("native test copy directory changed before release")
+        named = os.stat(selection, dir_fd=fd, follow_symlinks=False)
+        actual = (named.st_dev, named.st_ino, named.st_size, named.st_mode,
+                  named.st_uid, named.st_nlink, named.st_mtime_ns, named.st_ctime_ns)
+        if actual != expected:
+            raise CheckError("native test copy changed before release: " + selection)
+        os.fchmod(fd, 0o700)
+        try:
+            os.unlink(selection, dir_fd=fd)
+            os.fsync(fd)
+        finally:
+            os.fchmod(fd, 0o500)
+        del self.pending[selection]
+        print("[taira-check] released native test artifact "
+              + json.dumps(observation, sort_keys=True), flush=True)
+
+    def __exit__(self, exception_type, exception, traceback):
+        failures = []
+        try:
+            for selection in tuple(self.pending):
+                try:
+                    self.release(selection)
+                except (CheckError, OSError) as error:
+                    failures.append(str(error))
+        finally:
+            if self.directory_fd is not None:
+                os.close(self.directory_fd)
+                self.directory_fd = None
+        if failures:
+            message = "native test artifact release failed; copies retained: " + "; ".join(failures)
+            if exception is None:
+                raise CheckError(message)
+            print("[taira-check] " + message, file=sys.stderr, flush=True)
+        return False
+
+
 def native_artifact_record(event: dict[str, object]) -> dict[str, object]:
     """Retain Cargo metadata independently from the immutable execution path."""
     return {"name": event["target"]["name"], "executable": event["executable"],
@@ -627,7 +693,7 @@ def native_artifact_guard(root: Path, target: Path, env: dict[str, str]):
 
 
 def isolate_native_artifacts(root: Path, env: dict[str, str],
-                             records: dict[str, dict[str, object]]) -> dict[str, str]:
+                             records: dict[str, dict[str, object]]) -> NativeArtifactCopies:
     """Execute copied artifacts, never mutable Cargo paths returned by an earlier build."""
     from release_artifact_contract import ReleaseArtifactError, stable_hash_path, stable_open_relative
     target = Path(env["CARGO_TARGET_DIR"])
@@ -720,7 +786,7 @@ def isolate_native_artifacts(root: Path, env: dict[str, str],
         # Publish observations only when the complete batch is frozen and the locks released.
         for observation in observations:
             print("[taira-check] isolated native artifact " + json.dumps(observation, sort_keys=True), flush=True)
-        return copied
+        return NativeArtifactCopies(output, copied, published, observations)
     except (OSError, ValueError, ReleaseArtifactError, subprocess.SubprocessError) as error:
         raise CheckError(f"native artifact isolation failed: {error}") from error
 
@@ -820,8 +886,8 @@ def run_config_checks(root: Path, fixture_root: Path, env: dict[str, str],
                       lock_fds: tuple[int, ...]) -> None:
     """Reject schema failures before compiling the Core and network harnesses."""
     if CONFIG_STAGES:
-        harness = compile_harness(root, env, lock_fds=lock_fds, harness="config")
-        run_stages(harness, fixture_root, env, CONFIG_STAGES, lock_fds)
+        with compile_harness(root, env, lock_fds=lock_fds, harness="config") as artifacts:
+            run_stages(artifacts["config"], fixture_root, env, CONFIG_STAGES, lock_fds)
 
 
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
@@ -945,19 +1011,20 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if NETWORK_STAGES:
         selections += ("network",)
     if selections:
-        harnesses = compile_test_harnesses(root, env, lock_fds=lock_fds,
-                                          harnesses=selections)
-        for name, stages in early_stages:
-            run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
-        if NETWORK_STAGES:
-            run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
-    harness = compile_harness(root, env, lock_fds=lock_fds)
-    run_stages(harness, fixture_root, env, STAGES, lock_fds)
+        with compile_test_harnesses(root, env, lock_fds=lock_fds,
+                                    harnesses=selections) as harnesses:
+            for name, stages in early_stages:
+                run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
+                harnesses.release(name)
+            if NETWORK_STAGES:
+                run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
+    with compile_harness(root, env, lock_fds=lock_fds) as artifacts:
+        run_stages(artifacts["cli"], fixture_root, env, STAGES, lock_fds)
     for name, stages in (("proof", PROOF_STAGES),
                          ("proof-flows", PROOF_FLOW_STAGES)):
         if stages:
-            selected_harness = compile_harness(root, env, lock_fds=lock_fds, harness=name)
-            run_stages(selected_harness, fixture_root, env, stages, lock_fds)
+            with compile_harness(root, env, lock_fds=lock_fds, harness=name) as artifacts:
+                run_stages(artifacts[name], fixture_root, env, stages, lock_fds)
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")

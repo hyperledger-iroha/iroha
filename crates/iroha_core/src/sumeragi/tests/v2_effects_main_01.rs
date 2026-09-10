@@ -847,6 +847,7 @@ fn production_capacity_saturation_admits_response_and_reconstructible_fetch() {
     production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
+        0,
         Arc::clone(&fixture.executor.output_guard),
         1,
     );
@@ -1136,6 +1137,7 @@ fn ungated_certified_fetch_phase_b_restarts_before_ledger_without_mutation() {
     production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
+        0,
         Arc::clone(&fixture.executor.output_guard),
         1,
     );
@@ -1428,6 +1430,7 @@ fn request_bound_rotated_archive_completes_fetch_without_leader_wire_slot() {
     production_services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
     let mut planner_io = owner.bind_body_store_to_planner_io_for_test(
         &mut production_services,
+        0,
         Arc::clone(&fixture.executor.output_guard),
         1,
     );

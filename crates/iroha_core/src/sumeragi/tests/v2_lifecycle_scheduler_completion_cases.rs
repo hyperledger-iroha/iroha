@@ -640,6 +640,7 @@ mod recovered_sign_capacity_tests {
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
         let planner_io = owner.bind_body_store_to_planner_io_for_test(
             &mut services,
+            0,
             Arc::clone(&output_guard),
             8,
         );
@@ -1701,6 +1702,7 @@ mod recovered_sign_capacity_tests {
         let output_guard = crate::sumeragi::output_guard::ConsensusOutputGuard::isolated();
         let planner_io = owner.bind_body_store_to_planner_io_for_test(
             &mut services,
+            0,
             Arc::clone(&output_guard),
             8,
         );
@@ -2927,10 +2929,12 @@ impl ProductionLifecycleOwnerV1 {
         )
     }
     /// Move the owner's exact startup body store into the bounded test worker
-    /// while retaining only its comparison seal in the running owner.
+    /// while retaining only its comparison seal in the running owner. The
+    /// caller supplies the same local validator selected by its runtime.
     pub(in crate::sumeragi) fn bind_body_store_to_planner_io_for_test(
         &mut self,
         services: &mut ProductionV2Services,
+        local_validator: iroha_data_model::block::consensus_v2::ValidatorIndex,
         output_guard: std::sync::Arc<crate::sumeragi::output_guard::ConsensusOutputGuard>,
         class_capacity: usize,
     ) -> crate::sumeragi::v2_worker::tests::LifecyclePlannerIoFixture {
@@ -2939,9 +2943,10 @@ impl ProductionLifecycleOwnerV1 {
             .take()
             .expect("the startup owner transfers its body store exactly once");
         let identity = body_store.instance_identity();
-        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_test(
+        let fixture = crate::sumeragi::v2_worker::tests::install_lifecycle_planner_io_for_local_validator_for_test(
             services,
             self.verified.context().clone(),
+            local_validator,
             output_guard,
             body_store,
             identity.clone(),

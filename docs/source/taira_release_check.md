@@ -49,7 +49,14 @@ profile locks into a private read-only directory before execution. Captured
 release checks verify source fingerprints while holding those locks; foreign
 checkout fingerprints fail the check. Later stages and CLI capture use the
 copies, preserving the original Cargo metadata. Another build cannot replace
-the selected executable between compilation and execution. Keep concurrent
+the selected executable between compilation and execution. Each private test-harness
+copy is released after its final subprocess finishes, including a failed test.
+If an earlier stage fails, the same isolation owner releases its unused harnesses.
+Only those exact copied inodes are eligible: Cargo outputs, native `iroha` and
+`iroha3d` snapshots, fixture logs and artifact observations remain retained.
+Changed paths fail cleanup without deleting their replacements. Abrupt preparer
+termination or a failure before copy publication can leave copies for diagnosis;
+this workflow never scans old runs or deletes other owners' files. Keep concurrent
 development builds in their own stable Cargo target slots to avoid lock waits
 and source-fingerprint conflicts; the warm release target remains reusable.
 
