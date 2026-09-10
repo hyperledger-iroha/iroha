@@ -587,6 +587,28 @@ CORE_STARTUP_STAGES = (("authenticated snapshot owner policy and startup custody
     "sumeragi::v2_recovery::tests::hash_only_snapshot_rejects_an_intermediate_hash_vector_substitution",
     "state::tests::startup_sumeragi_key_policy_matches_canonical_state_without_mutation",
     "state::tests::startup_sumeragi_key_policy_rejects_each_mismatch_without_mutation",
+)), ("cold certified history and exact publication recovery", (
+    "kura::tests::sequential_autonomous_certificates_advance_the_durable_frontier",
+    "kura::tests::mixed_ordinary_autonomous_certificates_cold_restore_preserves_completed_history",
+    "kura::tests::certified_bundle_cold_restore_repairs_only_latest_partial_publication",
+    "kura::tests::certified_bundle_cold_restore_rejects_corrupt_or_missing_completed_history_without_mutation",
+    "kura::tests::certified_frontier_build_only_restart_promotes_then_rebuilds_remaining_obligation",
+    "kura::tests::certified_pair_crash_rebuilds_only_bundle_obligation",
+    "kura::tests::durable_bundle_pair_crash_rebuild_consumes_obligation_from_exact_readback",
+    "kura::tests::bundle_pair_append_intent_rebuilds_then_repairs_exact_obligation",
+    "kura::tests::append_intent_and_build_restart_preflight_reject_one_under_without_mutation",
+    "kura::tests::latest_certified_frontier_rejects_equal_height_conflict_before_publication",
+    "kura::tests::latest_certified_frontier_corruption_and_post_validation_substitution_fail_closed",
+)), ("authenticated history compaction and cold recovery", (
+    "kura::tests::lane_history_cold_restore_accepts_independent_authenticated_prefix_cuts",
+    "kura::tests::lane_history_cold_restore_recovers_certified_and_bundle_rewrite_cuts",
+    "kura::tests::lane_history_cold_restore_rejects_untrusted_frontier_and_retained_evidence_loss",
+    "kura::tests::lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix",
+    "kura::tests::lane_history_cold_restore_does_not_resurrect_terminal_local_frontier",
+    "kura::tests::lane_history_cold_restore_admits_obsolete_append_at_exact_capacity",
+    "kura::tests::lane_history_compaction_recovers_crash_temp_before_tight_capacity_refusal",
+    "kura::tests::lane_history_compaction_rejects_data_only_temp_before_capacity_refusal",
+    "kura::tests::lane_history_compaction_rejects_corrupt_temp_index_before_capacity_refusal",
 )),)
 CORE_STAGES += CORE_STARTUP_STAGES
 
@@ -1379,8 +1401,8 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
                             run_stages(harnesses[name], fixture_root, env, stages, lock_fds)
                         except SelectedRegressionFailures as error:
                             startup_failures.extend(error.failures)
-                # Collect both startup groups, then avoid expensive unrelated tests
-                # when a restart's mandatory policy boundary already failed.
+                # Collect all startup groups, then avoid expensive unrelated tests
+                # when a restart's mandatory storage or policy boundary already failed.
                 if startup_failures:
                     raise SelectedRegressionFailures(failures + startup_failures)
             for name, stages in early_stages:

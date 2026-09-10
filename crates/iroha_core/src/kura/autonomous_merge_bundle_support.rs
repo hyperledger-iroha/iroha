@@ -12,6 +12,31 @@ pub(crate) struct AutonomousLaneMergeBundleV1 {
     /// Immutable origin proposal with prepare/commit QCs and signer PoPs.
     pub(crate) certified: CertifiedLaneBlockArtifact,
 }
+
+/// Read-only recovery plan for an append whose exact certified target is
+/// already outside the authenticated terminal retention window.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ObsoleteCertifiedBundleAppendPlan {
+    entry: LaneConfigEntry,
+    frontier: CertifiedLaneBlockArtifact,
+    component: CertifiedBundleCapacityComponent,
+    recovery: CertifiedBundleAppendRecovery,
+    preimage_hash: Hash,
+    append_tail_hash: Hash,
+    data_len: u64,
+    index_len: u64,
+    remaining_index_growth: u64,
+}
+impl ObsoleteCertifiedBundleAppendPlan {
+    fn bundle_recovery(&self) -> Option<&CertifiedBundleAppendRecovery> {
+        (self.component == CertifiedBundleCapacityComponent::AutonomousBundlePair)
+            .then_some(&self.recovery)
+    }
+
+    fn remaining_index_growth(&self) -> u64 {
+        self.remaining_index_growth
+    }
+}
 impl AutonomousLaneMergeBundleV1 {
     /// Exact coordinated first-release layout accepted by Kura and merge transport.
     pub(crate) const VERSION: u8 = 1;
@@ -2840,14 +2865,457 @@ impl Kura {
         self.note_committed_lane_status_change();
         Ok(())
     }
+    /// Plan obsolete append recovery without reconstructing a pruned source.
+    /// The caller holds prune; the complete all-route capacity admission must
+    /// include every returned index-growth bound before these plans execute.
+    fn plan_obsolete_certified_bundle_appends_under_prune_guard(
+        &self,
+        entry: &LaneConfigEntry,
+        frontier: &CertifiedLaneBlockArtifact,
+        retention: &AuthenticatedLaneHistoryRetention,
+    ) -> Result<Vec<ObsoleteCertifiedBundleAppendPlan>> {
+        if retention.entry != *entry || !retention.permits_discard(&frontier.proposal.descriptor) {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "obsolete append planning lacks exact terminal retention authority",
+            ));
+        }
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        if self.lane_storage_entry(entry.lane_id)? != *entry {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "obsolete append planning observed changed lane geometry",
+            ));
+        }
+        self.require_active_lane_artifact(entry, &frontier.proposal.descriptor)?;
+        let _sidecar_guard = self.sidecar_lock.lock();
+        let actual = self
+            .read_latest_certified_lane_block_frontier_locked(entry, false)?
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "obsolete append lost its certified singleton",
+                )
+            })?;
+        if actual.frontier.artifact != *frontier {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "obsolete append targets a different certified singleton",
+            ));
+        }
+        self.confirm_latest_certified_lane_block_frontier_read_locked(entry, &actual.snapshot)?;
+        let mut plans = Vec::new();
+        for component in [
+            CertifiedBundleCapacityComponent::CertifiedPair,
+            CertifiedBundleCapacityComponent::AutonomousBundlePair,
+        ] {
+            if let Some(plan) =
+                self.plan_obsolete_certified_bundle_append_locked(entry, frontier, component)?
+            {
+                plans.push(plan);
+            }
+        }
+        Ok(plans)
+    }
+
+    fn plan_obsolete_certified_bundle_append_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        frontier: &CertifiedLaneBlockArtifact,
+        component: CertifiedBundleCapacityComponent,
+    ) -> Result<Option<ObsoleteCertifiedBundleAppendPlan>> {
+        let (data_path, index_path, kind) = match component {
+            CertifiedBundleCapacityComponent::CertifiedPair => {
+                let (data, index) =
+                    Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
+                (data, index, CertifiedLaneBlockArtifact::FORMAT_LABEL)
+            }
+            CertifiedBundleCapacityComponent::AutonomousBundlePair => {
+                let (data, index) =
+                    Self::autonomous_lane_merge_bundle_paths_for_entry(entry, &self.store_root);
+                (data, index, AutonomousLaneMergeBundleV1::FORMAT_LABEL)
+            }
+            CertifiedBundleCapacityComponent::LatestCertifiedFrontier => {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "obsolete append recovery cannot replace the certified singleton",
+                ));
+            }
+        };
+        let namespace = self.open_bound_progress_namespace(&data_path, &index_path)?;
+        let build_path = Self::bound_progress_append_build_path(&index_path);
+        let intent_path = Self::bound_progress_append_intent_path(&index_path);
+        let mut build = self.open_optional_bound_progress_file(&namespace, &build_path)?;
+        let mut intent_file = self.open_optional_bound_progress_file(&namespace, &intent_path)?;
+        if build.is_none() && intent_file.is_none() {
+            return Ok(None);
+        }
+        let metadata_of = |file: Option<&std::fs::File>, path: &Path| {
+            file.map(|file| {
+                secure_file_metadata::from_file(file)
+                    .map_err(|error| Error::IO(error, path.to_path_buf()))
+            })
+            .transpose()
+        };
+        let build_metadata = metadata_of(build.as_ref(), &build_path)?;
+        let intent_metadata = metadata_of(intent_file.as_ref(), &intent_path)?;
+        for conflicting in [
+            data_path.with_extension("norito.tmp"),
+            index_path.with_extension("index.tmp"),
+            index_path.with_extension("index.prepend.tmp"),
+        ] {
+            if self
+                .open_optional_bound_progress_file(&namespace, &conflicting)?
+                .is_some()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    conflicting,
+                    "obsolete append conflicts with another pair recovery protocol",
+                ));
+            }
+        }
+        let has_durable_intent = intent_file.is_some();
+        let decode = |file: &mut std::fs::File, path: &Path| {
+            Self::decode_bound_progress_append_intent(
+                file,
+                path,
+                &namespace,
+                &data_path,
+                &index_path,
+                kind,
+            )
+            .map_err(|_| {
+                Self::invalid_lane_artifact_error(
+                    path.to_path_buf(),
+                    "obsolete append journal is not authenticated",
+                )
+            })
+        };
+        let intent = if let Some(file) = intent_file.as_mut() {
+            decode(file, &intent_path)?
+        } else {
+            decode(
+                build.as_mut().expect("one append journal exists"),
+                &build_path,
+            )?
+        };
+        if let (Some(_), Some(file)) = (intent_file.as_ref(), build.as_mut())
+            && decode(file, &build_path)? != intent
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                build_path,
+                "obsolete append build differs from its durable intent",
+            ));
+        }
+        if intent.height != frontier.proposal.descriptor.lane_block_height
+            || (component == CertifiedBundleCapacityComponent::AutonomousBundlePair
+                && frontier.prepare_qc.payload_availability_qc.is_none())
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                intent_path,
+                "obsolete append journal targets another certified slot",
+            ));
+        }
+        if component == CertifiedBundleCapacityComponent::CertifiedPair {
+            let bytes = frontier.encode_framed()?;
+            if intent.payload_hash != BoundProgressAppendIntentV1::payload_digest(&bytes)
+                || intent.payload_len() != u64::try_from(bytes.len()).ok()
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    intent_path,
+                    "obsolete certified append differs from its exact singleton",
+                ));
+            }
+        }
+        let mut data = self.open_optional_bound_progress_file(&namespace, &data_path)?;
+        let mut index = self.open_optional_bound_progress_file(&namespace, &index_path)?;
+        let data_metadata = metadata_of(data.as_ref(), &data_path)?;
+        let index_metadata = metadata_of(index.as_ref(), &index_path)?;
+        let file_len = |file: Option<&std::fs::File>, path: &Path| -> Result<u64> {
+            file.map(|file| {
+                file.metadata()
+                    .map(|meta| meta.len())
+                    .map_err(|error| Error::IO(error, path.to_path_buf()))
+            })
+            .transpose()
+            .map(|length| length.unwrap_or(0))
+        };
+        let data_len = file_len(data.as_ref(), &data_path)?;
+        let index_len = file_len(index.as_ref(), &index_path)?;
+        if (intent.pair_was_present && (data.is_none() || index.is_none()))
+            || data_len < intent.old_data_len
+            || data_len > intent.new_data_len
+            || index_len > intent.old_index_len.max(intent.new_index_len)
+            || (intent.pair_was_present && index_len < intent.old_index_len)
+            || (!has_durable_intent
+                && (data_len != intent.old_data_len || index_len != intent.old_index_len))
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                intent_path,
+                "obsolete append pair is outside its authenticated journal bounds",
+            ));
+        }
+        let old_layout = if intent.old_index_len == 0 {
+            None
+        } else {
+            let old_index = index.as_mut().ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    index_path.clone(),
+                    "obsolete append lost its original index layout",
+                )
+            })?;
+            Some(
+                SidecarIndexLayout::read_from(old_index, intent.old_index_len).map_err(
+                    |message| {
+                        Self::invalid_lane_artifact_error(index_path.clone(), message.to_owned())
+                    },
+                )?,
+            )
+        };
+        intent
+            .validate_against_old_layout(old_layout)
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(intent_path.clone(), message.to_owned())
+            })?;
+        let preimage = self.certified_bundle_append_preimage_payloads_locked(
+            &data_path,
+            &index_path,
+            &intent,
+            kind,
+        )?;
+        for (height, bytes) in &preimage {
+            let proposal = match component {
+                CertifiedBundleCapacityComponent::CertifiedPair => {
+                    let artifact = norito::decode_canonical::<CertifiedLaneBlockArtifact>(bytes)?;
+                    Self::validate_certified_lane_block_artifact(&artifact).map_err(|message| {
+                        Self::invalid_lane_artifact_error(data_path.clone(), message.to_owned())
+                    })?;
+                    if artifact.encode_framed()? != *bytes {
+                        return Err(Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "obsolete certified preimage is noncanonical",
+                        ));
+                    }
+                    artifact.proposal
+                }
+                CertifiedBundleCapacityComponent::AutonomousBundlePair => {
+                    let bundle = norito::decode_canonical::<AutonomousLaneMergeBundleV1>(bytes)?;
+                    Self::validate_autonomous_lane_merge_bundle(
+                        &bundle,
+                        bundle.executable_payload().network_id,
+                        bundle.executable_payload().epoch,
+                    )
+                    .map_err(|message| {
+                        Self::invalid_lane_artifact_error(data_path.clone(), message.to_owned())
+                    })?;
+                    if bundle.encode_framed()? != *bytes {
+                        return Err(Self::invalid_lane_artifact_error(
+                            data_path.clone(),
+                            "obsolete bundle preimage is noncanonical",
+                        ));
+                    }
+                    bundle.certified.proposal
+                }
+                CertifiedBundleCapacityComponent::LatestCertifiedFrontier => unreachable!(),
+            };
+            self.require_active_lane_artifact(entry, &proposal.descriptor)?;
+            if proposal.descriptor.lane_block_height != *height {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "obsolete append preimage names another lane height",
+                ));
+            }
+        }
+        let tail_len = usize::try_from(data_len - intent.old_data_len)?;
+        let mut tail = Vec::new();
+        tail.try_reserve_exact(tail_len).map_err(|_| {
+            Self::invalid_lane_artifact_error(
+                data_path.clone(),
+                "obsolete append payload exceeds process allocation limits",
+            )
+        })?;
+        tail.resize(tail_len, 0);
+        if let Some(data) = data.as_mut() {
+            data.seek(SeekFrom::Start(intent.old_data_len))
+                .and_then(|_| data.read_exact(&mut tail))
+                .map_err(|error| Error::IO(error, data_path.clone()))?;
+        }
+        // The existing journal rolls incomplete or mismatching payloads back.
+        // A complete matching bundle may roll forward only if its own QCs and
+        // payload authenticate the same singleton; pruned input is never rebuilt.
+        if component == CertifiedBundleCapacityComponent::AutonomousBundlePair
+            && data_len == intent.new_data_len
+            && BoundProgressAppendIntentV1::payload_digest(&tail) == intent.payload_hash
+        {
+            let bundle = norito::decode_canonical::<AutonomousLaneMergeBundleV1>(&tail)?;
+            Self::validate_autonomous_lane_merge_bundle(
+                &bundle,
+                bundle.executable_payload().network_id,
+                bundle.executable_payload().epoch,
+            )
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(data_path.clone(), message.to_owned())
+            })?;
+            if bundle.certified != *frontier || bundle.encode_framed()? != tail {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path.clone(),
+                    "obsolete bundle append differs from its exact singleton",
+                ));
+            }
+        }
+        for (file, before, path) in [
+            (build.as_ref(), build_metadata.as_ref(), &build_path),
+            (intent_file.as_ref(), intent_metadata.as_ref(), &intent_path),
+            (data.as_ref(), data_metadata.as_ref(), &data_path),
+            (index.as_ref(), index_metadata.as_ref(), &index_path),
+        ] {
+            let unchanged = if let (Some(file), Some(before)) = (file, before) {
+                let opened = secure_file_metadata::from_file(file)
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                let current = secure_file_metadata::from_path(path)
+                    .map_err(|error| Error::IO(error, path.clone()))?;
+                Self::sidecar_file_metadata_unchanged(before, &opened)
+                    && Self::sidecar_file_metadata_unchanged(&opened, &current)
+            } else {
+                self.open_optional_bound_progress_file(&namespace, path)?
+                    .is_none()
+            };
+            if !unchanged {
+                return Err(Self::invalid_lane_artifact_error(
+                    path.clone(),
+                    "obsolete append files changed during planning",
+                ));
+            }
+        }
+        if !self.bound_progress_namespace_unchanged(&namespace) {
+            return Err(Self::invalid_lane_artifact_error(
+                index_path,
+                "obsolete append namespace changed during planning",
+            ));
+        }
+        let physical_temp_bytes = file_len(build.as_ref(), &build_path)?
+            .checked_add(file_len(intent_file.as_ref(), &intent_path)?)
+            .ok_or_else(|| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "obsolete append temporary size overflows",
+                )
+            })?;
+        let remaining_index_growth = if has_durable_intent {
+            intent
+                .old_index_len
+                .max(intent.new_index_len)
+                .saturating_sub(index_len)
+        } else {
+            0
+        };
+        Ok(Some(ObsoleteCertifiedBundleAppendPlan {
+            entry: entry.clone(),
+            frontier: frontier.clone(),
+            component,
+            recovery: CertifiedBundleAppendRecovery {
+                intent,
+                has_durable_intent,
+                physical_temp_bytes,
+            },
+            preimage_hash: Hash::new(norito::encode_canonical(&preimage)?),
+            append_tail_hash: Hash::new(&tail),
+            data_len,
+            index_len,
+            remaining_index_growth,
+        }))
+    }
+
+    /// Execute plans only after their aggregate index growth and all current
+    /// publication reservations have passed the startup capacity barrier.
+    fn recover_obsolete_certified_bundle_appends_under_prune_guard(
+        &self,
+        plans: &[ObsoleteCertifiedBundleAppendPlan],
+    ) -> Result<()> {
+        // Revalidate the entire batch before the first mutation.
+        for plan in plans {
+            let retention = self
+                .authenticated_lane_history_retention_under_prune_guard(&plan.entry)?
+                .ok_or_else(|| {
+                    Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "obsolete append lost its terminal retention proof",
+                    )
+                })?;
+            let actual = self.plan_obsolete_certified_bundle_appends_under_prune_guard(
+                &plan.entry,
+                &plan.frontier,
+                &retention,
+            )?;
+            let expected = plans
+                .iter()
+                .filter(|candidate| {
+                    candidate.entry == plan.entry && candidate.frontier == plan.frontier
+                })
+                .collect::<Vec<_>>();
+            if actual.len() != expected.len()
+                || expected.iter().any(|candidate| !actual.contains(candidate))
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "obsolete append changed after capacity admission",
+                ));
+            }
+        }
+        for plan in plans {
+            let _geometry_guard = self.lane_geometry_lock.lock();
+            if self.lane_storage_entry(plan.entry.lane_id)? != plan.entry {
+                return Err(Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    "obsolete append geometry changed before recovery",
+                ));
+            }
+            let _sidecar_guard = self.sidecar_lock.lock();
+            let (data_path, index_path, kind) = match plan.component {
+                CertifiedBundleCapacityComponent::CertifiedPair => {
+                    let (data, index) =
+                        Self::certified_lane_block_paths_for_entry(&plan.entry, &self.store_root);
+                    (data, index, CertifiedLaneBlockArtifact::FORMAT_LABEL)
+                }
+                CertifiedBundleCapacityComponent::AutonomousBundlePair => {
+                    let (data, index) = Self::autonomous_lane_merge_bundle_paths_for_entry(
+                        &plan.entry,
+                        &self.store_root,
+                    );
+                    (data, index, AutonomousLaneMergeBundleV1::FORMAT_LABEL)
+                }
+                CertifiedBundleCapacityComponent::LatestCertifiedFrontier => unreachable!(),
+            };
+            let before = Self::sidecar_tracked_bytes(&data_path, &index_path)?;
+            let accounting = self.begin_total_disk_usage_mutation().with_resource_paths(
+                Self::sidecar_physical_resource_paths(&data_path, &index_path),
+            );
+            if !self.recover_bound_progress_sidecar_artifacts(&data_path, &index_path, kind) {
+                return Err(Self::invalid_lane_artifact_error(
+                    index_path,
+                    "obsolete append did not recover its authenticated pair",
+                ));
+            }
+            self.update_disk_usage_delta(
+                before,
+                Self::sidecar_tracked_bytes(&data_path, &index_path)?,
+            );
+            accounting.finish();
+        }
+        Ok(())
+    }
+
     /// Reconcile independently durable autonomous merge bundles with the
     /// exact active certified slots that authorize them.
     ///
     /// A crash may publish the certified frontier/pair and stop before the
     /// bundle pair crosses its own data/index/directory barrier. Startup is
     /// the only repair path: it reconstructs such a missing slot from the
-    /// authenticated autonomous payload, certificate, and execution input.
-    /// Existing conflicting or orphan bundle bytes always fail closed.
+    /// authenticated autonomous payload, certificate, and execution input at
+    /// the exact current frontier. Retained older slots must already have a
+    /// complete bundle; only a carrier-authenticated terminal retention proof
+    /// can retire their cross-pair dependencies. Existing retained conflicting
+    /// or orphan bundle bytes always fail closed.
     fn repair_autonomous_lane_merge_bundles_on_startup(&self) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
@@ -2861,7 +3329,10 @@ impl Kura {
                 .collect::<Vec<_>>()
         };
         for entry in entries {
-            let (certified, persisted_bundles) = {
+            // Authenticate retention under prune -> canonical ordering before
+            // entering the geometry/sidecar corridor used by the pair reads.
+            let retention = self.authenticated_lane_history_retention_under_prune_guard(&entry)?;
+            let (frontier_artifact, mut certified, mut persisted_bundles) = {
                 let _geometry_guard = self.lane_geometry_lock.lock();
                 let active_entry = self.lane_storage_entry(entry.lane_id)?;
                 if active_entry != entry {
@@ -2875,11 +3346,15 @@ impl Kura {
                 let frontier =
                     self.read_latest_certified_lane_block_frontier_locked(&active_entry, true)?;
                 if let Some(frontier) = frontier.as_ref() {
-                    self.recover_certified_lane_block_pair_from_frontier_locked(
-                        &active_entry,
-                        &frontier.frontier.artifact,
-                        None,
-                    )?;
+                    if retention.as_ref().is_none_or(|proof| {
+                        !proof.permits_discard(&frontier.frontier.artifact.proposal.descriptor)
+                    }) {
+                        self.recover_certified_lane_block_pair_from_frontier_locked(
+                            &active_entry,
+                            &frontier.frontier.artifact,
+                            None,
+                        )?;
+                    }
                     self.confirm_latest_certified_lane_block_frontier_read_locked(
                         &active_entry,
                         &frontier.snapshot,
@@ -3029,8 +3504,45 @@ impl Kura {
                         bundles
                     }
                 };
-                (certified, bundles)
+                if frontier.is_none() && !bundles.is_empty() {
+                    return Err(Self::invalid_lane_artifact_error(
+                        bundle_data_path,
+                        "autonomous merge bundle history exists without its mandatory durable frontier",
+                    ));
+                }
+                (
+                    frontier.map(|read| read.frontier.artifact),
+                    certified,
+                    bundles,
+                )
             };
+            if let Some(frontier) = frontier_artifact.as_ref() {
+                let height = frontier.proposal.descriptor.lane_block_height;
+                if certified.keys().any(|candidate| *candidate > height)
+                    || certified
+                        .get(&height)
+                        .is_some_and(|artifact| artifact != frontier)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "certified lane history conflicts with its durable frontier during bundle repair",
+                    ));
+                }
+            }
+            // Independent pair rewrites can leave an obsolete certificate or
+            // bundle after its counterpart/input was already compacted. Only
+            // the authenticated terminal prefix may omit those dependencies.
+            // Replica application can outrun the local certified singleton;
+            // keep that singleton as the live monotonic anchor, but do not
+            // resurrect its pairs when the same terminal proof permits pruning.
+            let retain_descriptor = |descriptor: &LaneBlockDescriptorV1| {
+                retention
+                    .as_ref()
+                    .is_none_or(|proof| !proof.permits_discard(descriptor))
+            };
+            certified.retain(|_, artifact| retain_descriptor(&artifact.proposal.descriptor));
+            persisted_bundles
+                .retain(|_, bundle| retain_descriptor(&bundle.certified.proposal.descriptor));
             for lane_block_height in persisted_bundles.keys() {
                 let Some(artifact) = certified.get(lane_block_height) else {
                     return Err(Self::invalid_lane_artifact_error(
@@ -3098,10 +3610,19 @@ impl Kura {
                                 ),
                             )
                         })?;
-                    self.ensure_certified_bundle_capacity_reservation_under_prune_guard(
-                        &artifact, &published, None,
-                    )?;
+                    // Startup may finish a pending pair append after capacity
+                    // reconstruction. Consume only the exact components just
+                    // authenticated and made durable; historical certificates
+                    // must not cross the live frontier admission guard again.
+                    self.consume_certified_bundle_pair_capacity(&artifact)?;
+                    self.consume_autonomous_bundle_pair_capacity(&published)?;
                     continue;
+                }
+                if frontier_artifact.as_ref() != Some(&artifact) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        self.store_root.clone(),
+                        "historical autonomous certificate lacks its mandatory durable merge bundle",
+                    ));
                 }
                 let source = self
                     .durable_autonomous_lane_merge_source_under_prune_guard(

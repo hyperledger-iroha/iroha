@@ -51,13 +51,21 @@ and proof checks retain their selected cases. Adding the CLI changes the combine
 so the first run must warm and qualify that union; latency savings require actual
 measurement and are not inferred from these orchestration checks.
 
-After configuration and CLI checks, the short Core snapshot-owner and daemon
-startup-policy groups execute before proof, transport and long consensus tests.
-Both startup groups report their failures before stopping expensive work. On
+After configuration and CLI checks, the Core snapshot-owner, cold certified-history
+and daemon startup-policy groups execute before proof, transport and long consensus
+tests. Cold storage cases restore multiple completed slots, recover only the current
+partial publication, recover independently pruned pairs using an authenticated
+retention frontier, and reject corrupt or missing retained history. Discarded local
+certificate history cannot be resurrected after replica application advances. All startup
+groups report their failures before stopping expensive work. On
 success, the remaining groups execute each other selection once; the original
 complete census and exact-artifact checkpoint remain authoritative. Core and daemon
 copies stay retained until their final selected stage. A failed startup preflight
-never publishes independent-check success.
+never publishes independent-check success. Strict storage construction and both
+snapshot geometry restoration paths share one recovery sequence: rebuild budgets,
+finish publication recovery, then compact terminal history and rebuild route indexes.
+The source contract rejects bypassing this sequence or moving compaction before
+publication repair.
 
 CLI client admission binds the configured chain, genesis NetworkId and account
 address discriminant to the signed inventory during assembly, apply and recovery.

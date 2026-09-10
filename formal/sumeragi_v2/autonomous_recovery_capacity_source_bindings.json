@@ -862,7 +862,7 @@
         "receipt.proposal.descriptor.proposal_height == identity.1",
         "latest_execution_entry",
         "latest_height != identity.0",
-        "execution_entries_for_bounded_identities(&historical_execution_identities)",
+        "execution_entries_for_bounded_identities( &historical_execution_identities, )",
         "merge_carrier_for_entry_under_prune_and_canonical_guards",
         "authenticated_carriers.push((entry_hash, carrier))",
         "ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked"
@@ -878,7 +878,7 @@
         "receipt.proposal.descriptor.proposal_height == identity.1",
         "latest_execution_entry",
         "if latest_height != identity.0",
-        "execution_entries_for_bounded_identities(&historical_execution_identities)",
+        "execution_entries_for_bounded_identities( &historical_execution_identities, )",
         "for entry_hash in carrier_hashes",
         "merge_carrier_for_entry_under_prune_and_canonical_guards",
         "authenticated_carriers.push((entry_hash, carrier))",
@@ -898,10 +898,7 @@
       "required_tokens": [
         "if !provisional_open",
         "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
-        "kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
-        "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
-        "kura.repair_lane_merge_application_frontiers_on_startup()?",
-        "kura.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "kura.recover_lane_histories_on_startup()?",
         "kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(",
         "!provisional_open",
         "Kura emergency Fast mode skipped the full disk-usage inventory",
@@ -909,10 +906,7 @@
       ],
       "ordered_tokens": [
         "kura.reconcile_merge_carriers_from_durable_blocks_with_authority(",
-        "kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
-        "kura.rebuild_certified_bundle_capacity_reservations_on_startup()?",
-        "kura.repair_lane_merge_application_frontiers_on_startup()?",
-        "kura.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "kura.recover_lane_histories_on_startup()?",
         "kura.validate_and_publish_configured_kura_capacity_after_startup_recovery(",
         "!provisional_open",
         "Kura emergency Fast mode skipped the full disk-usage inventory",
@@ -928,21 +922,57 @@
       "symbol": "Kura::finish_restored_lane_segments_with_geometry",
       "required_tokens": [
         "if self.emergency_fast_startup_enabled()",
-        "self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
-        "self.rebuild_certified_bundle_capacity_reservations_on_startup()?",
-        "self.repair_lane_merge_application_frontiers_on_startup()?",
-        "self.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "self.recover_lane_histories_on_startup()?",
         "self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?",
         "Ok(())"
       ],
       "ordered_tokens": [
         "if self.emergency_fast_startup_enabled()",
-        "self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
-        "self.rebuild_certified_bundle_capacity_reservations_on_startup()?",
-        "self.repair_lane_merge_application_frontiers_on_startup()?",
-        "self.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "self.recover_lane_histories_on_startup()?",
         "self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?",
         "Ok(())"
+      ]
+    },
+    {
+      "id": "lane_restore_combined_capacity_publish",
+      "invariant": "MLDebugAppendReservationAndRestartAccounting",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura.rs",
+      "kind": "method",
+      "symbol": "Kura::restore_lane_segments",
+      "required_tokens": [
+        "if self.emergency_fast_startup_enabled()",
+        "self.recover_lane_histories_on_startup()?",
+        "self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?",
+        "Ok(())"
+      ],
+      "ordered_tokens": [
+        "if self.emergency_fast_startup_enabled()",
+        "self.recover_lane_histories_on_startup()?",
+        "self.validate_and_publish_configured_kura_capacity_after_startup_recovery(true)?",
+        "Ok(())"
+      ]
+    },
+    {
+      "id": "lane_history_recovery_phase_order",
+      "invariant": "MLStartupRepairAfterCarrierEnvelopes",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/lane_history_compaction.rs",
+      "kind": "method",
+      "symbol": "Kura::recover_lane_histories_on_startup",
+      "required_tokens": [
+        "self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
+        "self.rebuild_certified_bundle_capacity_reservations_on_startup()?",
+        "self.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "self.repair_lane_merge_application_frontiers_on_startup()?",
+        "self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()"
+      ],
+      "ordered_tokens": [
+        "self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?",
+        "self.rebuild_certified_bundle_capacity_reservations_on_startup()?",
+        "self.repair_autonomous_lane_merge_bundles_on_startup()?",
+        "self.repair_lane_merge_application_frontiers_on_startup()?",
+        "self.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()"
       ]
     },
     {
@@ -987,7 +1017,7 @@
       "required_tokens": [
         "self.preflight_autonomous_lane_entrypoint_claims_locked(",
         "pending_canonical_bytes, payload, max_files,",
-        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "let mut accounting_mutation = self .begin_total_disk_usage_mutation() .with_resource_children(payload.entrypoint_hashes.len())",
         "for entrypoint_hash in &payload.entrypoint_hashes",
         ".create_new(true)",
         "temp.write_all(&bytes).and_then(|()| temp.sync_all())",
@@ -997,7 +1027,7 @@
       "ordered_tokens": [
         "self.preflight_autonomous_lane_entrypoint_claims_locked(",
         "pending_canonical_bytes, payload, max_files,",
-        "let accounting_mutation = self.begin_total_disk_usage_mutation()",
+        "let mut accounting_mutation = self .begin_total_disk_usage_mutation() .with_resource_children(payload.entrypoint_hashes.len())",
         "for entrypoint_hash in &payload.entrypoint_hashes",
         ".create_new(true)",
         "temp.write_all(&bytes).and_then(|()| temp.sync_all())",

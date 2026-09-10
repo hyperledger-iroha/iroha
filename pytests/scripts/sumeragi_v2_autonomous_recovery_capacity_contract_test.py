@@ -256,13 +256,15 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
     def test_exact_incomplete_carrier_cannot_fall_back_to_route_latest(self) -> None:
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/lane_artifact_budget.rs",
-            ".execution_entries_for_bounded_identities(&historical_execution_identities)?",
+            ".execution_entries_for_bounded_identities(\n"
+            "                            &historical_execution_identities,\n"
+            "                        )?",
             ".latest_execution_entry(&historical_execution_identities)?",
             "exact_incomplete_carrier_reservation_rebuild",
         )
         for old, new in (
             (".union(&inventory.terminal_outcome_identities)", ".intersection(&inventory.terminal_outcome_identities)"),
-            ("!inventory\n                            .complete_terminal_outcome_identities", "inventory\n                            .complete_terminal_outcome_identities"),
+            ("!inventory\n                                .complete_terminal_outcome_identities", "inventory\n                                .complete_terminal_outcome_identities"),
         ):
             with self.subTest(mutation=old):
                 self.assert_source_mutation_rejected(
@@ -276,29 +278,48 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/lane_artifact_budget.rs",
             "self.ensure_post_wsv_lane_artifact_budget_reservation_after_authentication_locked(\n"
-            "                pending_canonical_bytes,\n"
-            "                &entry,\n"
-            "                carrier.block_height,",
+            "                    pending_canonical_bytes,\n"
+            "                    &entry,\n"
+            "                    carrier.block_height,",
             "self.ensure_post_wsv_lane_artifact_budget_reservation_locked(\n"
-            "                pending_canonical_bytes,\n"
-            "                &entry,\n"
-            "                carrier.block_height,",
+            "                    pending_canonical_bytes,\n"
+            "                    &entry,\n"
+            "                    carrier.block_height,",
             "exact_incomplete_carrier_reservation_rebuild",
         )
 
     def test_startup_repair_cannot_move_before_carrier_envelope_rebuild(self) -> None:
+        phase_path = "crates/iroha_core/src/kura/lane_history_compaction.rs"
         self.assert_source_mutation_rejected(
-            "crates/iroha_core/src/kura.rs",
-            "                kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;\n"
-            "                kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
-            "                kura.repair_lane_merge_application_frontiers_on_startup()?;\n"
-            "                kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;",
-            "                kura.repair_lane_merge_application_frontiers_on_startup()?;\n"
-            "                kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;\n"
-            "                kura.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
-            "                kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;",
-            "startup_carrier_envelope_reconstruction_order",
+            phase_path,
+            "        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;\n"
+            "        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
+            "        self.repair_autonomous_lane_merge_bundles_on_startup()?;",
+            "        self.repair_autonomous_lane_merge_bundles_on_startup()?;\n"
+            "        self.rebuild_certified_bundle_capacity_reservations_on_startup()?;\n"
+            "        self.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()?;",
+            "lane_history_recovery_phase_order",
         )
+        self.assert_source_mutation_rejected(
+            phase_path,
+            "        self.repair_autonomous_lane_merge_bundles_on_startup()?;\n"
+            "        self.repair_lane_merge_application_frontiers_on_startup()?;",
+            "        self.repair_lane_merge_application_frontiers_on_startup()?;\n"
+            "        self.repair_autonomous_lane_merge_bundles_on_startup()?;",
+            "lane_history_recovery_phase_order",
+        )
+        for receiver, occurrence, binding in (
+            ("kura", 1, "startup_carrier_envelope_reconstruction_order"),
+            ("self", 1, "lane_restore_combined_capacity_publish"),
+            ("self", 2, "geometry_restore_combined_capacity_publish"),
+        ):
+            self.assert_source_mutation_rejected(
+                "crates/iroha_core/src/kura.rs",
+                receiver + ".recover_lane_histories_on_startup()?;",
+                "// Missing the common authenticated history recovery phase.",
+                binding,
+                occurrence=occurrence,
+            )
 
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/autonomous_terminal_capacity.rs",
@@ -361,10 +382,10 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
     def test_certified_bundle_startup_cannot_drop_physical_crash_credit(self) -> None:
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
-            "                    total.checked_add(reserved.saturating_sub(\n"
-            "                        reservation.plan.startup_physical_credit_bytes.min(reserved),\n"
-            "                    ))",
-            "                    total.checked_add(reserved)",
+            "                        total.checked_add(reserved.saturating_sub(\n"
+            "                            reservation.plan.startup_physical_credit_bytes.min(reserved),\n"
+            "                        ))",
+            "                        total.checked_add(reserved)",
             "certified_bundle_transactional_startup_rebuild",
         )
 
@@ -432,6 +453,7 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "        }\n"
             "        if !provisional_open {\n"
             "            if config.init_mode == InitMode::Strict {\n"
+            "                kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;\n"
             "                kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;\n"
             "                kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;",
             "        if config.init_mode == InitMode::Strict {\n"
@@ -439,6 +461,7 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "        }\n"
             "        if !provisional_open {\n"
             "            if config.init_mode == InitMode::Strict {\n"
+            "                kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;\n"
             "                kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;\n"
             "                kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;\n"
             "                if let Some(intent) = prune_intent.as_ref() {\n"
@@ -471,8 +494,12 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "            payload,\n"
             "            max_files,\n"
             "        )?;\n"
-            "        let accounting_mutation = self.begin_total_disk_usage_mutation();",
-            "        let accounting_mutation = self.begin_total_disk_usage_mutation();\n"
+            "        let mut accounting_mutation = self\n"
+            "            .begin_total_disk_usage_mutation()\n"
+            "            .with_resource_children(payload.entrypoint_hashes.len());",
+            "        let mut accounting_mutation = self\n"
+            "            .begin_total_disk_usage_mutation()\n"
+            "            .with_resource_children(payload.entrypoint_hashes.len());\n"
             "        self.preflight_autonomous_lane_entrypoint_claims_locked(\n"
             "            pending_canonical_bytes,\n"
             "            payload,\n"
