@@ -1643,6 +1643,8 @@ impl PopCredentialToriiRuntimeV1 {
         self.provider_registry.finish(result)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopCanonicalPayloadRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope carrying one exact canonical native-Norito payload.
@@ -1650,6 +1652,8 @@ pub struct PopCanonicalPayloadRequestV1 {
     /// Canonical native-Norito bytes encoded as unpadded URL-safe base64.
     pub canonical_payload_base64url: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopRequestIdRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope selecting one durable PoP enrollment by identifier.
@@ -1657,6 +1661,8 @@ pub struct PopRequestIdRequestV1 {
     /// Non-zero 32-byte request id as lowercase hex.
     pub request_id_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopCredentialCommitmentRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope selecting one wallet credential commitment.
@@ -1664,6 +1670,8 @@ pub struct PopCredentialCommitmentRequestV1 {
     /// Non-zero credential commitment as lowercase hex.
     pub credential_commitment_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopMembershipRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope for local membership-proof generation.
@@ -1677,6 +1685,8 @@ pub struct PopMembershipRequestV1 {
     /// Non-zero recipient or action binding as lowercase hex, independent of the nullifier domain.
     pub presentation_binding_digest_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopVerifyMembershipRequestV1")]
 #[derive(Clone, Debug, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Request envelope for verification and exactly-once nullifier consumption.
@@ -1690,6 +1700,8 @@ pub struct PopVerifyMembershipRequestV1 {
     /// Non-zero recipient or action binding as lowercase hex, independent of the nullifier domain.
     pub presentation_binding_digest_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::pop_api::PopEmptyRequestV1")]
 #[derive(Clone, Copy, Debug, Default, NoritoSerialize, NoritoDeserialize)]
 #[norito(deny_unknown_fields)]
 /// Strict empty-object request used by bounded worker and projection endpoints.

@@ -11,6 +11,10 @@ use sorafs_manifest::signer::{
 /// Decoding or validating this value establishes no custody, device, finality or completion
 /// authority. The issuer retains independent configuration and verifies challenged signed
 /// evidence before release. The digest commits all signer, attester and observer configuration.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_registry::stream_token_hardware_binding::StreamTokenHardwareRuntimeBindingV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, norito::Decode, norito::Encode)]
 pub struct StreamTokenHardwareRuntimeBindingV1 {
     custody: SignerCustodyBindingV1,

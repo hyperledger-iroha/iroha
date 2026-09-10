@@ -948,6 +948,8 @@ pub fn validate_musubi_provider_attestation_inventory_binding_v1(
     }
     qualification.validate()
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::ApprovalIdPreimageV1")]
 #[derive(NoritoSerialize)]
 struct ApprovalIdPreimageV1 {
     key: MusubiProviderBundleAttestationKeyV1,
@@ -955,6 +957,8 @@ struct ApprovalIdPreimageV1 {
     completion_claim_digest: [u8; 32],
     signer_policy: ProviderIngestCompletionSignerPolicyV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::InventoryHandoffIdPreimageV1")]
 #[derive(NoritoSerialize)]
 struct InventoryHandoffIdPreimageV1 {
     scope: MusubiProviderAttestationInventoryScopeV1,
@@ -1071,6 +1075,8 @@ pub struct MusubiProviderAttestationJournalPolicyV1 {
     /// Maximum CAS conflicts retried by one journal operation.
     pub max_cas_retries: u32,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::JournalPolicyDigestMaterialV1")]
 #[derive(NoritoSerialize)]
 struct JournalPolicyDigestMaterialV1 {
     version: u8,
@@ -1653,6 +1659,8 @@ pub enum MusubiProviderAttestationJournalErrorV1 {
     #[error("Musubi provider-attestation journal counter overflowed")]
     ArithmeticOverflow,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::StoredApprovalIntentV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredApprovalIntentV1 {
     approval_id: MusubiProviderAttestationApprovalIdV1,
@@ -1731,6 +1739,8 @@ enum StoredJournalStateV1 {
         dead_lettered_at_unix_ms: u64,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::StoredJournalEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredJournalEntryV1 {
     intent: StoredApprovalIntentV1,
@@ -1805,6 +1815,8 @@ impl StoredJournalEntryV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_attestation_journal::StoredJournalCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct StoredJournalCheckpointV1 {
     version: u8,

@@ -47,15 +47,58 @@ function field(bytes) {
 }
 const payloadFields = splitFields(splitFields(signed.subarray(1))[1]);
 assert.equal(payloadFields.length, 10);
-// Unsigned application drafts require an absent nonce and Ordinary admission.
+// Unsigned application drafts require an absent nonce and caller-bound admission.
 payloadFields[5] = Buffer.of(0);
 payloadFields[7] = Buffer.alloc(4);
 const ordinaryPayload = Buffer.concat(payloadFields.map(field));
 
 test("ordinary draft inspector retains the exact common envelope bindings", () => {
-  assert.deepEqual(inspectOrdinaryDraft(ordinaryPayload), inspectCanonicalTransactionPayloadBindings(ordinaryPayload));
-  assert.throws(() => inspectOrdinaryDraft(Buffer.concat([ordinaryPayload, Buffer.of(0)])), /trailing/u);
+  assert.deepEqual(
+    inspectOrdinaryDraft(ordinaryPayload, null, "ordinary"),
+    inspectCanonicalTransactionPayloadBindings(ordinaryPayload, null, "ordinary"),
+  );
+  assert.throws(
+    () => inspectOrdinaryDraft(Buffer.concat([ordinaryPayload, Buffer.of(0)]), null, "ordinary"),
+    /trailing/u,
+  );
 });
+
+for (const [name, inspect] of [
+  ["general", inspectCanonicalTransactionPayloadBindings],
+  ["ordinary draft", inspectOrdinaryDraft],
+]) {
+  test(`${name} inspector requires an explicit canonical admission intent`, () => {
+    for (const admissionIntent of [undefined, null, "", "Ordinary", "QueuePlanSynced"]) {
+      assert.throws(() => inspect(ordinaryPayload, null, admissionIntent), (error) => {
+        assert.ok(error instanceof BrowserTransactionCodecError);
+        assert.equal(error.code, "unsupported_payload");
+        assert.match(error.message, /requires one explicit expected admission intent/u);
+        return true;
+      });
+    }
+  });
+
+  test(`${name} inspector binds both admission intents without inferring one from the payload`, () => {
+    const fields = [...payloadFields];
+    fields[7] = Buffer.of(1, 0, 0, 0);
+    const queuePlanPayload = Buffer.concat(fields.map(field));
+    assert.deepEqual(
+      inspect(queuePlanPayload, null, "queue_plan_synced"),
+      inspect(ordinaryPayload, null, "ordinary"),
+    );
+    for (const [payload, expectedIntent] of [
+      [ordinaryPayload, "queue_plan_synced"],
+      [queuePlanPayload, "ordinary"],
+    ]) {
+      assert.throws(() => inspect(payload, null, expectedIntent), (error) => {
+        assert.ok(error instanceof BrowserTransactionCodecError);
+        assert.equal(error.code, "unsupported_payload");
+        assert.match(error.message, /admissionIntent/u);
+        return true;
+      });
+    }
+  });
+}
 
 for (const name of ["VerifyExecutionProofV1", "SettleGameSessionV1"]) {
   test(`ordinary draft inspector rejects standalone large ${name} while the general inspector preserves its execution corridor`, () => {
@@ -76,8 +119,11 @@ for (const name of ["VerifyExecutionProofV1", "SettleGameSessionV1"]) {
     assert.ok(payload.length > 1024 * 1024);
     assert.ok(payload.length <= 4 * 1024 * 1024);
     // This is wire admission and binding only, not verification of the opaque proof bytes.
-    assert.deepEqual(inspectCanonicalTransactionPayloadBindings(payload).executableArchive, executable);
-    assert.throws(() => inspectOrdinaryDraft(payload), (error) => {
+    assert.deepEqual(
+      inspectCanonicalTransactionPayloadBindings(payload, null, "ordinary").executableArchive,
+      executable,
+    );
+    assert.throws(() => inspectOrdinaryDraft(payload, null, "ordinary"), (error) => {
       assert.ok(error instanceof BrowserTransactionCodecError);
       assert.equal(error.code, "bounds_exceeded");
       assert.equal(error.message, "transaction payload exceeds 1048576 bytes");

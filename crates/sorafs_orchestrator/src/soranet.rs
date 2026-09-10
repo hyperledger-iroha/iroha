@@ -1858,12 +1858,16 @@ pub enum GuardSetPersistenceError {
         message: String,
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::soranet::GuardSetEnvelopeV8")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardSetEnvelopeV8 {
     version: u8,
     payload: Vec<u8>,
     cache_tag_hex: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_orchestrator::soranet::GuardSetPayloadV8")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct GuardSetPayloadV8 {
     guards: Vec<GuardRecordPersist>,
@@ -4166,6 +4170,32 @@ mod tests {
         let bytes = guards.encode_authenticated(&key).expect("encode guard set");
         let decoded = GuardSet::decode_authenticated(&bytes, &key).expect("decode guard set");
         assert_eq!(decoded, guards);
+        let envelope: GuardSetEnvelopeV8 =
+            decode_from_bytes_with_limits(&bytes, GUARD_CACHE_OUTER_DECODE_LIMITS_V1)
+                .expect("bounded outer frame");
+        let outer_header = norito::core::Header::read(bytes.as_slice()).unwrap();
+        let inner_header = norito::core::Header::read(envelope.payload.as_slice()).unwrap();
+        assert_eq!(
+            outer_header.schema,
+            norito::core::schema_hash_for_name("sorafs_orchestrator::soranet::GuardSetEnvelopeV8")
+        );
+        assert_eq!(
+            inner_header.schema,
+            norito::core::schema_hash_for_name("sorafs_orchestrator::soranet::GuardSetPayloadV8")
+        );
+        assert_ne!(outer_header.schema, inner_header.schema);
+        let payload: GuardSetPayloadV8 =
+            decode_from_bytes_with_limits(&envelope.payload, GUARD_CACHE_INNER_DECODE_LIMITS_V1)
+                .expect("bounded inner frame");
+        assert_eq!(to_bytes(&payload).unwrap(), envelope.payload);
+        assert_eq!(to_bytes(&envelope).unwrap(), bytes);
+        assert!(matches!(
+            decode_from_bytes_with_limits::<GuardSetPayloadV8>(
+                &bytes,
+                GUARD_CACHE_INNER_DECODE_LIMITS_V1
+            ),
+            Err(norito::Error::SchemaMismatch)
+        ));
     }
     #[test]
     fn guard_cache_tag_reports_rng_failure() {

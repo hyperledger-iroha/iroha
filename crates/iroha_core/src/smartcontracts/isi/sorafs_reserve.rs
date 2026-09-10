@@ -56,6 +56,8 @@ const EVENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_event_v1_";
 const STATE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const STATE_LIMITS: DecodeLimits =
     DecodeLimits::new(4_096, STATE_MAX_BYTES, 32_768, STATE_MAX_BYTES * 2, 64);
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs_reserve::ReservePersistedEventV1")]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ReservePersistedEventV1 {
     sequence: u64,
@@ -63,12 +65,18 @@ struct ReservePersistedEventV1 {
     event_index: u32,
     event: SorafsReserveLedgerEvent,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveEventJournalHeadV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ReserveEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
     last_event_index: u32,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::smartcontracts::isi::sorafs_reserve::ReserveStateV1")]
 #[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ReserveStateV1 {
     policy: ReserveAuthorityPolicyRecordV1,

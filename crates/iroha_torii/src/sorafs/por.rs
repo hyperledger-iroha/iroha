@@ -24,11 +24,12 @@ use parking_lot::{MappedRwLockReadGuard, Mutex, RwLock, RwLockReadGuard};
 use sorafs_manifest::por::{
     AuditOutcomeV1, AuditVerdictV1, POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1,
     POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_CHALLENGE_STATUS_VERSION_V1,
-    POR_STATUS_CURSOR_VERSION_V1, POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome,
-    PorChallengePublicationV1, PorChallengePublicationValidationError, PorChallengeStatusV1,
-    PorChallengeV1, PorChallengeValidationError, PorProviderSummaryV1,
-    PorProviderSummaryValidationError, PorReportIsoWeek, PorReportIsoWeekValidationError,
-    PorStatusCursorV1, PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
+    POR_STATUS_CURSOR_VERSION_V1, POR_STATUS_EXPORT_PAGE_VERSION_V1, POR_STATUS_PAGE_VERSION_V1,
+    POR_WEEKLY_REPORT_VERSION_V1, PorChallengeOutcome, PorChallengePublicationV1,
+    PorChallengePublicationValidationError, PorChallengeStatusV1, PorChallengeV1,
+    PorChallengeValidationError, PorProviderSummaryV1, PorProviderSummaryValidationError,
+    PorReportIsoWeek, PorReportIsoWeekValidationError, PorStatusCursorV1, PorStatusExportPageV1,
+    PorStatusPageV1, PorWeeklyReportV1, PorWeeklyReportValidationError, ProviderVrfSubmissionV1,
     ProviderVrfSubmissionValidationError, provider_vrf_input,
 };
 #[cfg(feature = "app_api")]
@@ -61,8 +62,6 @@ use thiserror::Error;
 use time::{Date, Duration, OffsetDateTime, Weekday};
 #[cfg(feature = "app_api")]
 use tokio::time::{MissedTickBehavior, interval};
-const POR_STATUS_PAGE_VERSION_V1: u8 = 1;
-const POR_STATUS_EXPORT_PAGE_VERSION_V1: u8 = 1;
 /// Maximum sum of canonical status-record bytes returned by one PoR page.
 pub(crate) const POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1: usize =
     POR_CHALLENGE_STATUS_PAGE_MAX_RECORD_BYTES_V1;
@@ -111,6 +110,8 @@ impl RecordedVerdict {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::RecordedVerdictSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct RecordedVerdictSnapshot {
     outcome: u8,
@@ -231,47 +232,9 @@ impl PorStatusPageCursor {
         })
     }
 }
-/// Bounded, generation-bound PoR status page.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-pub struct PorStatusPageV1 {
-    /// Schema version.
-    pub version: u8,
-    /// Immutable coordinator generation against which this page was evaluated.
-    pub snapshot_generation: u64,
-    /// Maximum records requested by the caller.
-    pub record_limit: u32,
-    /// Maximum sum of canonical status-record bytes requested by the caller.
-    pub canonical_byte_limit: u64,
-    /// Exact sum of canonical bytes for all returned status records.
-    pub canonical_bytes: u64,
-    /// Exact number of indexed status candidates evaluated for this page.
-    pub inspected_candidates: u32,
-    /// Whether traversal can continue after the last consumed candidate.
-    ///
-    /// Sparse filter intersections may therefore return no statuses together
-    /// with `has_more = true` and a non-empty continuation cursor.
-    pub has_more: bool,
-    /// Opaque continuation bound to this generation, selection, and last consumed candidate.
-    #[norito(default)]
-    pub next_cursor: Option<String>,
-    /// Challenge status records in canonical index order.
-    pub statuses: Vec<PorChallengeStatusV1>,
-}
-/// Bounded replacement for the retired full-history PoR export response.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
-pub struct PorStatusExportPageV1 {
-    /// Schema version.
-    pub version: u8,
-    /// Optional inclusive epoch-range lower bound.
-    #[norito(default)]
-    pub start_epoch: Option<u64>,
-    /// Optional inclusive epoch-range upper bound.
-    #[norito(default)]
-    pub end_epoch: Option<u64>,
-    /// Bounded page evaluated against one exact coordinator generation.
-    pub page: PorStatusPageV1,
-}
 /// Durable exact report material and its publication acknowledgement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::PreparedWeeklyReportV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PreparedWeeklyReportV1 {
     report: PorWeeklyReportV1,
@@ -797,6 +760,8 @@ pub trait VrfProvider: Send + Sync {
 }
 #[cfg(feature = "app_api")]
 const VRF_STATE_VERSION_V1: u8 = 1;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::VrfStateKeyV1")]
 #[cfg(feature = "app_api")]
 #[derive(
     Debug, Clone, Copy, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, PartialOrd, Ord,
@@ -806,18 +771,24 @@ struct VrfStateKeyV1 {
     provider_id: [u8; 32],
     manifest_digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::VrfStateEntryV1")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct VrfStateEntryV1 {
     key: VrfStateKeyV1,
     submission: ProviderVrfSubmissionV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::VrfProviderSequenceV1")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct VrfProviderSequenceV1 {
     provider_id: [u8; 32],
     high_water: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::VrfStateSnapshotV1")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct VrfStateSnapshotV1 {
@@ -4351,6 +4322,10 @@ mod tests {
     }
     #[test]
     fn persistence_rejects_zero_or_missing_status_generation() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_torii::sorafs::por::tests::persistence_rejects_zero_or_missing_status_generation::SnapshotWithoutStatusGeneration"
+        )]
         #[derive(NoritoSerialize)]
         struct SnapshotWithoutStatusGeneration {
             version: u8,

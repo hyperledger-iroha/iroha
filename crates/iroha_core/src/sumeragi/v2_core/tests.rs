@@ -7587,3 +7587,7 @@ fn assert_retirement_is_bound_to_finality(
     ));
 }
 include!("tests/v2_core_terminal_transactionality.rs");
+
+mod four_reducer_network {
+    include!("tests/four_reducer_network.rs");
+}

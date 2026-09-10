@@ -75,6 +75,8 @@ struct CachedResolverPageV1 {
     response: MusubiResolverIndexPageV1,
 }
 /// Complete coherent set of pages consumed by one successful graph collection.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::registry_cache::ResolverIndexCacheSnapshotV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct ResolverIndexCacheSnapshotV1 {
     network_id: NetworkId,
@@ -266,6 +268,8 @@ impl CommittedResolverSnapshotV1 {
     }
 }
 /// Strict first-release cache catalog.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "musubi::registry_cache::ResolverIndexCacheCatalogV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 struct ResolverIndexCacheCatalogV1 {
     schema: String,

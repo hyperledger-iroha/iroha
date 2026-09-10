@@ -75,6 +75,8 @@ pub const MAX_CERTIFIED_MERGE_CHUNKS: usize =
 /// across crashes or height rollover. Sequence and cumulative-close values are
 /// meaningful only inside the exact `(requester, responder, stream_epoch)`
 /// tuple.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarStreamEpochV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[repr(transparent)]
 pub struct CertifiedMergeSidecarStreamEpochV1(pub NonZeroU64);
@@ -91,6 +93,8 @@ impl CertifiedMergeSidecarStreamEpochV1 {
 /// responder, service_generation, stream_epoch)` tuple. Cumulative close
 /// floors and stream high-water counters remain plain `u64` values because
 /// zero represents an empty prefix.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarSemanticSequenceV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[repr(transparent)]
 pub struct CertifiedMergeSidecarSemanticSequenceV1(pub NonZeroU64);
@@ -110,6 +114,8 @@ impl CertifiedMergeSidecarSemanticSequenceV1 {
 /// unreachable. Delayed messages from the prior roster generation can
 /// therefore be rejected without retaining an unbounded collection of peer
 /// tombstones.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarServiceGenerationV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[repr(transparent)]
 pub struct CertifiedMergeSidecarServiceGenerationV1(pub NonZeroU64);
@@ -373,6 +379,8 @@ fn retry_timeout(base: Duration, attempts: u32) -> Duration {
     base.saturating_mul(1_u32 << backoff_shift)
 }
 /// Point-to-point request for one exact certified merge sidecar.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarRequestV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarRequestV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -448,6 +456,8 @@ impl CertifiedMergeSidecarRequestV1 {
     }
 }
 /// Cumulative authenticated release of completed semantic request occurrences.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarCloseV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarCloseV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -490,6 +500,8 @@ impl CertifiedMergeSidecarCloseV1 {
     }
 }
 /// Idempotent responder acknowledgement for one cumulative close witness.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarCloseAckV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarCloseAckV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -532,6 +544,8 @@ impl CertifiedMergeSidecarCloseAckV1 {
     }
 }
 /// Authenticated responder fence returned for a stale service generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarGenerationHintV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarGenerationHintV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -573,6 +587,8 @@ impl CertifiedMergeSidecarGenerationHintV1 {
     }
 }
 /// One fixed-boundary chunk of a certified merge sidecar response.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarChunkV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct CertifiedMergeSidecarChunkV1 {
     /// Protocol version; must equal [`CERTIFIED_MERGE_SIDECAR_VERSION_V1`].
@@ -605,6 +621,8 @@ pub struct CertifiedMergeSidecarChunkV1 {
     pub bytes: Vec<u8>,
 }
 /// Wire messages used by the certified merge-sidecar protocol.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::CertifiedMergeSidecarMessage")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum CertifiedMergeSidecarMessage {
     /// Request an exact full entry from one merge-QC signer.
@@ -1455,6 +1473,8 @@ impl ServerPendingChunkIdentity {
             && self.topic == projection.ticket_topic
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarRuntimeGeometryV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarRuntimeGeometryV3 {
@@ -1472,6 +1492,8 @@ struct MergeSidecarRuntimeGeometryV3 {
     outbound_bytes_per_source: u64,
     server_request_gates_per_source: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::RequestStreamLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct RequestStreamLifecycleV3 {
@@ -1482,16 +1504,22 @@ struct RequestStreamLifecycleV3 {
     closed_through: u64,
     acknowledged_through: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::DurableServerRequestSourceV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 enum DurableServerRequestSourceV3 {
     Synthetic(PeerId),
     Authenticated(PeerId),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::DurableServerResponseCursorV3")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 enum DurableServerResponseCursorV3 {
     Pending(u64),
     Complete,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerPendingChunkLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerPendingChunkLifecycleV3 {
@@ -1557,6 +1585,8 @@ impl From<ServerPendingChunkLifecycleV3> for ServerPendingChunkIdentity {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerRequestAttemptLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerRequestAttemptLifecycleV3 {
@@ -1564,6 +1594,8 @@ struct ServerRequestAttemptLifecycleV3 {
     cursor: DurableServerResponseCursorV3,
     pending_flush_chunk: Option<ServerPendingChunkLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerRequestGateLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerRequestGateLifecycleV3 {
@@ -1577,6 +1609,8 @@ struct ServerRequestGateLifecycleV3 {
     source_capacity: Option<u64>,
     attempts: Vec<ServerRequestAttemptLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::ServerStreamLifecycleV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct ServerStreamLifecycleV3 {
@@ -1586,6 +1620,8 @@ struct ServerStreamLifecycleV3 {
     closed_through: u64,
     highest_sequence: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecyclePayloadV1")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1598,6 +1634,8 @@ struct UnsupportedMergeSidecarLifecyclePayloadV1 {
     server_streams: Vec<ServerStreamLifecycleV3>,
     server_request_gates: Vec<ServerRequestGateLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecycleSnapshotV1")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1615,6 +1653,8 @@ impl UnsupportedMergeSidecarLifecycleSnapshotV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecyclePayloadV2")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1628,6 +1668,8 @@ struct UnsupportedMergeSidecarLifecyclePayloadV2 {
     server_streams: Vec<ServerStreamLifecycleV3>,
     server_request_gates: Vec<ServerRequestGateLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::UnsupportedMergeSidecarLifecycleSnapshotV2")]
 #[cfg(test)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -1647,6 +1689,8 @@ impl UnsupportedMergeSidecarLifecycleSnapshotV2 {
 }
 /// The current format fingerprints the canonical responder roster and the independently
 /// bounded stream, logical-gate, and authenticated-attempt tables.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecycleGeometryV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarLifecycleGeometryV3 {
@@ -1656,6 +1700,8 @@ struct MergeSidecarLifecycleGeometryV3 {
     server_request_gate_capacity: u64,
     server_request_attempt_capacity: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecyclePayloadV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarLifecyclePayloadV3 {
@@ -1672,6 +1718,8 @@ struct MergeSidecarLifecyclePayloadV3 {
     server_streams: Vec<ServerStreamLifecycleV3>,
     server_request_gates: Vec<ServerRequestGateLifecycleV3>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecycleSnapshotV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarLifecycleSnapshotV3 {
@@ -1690,6 +1738,8 @@ impl MergeSidecarLifecycleSnapshotV3 {
         self.payload_hash == HashOf::new(&self.payload)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSidecarLifecycleRootHighWaterV3")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSidecarLifecycleRootHighWaterV3 {
@@ -8841,6 +8891,8 @@ impl MergeSidecarTransport {
     }
 }
 /// Exact context in which a local merge signature is permitted.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSigningContextV1")]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 pub(crate) struct MergeSigningContextV1 {
     /// Merge epoch being signed.
@@ -8854,6 +8906,8 @@ pub(crate) struct MergeSigningContextV1 {
     /// Exact ordered merge-committee roster hash.
     pub(crate) validator_set_hash: HashOf<Vec<PeerId>>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSigningGuardRecordV2")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSigningGuardRecordV2 {
@@ -8864,6 +8918,8 @@ struct MergeSigningGuardRecordV2 {
     candidate_encoded_len: u64,
     candidate_bytes: Vec<u8>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::merge_sidecar::MergeSigningHighWaterV2")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct MergeSigningHighWaterV2 {

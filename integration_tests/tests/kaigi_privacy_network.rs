@@ -399,12 +399,12 @@ async fn lifecycle() -> Result<()> {
         let member = bounded_client(
             network.peers()[0].client_for(&participant, participant_key.private_key().clone()),
         );
-        let network_id: NetworkId = host.client().network_id;
+        let network_id: NetworkId = *host.client().network_id();
         ensure!(
             clients
                 .iter()
-                .all(|client| client.client().network_id == network_id)
-                && member.client().network_id == network_id,
+                .all(|client| *client.client().network_id() == network_id)
+                && *member.client().network_id() == network_id,
             "client network identities differ"
         );
         applied(

@@ -50,6 +50,8 @@ pub(crate) fn canonical_receipt_digest_v1(
 }
 
 /// Exact route-scoped identity of one governed confidential settlement pool.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::private_settlement::global_state::PrivateSettlementPoolKeyV1")]
 #[derive(
     Clone,
     Copy,
@@ -81,6 +83,8 @@ impl PrivateSettlementPoolKeyV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::private_settlement::global_state::PrivateSettlementRootKeyV1")]
 #[derive(
     Clone,
     Copy,
@@ -100,6 +104,10 @@ pub(crate) struct PrivateSettlementRootKeyV1 {
     pub(crate) root: PrivacyRootV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementNullifierKeyV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -118,6 +126,10 @@ pub(crate) struct PrivateSettlementNullifierKeyV1 {
     pub(crate) nullifier: PrivacyNullifierV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementOutputKeyV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -141,6 +153,10 @@ pub(crate) struct PrivateSettlementOutputKeyV1 {
 /// The bundle row stores the complete public Prepare barrier exactly once.
 /// Resource rows provide deterministic exclusivity without repeating that
 /// potentially large barrier for every fixed-shape state item.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockKeyV1"
+)]
 #[derive(
     Clone,
     Copy,
@@ -176,6 +192,10 @@ pub(crate) enum PrivateSettlementStagedLockKeyV1 {
 }
 
 /// Canonical value stored under a private-settlement staged-lock key.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementStagedLockRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "kind", content = "record", deny_unknown_fields)]
 pub(crate) enum PrivateSettlementStagedLockRecordV1 {
@@ -251,6 +271,10 @@ impl_private_settlement_json_key_v1!(
 );
 
 /// Public provenance shared by every state item created by one finalized leg.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementFinalizationReferenceV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
     pub(crate) bundle_id: Hash,
@@ -259,6 +283,10 @@ pub(crate) struct PrivateSettlementFinalizationReferenceV1 {
     pub(crate) finalized_height: u64,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementRootProvenanceV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 #[norito(tag = "origin", content = "record", deny_unknown_fields)]
 pub(crate) enum PrivateSettlementRootProvenanceV1 {
@@ -269,6 +297,10 @@ pub(crate) enum PrivateSettlementRootProvenanceV1 {
     Settlement(PrivateSettlementFinalizationReferenceV1),
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementOutputRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, JsonDeserialize, JsonSerialize)]
 pub(crate) struct PrivateSettlementOutputRecordV1 {
     pub(crate) reference: PrivateSettlementFinalizationReferenceV1,
@@ -276,6 +308,10 @@ pub(crate) struct PrivateSettlementOutputRecordV1 {
 }
 
 /// Test/reference aggregate over the production private-settlement planner maps.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::global_state::PrivateSettlementGlobalStateV1"
+)]
 #[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct PrivateSettlementGlobalStateV1 {

@@ -3,6 +3,9 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Crypto;
+using Hyperledger.Iroha.Http;
+using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Torii;
 using Hyperledger.Iroha.Transactions;
 
@@ -298,6 +301,10 @@ public sealed class NoritoRpcFixtureParityTests
         _ = feePayment.GasLimit
             ?? throw new InvalidDataException("torii_boundary.fee_payment is missing gas_limit");
 
+        var signingSeed = Enumerable.Repeat((byte)0x41, 32).ToArray();
+        var authority = AccountAddress.FromPublicKey(Ed25519Signer.GetPublicKey(signingSeed))
+            .ToI105(AccountAddress.DefaultChainDiscriminant);
+        _ = AccountAddress.Parse(RequireString(boundary, "authority", "torii_boundary"));
         JsonDocument? submittedBody = null;
         using var handler = new RecordingHandler(request =>
         {
@@ -313,13 +320,20 @@ public sealed class NoritoRpcFixtureParityTests
         });
         using var client = new ToriiClient(
             new Uri("https://fixture.invalid"),
-            new HttpClient(handler));
+            new HttpClient(handler),
+            new ToriiClientOptions
+            {
+                NetworkId = NetworkId.FromBytes(Convert.FromHexString(
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab")),
+                CanonicalRequestCredentials = new CanonicalRequestCredentials(authority, signingSeed),
+            },
+            TransactionSubmissionTransportAssurance.OneShotWithoutRedirectsOrRetries);
 
         await Assert.ThrowsAnyAsync<Exception>(async () =>
             await client.CallContractAsync(
                 new ToriiContractCallRequest
                 {
-                    Authority = RequireString(boundary, "authority", "torii_boundary"),
+                    Authority = authority,
                     ContractAlias = RequireString(boundary, "contract_alias", "torii_boundary"),
                     Entrypoint = RequireString(boundary, "entrypoint", "torii_boundary"),
                     Payload = JsonNode.Parse(boundaryPayload.GetRawText()),
@@ -332,7 +346,7 @@ public sealed class NoritoRpcFixtureParityTests
             ?? throw new InvalidDataException("contract call did not reach the HTTP boundary");
         var submitted = capturedBody.RootElement;
         Assert.Equal(
-            RequireString(boundary, "authority", "torii_boundary"),
+            authority,
             RequireString(submitted, "authority", "submitted contract call"));
         Assert.Equal(
             RequireString(boundary, "contract_alias", "torii_boundary"),

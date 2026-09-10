@@ -162,8 +162,8 @@ impl RuntimeParliamentTleShareProvisioningV1 {
     }
 }
 
-#[derive(NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.credential_header")]
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha.runtime_provider_broker.v1.consensus_threshold.credential_header")]
 struct RuntimeConsensusThresholdCredentialHeaderWireV1 {
     magic: [u8; 8],
     version: u16,
@@ -174,8 +174,8 @@ struct RuntimeConsensusThresholdCredentialHeaderWireV1 {
     policy_digest: [u8; 32],
 }
 
-#[derive(NoritoSerialize, NoritoDeserialize)]
-#[norito(schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.secret_scalar_triple")]
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(name = "iroha.runtime_provider_broker.v1.consensus_threshold.secret_scalar_triple")]
 struct RuntimeSecretScalarTripleWireV1([[u8; 32]; 3]);
 
 impl RuntimeSecretScalarTripleWireV1 {
@@ -194,9 +194,9 @@ impl Drop for RuntimeSecretScalarTripleWireV1 {
     }
 }
 
-#[derive(NoritoSerialize, NoritoDeserialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_share_credential"
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_share_credential"
 )]
 struct RuntimeGlobalBeaconShareCredentialWireV1 {
     public_session: GlobalThresholdBeaconKeySessionV1,
@@ -204,18 +204,18 @@ struct RuntimeGlobalBeaconShareCredentialWireV1 {
     components: RuntimeSecretScalarTripleWireV1,
 }
 
-#[derive(NoritoSerialize, NoritoDeserialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_signer_credential"
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_signer_credential"
 )]
 struct RuntimeGlobalBeaconSignerCredentialWireV1 {
     header: RuntimeConsensusThresholdCredentialHeaderWireV1,
     sessions: Vec<RuntimeGlobalBeaconShareCredentialWireV1>,
 }
 
-#[derive(NoritoSerialize, NoritoDeserialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_share_credential"
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_share_credential"
 )]
 struct RuntimeParliamentTleShareCredentialWireV1 {
     public_session: TleKeySessionPublicStateV1,
@@ -223,27 +223,27 @@ struct RuntimeParliamentTleShareCredentialWireV1 {
     components: RuntimeSecretScalarTripleWireV1,
 }
 
-#[derive(NoritoSerialize, NoritoDeserialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_signer_credential"
+#[derive(NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_signer_credential"
 )]
 struct RuntimeParliamentTleSignerCredentialWireV1 {
     header: RuntimeConsensusThresholdCredentialHeaderWireV1,
     sessions: Vec<RuntimeParliamentTleShareCredentialWireV1>,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory_entry"
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory_entry"
 )]
 struct RuntimeGlobalBeaconPublicInventoryEntryWireV1 {
     public_session: GlobalThresholdBeaconKeySessionV1,
     signer_index: u16,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory"
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.global_beacon_public_inventory"
 )]
 struct RuntimeGlobalBeaconPublicInventoryWireV1 {
     version: u16,
@@ -252,18 +252,18 @@ struct RuntimeGlobalBeaconPublicInventoryWireV1 {
     sessions: Vec<RuntimeGlobalBeaconPublicInventoryEntryWireV1>,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory_entry"
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory_entry"
 )]
 struct RuntimeParliamentTlePublicInventoryEntryWireV1 {
     public_session: TleKeySessionPublicStateV1,
     participant_index: u16,
 }
 
-#[derive(NoritoSerialize)]
-#[norito(
-    schema_name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory"
+#[derive(NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha.runtime_provider_broker.v1.consensus_threshold.parliament_tle_public_inventory"
 )]
 struct RuntimeParliamentTlePublicInventoryWireV1 {
     version: u16,
@@ -2267,26 +2267,30 @@ pub(crate) mod tests {
 
     #[test]
     fn consensus_threshold_top_level_schema_hashes_are_golden() {
+        fn codec_frame_hash<T: NoritoSerialize + for<'de> NoritoDeserialize<'de>>() -> [u8; 16] {
+            norito::schema::identity::frame_hash::<T>()
+        }
         for (name, expected_hash_hex, actual_hash) in [
             (
                 GLOBAL_BEACON_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
                 "0b311f1a10d971b693860f8fb160ed1c",
-                <RuntimeGlobalBeaconSignerCredentialWireV1 as NoritoSerialize>::schema_hash(),
+                norito::schema::identity::frame_hash::<RuntimeGlobalBeaconSignerCredentialWireV1>(),
             ),
             (
                 PARLIAMENT_TLE_SIGNER_CREDENTIAL_SCHEMA_NAME_V1,
                 "4071e4e5876f8a71466b3e94581b710b",
-                <RuntimeParliamentTleSignerCredentialWireV1 as NoritoSerialize>::schema_hash(),
+                norito::schema::identity::frame_hash::<RuntimeParliamentTleSignerCredentialWireV1>(
+                ),
             ),
             (
                 GLOBAL_BEACON_PUBLIC_INVENTORY_SCHEMA_NAME_V1,
                 "ea71fde9b50685c39f6977c4f472ac39",
-                <RuntimeGlobalBeaconPublicInventoryWireV1 as NoritoSerialize>::schema_hash(),
+                norito::schema::identity::frame_hash::<RuntimeGlobalBeaconPublicInventoryWireV1>(),
             ),
             (
                 PARLIAMENT_TLE_PUBLIC_INVENTORY_SCHEMA_NAME_V1,
                 "3087d1f9251cf172e937752119357b34",
-                <RuntimeParliamentTlePublicInventoryWireV1 as NoritoSerialize>::schema_hash(),
+                norito::schema::identity::frame_hash::<RuntimeParliamentTlePublicInventoryWireV1>(),
             ),
         ] {
             assert_eq!(hex::encode(actual_hash), expected_hash_hex);
@@ -2297,14 +2301,12 @@ pub(crate) mod tests {
             );
         }
         assert_eq!(
-            <RuntimeGlobalBeaconSignerCredentialWireV1 as NoritoDeserialize<'static>>::schema_hash(
-            ),
-            <RuntimeGlobalBeaconSignerCredentialWireV1 as NoritoSerialize>::schema_hash(),
+            codec_frame_hash::<RuntimeGlobalBeaconSignerCredentialWireV1>(),
+            norito::core::schema_hash_for_name(GLOBAL_BEACON_SIGNER_CREDENTIAL_SCHEMA_NAME_V1),
         );
         assert_eq!(
-            <RuntimeParliamentTleSignerCredentialWireV1 as NoritoDeserialize<'static>>::schema_hash(
-            ),
-            <RuntimeParliamentTleSignerCredentialWireV1 as NoritoSerialize>::schema_hash(),
+            codec_frame_hash::<RuntimeParliamentTleSignerCredentialWireV1>(),
+            norito::core::schema_hash_for_name(PARLIAMENT_TLE_SIGNER_CREDENTIAL_SCHEMA_NAME_V1),
         );
     }
 

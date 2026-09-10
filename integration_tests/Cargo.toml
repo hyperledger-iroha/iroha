@@ -44,10 +44,6 @@ name = "consensus_and_da"
 path = "tests/consensus_and_da.rs"
 
 [[test]]
-name = "taira_consensus_contracts"
-path = "tests/grouped/taira_consensus_contracts.rs"
-
-[[test]]
 name = "sumeragi_v2_runner_isolated"
 path = "tests/sumeragi_v2_runner_isolated.rs"
 

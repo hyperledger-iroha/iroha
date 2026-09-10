@@ -1,4 +1,4 @@
-//! One-use native account/device possession bound to authenticated retail enrollment.
+//! Test-only one-use native account/device possession bound to authenticated retail enrollment.
 //!
 //! Pending challenges cannot be decoded, copied or created from host paths, owner projections
 //! or caller freshness claims. Completion consumes the pending instance. Its opaque result is
@@ -8,13 +8,10 @@
 use std::time::Duration;
 
 use iroha_core::zk::kagemusha_v1_state::{
-    DurabilityAnchorStatementV1, KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1,
-    KagemushaCurrentRecoveryOwnerV1, KagemushaCurrentRecoverySelectionV1,
-    KagemushaRecoveryEnrollmentBindingV1, KagemushaStateMachineV1,
+    DurabilityAnchorStatementV1, KagemushaRecoveryEnrollmentBindingV1,
 };
 use iroha_crypto::{Algorithm, HashOf, Signature, SignatureOf};
 use iroha_data_model::kagemusha::{
-    KagemushaAuthenticatedReleaseV1, KagemushaDevicePublicKeyV1,
     KagemushaDeviceReadCredentialCommandV1, KagemushaHardwareCredentialV1,
     KagemushaRetailEnrollmentOwnerV1, kagemusha_decode_device_success_response_v1,
 };
@@ -33,15 +30,17 @@ use crate::kagemusha_device_bridge_v1::{
 
 const ACCOUNT_DOMAIN: &str = "iroha:kagemusha:v1:enrolled-open-account-possession";
 const INITIAL_CERTIFICATE_DOMAIN: &[u8] = b"iroha:kagemusha:v1:enrolled-open-initial-certificate";
-const RECOVERY_ANCHOR_DOMAIN: &[u8] = b"iroha:kagemusha:v1:enrolled-open-recovery-anchor";
 const CHALLENGE_MAX_BYTES: usize = 16 * 1024;
 pub(super) const LIFETIME: Duration = Duration::from_secs(120);
 const LIFETIME_MS: u64 = 120_000;
 
 /// Authenticated source retained by native construction and committed by the account signer.
 /// Decoding this projection supplies no certificate or checkpoint authority.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.v1.enrolled-open-authority-source")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::enrolled_open::EnrolledOpenAuthoritySourceV1",
+    frame = "iroha.kagemusha.v1.enrolled-open-authority-source"
+)]
 pub(super) enum EnrolledOpenAuthoritySourceV1 {
     /// Digest of the entire canonical initially verified issuer certificate.
     InitialCertificate { certificate_digest: [u8; 32] },
@@ -52,31 +51,12 @@ pub(super) enum EnrolledOpenAuthoritySourceV1 {
     },
 }
 
-impl EnrolledOpenAuthoritySourceV1 {
-    /// Derive the exact source only from Core's opaque complete current-checkpoint selection.
-    pub(super) fn from_recovery_selection(
-        selection: &KagemushaCurrentRecoverySelectionV1<'_>,
-    ) -> Result<Self> {
-        let anchor = selection.checkpoint();
-        if anchor.guard_bundle.is_empty()
-            || anchor.guard_bundle.len() > KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1
-        {
-            return Err(EnrolledOpenErrorV1::Encoding);
-        }
-        let canonical_anchor = encode_bounded(
-            anchor,
-            KAGEMUSHA_GUARD_BUNDLE_MAX_BYTES_V1 + CHALLENGE_MAX_BYTES,
-        )?;
-        Ok(Self::RecoveryCheckpoint {
-            statement: anchor.statement.clone(),
-            terminal_certificate_digest: digest(RECOVERY_ANCHOR_DOMAIN, &canonical_anchor),
-        })
-    }
-}
-
 /// Exact typed account signing payload. Its digest uses `HashOf`, not SHA-256 of these bytes.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-#[norito(schema_name = "iroha.kagemusha.v1.enrolled-open-account-challenge")]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::enrolled_open::EnrolledOpenAccountChallengeV1",
+    frame = "iroha.kagemusha.v1.enrolled-open-account-challenge"
+)]
 #[norito(deny_unknown_fields)]
 pub(super) struct EnrolledOpenAccountChallengeV1 {
     version: u16,
@@ -98,7 +78,6 @@ pub(super) enum EnrolledOpenErrorV1 {
     AccountController,
     AccountSignature,
     DeviceBinding,
-    CheckpointBinding,
     Expired,
     Observation(ObservationErrorV1),
 }
@@ -111,8 +90,8 @@ impl From<ObservationErrorV1> for EnrolledOpenErrorV1 {
 
 type Result<T> = std::result::Result<T, EnrolledOpenErrorV1>;
 
-// These selectors are supplied only by an opaque certificate or machine. They cannot be
-// serialized and are never exposed as alternative construction inputs.
+// Admission supplies its credential from an opaque certificate. Recovery tests use structural
+// epoch selectors; these cannot be serialized or exposed as alternative construction inputs.
 enum RequiredCredentialV1 {
     Initial(KagemushaHardwareCredentialV1),
     Recovered {
@@ -178,44 +157,6 @@ impl PendingEnrolledOpenV1 {
         pending.initial_enrollment = Some(admission);
         pending.require_unexpired()?;
         Ok(pending)
-    }
-
-    /// Begin possession around the complete freshly selected hardware/Core recovery checkpoint.
-    /// Core separately authenticates hardware metadata and descriptor-owned journal prefixes;
-    /// the operation-1 possession proof below cannot substitute for that selection. Certificate
-    /// admission time is deliberately absent; historical recovery is independent.
-    pub(super) fn from_state_machine<R, G, H>(
-        release: &KagemushaAuthenticatedReleaseV1,
-        machine: &KagemushaStateMachineV1<R, G, H>,
-        native_authorization_public_key: &KagemushaDevicePublicKeyV1,
-        deadline: NativeDeadlineV1,
-    ) -> Result<Self>
-    where
-        KagemushaStateMachineV1<R, G, H>: KagemushaCurrentRecoveryOwnerV1,
-    {
-        deadline.check().map_err(|_| EnrolledOpenErrorV1::Expired)?;
-        let observer = NativeStartupQualificationOwnerV1::from_state_machine(
-            release,
-            machine,
-            native_authorization_public_key,
-        )?;
-        let selection = machine
-            .current_recovery_selection()
-            .map_err(|_| EnrolledOpenErrorV1::CheckpointBinding)?;
-        Self::begin(
-            observer,
-            selection.enrollment_binding().clone(),
-            EnrolledOpenAuthoritySourceV1::from_recovery_selection(&selection)?,
-            RequiredCredentialV1::Recovered {
-                generation: selection.hardware_epoch().generation,
-                epoch_id: selection.hardware_epoch().epoch_id,
-                key_reference: selection.device_policy_binding().device_key_reference,
-            },
-            release.release_id(),
-            release.hardware_policy_digest(),
-            hardware_authorization_key_reference_v1(native_authorization_public_key),
-            deadline,
-        )
     }
 
     // Private shared kernel. Production callers above have already authenticated every input;
@@ -307,12 +248,6 @@ impl PendingEnrolledOpenV1 {
             .check()
             .map(|_| ())
             .map_err(|_| EnrolledOpenErrorV1::Expired)
-    }
-
-    /// Share the original deadline and clock floor; a new handle cannot extend either.
-    pub(super) fn deadline(&self) -> Result<NativeDeadlineV1> {
-        self.require_unexpired()?;
-        Ok(self.deadline.clone())
     }
 
     /// Consume the one-use account/device proof under the retained challenge and native clock.
@@ -503,3 +438,80 @@ fn digest(domain: &[u8], bytes: &[u8]) -> [u8; 32] {
 
 #[cfg(test)]
 pub(super) mod tests;
+
+#[cfg(test)]
+mod explicit_schema_identity_tests {
+    use super::*;
+
+    macro_rules! identity {
+        ($root:ty, $nominal:literal, $frame:literal) => {
+            assert_eq!(<$root as norito::NoritoSchema>::nominal_name(), $nominal);
+            assert_eq!(<$root as norito::NoritoSchema>::frame_name(), $frame);
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$root>(),
+                norito::core::schema_hash_for_name($frame)
+            );
+            assert_eq!(
+                <Vec<$root> as norito::NoritoSchema>::nominal_name(),
+                format!("alloc::vec::Vec<{}>", $nominal)
+            );
+        };
+    }
+
+    fn roundtrip<T>(value: &T) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let frame = norito::encode_canonical(value).expect("canonical fixture frame");
+        let header = norito::core::Header::read(frame.as_slice()).expect("typed frame header");
+        assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+        let decoded: T = norito::decode_canonical(&frame).expect("same root canonical replay");
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        assert!(matches!(
+            norito::decode_canonical::<Vec<T>>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn framed_roots_keep_nominal_and_protocol_identities() {
+        identity!(
+            EnrolledOpenAccountChallengeV1,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::enrolled_open::EnrolledOpenAccountChallengeV1",
+            "iroha.kagemusha.v1.enrolled-open-account-challenge"
+        );
+
+        use crate::kagemusha_core_coordinator_v1::startup_qualification::tests as fixture;
+        let qualification = fixture::qualification(1);
+        let enrollment = fixture::enrollment_binding(&qualification);
+        let challenge = EnrolledOpenAccountChallengeV1 {
+            version: 1,
+            domain: ACCOUNT_DOMAIN.to_owned(),
+            enrollment_id: enrollment.enrollment_id,
+            owner: enrollment.owner,
+            nonce: [71; 32],
+            authority_source: EnrolledOpenAuthoritySourceV1::InitialCertificate {
+                certificate_digest: [77; 32],
+            },
+            release_id: qualification.release_id,
+            hardware_policy_digest: qualification.hardware_policy_digest,
+            core_authorization_key_reference: qualification.core_authorization_key_reference,
+            lifetime_ms: LIFETIME_MS,
+        };
+        let frame = roundtrip(&challenge);
+        assert_eq!(
+            encode_bounded(&challenge, CHALLENGE_MAX_BYTES).unwrap(),
+            frame
+        );
+        let replay: EnrolledOpenAccountChallengeV1 = norito::decode_canonical(&frame).unwrap();
+        assert_eq!(HashOf::new(&challenge), HashOf::new(&replay));
+        let mut altered = replay;
+        altered.nonce[0] ^= 1;
+        assert_ne!(HashOf::new(&challenge), HashOf::new(&altered));
+    }
+}

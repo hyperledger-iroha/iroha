@@ -222,6 +222,8 @@ const fn boundary_path_name(boundary: SccpReplayBoundaryV1) -> &'static str {
 }
 
 /// One complete signed checkpoint and its exact canonical snapshot bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SccpReplayReplicaCheckpointEntryV1 {
     /// Exactly-three-signature checkpoint statement.
@@ -231,6 +233,8 @@ pub struct SccpReplayReplicaCheckpointEntryV1 {
 }
 
 /// Exact checkpoint set returned independently by all three replicas.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::SccpReplayReplicaCheckpointSetV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SccpReplayReplicaCheckpointSetV1 {
     /// Schema version; final V1 accepts exactly one.
@@ -651,6 +655,8 @@ impl From<SccpReplayArchiveProviderErrorV1> for ToriiSccpReplayEndpointErrorV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayHeadEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayHeadEntryV1 {
     accumulator_id: SccpReplayAccumulatorIdV1,
@@ -659,6 +665,8 @@ struct PersistedReplayHeadEntryV1 {
     checkpoint_sha256: [u8; 32],
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayGenerationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayGenerationV1 {
     checkpoint_set_sha256: [u8; 32],
@@ -667,6 +675,8 @@ struct PersistedReplayGenerationV1 {
     entries: Vec<PersistedReplayHeadEntryV1>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sccp_replay::PersistedReplayHeadV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 struct PersistedReplayHeadV1 {
     version: u8,
@@ -1270,13 +1280,10 @@ fn fetch_exact_three(
 }
 
 /// Settle every started replica worker before returning any creation or fetch failure.
-fn join_replica_fetch_workers<'scope>(
+fn join_replica_fetch_workers(
     workers: impl IntoIterator<
         Item = std::io::Result<
-            std::thread::ScopedJoinHandle<
-                'scope,
-                Result<(File, usize), ToriiSccpReplayStartupErrorV1>,
-            >,
+            std::thread::ScopedJoinHandle<'_, Result<(File, usize), ToriiSccpReplayStartupErrorV1>>,
         >,
     >,
 ) -> Result<Vec<(File, usize)>, ToriiSccpReplayStartupErrorV1> {

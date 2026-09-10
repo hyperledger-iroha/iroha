@@ -155,6 +155,8 @@ impl<'a> OracleAggregator<'a> {
     }
 }
 /// Key identifying a buffered observation window for `(feed, version, slot, request)`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::oracle::ObservationWindowKey")]
 #[derive(
     Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, iroha_schema::IntoSchema,
 )]
@@ -215,6 +217,8 @@ impl JsonKeyCodec for ObservationWindowKey {
     }
 }
 /// Buffered observations for a single `(feed, slot, request_hash)` window.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::oracle::ObservationWindow")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, iroha_schema::IntoSchema)]
 #[cfg_attr(
     feature = "json",

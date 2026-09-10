@@ -78,6 +78,8 @@ impl_into_box! {
 => RegisterBox
 }
 /// Register a peer for consensus participation with a BLS Proof-of-Possession.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::register::RegisterPeerWithPop")]
 #[derive(
     Debug,
     Clone,

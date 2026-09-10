@@ -606,6 +606,7 @@ fn validate_evidence_viewer_grant_claims(
     if claims.session_id == [0; 16]
         || claims.quarantine_id == [0; 16]
         || claims.purpose_digest == [0; 32]
+        || claims.issuance_nonce == [0; 32]
         || claims.generation == 0
         || claims.issued_at_unix_ms == 0
         || lifetime == 0

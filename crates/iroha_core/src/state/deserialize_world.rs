@@ -1472,6 +1472,8 @@ impl SoracloudInrouPersistedStateV1<'_> {
                                     == latest_rollover.active_service_version
                                 && checkpoint.assignment.placement.replica_slot
                                     == latest_rollover.replica_slot
+                                && checkpoint.assignment.placement.placement_incarnation
+                                    == latest_rollover.placement_incarnation
                                 && checkpoint.assignment.placement.validator_account_id
                                     == latest_rollover.reporter_account_id
                         });
@@ -4055,6 +4057,8 @@ fn replay_soracloud_service_lease_usage(
                     && checkpoint.assignment.service_version == usage.assignment.service_version
                     && checkpoint.assignment.placement.replica_slot
                         == usage.assignment.placement.replica_slot
+                    && checkpoint.assignment.placement.placement_incarnation
+                        == usage.assignment.placement.placement_incarnation
                     && checkpoint.assignment.placement.validator_account_id
                         == usage.assignment.placement.validator_account_id
             })
@@ -4161,6 +4165,7 @@ fn replay_soracloud_service_lease_usage(
             || rollover.reporter_account_id != usage.assignment.placement.validator_account_id
             || rollover.active_service_version != usage.assignment.service_version
             || rollover.replica_slot != usage.assignment.placement.replica_slot
+            || rollover.placement_incarnation != usage.assignment.placement.placement_incarnation
             || usize::try_from(rollover.finalized_checkpoint_count).ok()
                 != Some(SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
             || rollover.settled_egress_bytes_delta != settled_delta
@@ -4185,12 +4190,14 @@ fn replay_soracloud_service_lease_usage(
             left.reporting_epoch,
             left.assignment.service_version.as_str(),
             left.assignment.placement.replica_slot,
+            left.assignment.placement.placement_incarnation,
             &left.assignment.placement.validator_account_id,
         )
             .cmp(&(
                 right.reporting_epoch,
                 right.assignment.service_version.as_str(),
                 right.assignment.placement.replica_slot,
+                right.assignment.placement.placement_incarnation,
                 &right.assignment.placement.validator_account_id,
             ))
     });
@@ -4349,6 +4356,125 @@ mod soracloud_service_lease_replay_tests {
         let event_to_version = "candidate";
         assert_ne!(rollover.active_service_version, event_to_version);
         assert!(lease_rollover_extends_settlement_chain(&rollover, 1, 3, 5,));
+    }
+
+    #[test]
+    fn replay_retains_distinct_placement_incarnations_for_one_reporter() {
+        let mut incarnations = [
+            Hash::new(b"prior-placement"),
+            Hash::new(b"returned-placement"),
+        ];
+        incarnations.sort_unstable();
+        let mut original = sample_assignment("current");
+        original.placement.placement_incarnation = incarnations[1];
+        let mut replacement = original.clone();
+        replacement.placement.placement_incarnation = incarnations[0];
+        let mut lease = finalized_lease(original.clone());
+        lease.egress_reporter_checkpoints[0].finalize_reporter = false;
+        let mut usage = SoraServiceLeaseUsageAuditV1 {
+            schema_version: SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+            reporting_epoch: 1,
+            assignment: replacement.clone(),
+            replica_accounted_egress_bytes: 0,
+            finalize_reporter: false,
+        };
+        let opened = replay_soracloud_service_lease_usage(&lease, &usage, None, 11, 0)
+            .expect("the replacement placement opens its own zero counter");
+        opened
+            .validate()
+            .expect("replacement checkpoints remain canonically ordered");
+        assert_eq!(opened.egress_reporter_checkpoints.len(), 2);
+        assert_eq!(opened.accounted_egress_bytes, 10);
+        assert_eq!(
+            opened.egress_reporter_checkpoints[0].assignment,
+            replacement
+        );
+        assert_eq!(
+            opened.egress_reporter_checkpoints[1],
+            lease.egress_reporter_checkpoints[0]
+        );
+
+        usage.assignment = original;
+        usage.replica_accounted_egress_bytes = 11;
+        usage.finalize_reporter = true;
+        let finalized = replay_soracloud_service_lease_usage(&opened, &usage, None, 12, 0)
+            .expect("the predecessor can deliver its exact terminal usage after replacement");
+        assert_eq!(
+            finalized.egress_reporter_checkpoints[0],
+            opened.egress_reporter_checkpoints[0]
+        );
+        assert!(finalized.egress_reporter_checkpoints[1].finalize_reporter);
+        assert_eq!(finalized.accounted_egress_bytes, 11);
+
+        usage.assignment = replacement;
+        usage.replica_accounted_egress_bytes = 1;
+        usage.finalize_reporter = false;
+        let increased = replay_soracloud_service_lease_usage(&finalized, &usage, None, 13, 0)
+            .expect("the replacement counter increases independently");
+        increased
+            .validate()
+            .expect("both placement counters remain valid");
+        assert_eq!(increased.accounted_egress_bytes, 12);
+        assert_eq!(
+            increased.egress_reporter_checkpoints[0].accounted_egress_bytes,
+            1
+        );
+        assert_eq!(
+            increased.egress_reporter_checkpoints[1].accounted_egress_bytes,
+            11
+        );
+    }
+
+    #[test]
+    fn replay_rollover_rejects_another_placement_incarnation() {
+        let assignment = sample_assignment("current");
+        let mut lease = finalized_lease(assignment.clone());
+        let checkpoint = lease.egress_reporter_checkpoints[0].clone();
+        lease.egress_reporter_checkpoints = (0
+            ..SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1)
+            .map(|index| {
+                let mut checkpoint = checkpoint.clone();
+                checkpoint.assignment.service_version = format!("retired-{index:04}");
+                checkpoint
+            })
+            .collect();
+        lease
+            .refresh_accounted_egress_bytes()
+            .expect("bounded reporter sum");
+        lease.validate().expect("full finalized reporting epoch");
+        let usage = SoraServiceLeaseUsageAuditV1 {
+            schema_version: SORA_SERVICE_LEASE_USAGE_AUDIT_VERSION_V1,
+            reporting_epoch: 2,
+            assignment: assignment.clone(),
+            replica_accounted_egress_bytes: 0,
+            finalize_reporter: false,
+        };
+        let mut rollover = SoraServiceLeaseReportingEpochRolloverV1 {
+            schema_version: SORA_SERVICE_LEASE_REPORTING_EPOCH_ROLLOVER_VERSION_V1,
+            economic_clock: SoraServiceLeaseClockV1::CanonicalBlockHeight,
+            lease_started_height: 1,
+            previous_reporting_epoch: 1,
+            new_reporting_epoch: 2,
+            reporter_account_id: assignment.placement.validator_account_id.clone(),
+            active_service_version: assignment.service_version.clone(),
+            replica_slot: 1,
+            placement_incarnation: Hash::new(b"another-rollover-placement"),
+            finalized_checkpoint_count: u32::try_from(
+                SORA_SERVICE_LEASE_MAX_EGRESS_REPORTER_CHECKPOINTS_V1,
+            )
+            .expect("checkpoint bound fits u32"),
+            settled_egress_bytes_delta: lease.accounted_egress_bytes,
+            settled_egress_bytes: lease.accounted_egress_bytes,
+        };
+        let error = replay_soracloud_service_lease_usage(&lease, &usage, Some(&rollover), 11, 0)
+            .expect_err("rollover metadata cannot retarget the opener's placement incarnation");
+        assert!(error.contains("exact replayed settlement"), "{error}");
+        rollover.placement_incarnation = assignment.placement.placement_incarnation;
+        let rolled = replay_soracloud_service_lease_usage(&lease, &usage, Some(&rollover), 11, 0)
+            .expect("matching rollover and opener identities replay");
+        rolled.validate().expect("valid successor lease");
+        assert_eq!(rolled.egress_reporter_checkpoints[0].assignment, assignment);
+        assert_eq!(rolled.accounted_egress_bytes, lease.accounted_egress_bytes);
     }
 
     #[test]
@@ -7839,8 +7965,10 @@ fn parse_world(
     let content_bundles = take_required(&mut map, "content_bundles")?;
     let content_chunks = take_required(&mut map, "content_chunks")?;
     let asset_escrows = take_required(&mut map, "asset_escrows")?;
-    let execution_proof_profiles = take_optional(&mut map, "execution_proof_profiles")?.unwrap_or_default();
-    let execution_proof_verifications = take_optional(&mut map, "execution_proof_verifications")?.unwrap_or_default();
+    let execution_proof_profiles =
+        take_optional(&mut map, "execution_proof_profiles")?.unwrap_or_default();
+    let execution_proof_verifications =
+        take_optional(&mut map, "execution_proof_verifications")?.unwrap_or_default();
     let game_sessions = take_optional(&mut map, "game_sessions")?.unwrap_or_default();
     let nft_sale_offers = take_optional(&mut map, "nft_sale_offers")?.unwrap_or_default();
     let nft_custody_records = take_optional(&mut map, "nft_custody_records")?.unwrap_or_default();
@@ -8432,12 +8560,20 @@ fn parse_world(
             message,
         })?;
     world.rebuild_nft_owner_index();
-    world.rebuild_nft_custody_indexes().map_err(|message| json::Error::InvalidField { field: "nft_custody_records".into(), message })?;
+    world
+        .rebuild_nft_custody_indexes()
+        .map_err(|message| json::Error::InvalidField {
+            field: "nft_custody_records".into(),
+            message,
+        })?;
     world.rebuild_rwa_indexes();
     world.rebuild_escrow_indexes();
-    world.rebuild_game_session_indexes().map_err(|message| json::Error::InvalidField {
-        field: "game_sessions".into(), message,
-    })?;
+    world
+        .rebuild_game_session_indexes()
+        .map_err(|message| json::Error::InvalidField {
+            field: "game_sessions".into(),
+            message,
+        })?;
     world
         .rebuild_vpn_lease_indexes()
         .map_err(|message| json::Error::InvalidField {

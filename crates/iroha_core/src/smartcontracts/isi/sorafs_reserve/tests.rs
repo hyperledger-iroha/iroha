@@ -1,3 +1,4 @@
+include!("schema_identity_tests.rs");
 include!("finalized_fixture_tests.rs");
 use super::*;
 use crate::{

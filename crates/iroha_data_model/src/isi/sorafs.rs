@@ -942,6 +942,8 @@ pub struct SorafsPotrProofOutcomeSubmissionV1 {
     pub admission_envelope_digest: [u8; 32],
 }
 /// Existing canonical proof material accepted by the chain-authoritative outcome journal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::isi::sorafs::SorafsProofOutcomeSubmissionV1")]
 #[derive(
     Debug,
     Clone,
@@ -3346,5 +3348,39 @@ mod tests {
             &registry,
             FinalizeSorafsModerationCase::new("case-1".to_owned(), "round-1".to_owned()),
         );
+    }
+    #[test]
+    fn proof_outcome_submission_frame_roundtrips_both_variants_and_rejects_instruction_root() {
+        for submission in [
+            SorafsProofOutcomeSubmissionV1::Pdp(SorafsPdpProofOutcomeSubmissionV1 {
+                archive_payload: vec![0, 1, 2],
+            }),
+            SorafsProofOutcomeSubmissionV1::Potr(SorafsPotrProofOutcomeSubmissionV1 {
+                receipt_payload: vec![4, 5],
+                admission_envelope_digest: [7; 32],
+            }),
+        ] {
+            let bytes = norito::encode_canonical(&submission).unwrap();
+            let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+            assert_eq!(
+                header.schema,
+                norito::core::schema_hash_for_name(
+                    "iroha_data_model::isi::sorafs::SorafsProofOutcomeSubmissionV1"
+                )
+            );
+            let decoded: SorafsProofOutcomeSubmissionV1 = norito::decode_canonical(&bytes).unwrap();
+            assert_eq!(decoded, submission);
+            assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+            let instruction = SubmitSorafsProofOutcome::new(submission);
+            let foreign = norito::encode_canonical(&instruction).unwrap();
+            assert_eq!(
+                norito::decode_canonical::<SubmitSorafsProofOutcome>(&foreign).unwrap(),
+                instruction
+            );
+            assert!(matches!(
+                norito::decode_canonical::<SorafsProofOutcomeSubmissionV1>(&foreign),
+                Err(norito::Error::SchemaMismatch)
+            ));
+        }
     }
 }

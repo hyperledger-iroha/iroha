@@ -646,10 +646,13 @@ fn install_lane_manifest_registry_for_test(
 }
 /// Test-only wire twin of the private core committee record.
 ///
-/// The explicit schema name keeps its Norito header identical to the record
+/// The explicit frame identity keeps its Norito header identical to the record
 /// decoded by `State`; field order and types intentionally mirror that record.
-#[derive(norito::Encode)]
-#[norito(schema_name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
+#[derive(norito::Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1",
+    frame = "iroha_core::state::AutoscaleLaneCommitteeV1"
+)]
 struct AutoscaleLaneCommitteeFixtureV1 {
     version: u8,
     validator_set_hash_version: u16,
@@ -658,6 +661,33 @@ struct AutoscaleLaneCommitteeFixtureV1 {
     validator_pops: Vec<Vec<u8>>,
     validator_count: u32,
     min_quorum: u32,
+}
+#[test]
+fn autoscale_fixture_declares_its_nominal_identity_and_core_frame_projection() {
+    use norito::NoritoSchema as _;
+    let nominal = "iroha_torii::tests_runtime_handlers::AutoscaleLaneCommitteeFixtureV1";
+    let frame = "iroha_core::state::AutoscaleLaneCommitteeV1";
+    assert_eq!(AutoscaleLaneCommitteeFixtureV1::nominal_name(), nominal);
+    assert_eq!(AutoscaleLaneCommitteeFixtureV1::frame_name(), frame);
+    assert_ne!(nominal, frame);
+    assert_eq!(
+        Vec::<AutoscaleLaneCommitteeFixtureV1>::nominal_name(),
+        format!("alloc::vec::Vec<{nominal}>"),
+    );
+    assert_eq!(
+        norito::schema::identity::frame_hash::<AutoscaleLaneCommitteeFixtureV1>(),
+        norito::core::schema_hash_for_name(frame),
+    );
+    let keys = (0xa1_u8..=0xa4)
+        .map(|seed| checked_torii_test_bls_keypair(seed, "declared autoscale fixture identity"))
+        .collect::<Vec<_>>();
+    let mut lane = iroha_data_model::nexus::LaneConfig::default();
+    let peers = pin_autoscale_lane_committee_for_test(&mut lane, &keys);
+    assert_eq!(peers.len(), 4);
+    let bytes = hex::decode(&lane.metadata[iroha_data_model::nexus::AUTOSCALE_META_COMMITTEE])
+        .expect("actual fixture committee frame");
+    let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+    assert_eq!(header.schema, norito::core::schema_hash_for_name(frame));
 }
 /// Attach a canonical, PoP-valid immutable committee to an autoscale fixture.
 fn pin_autoscale_lane_committee_for_test(

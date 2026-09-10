@@ -235,6 +235,7 @@ fn por_replay_archive_record_fixture() -> node::PorFinalizedReplayArchiveRecordV
                 failed_samples: 0,
             },
             repair_task_id: None,
+            repair_handoff_acknowledged: true,
             reputation_sequence: 1,
             reputation_terminal: PorTerminalOutcomeV1 {
                 challenge_id,

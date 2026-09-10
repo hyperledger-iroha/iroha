@@ -312,20 +312,24 @@ fn validate_billing_publication_receipt_shape(
     }
     Ok(())
 }
-define_broker_wire_struct!(owned ProviderIngestSourceMusubiArchiveWireV1 { network_id: iroha_data_model::NetworkId, observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1, binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestSourceMusubiArchiveWireV1" ProviderIngestSourceMusubiArchiveWireV1 { network_id: iroha_data_model::NetworkId, observed_finalized_cursor: sorafs_node::ProviderIngestFinalizedCursorV1, binding: iroha_data_model::musubi::MusubiReplicationOrderArchiveBindingV1, });
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::runtime_provider_broker::protocol::ProviderIngestSourceFetchRequestWireV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct ProviderIngestSourceFetchRequestWireV1 {
     authorization: sorafs_node::FinalizedProviderIngestAuthorizationV1,
     source_provider_ids: Vec<[u8; 32]>,
     musubi_archive: Option<ProviderIngestSourceMusubiArchiveWireV1>,
 }
-define_broker_wire_struct!(owned ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
-define_broker_wire_struct!(copy ProviderIngestChunkProfileWireV1 { min_size: u64, target_size: u64, max_size: u64, break_mask: u64, });
-define_broker_wire_struct!(copy ProviderIngestCarChunkWireV1 { offset: u64, length: u32, digest: [u8; 32], });
-define_broker_wire_struct!(owned ProviderIngestFilePlanWireV1 { path: Vec<String>, first_chunk: u64, chunk_count: u64, size: u64, });
-define_broker_wire_struct!(owned ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
-define_broker_wire_struct!(owned ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
-define_broker_wire_struct!(copy ProviderIngestSourceTrailerWireV1 { status: u8, content_length: u64, frame_count: u64, payload_digest: [u8; 32], transcript_digest: [u8; 32], provider_metadata_digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestCarPlanWireV1" ProviderIngestCarPlanWireV1 { chunk_profile: ProviderIngestChunkProfileWireV1, payload_digest: [u8; 32], content_length: u64, chunks: Vec<ProviderIngestCarChunkWireV1>, files: Vec<ProviderIngestFilePlanWireV1>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ProviderIngestChunkProfileWireV1" ProviderIngestChunkProfileWireV1 { min_size: u64, target_size: u64, max_size: u64, break_mask: u64, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ProviderIngestCarChunkWireV1" ProviderIngestCarChunkWireV1 { offset: u64, length: u32, digest: [u8; 32], });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestFilePlanWireV1" ProviderIngestFilePlanWireV1 { path: Vec<String>, first_chunk: u64, chunk_count: u64, size: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestSourceHeaderWireV1" ProviderIngestSourceHeaderWireV1 { manifest: Vec<u8>, plan: Vec<u8>, content_length: u64, frame_count: u64, });
+define_broker_wire_struct!(owned "irohad::runtime_provider_broker::protocol::ProviderIngestSourceChunkWireV1" ProviderIngestSourceChunkWireV1 { sequence: u64, offset: u64, bytes: Vec<u8>, });
+define_broker_wire_struct!(copy "irohad::runtime_provider_broker::protocol::ProviderIngestSourceTrailerWireV1" ProviderIngestSourceTrailerWireV1 { status: u8, content_length: u64, frame_count: u64, payload_digest: [u8; 32], transcript_digest: [u8; 32], provider_metadata_digest: [u8; 32], });
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BrokerError {
     Unavailable,

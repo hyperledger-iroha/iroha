@@ -1,24 +1,32 @@
 //! Independent signed stream-receipt simulations; no fixture qualifies physical hardware.
 
 use super::*;
+use crate::signer::{
+    custody::*,
+    protocol::*,
+    receipt::{
+        SignerCompletedOperationV1, SignerOperationFinalizedAnchorV1, SignerOperationProvenanceV1,
+    },
+};
+use iroha_crypto::{Algorithm, KeyPair, Signature};
 
-pub(super) struct Fixture {
-    pub(super) signer: KeyPair,
-    pub(super) attester: KeyPair,
-    pub(super) binding: SignerCustodyBindingV1,
-    pub(super) trust: SignerCustodyTrustV1,
-    pub(super) current: SignerCustodyUseContextV1,
-    pub(super) expected: SignerStreamTokenExpectedV1,
-    pub(super) completion: SignerCompletedOperationV1,
-    pub(super) receipt: SignerStreamTokenReceiptV1,
-    pub(super) token: StreamTokenV1,
+pub(in crate::signer) struct Fixture {
+    pub(in crate::signer) signer: KeyPair,
+    pub(in crate::signer) attester: KeyPair,
+    pub(in crate::signer) binding: SignerCustodyBindingV1,
+    pub(in crate::signer) trust: SignerCustodyTrustV1,
+    pub(in crate::signer) current: SignerCustodyUseContextV1,
+    pub(in crate::signer) expected: SignerStreamTokenExpectedV1,
+    pub(in crate::signer) completion: SignerCompletedOperationV1,
+    pub(in crate::signer) receipt: SignerStreamTokenReceiptV1,
+    pub(in crate::signer) token: StreamTokenV1,
 }
 
-pub(super) fn key(seed: u8) -> KeyPair {
+pub(in crate::signer) fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("simulated Ed25519 key")
 }
 
-pub(super) fn layouts() -> [u8; 10] {
+pub(in crate::signer) fn layouts() -> [u8; 10] {
     use norito::core::header_flags::{COMPACT_LEN, FIELD_BITSET, PACKED_SEQ, PACKED_STRUCT};
     [
         0,
@@ -35,7 +43,7 @@ pub(super) fn layouts() -> [u8; 10] {
 }
 
 // Explicit domains and length prefixes deliberately do not call the production digest helpers.
-pub(super) fn oracle_digest(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+pub(in crate::signer) fn oracle_digest(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(domain);
     for part in parts {
@@ -49,24 +57,27 @@ pub(super) fn oracle_digest(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     *hasher.finalize().as_bytes()
 }
 
-pub(super) fn oracle_canonical<T: norito::NoritoSerialize>(domain: &[u8], value: &T) -> [u8; 32] {
+pub(in crate::signer) fn oracle_canonical<T: norito::NoritoSerialize>(
+    domain: &[u8],
+    value: &T,
+) -> [u8; 32] {
     oracle_digest(
         domain,
         &[&norito::encode_canonical(value).expect("canonical oracle")],
     )
 }
 
-pub(super) fn oracle_payload(body: &StreamTokenBodyV1) -> Vec<u8> {
+pub(in crate::signer) fn oracle_payload(body: &StreamTokenBodyV1) -> Vec<u8> {
     let mut payload = b"sorafs.stream-token.signature.v1\0".to_vec();
     payload.extend(norito::encode_canonical(body).expect("body oracle"));
     payload
 }
 
-pub(super) fn oracle_intent(intent: &SignerOperationIntentV1) -> [u8; 32] {
+pub(in crate::signer) fn oracle_intent(intent: &SignerOperationIntentV1) -> [u8; 32] {
     oracle_canonical(b"iroha.sorafs.signer.operation.intent.v1", intent)
 }
 
-pub(super) fn oracle_audit(
+pub(in crate::signer) fn oracle_audit(
     receipt: &SignerStreamTokenReceiptV1,
     signature: &[u8],
 ) -> SignerOperationAuditHeadV1 {
@@ -89,7 +100,7 @@ pub(super) fn oracle_audit(
     }
 }
 
-pub(super) fn oracle_signatures(signatures: &[SignerOperationSignatureV1]) -> [u8; 32] {
+pub(in crate::signer) fn oracle_signatures(signatures: &[SignerOperationSignatureV1]) -> [u8; 32] {
     let manifest: Vec<_> = signatures
         .iter()
         .map(|signature| {
@@ -106,7 +117,7 @@ pub(super) fn oracle_signatures(signatures: &[SignerOperationSignatureV1]) -> [u
     oracle_canonical(b"iroha.sorafs.signer.operation.signatures.v1", &manifest)
 }
 
-pub(super) fn oracle_response(receipt: &SignerStreamTokenReceiptV1) -> [u8; 32] {
+pub(in crate::signer) fn oracle_response(receipt: &SignerStreamTokenReceiptV1) -> [u8; 32] {
     oracle_canonical(
         b"iroha.sorafs.signer.stream-token.response.v1",
         &(
@@ -117,7 +128,7 @@ pub(super) fn oracle_response(receipt: &SignerStreamTokenReceiptV1) -> [u8; 32] 
     )
 }
 
-pub(super) fn sign(
+pub(in crate::signer) fn sign(
     key: &KeyPair,
     purpose: SignerKeyOperationPurposeV1,
     message: &[u8],
@@ -132,7 +143,10 @@ pub(super) fn sign(
     }
 }
 
-pub(super) fn attest_unchecked(statement: SignerCustodyStatementV1, attester: &KeyPair) -> Vec<u8> {
+pub(in crate::signer) fn attest_unchecked(
+    statement: SignerCustodyStatementV1,
+    attester: &KeyPair,
+) -> Vec<u8> {
     let mut payload = b"iroha:sorafs:hardware-signer-custody:v1\0".to_vec();
     payload.extend(norito::encode_canonical(&statement).expect("statement oracle"));
     let signature =
@@ -144,11 +158,11 @@ pub(super) fn attest_unchecked(statement: SignerCustodyStatementV1, attester: &K
     .expect("signed custody record")
 }
 
-pub(super) fn fixture() -> Fixture {
+pub(in crate::signer) fn fixture() -> Fixture {
     fixture_with(0x21, |_, _, _| {})
 }
 
-pub(super) fn fixture_with(
+pub(in crate::signer) fn fixture_with(
     signer_seed: u8,
     configure: impl FnOnce(
         &mut StreamTokenBodyV1,
@@ -351,7 +365,7 @@ pub(super) fn fixture_with(
 
 // Re-sign all downstream claims, retaining the caller's provenance and exact role signature.
 // This is deliberately unable to replace the independently supplied completed row.
-pub(super) fn resign_follow_on(f: &mut Fixture) {
+pub(in crate::signer) fn resign_follow_on(f: &mut Fixture) {
     let audit = f.receipt.commitment.audit;
     let audit_message = oracle_digest(
         b"iroha.external-signer.audit-attestation.v1",
@@ -375,7 +389,7 @@ pub(super) fn resign_follow_on(f: &mut Fixture) {
     resign_response(f);
 }
 
-pub(super) fn resign_response(f: &mut Fixture) {
+pub(in crate::signer) fn resign_response(f: &mut Fixture) {
     f.receipt.signatures.truncate(3);
     f.receipt.commitment.response_digest = oracle_response(&f.receipt);
     let response_message = oracle_digest(
@@ -389,7 +403,7 @@ pub(super) fn resign_response(f: &mut Fixture) {
     ));
 }
 
-pub(super) fn rebuild_operation(f: &mut Fixture) {
+pub(in crate::signer) fn rebuild_operation(f: &mut Fixture) {
     f.receipt.intent.request_digest = oracle_canonical(
         b"iroha.sorafs.signer.stream-token.request.v1",
         &f.receipt.request,
@@ -409,12 +423,12 @@ pub(super) fn rebuild_operation(f: &mut Fixture) {
     f.completion.signatures_digest = oracle_signatures(&f.receipt.signatures);
 }
 
-pub(super) fn active(f: &Fixture) -> VerifiedSignerCustodyV1 {
+pub(in crate::signer) fn active(f: &Fixture) -> VerifiedSignerCustodyV1 {
     verify_signer_custody_use_v1(&f.receipt.custody_record, &f.binding, &f.trust, &f.current)
         .expect("positive independent custody")
 }
 
-pub(super) fn verify_bytes(
+pub(in crate::signer) fn verify_bytes(
     f: &Fixture,
     bytes: &[u8],
 ) -> Result<VerifiedStreamTokenSignerReceiptV1, SignerStreamTokenReceiptErrorV1> {
@@ -429,7 +443,7 @@ pub(super) fn verify_bytes(
     )
 }
 
-pub(super) fn verify(
+pub(in crate::signer) fn verify(
     f: &Fixture,
 ) -> Result<VerifiedStreamTokenSignerReceiptV1, SignerStreamTokenReceiptErrorV1> {
     // Raw canonical serialization is intentional: malformed semantic fields must reach decoding
@@ -440,7 +454,7 @@ pub(super) fn verify(
     )
 }
 
-pub(super) fn assert_positive(f: &Fixture) {
+pub(in crate::signer) fn assert_positive(f: &Fixture) {
     let (_, public) = f
         .binding
         .public_key
@@ -470,7 +484,7 @@ pub(super) fn assert_positive(f: &Fixture) {
 
 // Remove one field from the actual current canonical schema, retaining its real schema header.
 // No surrogate legacy type or schema mismatch can make the missing-field negative pass early.
-pub(super) fn without_receipt_field(
+pub(in crate::signer) fn without_receipt_field(
     receipt: &SignerStreamTokenReceiptV1,
     omitted: usize,
 ) -> Vec<u8> {

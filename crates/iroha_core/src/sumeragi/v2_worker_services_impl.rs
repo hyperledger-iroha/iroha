@@ -4011,6 +4011,10 @@ impl ProductionV2Services {
                 pending.applied_height_finality = Some(artifact);
             }
         }
+        let _ = pending.handoff_independently_reconstructible_applied_output(
+            self.kura.as_ref(),
+            released_kura_replica_advert_heights,
+        )?;
         pending.poll_reply_flushes()?;
         let outcome = {
             #[cfg(test)]

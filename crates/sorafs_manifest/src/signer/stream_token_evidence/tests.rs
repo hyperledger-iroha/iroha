@@ -1,17 +1,13 @@
 //! Independently signed observer simulations; these tests do not qualify deployed hardware.
-//!
-//! TODO: compile and run only after the atomic provider purpose, shared observer/receipt owners,
-//! token validator move and candidate receipt prevalidation are integrated by their owners.
 
 use super::*;
-use crate::signer::{custody::*, protocol::*, receipt::*, state_observation::*, stream_token::*};
-use crate::token::{StreamTokenBodyV1, StreamTokenV1};
+use crate::signer::{custody::*, receipt::*, state_observation::*, stream_token::*};
+use crate::token::StreamTokenV1;
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use norito::codec::Encode;
 
-#[path = "receipt_fixture.rs"]
-mod receipt_fixture;
-#[path = "test_support.rs"]
+use crate::signer::stream_token::receipt_test_support as receipt_fixture;
+#[path = "observer_fixture.rs"]
 mod test_support;
 #[path = "wire_tests.rs"]
 mod wire_tests;

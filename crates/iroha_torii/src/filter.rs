@@ -12,6 +12,8 @@ use norito::{
     json::{self, FastJsonWrite, JsonDeserialize, JsonSerialize, Map, Value},
 };
 /// A field path such as `authority`, `timestamp_ms`, or `metadata.display_name`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::FieldPath")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldPath(pub String);
 impl JsonSerialize for FieldPath {
@@ -28,6 +30,8 @@ impl JsonDeserialize for FieldPath {
     }
 }
 /// Filter expression AST.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::FilterExpr")]
 #[derive(Debug, Clone, PartialEq)]
 pub enum FilterExpr {
     /// Logical conjunction of nested predicates.
@@ -70,6 +74,8 @@ impl FastJsonWrite for FilterExpr {
     }
 }
 /// Selector (projection) definition as a flat list of field paths.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::Selector")]
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Selector(pub Vec<FieldPath>);
 impl JsonSerialize for Selector {
@@ -85,6 +91,8 @@ impl JsonDeserialize for Selector {
     }
 }
 /// Sorting key descriptor.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::SortKey")]
 #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
 pub struct SortKey {
     /// Field path to sort by.
@@ -94,6 +102,8 @@ pub struct SortKey {
     pub order: Order,
 }
 /// Sort direction for a single key.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::filter::Order")]
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Order {
     /// Sort values in ascending order.
@@ -755,6 +765,64 @@ mod tests {
         assert!(norito::to_bytes(&programmatic).is_err());
     }
     #[test]
+    fn filter_frame_identity_is_explicit_and_rejects_a_foreign_root() {
+        use norito::NoritoSchema as _;
+        let name = "iroha_torii::filter::FilterExpr";
+        assert_eq!(FilterExpr::nominal_name(), name);
+        assert_eq!(FilterExpr::frame_name(), name);
+        assert_eq!(
+            norito::schema::identity::frame_hash::<FilterExpr>(),
+            norito::core::schema_hash_for_name(name),
+        );
+        let expr = FilterExpr::Eq(FieldPath("result_ok".into()), Value::Bool(true));
+        let canonical = norito::encode_canonical(&expr).expect("valid filter frame");
+        let header = norito::core::Header::read(canonical.as_slice()).unwrap();
+        assert_eq!(header.schema, norito::core::schema_hash_for_name(name));
+        let mut layouts = 0;
+        for flags in 0..=u8::MAX {
+            if norito::core::validate_header_flags(flags).is_err() {
+                continue;
+            }
+            layouts += 1;
+            let _layout = norito::core::DecodeFlagsGuard::enter(flags);
+            assert_eq!(norito::encode_canonical(&expr).unwrap(), canonical);
+            assert_eq!(
+                norito::decode_canonical::<FilterExpr>(&canonical).unwrap(),
+                expr
+            );
+            assert_eq!(norito::core::get_decode_flags(), flags);
+        }
+        assert_eq!(layouts, 10);
+        let json = json::to_string(&filter_expr_to_value(&expr)).unwrap();
+        let foreign = norito::encode_canonical(&json).unwrap();
+        assert!(matches!(
+            norito::decode_canonical::<FilterExpr>(&foreign),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+    #[test]
+    fn filter_wrappers_keep_their_exact_bare_payload_contract() {
+        fn bare<T: Encode + Decode + PartialEq + core::fmt::Debug>(value: T, expected: Vec<u8>) {
+            let encoded = value.encode();
+            assert_eq!(encoded, expected);
+            let decoded = T::decode(&mut encoded.as_slice()).expect("bare wrapper replay");
+            assert_eq!(decoded, value);
+        }
+        let path = FieldPath("metadata.note".into());
+        bare(path.clone(), path.0.encode());
+        bare(Selector(vec![path.clone()]), vec![path.clone()].encode());
+        bare(Order::Asc, 0_u8.encode());
+        bare(Order::Desc, 1_u8.encode());
+        bare(
+            SortKey {
+                key: path.clone(),
+                order: Order::Desc,
+            },
+            (path, Order::Desc).encode(),
+        );
+        assert!(Order::decode(&mut 2_u8.encode().as_slice()).is_err());
+    }
+    #[test]
     fn reject_unsupported_field_path() {
         let json = obj(vec![
             ("op", val("eq")),
@@ -1076,13 +1144,11 @@ pub fn validate_filter(expr: &FilterExpr) -> Result<(), ValidateError> {
     let mut membership_values = 0;
     validate_rec(expr, 0, &mut nodes, &mut membership_values)
 }
-impl norito::core::NoritoSerialize for FieldPath {}
 impl norito::core::SerializePayload for FieldPath {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <String as norito::core::SerializePayload>::serialize(&self.0, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for FieldPath {}
 impl<'de> norito::core::DeserializePayload<'de> for FieldPath {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FieldPath>,
@@ -1096,13 +1162,11 @@ impl<'de> norito::core::DeserializePayload<'de> for FieldPath {
             .expect("FieldPath should deserialize from a valid Norito string")
     }
 }
-impl norito::core::NoritoSerialize for Selector {}
 impl norito::core::SerializePayload for Selector {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         <Vec<FieldPath> as norito::core::SerializePayload>::serialize(&self.0, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Selector {}
 impl<'de> norito::core::DeserializePayload<'de> for Selector {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Selector>,
@@ -1116,7 +1180,6 @@ impl<'de> norito::core::DeserializePayload<'de> for Selector {
         Self::try_deserialize(archived).expect("Selector should decode from a Norito sequence")
     }
 }
-impl norito::core::NoritoSerialize for Order {}
 impl norito::core::SerializePayload for Order {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let tag = match self {
@@ -1126,7 +1189,6 @@ impl norito::core::SerializePayload for Order {
         <u8 as norito::core::SerializePayload>::serialize(&tag, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for Order {}
 impl<'de> norito::core::DeserializePayload<'de> for Order {
     fn try_deserialize(
         archived: &'de norito::core::Archived<Order>,
@@ -1145,14 +1207,12 @@ impl<'de> norito::core::DeserializePayload<'de> for Order {
         Self::try_deserialize(archived).expect("Order should decode from variant tag")
     }
 }
-impl norito::core::NoritoSerialize for SortKey {}
 impl norito::core::SerializePayload for SortKey {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         let payload = (self.key.clone(), self.order);
         <(FieldPath, Order) as norito::core::SerializePayload>::serialize(&payload, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for SortKey {}
 impl<'de> norito::core::DeserializePayload<'de> for SortKey {
     fn try_deserialize(
         archived: &'de norito::core::Archived<SortKey>,
@@ -1168,7 +1228,6 @@ impl<'de> norito::core::DeserializePayload<'de> for SortKey {
         Self::try_deserialize(archived).expect("SortKey should decode from (FieldPath, Order)")
     }
 }
-impl norito::core::NoritoSerialize for FilterExpr {}
 impl norito::core::SerializePayload for FilterExpr {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::core::Error> {
         validate_filter(self)
@@ -1178,7 +1237,6 @@ impl norito::core::SerializePayload for FilterExpr {
         <String as norito::core::SerializePayload>::serialize(&json, writer)
     }
 }
-impl norito::core::NoritoDeserialize<'_> for FilterExpr {}
 impl<'de> norito::core::DeserializePayload<'de> for FilterExpr {
     fn try_deserialize(
         archived: &'de norito::core::Archived<FilterExpr>,

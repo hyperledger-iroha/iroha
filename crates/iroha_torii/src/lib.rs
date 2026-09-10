@@ -1219,7 +1219,7 @@ pub use routing::{
     SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
     ZkVkRegisterDto, ZkVkUpdateDto, handle_count_proofs, handle_get_contract_code_bytes,
     handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk,
-    handle_post_asset_transfer, handle_post_contract_alias_set, handle_post_contract_call,
+    handle_post_asset_transfer, handle_post_contract_alias_set,
     handle_post_contract_call_batch_prepare, handle_post_contract_call_simulate,
     handle_post_contract_view, handle_post_sorafs_register_manifest,
     handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
@@ -4135,6 +4135,8 @@ enum NoritoRpcGateFailure {
     CanaryDenied,
     MtlsRequired,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcCapabilitiesResponse")]
 #[derive(
     Debug,
     Clone,
@@ -4150,6 +4152,8 @@ struct RpcCapabilitiesResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcPingResponse")]
 #[derive(
     Debug,
     Clone,
@@ -4169,6 +4173,8 @@ struct RpcPingResponse {
     /// Norito-RPC capability advert.
     norito_rpc: RpcNoritoRpcCapability,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::RpcNoritoRpcCapability")]
 #[derive(
     Debug,
     Clone,
@@ -8543,6 +8549,8 @@ async fn handler_gov_unlock_stats(
     check_access(&app, &headers, Some(remote.ip()), "v1/gov/unlocks/stats").await?;
     crate::gov::handle_gov_unlock_stats(app.state.clone()).await
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::InternalAccountReadResponse")]
 #[cfg(feature = "app_api")]
 #[derive(
     Debug,
@@ -14466,6 +14474,8 @@ async fn handler_zk_verify_batch(
     let admission = acquire_query_admission(app.as_ref(), true).await?;
     routing::handle_v1_zk_verify_batch_admitted(format, body, limits, admission).await
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmDeriveRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -14491,6 +14501,8 @@ pub struct ZkIvmDeriveRequestDto {
     /// IVM bytecode to execute.
     pub bytecode: iroha_data_model::transaction::IvmBytecode,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmDeriveResponseDto")]
 #[derive(
     Debug,
     Clone,
@@ -14508,6 +14520,8 @@ pub struct ZkIvmDeriveResponseDto {
     /// Proved executable payload derived from local IVM execution.
     pub proved: iroha_data_model::transaction::IvmProved,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveRequestDto")]
 #[derive(
     Debug,
     Clone,
@@ -14540,6 +14554,8 @@ pub struct ZkIvmProveRequestDto {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub proved: Option<iroha_data_model::transaction::IvmProved>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveJobCreatedDto")]
 #[derive(
     Debug,
     Clone,
@@ -14555,6 +14571,8 @@ pub struct ZkIvmProveJobCreatedDto {
     /// Stable job identifier.
     pub job_id: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::ZkIvmProveJobDto")]
 #[derive(
     Debug,
     Clone,
@@ -20814,99 +20832,7 @@ fn exact_query_fanout_envelope(
         verified_query_request_encoded_len(request)?,
     )
 }
-struct FixedCapacityNoritoWriter<'a> {
-    bytes: &'a mut Vec<u8>,
-    max_bytes: usize,
-}
-impl std::io::Write for FixedCapacityNoritoWriter<'_> {
-    fn write(&mut self, chunk: &[u8]) -> std::io::Result<usize> {
-        let remaining = self
-            .max_bytes
-            .checked_sub(self.bytes.len())
-            .ok_or_else(|| std::io::Error::other("Norito writer exceeded its admitted bound"))?;
-        if chunk.len() > remaining {
-            return Err(std::io::Error::other(
-                "Norito payload exceeded its counted bound",
-            ));
-        }
-        self.bytes.extend_from_slice(chunk);
-        Ok(chunk.len())
-    }
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-fn encode_versioned_norito_bounded<T>(value: &T, max_bytes: usize) -> Result<Vec<u8>, Response>
-where
-    T: iroha_version::Version + norito::core::NoritoSerialize,
-{
-    // Count a real serialization into a sink. `encoded_len_exact` is an
-    // optimization hint and cannot be trusted as an admission boundary for a
-    // custom erased query implementation.
-    let payload_bytes =
-        norito::codec::encode_adaptive_into(value, &mut std::io::sink()).map_err(|_| {
-            torii_proxy_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "query_encoding_failed",
-                "failed to count the signed-query versioned frame",
-            )
-        })?;
-    let encoded_bytes = payload_bytes.checked_add(1).ok_or_else(|| {
-        torii_proxy_error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "query_capacity_exceeded",
-            "signed-query versioned frame length overflows the platform address space",
-        )
-    })?;
-    if encoded_bytes > max_bytes {
-        return Err(torii_proxy_error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "query_capacity_exceeded",
-            format!(
-                "signed-query versioned frame requires {encoded_bytes} bytes but its admitted request limit is {max_bytes} bytes"
-            ),
-        ));
-    }
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(encoded_bytes).map_err(|_| {
-        torii_proxy_error_response(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "query_capacity_exceeded",
-            "failed to reserve the admitted signed-query versioned frame",
-        )
-    })?;
-    bytes.push(iroha_version::Version::version(value));
-    let written = {
-        let mut writer = FixedCapacityNoritoWriter {
-            bytes: &mut bytes,
-            max_bytes: encoded_bytes,
-        };
-        norito::codec::encode_adaptive_into(value, &mut writer).map_err(|_| {
-            torii_proxy_error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "query_encoding_failed",
-                "failed to encode the admitted signed-query versioned frame",
-            )
-        })?
-    };
-    if written != payload_bytes || bytes.len() != encoded_bytes {
-        return Err(torii_proxy_error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "query_encoding_failed",
-            format!(
-                "signed-query length changed between preflight ({encoded_bytes}) and encoding ({})",
-                bytes.len()
-            ),
-        ));
-    }
-    Ok(bytes)
-}
-fn encode_signed_query_versioned_bounded(
-    query: &SignedQuery,
-    max_bytes: usize,
-) -> Result<Vec<u8>, Response> {
-    encode_versioned_norito_bounded(query, max_bytes)
-}
+include!("bounded_versioned_query_encoder.rs");
 fn clone_verified_query_request_bounded(
     request: &iroha_data_model::query::QueryRequestWithAuthority,
     envelope: QueryFanoutMemoryEnvelope,
@@ -32424,21 +32350,42 @@ async fn handler_post_contract_call(
         "call",
     )
     .await?;
-    match crate::routing::handle_post_contract_call(
+    let crate::routing::PreparedContractCallRequest {
+        mut response,
+        transaction,
+    } = crate::routing::prepare_contract_call_request(
         app.queue.clone(),
         app.state.clone(),
-        app.telemetry.clone(),
-        request,
+        request.0,
     )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("call"));
-            Err(err)
+    .inspect_err(|_| {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_error("call"));
+    })?;
+    if let Some(transaction) = transaction {
+        let tx_hash_hex = hex::encode(transaction.hash().as_ref());
+        let entrypoint_hash_hex = hex::encode(transaction.hash_as_entrypoint().as_ref());
+        let admitted = submit_signed_transaction_for_ingress_strict_durable(
+            app.clone(),
+            headers,
+            None,
+            transaction,
+        )
+        .await?;
+        if admitted.status() != StatusCode::ACCEPTED {
+            return Ok(admitted);
         }
+        // A certified acceptance proves admission. It does not prove local queue presence or Applied.
+        response.submitted = true;
+        response.tx_hash_hex = Some(tx_hash_hex.clone());
+        response.entrypoint_hash_hex = Some(entrypoint_hash_hex.clone());
+        response.transaction_payload_b64 = None;
+        response.signing_message_b64 = None;
+        response.operation_receipt.status = "submitted".to_owned();
+        response.operation_receipt.tx_hash_hex = Some(tx_hash_hex);
+        response.operation_receipt.entrypoint_hash_hex = Some(entrypoint_hash_hex);
     }
+    Ok(JsonBody(response).into_response())
 }
 #[cfg(feature = "app_api")]
 async fn handler_post_contract_call_batch_prepare(

@@ -5013,6 +5013,8 @@ impl_default!(Pipeline => {
 /// The complete projection contains every active or retired lane identifier ever
 /// observed by the state. Retired entries remain consensus-relevant because a
 /// later recreation derives its next incarnation from this retained generation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_config::parameters::actual::SumeragiV2LaneLifecycleEntry")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode)]
 pub struct SumeragiV2LaneLifecycleEntry {
     /// Canonical lane identifier.

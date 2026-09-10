@@ -816,6 +816,8 @@ fn root_command_routes_load_through_the_existing_transaction_surface() {
         "/usr/bin/python3",
         "--resource-worker",
         "/tmp/resource_probe_worker.py",
+        "--resource-budget-sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--resource-config",
         "/tmp/runtime-only-probe-config.json",
         "--resource-capture-dir",

@@ -73,6 +73,10 @@ pub enum KagemushaGuardVerificationErrorV1 {
     HardwareTransactionUnavailable(&'static str),
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::guard_verifier::KagemushaGuardVerifierBindingV1"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub(super) struct KagemushaGuardVerifierBindingV1 {
     pub(super) release_id: DigestV1,
@@ -94,8 +98,12 @@ pub(super) struct KagemushaGuardVerifierMaterialV1<'a> {
     pub(super) provider_policy_root: DigestV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::guard_verifier::GuardProofWire",
+    frame = "iroha.kagemusha.core.v1.monetary-guard-proof"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
-#[norito(schema_name = "iroha.kagemusha.core.v1.monetary-guard-proof")]
 struct GuardProofWire {
     version: u16,
     binding: KagemushaGuardVerifierBindingV1,
@@ -825,8 +833,12 @@ mod tests {
 
     #[test]
     fn guard_archive_rejects_the_old_archive_without_proof_bound_credential_slots() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::zk::kagemusha_v1_recursion::guard_verifier::tests::guard_archive_rejects_the_old_archive_without_proof_bound_credential_slots::OldGuardProofWire",
+            frame = "iroha.kagemusha.core.v1.monetary-guard-proof"
+        )]
         #[derive(Encode)]
-        #[norito(schema_name = "iroha.kagemusha.core.v1.monetary-guard-proof")]
         struct OldGuardProofWire {
             version: u16,
             binding: KagemushaGuardVerifierBindingV1,

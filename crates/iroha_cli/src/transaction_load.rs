@@ -591,8 +591,10 @@ trait Recorder: Send + Sync + 'static {
 enum JournalCommand {
     Record(Value),
     Barrier(mpsc::SyncSender<()>),
+    // Box only the large request owner to keep every queue slot compact;
+    // channel capacity and the canonical frame bound still limit retention.
     RetainSignedRequest(
-        signed_request::SignedRequest,
+        Box<signed_request::SignedRequest>,
         tokio::sync::oneshot::Sender<signed_request::DurableReceipt>,
     ),
 }
@@ -604,7 +606,10 @@ impl JournalSender {
     ) -> Result<signed_request::DurableReceipt> {
         let (acknowledgment, completed) = tokio::sync::oneshot::channel();
         self.0
-            .try_send(JournalCommand::RetainSignedRequest(request, acknowledgment))
+            .try_send(JournalCommand::RetainSignedRequest(
+                Box::new(request),
+                acknowledgment,
+            ))
             .map_err(|_| eyre!("bounded signed request writer is saturated or unavailable"))?;
         completed
             .await

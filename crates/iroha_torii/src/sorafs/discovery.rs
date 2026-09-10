@@ -36,6 +36,8 @@ struct AdvertReplayHighWater {
     issued_at: u64,
     fingerprint: [u8; FINGERPRINT_LEN],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::discovery::ProviderAdvertReplayEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderAdvertReplayEntryV1 {
     version: u8,

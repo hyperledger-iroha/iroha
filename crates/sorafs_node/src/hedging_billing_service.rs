@@ -178,7 +178,9 @@ const RETAINED_EPOCH_STATE_DOMAIN_V1: &[u8] = b"sorafs.hedging-billing.retained-
     DeriveNoritoDeserialize,
     DeriveJsonSerialize,
     DeriveJsonDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgingBillingFinalizedCursorV1")]
 pub struct HedgingBillingFinalizedCursorV1 {
     /// Finalized block height.
     pub height: u64,
@@ -361,6 +363,8 @@ impl HedgingBillingFinalizedEventV1 {
     }
 }
 /// One bounded contiguous page from the authoritative finalized billing journal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgingBillingFinalizedEventPageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingFinalizedEventPageV1 {
     /// Schema version.
@@ -851,6 +855,8 @@ impl HedgingBillingTransitionAuthorityV1 {
     }
 }
 /// Deterministic resource, billing-cycle, signer, and exposure policy.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgingBillingServicePolicyV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingServicePolicyV1 {
     /// Schema version.
@@ -1046,6 +1052,8 @@ pub struct HedgingBillingCompactionCountsV1 {
     pub hedge_intents: u64,
 }
 /// Signed audit witness for compaction and an optional signer/feed-policy rotation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgingBillingEpochTransitionV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingEpochTransitionV1 {
     /// Schema version.
@@ -1186,6 +1194,8 @@ impl HedgingBillingEpochTransitionV1 {
     }
 }
 /// Sealed immutable recovery record for one authenticated billing epoch.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgingBillingEpochWitnessRecordV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgingBillingEpochWitnessRecordV1 {
     /// Schema version.
@@ -1339,7 +1349,18 @@ pub trait HedgingBillingEpochWitnessStore: HedgingBillingRuntimeProviderV1 {
     ) -> Result<(), HedgingBillingExternalError>;
 }
 /// Exact consensus-authenticated close of one billing period.
-#[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    DeriveNoritoSerialize,
+    DeriveNoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "sorafs_node::hedging_billing_service::HedgingBillingFinalizedPeriodCloseV1"
+)]
 pub struct HedgingBillingFinalizedPeriodCloseV1 {
     /// Schema version.
     pub version: u8,
@@ -1423,6 +1444,8 @@ impl HedgingBillingFinalizedPeriodCloseV1 {
         )
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgingBillingPeriodClosePreimageV1")]
 #[derive(Debug, Clone, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct HedgingBillingPeriodClosePreimageV1 {
     version: u8,
@@ -1483,6 +1506,8 @@ pub trait BillingStatementRuntimeSigner: HedgingBillingRuntimeProviderV1 {
     fn sign_digest(&self, digest: [u8; 32]) -> Result<[u8; 64], HedgingBillingExternalError>;
 }
 /// Signed, governed billing statement returned by a qualified runtime provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::SignedGovernedBillingStatementV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
 )]
@@ -1604,6 +1629,8 @@ impl SignedGovernedBillingStatementV1 {
         Ok(bytes)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::BillingStatementSignaturePreimageV1")]
 #[derive(Debug, Clone, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct BillingStatementSignaturePreimageV1 {
     version: u8,
@@ -1618,6 +1645,10 @@ struct BillingStatementSignaturePreimageV1 {
     governed_statement: GovernedBillingStatementV1,
 }
 /// Durable receipt returned by an authenticated statement publication sink.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::hedging_billing_service::BillingStatementPublicationReceiptV1"
+)]
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
 )]
@@ -1746,6 +1777,8 @@ pub trait BillingStatementPublisher: HedgingBillingRuntimeProviderV1 {
     ) -> Result<Option<BillingStatementAuthoritativePublicationV1>, HedgingBillingExternalError>;
 }
 /// Durable authenticated account acknowledgement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::BillingStatementAcknowledgementV1")]
 #[derive(Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct BillingStatementAcknowledgementV1 {
     /// Schema version.
@@ -2139,6 +2172,8 @@ pub enum HedgeIntentDispositionV1 {
     GovernedOverflow,
 }
 /// Deterministic intent for a later, separately governed execution adapter.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgeIntentV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
 )]
@@ -2222,6 +2257,8 @@ impl HedgeIntentV1 {
     }
 }
 /// Governed identities and limits for one explicitly authorized hedge venue.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::GovernedHedgeExecutionPolicyV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct GovernedHedgeExecutionPolicyV1 {
     /// Schema version.
@@ -2289,6 +2326,8 @@ impl GovernedHedgeExecutionPolicyV1 {
     }
 }
 /// Explicit operator authorization binding one executable intent to one venue.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgeExecutionAuthorizationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgeExecutionAuthorizationV1 {
     /// Schema version.
@@ -2390,6 +2429,8 @@ pub struct GovernedHedgeExecutionVenueIdentityV1 {
     pub public_key: [u8; 32],
 }
 /// Immutable venue receipt for one explicitly authorized hedge submission.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgeExecutionSubmissionReceiptV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 pub struct HedgeExecutionSubmissionReceiptV1 {
     /// Schema version.
@@ -2537,6 +2578,8 @@ struct StoredStatementV1 {
     signed_statement: Option<SignedGovernedBillingStatementV1>,
     publication_receipt: Option<BillingStatementPublicationReceiptV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::HedgingBillingCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize)]
 struct HedgingBillingCheckpointV1 {
     version: u8,
@@ -3711,8 +3754,15 @@ pub struct BillingStatementAcknowledgementProjectionV1 {
 }
 /// Exact published statement plus immutable publication and acknowledgement projections.
 #[derive(
-    Clone, PartialEq, Eq, DeriveNoritoSerialize, DeriveNoritoDeserialize, DeriveJsonSerialize,
+    Clone,
+    PartialEq,
+    Eq,
+    DeriveNoritoSerialize,
+    DeriveNoritoDeserialize,
+    DeriveJsonSerialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::BillingPublishedStatementV1")]
 pub struct BillingPublishedStatementV1 {
     /// Exact checkpoint anchor for this read.
     pub anchor: HedgingBillingProjectionAnchorV1,
@@ -6909,12 +6959,16 @@ fn runtime_api_service_error(error: HedgingBillingServiceError) -> HedgingBillin
         _ => HedgingBillingRuntimeApiErrorV1::Unavailable,
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::BillingSourceReceiptPreimageV1")]
 #[derive(DeriveNoritoSerialize)]
 struct BillingSourceReceiptPreimageV1 {
     network_id: NetworkId,
     source: BillingAccrualSourceV1,
     source_id: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::BillingEventReplayPreimageV1")]
 #[derive(DeriveNoritoSerialize)]
 struct BillingEventReplayPreimageV1 {
     network_id: NetworkId,
@@ -7044,6 +7098,8 @@ fn epoch_transition_signature_digest(transition_id: [u8; 32]) -> [u8; 32] {
     hasher.update(&transition_id);
     *hasher.finalize().as_bytes()
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::RetainedEpochBaseStateV1")]
 #[derive(DeriveNoritoSerialize)]
 struct RetainedEpochBaseStateV1 {
     checkpoint_version: u8,
@@ -7054,6 +7110,8 @@ struct RetainedEpochBaseStateV1 {
     compacted_through_period_end_unix: u64,
     compacted_account_bases: Vec<GovernedBillingStatementV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::CompactedSourceArchiveV1")]
 #[derive(DeriveNoritoSerialize)]
 struct CompactedSourceArchiveV1 {
     network_id: NetworkId,
@@ -7064,6 +7122,8 @@ struct CompactedSourceArchiveV1 {
     replay_receipts: Vec<[u8; 32]>,
     event_replay_receipts: Vec<StoredEventReplayReceiptV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::hedging_billing_service::CompactedEconomicArchiveV1")]
 #[derive(DeriveNoritoSerialize)]
 struct CompactedEconomicArchiveV1 {
     network_id: NetworkId,
@@ -7324,6 +7384,7 @@ impl From<CheckpointStoreError> for HedgingBillingServiceError {
 }
 #[cfg(test)]
 mod tests {
+    include!("hedging_billing_service/schema_identity_tests.rs");
     use super::*;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, numeric::Quantity};
@@ -8641,143 +8702,7 @@ mod tests {
         );
         assert_eq!(store.calls.load(Ordering::Relaxed), 1);
     }
-    #[test]
-    fn finalized_query_reconciliation_is_bounded_and_stops_on_empty_progress() {
-        let root = tempfile::tempdir().expect("state root");
-        let (service, _feed_policy, _reference, _verifier, _publisher, _ack_authority) =
-            ready_service(root.path());
-        let first_query = TestFinalizedQuery::new(vec![
-            Some(page(vec![event(1, "storage:event:1", "10")])),
-            Some(page(vec![event(2, "storage:event:2", "2")])),
-        ]);
-        let first_head = first_query.finalized_head().expect("first query head");
-        assert!(matches!(
-            service.reconcile_finalized_query(&first_query, 0, first_head),
-            Err(HedgingBillingServiceError::InvalidQueryBound)
-        ));
-        assert!(matches!(
-            service.reconcile_finalized_query(
-                &first_query,
-                HEDGING_BILLING_MAX_PAGES_PER_SCAN_V1 + 1,
-                first_head,
-            ),
-            Err(HedgingBillingServiceError::InvalidQueryBound)
-        ));
-        assert_eq!(first_query.calls.load(Ordering::Relaxed), 0);
-        let first = service
-            .reconcile_finalized_query(&first_query, 1, first_head)
-            .expect("bounded first scan");
-        assert_eq!(
-            first,
-            HedgingBillingReconcileOutcomeV1 {
-                pages_applied: 1,
-                events_applied: 1,
-                next_sequence: 2,
-                finalized_cursor: Some(
-                    page(vec![event(1, "storage:event:1", "10")])
-                        .journal_commitment
-                        .finalized_cursor,
-                ),
-            }
-        );
-        assert_eq!(first_query.calls.load(Ordering::Relaxed), 1);
-        assert_eq!(
-            first_query
-                .requested_max_events
-                .lock()
-                .expect("requested max-events state")
-                .as_slice(),
-            &[service_policy().max_events_per_page]
-        );
-        let finality_only_cursor = cursor(12, [0xB2; 32], PERIOD_END + 2);
-        let first_commitment = page(vec![event(1, "storage:event:1", "10")]).journal_commitment;
-        let finality_only_page = HedgingBillingFinalizedEventPageV1 {
-            version: HEDGING_BILLING_FINALIZED_PAGE_VERSION_V1,
-            network_id: test_network_id(b"hedging-billing-test-genesis"),
-            start_sequence: 2,
-            next_sequence: 2,
-            journal_commitment: HedgingBillingJournalCommitmentV1 {
-                version: HEDGING_BILLING_JOURNAL_COMMITMENT_VERSION_V1,
-                network_id: test_network_id(b"hedging-billing-test-genesis"),
-                finalized_cursor: finality_only_cursor,
-                journal_next_sequence: 2,
-                journal_root: first_commitment.journal_root,
-            },
-            append_proof: vec![0xA5],
-            inclusion_proof: vec![0xB6],
-            events: Vec::new(),
-        };
-        let empty_query = TestFinalizedQuery::new(vec![
-            Some(finality_only_page.clone()),
-            Some(finality_only_page),
-        ]);
-        let empty_head = empty_query.finalized_head().expect("empty query head");
-        let empty = service
-            .reconcile_finalized_query(&empty_query, 10, empty_head)
-            .expect("finality-only scan");
-        assert_eq!(
-            empty,
-            HedgingBillingReconcileOutcomeV1 {
-                pages_applied: 1,
-                events_applied: 0,
-                next_sequence: 2,
-                finalized_cursor: Some(finality_only_cursor),
-            }
-        );
-        assert_eq!(
-            empty_query.calls.load(Ordering::Relaxed),
-            1,
-            "a finality-only page must terminate the scan"
-        );
-        assert_eq!(
-            empty_query
-                .positions
-                .lock()
-                .expect("query-position state")
-                .as_slice(),
-            &[HedgingBillingQueryPositionV1 {
-                next_sequence: 2,
-                journal_commitment: Some(first_commitment),
-            }]
-        );
-        assert_eq!(
-            service
-                .reconcile_finalized_query(&empty_query, 10, empty_head)
-                .expect("exact finality-only replay"),
-            HedgingBillingReconcileOutcomeV1 {
-                pages_applied: 0,
-                events_applied: 0,
-                next_sequence: 2,
-                finalized_cursor: Some(finality_only_cursor),
-            }
-        );
-        assert_eq!(empty_query.calls.load(Ordering::Relaxed), 2);
-        let bounded_root = tempfile::tempdir().expect("bounded state root");
-        let (bounded_service, ..) = ready_service(bounded_root.path());
-        let beyond_head_query =
-            TestFinalizedQuery::new(vec![Some(page(vec![event(1, "storage:beyond-head", "1")]))]);
-        let query_head = beyond_head_query
-            .finalized_head()
-            .expect("beyond-head query cursor");
-        let earlier_head = HedgingBillingFinalizedCursorV1 {
-            height: query_head.height - 1,
-            block_hash: [0x31; 32],
-            finalized_at_unix: query_head.finalized_at_unix - 1,
-        };
-        assert_eq!(
-            bounded_service
-                .reconcile_finalized_query(&beyond_head_query, 1, earlier_head)
-                .expect_err("a page beyond the authenticated scan head must fail before ingest"),
-            HedgingBillingServiceError::FinalizedForkOrRollback
-        );
-        assert_eq!(
-            bounded_service
-                .query_position()
-                .expect("unchanged bounded query position")
-                .next_sequence,
-            1
-        );
-    }
+    include!("hedging_billing_service/schema_preserved_tests.rs");
     #[test]
     fn committed_accrual_to_acknowledgement_survives_restart() {
         let root = tempfile::tempdir().expect("state root");

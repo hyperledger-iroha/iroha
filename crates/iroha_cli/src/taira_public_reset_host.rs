@@ -3622,6 +3622,7 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
     require_no_live_target_references(admitted)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn target_path_is_occupied(path: &Path, roots: &[&Path]) -> bool {
     // procfs appends this suffix to an unlinked referenced pathname. Strip it
     // before component matching, including an open descriptor of the root itself.

@@ -1,12 +1,9 @@
 # FASTPQ ordinary source statements
 
-Updated 2026-09-07. This is the source-coupled contract for the pending
-`optimizations` integration candidate. The candidate lives under ignored
-`target/fastpq-optimizations-integration/port-candidate` in
-`/Users/takemiyamakoto/dev/iroha`; it has not been applied or compiled on that
-branch. Production compact admission remains disabled. The
-[readiness ledger](fastpq_production_readiness.md) separates retained reference
-validation from the required current-branch gate.
+Updated 2026-09-09. This is the source-coupled contract for complete-entry source
+statements and local State-owned construction accounting. Production compact
+admission remains disabled. The [readiness ledger](fastpq_production_readiness.md)
+separates bounded source/reference validation from required native release gates.
 
 ## Transaction wires and execution sources
 
@@ -144,6 +141,34 @@ reject rather than being enlarged after accounting. Final per-statement encoding
 still enforces individual and cumulative byte caps. Repeated public preparation
 costs CPU time that requires measurement on the final candidate.
 
+`StateBlock::fastpq_source_statement_budget` creates a local budget tied to the
+privately finalized inventory allocation. Its E count is the complete owned entry
+slice, including entries without transfers. `prepare` verifies the current State
+owner, remeasures the entire supplied archive with the canonical six-cap owner,
+and checks its exact public seal. It never accepts a caller-supplied E, usage
+increment, prefix size, or permission root. Same-entry bundles are always measured
+whole; retrying the inventory replaces usage instead of adding it again.
+
+The prepared attempt borrows its immutable transcript map and exclusively borrows
+the local budget. Dropping it or encountering any error preserves the previously
+committed usage. `materialize` rechecks the original State inventory allocation,
+derives slot and permission root from the current block, and invokes the strict
+producer. Its successful return is the sole accounting publication point. Empty
+archives retain E, produce no synthetic statement, and permit zero T/D/I/M/S caps.
+Private paths are not public-seal facts, but changed paths are remeasured for I.
+No State, recorder, ordinary write, capture error or witness is published by this
+local construction operation. Permission-table scanning is separately costed.
+
+This post-execution construction budget has no Norito/wire identity and is not an
+execution-admission token or authenticated policy. The existing test-only D7
+preparer exercises it. Production `StateBlock::capture_exec_witness` still requires
+an authenticated source policy and atomic D7 insertion/retained-context validation.
+`StateTransaction::apply` still merges applied whole-entry transcripts without
+these runtime quotas. TODO: supply authenticated intrinsic/block ceilings,
+transaction/savepoint ownership, mandatory fee/penalty/time-work reservations and
+deterministic proposal-packing behavior before wiring admission there. Existing
+test-only occurrence/prefix helpers do not authorize fragment sums for M or S.
+
 Full-domain quantity preparation supports the ledger's nonnegative 512-bit
 mantissa and scales 0 through 28 using 19 little-endian `u32` limbs. Canonical
 value frames bind scale and all limbs, including zero padding. Narrow and
@@ -151,6 +176,12 @@ full-domain factories reject each other's value encodings. Checked arithmetic,
 exact occurrence coverage and repeated-key balance continuity precede private
 SMT materialization. Tree limits bound updates, unique keys, occupied nodes and
 path allocation. Statements are built and dropped one at a time.
+
+`DerivedTransferSmtWitnesses::intermediate_roots` borrows the existing complete
+batch witnesses and returns each debit/credit pair boundary except the final
+root. It preserves equal-root occurrences without preparing individual deltas,
+building a second tree or allocating another root buffer. These local roots do
+not establish authenticated finality or replace the full persisted WSV roots.
 
 Statement roots describe touched balances for the complete execution-entry transfer
 bundle. They exclude the ordinary-write tree that contains the manifest. Legal

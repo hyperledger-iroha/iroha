@@ -149,6 +149,10 @@ use iroha_primitives::{
 };
 use iroha_sccp::{
     SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, TairaSccpMessageProofV1,
+    api::{
+        SccpCapabilities, SccpRecentCursor, SccpRecentMessage, SccpRecentMessageLinks,
+        SccpRecentMessages, SccpRegistryLimits, SccpResourceLimits,
+    },
     sccp_message_payload_kind_key, sccp_message_source_domain, sccp_message_target_domain,
     sccp_payload_projection,
 };
@@ -206,8 +210,8 @@ use crate::bounded_replay_cache::{InsertError as ReplayInsertError, ReplayCache}
 use crate::sorafs::{
     PorCoordinatorError, QuotaExceeded, SorafsAction, SorafsQuotaEnforcer,
     por::{
-        POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusExportPageV1, PorStatusFilter,
-        PorStatusPageCursor, PorStatusPageLimits, PorStatusPageV1,
+        POR_STATUS_PAGE_MAX_CANONICAL_BYTES_V1, PorStatusFilter, PorStatusPageCursor,
+        PorStatusPageLimits,
     },
 };
 #[cfg(feature = "app_api")]
@@ -492,7 +496,8 @@ use sorafs_manifest::{
         AUDIT_VERDICT_MAX_CANONICAL_BYTES_V1, AuditVerdictV1,
         POR_CHALLENGE_STATUS_PAGE_MAX_RECORDS_V1, POR_PROOF_MAX_CANONICAL_BYTES_V1,
         PorChallengeOutcome, PorChallengeStatusV1, PorChallengeV1, PorProofV1, PorReportIsoWeek,
-        PorWeeklyReportV1, decode_audit_verdict_v1, decode_por_proof_v1,
+        PorStatusExportPageV1, PorStatusPageV1, PorWeeklyReportV1, decode_audit_verdict_v1,
+        decode_por_proof_v1,
     },
     validate_manifest,
 };
@@ -530,11 +535,15 @@ struct PrfContext {
     epoch_seed: Option<String>,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SumeragiLeaderResponse")]
 struct SumeragiLeaderResponse {
     leader_index: u64,
     prf: PrfContext,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SumeragiParamsResponse")]
 struct SumeragiParamsResponse {
     block_cadence_ms: u64,
     max_clock_drift_ms: u64,
@@ -586,6 +595,8 @@ pub(crate) struct PipelinePreflightFees {
     pub successful_claim_fee_exempt_authorities: Vec<String>,
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::PipelinePreflightResponse")]
 pub(crate) struct PipelinePreflightResponse {
     pub schema_version: u64,
     pub chain_height: u64,
@@ -709,6 +720,8 @@ fn pagination_bounds(
     (start, end)
 }
 /// Optional `from`/`limit` window applied to newest-first histories.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::HistoryWindowQuery")]
 #[derive(
     crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default, Debug, Clone,
 )]
@@ -1595,6 +1608,8 @@ derived_items! {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordSoranetPrivacyEventDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/event`.
 pub struct RecordSoranetPrivacyEventDto {
@@ -1611,6 +1626,8 @@ pub struct RecordSoranetPrivacyEventDto {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordSoranetPrivacyShareDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload accepted by `/v1/soranet/privacy/share`.
 pub struct RecordSoranetPrivacyShareDto {
@@ -1626,6 +1643,8 @@ pub struct AliasResolveRequestDto {
     pub alias: String,
 }
 (crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AssetAliasResolveRequestDto")]
 pub struct AssetAliasResolveRequestDto {
     pub alias: String,
 }
@@ -1951,6 +1970,8 @@ enum KaigiRelayEventKind {
 const KAIGI_CALL_SIGNALS_CURSOR_VERSION: u8 = 1;
 const KAIGI_CALL_SIGNALS_CURSOR_MAX_BYTES: usize = 1_024;
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::KaigiCallSignalsCursorV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct KaigiCallSignalsCursorV1 {
     version: u8,
@@ -3052,6 +3073,8 @@ pub struct RamLfeProgramPolicyListDto {
 }
 (Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Execute one RAM-LFE program from a BFV-encrypted input.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RamLfeExecuteRequestDto")]
 pub struct RamLfeExecuteRequestDto {
     pub encrypted_input: String,
 }
@@ -3157,6 +3180,8 @@ pub struct RamLfeExecutionReceiptDto {
 }
 ( Clone, Debug, crate::json_macros::JsonSerialize, crate::json_macros::JsonDeserialize, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,)
 /// Stateless receipt-verification request for RAM-LFE execution receipts.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RamLfeReceiptVerifyRequestDto")]
 pub struct RamLfeReceiptVerifyRequestDto {
     pub receipt: iroha_data_model::ram_lfe::RamLfeExecutionReceipt,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -3210,6 +3235,8 @@ pub struct IdentifierPolicyListDto {
 }
 (Debug, norito::derive::NoritoDeserialize, norito::derive::NoritoSerialize)
 /// Resolve an encrypted identifier under one policy namespace.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::IdentifierResolveRequestDto")]
 pub struct IdentifierResolveRequestDto {
     pub policy_id: String,
     pub encrypted_input: String,
@@ -4459,6 +4486,8 @@ impl Default for ProofApiLimits {
     }
 }
 app_api_items! {
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ProofListQuery")]
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -5070,6 +5099,8 @@ async fn handle_count_proofs_with_admission(
     });
     Ok(application_json_response(body))
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::VkListQuery")]
 #[derive(
     Debug, Default, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
 )]
@@ -5215,6 +5246,8 @@ pub async fn handle_list_vk(
 }
 include!("routing/signed_query_execution.rs");
 // ---------------------- Iroha Connect (feature-gated) ----------------------
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ConnectSessionRequest")]
 #[cfg(feature = "connect")]
 #[derive(
     crate::json_macros::JsonDeserialize,
@@ -5235,6 +5268,8 @@ pub struct ConnectSessionRequest {
     /// Optional explicit node host for the deeplink (hostname:port).
     pub node: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ConnectSessionResponse")]
 #[cfg(feature = "connect")]
 #[derive(crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response body for creating a Connect session.
@@ -5374,6 +5409,8 @@ fn fill_connect_session_random_bytes<R: rand::rand_core::TryCryptoRng + ?Sized>(
         )))
     })
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ConnectWsQuery")]
 #[cfg(feature = "connect")]
 #[derive(Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize)]
 /// Query parameters for WebSocket Connect endpoint
@@ -5527,6 +5564,8 @@ mod connect_session_tests {
 derived_items! {
 // ------------------------ ZK convenience DTOs (examples) ------------------------
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkRootsGetRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request for recent shielded ledger roots (convenience JSON wrapper).
 /// Mirrors the Norito type used by IVM syscalls.
@@ -5539,6 +5578,8 @@ pub struct ZkRootsGetRequestDto {
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with recent roots and the exact committed state snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkRootsGetResponseDto")]
 pub struct ZkRootsGetResponseDto {
     /// Latest or profile-defined empty root as a lowercase, 0x-less hex string.
     pub latest: String,
@@ -5550,6 +5591,8 @@ pub struct ZkRootsGetResponseDto {
     pub evaluated_block_hash: String,
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkMerklePathGetRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request for current profiled confidential-tree inclusion paths.
 pub struct ZkMerklePathGetRequestDto {
@@ -5577,6 +5620,8 @@ pub struct ZkMerklePathDto {
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with current profiled confidential-tree inclusion paths.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkMerklePathGetResponseDto")]
 pub struct ZkMerklePathGetResponseDto {
     /// Committed block height at which the frontier and paths were read.
     pub evaluated_block_height: u64,
@@ -5594,6 +5639,8 @@ pub struct ZkMerklePathGetResponseDto {
     pub paths: Vec<ZkMerklePathDto>,
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVoteGetTallyRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request for election tally (convenience JSON wrapper).
 pub struct ZkVoteGetTallyRequestDto {
@@ -5602,6 +5649,8 @@ pub struct ZkVoteGetTallyRequestDto {
 }
 ( Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Response with election tally (convenience JSON wrapper).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVoteGetTallyResponseDto")]
 pub struct ZkVoteGetTallyResponseDto {
     /// Height of the committed block whose state supplied this tally.
     pub evaluated_block_height: u64,
@@ -5778,6 +5827,8 @@ pub async fn handle_get_proof(
         bytes,
     })
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ProofFindByIdQueryDto")]
 #[derive(
     Debug,
     crate::json_macros::JsonDeserialize,
@@ -6260,215 +6311,84 @@ pub fn parse_sccp_recent_query(raw_query: Option<&str>) -> Result<SccpRecentWind
 pub fn validate_sccp_recent_query(raw_query: Option<&str>) -> Result<()> {
     parse_sccp_recent_query(raw_query).map(|_| ())
 }
-derived_items! {
-( Clone, Copy, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
-/// Fixed SCCP V1 route-registry capacity limits.
-pub struct SccpRegistryLimitsDto {
-    /// Maximum governed lanes retained by the registry.
-    pub max_governed_lanes: u32,
-    /// Maximum nonterminal route revisions across all lanes.
-    pub max_live_governed_routes: u32,
-    /// Maximum nonterminal route revisions in one lane.
-    pub max_live_routes_per_lane: u32,
-    /// Maximum retained route revisions in one lane, including retired revisions.
-    pub max_retained_routes_per_lane: u32,
-    /// Maximum retained native trust anchors in one lane.
-    pub max_retained_native_trust_anchors_per_lane: u32,
-}
-( Clone, Copy, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
-/// Consensus-critical SCCP proof and deterministic verifier-work limits.
-pub struct SccpResourceLimitsDto {
-    /// Maximum successful outbound SCCP messages committed by one block.
-    pub max_outbound_messages_per_block: u32,
-    /// Maximum canonical payload bytes retained by one outbound SCCP message.
-    pub max_outbound_message_payload_bytes: u64,
-    /// Maximum payload-bearing outbound messages awaiting destination proof acceptance.
-    pub max_pending_outbound_messages: u64,
-    /// Maximum canonical outbound payload bytes awaiting destination proof acceptance.
-    pub max_pending_outbound_payload_bytes: u64,
-    /// Maximum closed SCCP proofs in one transaction.
-    pub max_proofs_per_transaction: u32,
-    /// Maximum closed SCCP proofs committed in one block.
-    pub max_proofs_per_block: u32,
-    /// Maximum canonical bytes retained for one closed SCCP proof.
-    pub max_proof_bytes_per_proof: u64,
-    /// Maximum aggregate SCCP proof bytes in one transaction.
-    pub max_proof_bytes_per_transaction: u64,
-    /// Maximum aggregate SCCP proof bytes committed in one block.
-    pub max_proof_bytes_per_block: u64,
-    /// Maximum native-finality continuation headers in one transaction.
-    pub max_native_headers_per_transaction: u32,
-    /// Maximum native-finality continuation headers committed in one block.
-    pub max_native_headers_per_block: u32,
-    /// Maximum Ethereum light-client updates in one transaction.
-    pub max_ethereum_light_client_updates_per_transaction: u32,
-    /// Maximum Ethereum light-client updates committed in one block.
-    pub max_ethereum_light_client_updates_per_block: u32,
-    /// Maximum framed native-finality header bytes in one transaction.
-    pub max_native_header_bytes_per_transaction: u64,
-    /// Maximum framed native-finality header bytes committed in one block.
-    pub max_native_header_bytes_per_block: u64,
-    /// Maximum secp256k1 recoveries in one transaction.
-    pub max_secp256k1_recoveries_per_transaction: u32,
-    /// Maximum secp256k1 recoveries committed in one block.
-    pub max_secp256k1_recoveries_per_block: u32,
-    /// Maximum BLS aggregate-signature checks in one transaction.
-    pub max_bls_aggregate_checks_per_transaction: u32,
-    /// Maximum BLS aggregate-signature checks committed in one block.
-    pub max_bls_aggregate_checks_per_block: u32,
-    /// Maximum BLS key-validation and signer-contribution work in one transaction.
-    pub max_bls_signer_contributions_per_transaction: u32,
-    /// Maximum BLS key-validation and signer-contribution work committed in one block.
-    pub max_bls_signer_contributions_per_block: u32,
-    /// Maximum Ed25519 signature checks in one transaction.
-    pub max_ed25519_signature_checks_per_transaction: u32,
-    /// Maximum Ed25519 signature checks committed in one block.
-    pub max_ed25519_signature_checks_per_block: u32,
-    /// Maximum TON Ed25519 validator-key checks in one transaction.
-    pub max_ed25519_validator_key_checks_per_transaction: u32,
-    /// Maximum TON Ed25519 validator-key checks committed in one block.
-    pub max_ed25519_validator_key_checks_per_block: u32,
-    /// Maximum BN254 pairing-product checks in one transaction.
-    pub max_bn254_pairing_checks_per_transaction: u32,
-    /// Maximum BN254 pairing-product checks committed in one block.
-    pub max_bn254_pairing_checks_per_block: u32,
-    /// Maximum BLS12-381 pairing-product checks in one transaction.
-    pub max_bls12_381_pairing_checks_per_transaction: u32,
-    /// Maximum BLS12-381 pairing-product checks committed in one block.
-    pub max_bls12_381_pairing_checks_per_block: u32,
-}
-}
-impl SccpRegistryLimitsDto {
-    fn v1() -> Self {
-        Self {
-            max_governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
-                .expect("SCCP governed-lane limit fits u32"),
-            max_live_governed_routes: u32::try_from(
-                iroha_data_model::bridge::SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
-            )
-            .expect("SCCP global live-route limit fits u32"),
-            max_live_routes_per_lane: u32::try_from(
-                iroha_data_model::bridge::SCCP_V1_MAX_LIVE_ROUTES_PER_LANE,
-            )
-            .expect("SCCP lane live-route limit fits u32"),
-            max_retained_routes_per_lane: u32::try_from(
-                iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
-            )
-            .expect("SCCP retained-route limit fits u32"),
-            max_retained_native_trust_anchors_per_lane: u32::try_from(
-                iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE,
-            )
-            .expect("SCCP retained-anchor limit fits u32"),
-        }
+fn sccp_registry_limits_v1() -> SccpRegistryLimits {
+    SccpRegistryLimits {
+        governed_lanes: u32::try_from(iroha_data_model::bridge::SCCP_V1_MAX_GOVERNED_LANES)
+            .expect("SCCP governed-lane limit fits u32"),
+        live_governed_routes: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
+        )
+        .expect("SCCP global live-route limit fits u32"),
+        live_routes_per_lane: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_LIVE_ROUTES_PER_LANE,
+        )
+        .expect("SCCP lane live-route limit fits u32"),
+        retained_routes_per_lane: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
+        )
+        .expect("SCCP retained-route limit fits u32"),
+        retained_native_trust_anchors_per_lane: u32::try_from(
+            iroha_data_model::bridge::SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE,
+        )
+        .expect("SCCP retained-anchor limit fits u32"),
     }
 }
-impl From<iroha_config::parameters::actual::Sccp> for SccpResourceLimitsDto {
-    fn from(sccp: iroha_config::parameters::actual::Sccp) -> Self {
-        Self {
-            max_outbound_messages_per_block:
-                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
-            max_outbound_message_payload_bytes: u64::try_from(
-                iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1,
-            )
-            .expect("SCCP outbound payload bound fits u64"),
-            max_pending_outbound_messages: sccp.max_pending_outbound_messages.get(),
-            max_pending_outbound_payload_bytes: sccp.max_pending_outbound_payload_bytes.get(),
-            max_proofs_per_transaction: sccp.max_proofs_per_transaction.get(),
-            max_proofs_per_block: sccp.max_proofs_per_block.get(),
-            max_proof_bytes_per_proof: sccp.max_proof_bytes_per_proof.get(),
-            max_proof_bytes_per_transaction: sccp.max_proof_bytes_per_transaction.get(),
-            max_proof_bytes_per_block: sccp.max_proof_bytes_per_block.get(),
-            max_native_headers_per_transaction: sccp.max_native_headers_per_transaction.get(),
-            max_native_headers_per_block: sccp.max_native_headers_per_block.get(),
-            max_ethereum_light_client_updates_per_transaction: sccp
-                .max_ethereum_light_client_updates_per_transaction
-                .get(),
-            max_ethereum_light_client_updates_per_block: sccp
-                .max_ethereum_light_client_updates_per_block
-                .get(),
-            max_native_header_bytes_per_transaction: sccp
-                .max_native_header_bytes_per_transaction
-                .get(),
-            max_native_header_bytes_per_block: sccp.max_native_header_bytes_per_block.get(),
-            max_secp256k1_recoveries_per_transaction: sccp
-                .max_secp256k1_recoveries_per_transaction
-                .get(),
-            max_secp256k1_recoveries_per_block: sccp.max_secp256k1_recoveries_per_block.get(),
-            max_bls_aggregate_checks_per_transaction: sccp
-                .max_bls_aggregate_checks_per_transaction
-                .get(),
-            max_bls_aggregate_checks_per_block: sccp.max_bls_aggregate_checks_per_block.get(),
-            max_bls_signer_contributions_per_transaction: sccp
-                .max_bls_signer_contributions_per_transaction
-                .get(),
-            max_bls_signer_contributions_per_block: sccp
-                .max_bls_signer_contributions_per_block
-                .get(),
-            max_ed25519_signature_checks_per_transaction: sccp
-                .max_ed25519_signature_checks_per_transaction
-                .get(),
-            max_ed25519_signature_checks_per_block: sccp
-                .max_ed25519_signature_checks_per_block
-                .get(),
-            max_ed25519_validator_key_checks_per_transaction: sccp
-                .max_ed25519_validator_key_checks_per_transaction
-                .get(),
-            max_ed25519_validator_key_checks_per_block: sccp
-                .max_ed25519_validator_key_checks_per_block
-                .get(),
-            max_bn254_pairing_checks_per_transaction: sccp
-                .max_bn254_pairing_checks_per_transaction
-                .get(),
-            max_bn254_pairing_checks_per_block: sccp.max_bn254_pairing_checks_per_block.get(),
-            max_bls12_381_pairing_checks_per_transaction: sccp
-                .max_bls12_381_pairing_checks_per_transaction
-                .get(),
-            max_bls12_381_pairing_checks_per_block: sccp
-                .max_bls12_381_pairing_checks_per_block
-                .get(),
-        }
+fn sccp_resource_limits(sccp: iroha_config::parameters::actual::Sccp) -> SccpResourceLimits {
+    SccpResourceLimits {
+        outbound_messages_per_block:
+            iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
+        outbound_message_payload_bytes: u64::try_from(
+            iroha_data_model::bridge::SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1,
+        )
+        .expect("SCCP outbound payload bound fits u64"),
+        pending_outbound_messages: sccp.max_pending_outbound_messages.get(),
+        pending_outbound_payload_bytes: sccp.max_pending_outbound_payload_bytes.get(),
+        proofs_per_transaction: sccp.max_proofs_per_transaction.get(),
+        proofs_per_block: sccp.max_proofs_per_block.get(),
+        proof_bytes_per_proof: sccp.max_proof_bytes_per_proof.get(),
+        proof_bytes_per_transaction: sccp.max_proof_bytes_per_transaction.get(),
+        proof_bytes_per_block: sccp.max_proof_bytes_per_block.get(),
+        native_headers_per_transaction: sccp.max_native_headers_per_transaction.get(),
+        native_headers_per_block: sccp.max_native_headers_per_block.get(),
+        ethereum_light_client_updates_per_transaction: sccp
+            .max_ethereum_light_client_updates_per_transaction
+            .get(),
+        ethereum_light_client_updates_per_block: sccp
+            .max_ethereum_light_client_updates_per_block
+            .get(),
+        native_header_bytes_per_transaction: sccp.max_native_header_bytes_per_transaction.get(),
+        native_header_bytes_per_block: sccp.max_native_header_bytes_per_block.get(),
+        secp256k1_recoveries_per_transaction: sccp.max_secp256k1_recoveries_per_transaction.get(),
+        secp256k1_recoveries_per_block: sccp.max_secp256k1_recoveries_per_block.get(),
+        bls_aggregate_checks_per_transaction: sccp.max_bls_aggregate_checks_per_transaction.get(),
+        bls_aggregate_checks_per_block: sccp.max_bls_aggregate_checks_per_block.get(),
+        bls_signer_contributions_per_transaction: sccp
+            .max_bls_signer_contributions_per_transaction
+            .get(),
+        bls_signer_contributions_per_block: sccp.max_bls_signer_contributions_per_block.get(),
+        ed25519_signature_checks_per_transaction: sccp
+            .max_ed25519_signature_checks_per_transaction
+            .get(),
+        ed25519_signature_checks_per_block: sccp.max_ed25519_signature_checks_per_block.get(),
+        ed25519_validator_key_checks_per_transaction: sccp
+            .max_ed25519_validator_key_checks_per_transaction
+            .get(),
+        ed25519_validator_key_checks_per_block: sccp
+            .max_ed25519_validator_key_checks_per_block
+            .get(),
+        bn254_pairing_checks_per_transaction: sccp.max_bn254_pairing_checks_per_transaction.get(),
+        bn254_pairing_checks_per_block: sccp.max_bn254_pairing_checks_per_block.get(),
+        bls12_381_pairing_checks_per_transaction: sccp
+            .max_bls12_381_pairing_checks_per_transaction
+            .get(),
+        bls12_381_pairing_checks_per_block: sccp.max_bls12_381_pairing_checks_per_block.get(),
     }
 }
 derived_items! {
-( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
-/// Stable first-release SCCP HTTP surface discovery.
-pub struct SccpCapabilitiesDto {
-    /// Capability schema version. First release is exactly `1`.
-    pub version: u8,
-    /// Hex-encoded digest of the authoritative typed route registry.
-    pub registry_revision: String,
-    /// Authoritative typed route-registry endpoint.
-    pub registry_path: String,
-    /// Finalized SORA message-bundle endpoint template.
-    pub message_bundle_path: String,
-    /// Query-free state-derived Groth16 request endpoint template.
-    pub proof_request_path: String,
-    /// Newest-first indexed outbound-message endpoint.
-    pub recent_messages_path: String,
-    /// Route-scoped SORA outbound contract-material endpoint template.
-    ///
-    /// The route registry commits only the artifact digest, verifier-key
-    /// reference, semantics, and gas policy.  Contract bytes are read back
-    /// separately from the governance-registered contract-code store through
-    /// this exact path.
-    pub sora_outbound_material_path: String,
-    /// Fixed SCCP V1 route-registry capacity limits.
-    pub registry_limits: SccpRegistryLimitsDto,
-    /// Consensus-critical proof and deterministic verifier-work limits.
-    pub resource_limits: SccpResourceLimitsDto,
-    /// Closed destination-proof submission endpoint when the application API is enabled.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub proof_submit_path: Option<String>,
-    /// Protocol-native inbound proof endpoint when the application API is enabled.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub native_message_submit_path: Option<String>,
-}
+
 (Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SccpSoraOutboundMaterialDto")]
 #[norito(deny_unknown_fields)]
 /// Route-scoped, state-derived SORA outbound IVM material.
 ///
@@ -6498,76 +6418,10 @@ pub struct SccpSoraOutboundMaterialDto {
     /// Active governance version of the referenced proof verification key.
     pub verifying_key_version: u32,
 }
-(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-#[norito(deny_unknown_fields)]
-/// Canonical readback and proof-request links for one finalized outbound message.
-pub struct SccpRecentMessageLinksDto {
-    /// Canonical SCCP bundle lookup path.
-    pub bundle_path: String,
-    /// Query-free canonical Groth16 request lookup path.
-    pub proof_request_path: String,
-}
-(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-#[norito(deny_unknown_fields)]
-/// Compact newest-first SCCP outbound-message discovery record.
-pub struct SccpRecentMessageDto {
-    /// Finalized SORA block height containing the message.
-    pub height: u64,
-    /// Zero-based position in that block's finalized SCCP commitment tree.
-    pub commitment_index: u32,
-    /// Hex-encoded canonical SCCP message identifier.
-    pub message_id_hex: String,
-    /// Stable closed payload kind.
-    pub kind: String,
-    /// Exact SORA source network profile.
-    pub source_profile: String,
-    /// Exact external destination network profile.
-    pub target_profile: String,
-    /// Hex-encoded destination deployment binding authenticated at admission.
-    pub destination_binding_hash: String,
-    /// Hex-encoded immutable destination route configuration.
-    pub route_configuration_hash: String,
-    /// Numeric SCCP destination domain.
-    pub target_domain: u32,
-    /// Canonical asset key when the transfer codec is textual.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub asset_id: Option<String>,
-    /// Canonical route identifier when the transfer codec is textual.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub route_id: Option<String>,
-    /// Canonical recipient when its codec is textual.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub recipient: Option<String>,
-    /// Exact non-negative transfer quantity projected from the fixed SCCP scalar.
-    pub amount: Quantity,
-    /// Required normalized closed transfer projection.
-    pub payload_projection: SccpPayloadProjectionV1,
-    /// Canonical bundle and state-derived proof-request links.
-    pub links: SccpRecentMessageLinksDto,
-}
-( Clone, Copy, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
-#[norito(deny_unknown_fields)]
-/// Compound continuation for SCCP recent-message discovery.
-pub struct SccpRecentCursorDto {
-    /// Height of the last item returned by the current page.
-    pub from: u64,
-    /// Commitment index of the last item returned by the current page.
-    pub after_index: u32,
-}
-(Clone, Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-#[norito(deny_unknown_fields)]
-/// Newest-first SCCP recent-message discovery response.
-pub struct SccpRecentMessagesDto {
-    /// Finalized outbound messages selected by the ordered consensus index.
-    pub items: Vec<SccpRecentMessageDto>,
-    /// Continuation to pass back as paired `from` and `after_index` fields.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub next: Option<SccpRecentCursorDto>,
-}
+
+
+
+
 (Clone, Debug)
 struct SccpIndexedOutboundRecord {
     key: iroha_data_model::bridge::SccpOutboundMessageKeyV1,
@@ -6704,9 +6558,9 @@ fn sccp_exact_proof_material(
         request,
     }))
 }
-fn sccp_capabilities_snapshot(state: &CoreState) -> SccpCapabilitiesDto {
+fn sccp_capabilities_snapshot(state: &CoreState) -> SccpCapabilities {
     let registry = state.sccp_registry_snapshot();
-    SccpCapabilitiesDto {
+    SccpCapabilities {
         version: 1,
         registry_revision: format!("0x{}", hex::encode(registry.revision())),
         registry_path: "/v1/sccp/registry".to_owned(),
@@ -6716,8 +6570,8 @@ fn sccp_capabilities_snapshot(state: &CoreState) -> SccpCapabilitiesDto {
         sora_outbound_material_path:
             "/v1/sccp/routes/{source_profile}/{route_id}/{asset_key}/{revision}/sora-outbound-material"
                 .to_owned(),
-        registry_limits: SccpRegistryLimitsDto::v1(),
-        resource_limits: state.zk_snapshot().sccp.into(),
+        registry_limits: sccp_registry_limits_v1(),
+        resource_limits: sccp_resource_limits(state.zk_snapshot().sccp),
         #[cfg(feature = "app_api")]
         proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
         #[cfg(not(feature = "app_api"))]
@@ -6842,6 +6696,9 @@ fn sccp_sora_outbound_material_for_route(
         verifying_key_version: vk_record.version,
     }))
 }
+#[cfg(test)]
+#[path = "routing/sccp_shared_wire_tests.rs"]
+mod sccp_shared_wire_tests;
 #[cfg(test)]
 mod sccp_first_release_api_tests {
     use super::*;
@@ -7673,35 +7530,35 @@ mod sccp_first_release_api_tests {
                 .is_err(),
             "a SORA source profile must fail before route lookup"
         );
-        assert_eq!(capabilities.registry_limits.max_governed_lanes, 16);
+        assert_eq!(capabilities.registry_limits.governed_lanes, 16);
         assert_eq!(
             capabilities
                 .registry_limits
-                .max_retained_native_trust_anchors_per_lane,
+                .retained_native_trust_anchors_per_lane,
             4_096
         );
         assert_eq!(
-            capabilities.resource_limits.max_proofs_per_transaction,
+            capabilities.resource_limits.proofs_per_transaction,
             state.zk_snapshot().sccp.max_proofs_per_transaction.get()
         );
         assert_eq!(
-            capabilities.resource_limits.max_outbound_messages_per_block,
+            capabilities.resource_limits.outbound_messages_per_block,
             512
         );
         assert_eq!(
             capabilities
                 .resource_limits
-                .max_outbound_message_payload_bytes,
+                .outbound_message_payload_bytes,
             4_096
         );
         assert_eq!(
-            capabilities.resource_limits.max_pending_outbound_messages,
+            capabilities.resource_limits.pending_outbound_messages,
             state.zk_snapshot().sccp.max_pending_outbound_messages.get()
         );
         assert_eq!(
             capabilities
                 .resource_limits
-                .max_pending_outbound_payload_bytes,
+                .pending_outbound_payload_bytes,
             state
                 .zk_snapshot()
                 .sccp
@@ -7711,7 +7568,7 @@ mod sccp_first_release_api_tests {
         assert_eq!(
             capabilities
                 .resource_limits
-                .max_bls_signer_contributions_per_block,
+                .bls_signer_contributions_per_block,
             state
                 .zk_snapshot()
                 .sccp
@@ -8738,7 +8595,7 @@ fn recent_message_entry_from_projection(
     height: u64,
     message_id: [u8; 32],
     message: &iroha_core::bridge::ValidatedSccpOutboundMessageProjectionV1,
-) -> Result<SccpRecentMessageDto> {
+) -> Result<SccpRecentMessage> {
     let context = message.context;
     if !context.is_well_formed()
         || sccp_message_source_domain(&message.payload) != context.lane.source.domain_id()
@@ -8779,7 +8636,7 @@ fn recent_message_entry_from_projection(
         .spec();
     let amount =
         recent_message_projection_amount(&payload_projection, governed_route, settlement_spec)?;
-    Ok(SccpRecentMessageDto {
+    Ok(SccpRecentMessage {
         height,
         commitment_index: message.commitment_index,
         message_id_hex: message_id_hex.clone(),
@@ -8794,7 +8651,7 @@ fn recent_message_entry_from_projection(
         recipient,
         amount,
         payload_projection,
-        links: SccpRecentMessageLinksDto {
+        links: SccpRecentMessageLinks {
             bundle_path: format!("/v1/sccp/proofs/message/{message_id_hex}"),
             proof_request_path: format!("/v1/sccp/proof-requests/{message_id_hex}"),
         },
@@ -8809,7 +8666,7 @@ fn take_bounded_recent_sccp_index_keys(
 fn recent_sccp_entries_from_indexed_records(
     state: &CoreState,
     indexed_records: &[SccpIndexedOutboundRecord],
-) -> Result<Vec<SccpRecentMessageDto>> {
+) -> Result<Vec<SccpRecentMessage>> {
     let mut entries = Vec::with_capacity(indexed_records.len());
     let mut offset = 0;
     while offset < indexed_records.len() {
@@ -8857,7 +8714,7 @@ fn recent_sccp_entries_from_indexed_records(
 fn collect_recent_sccp_messages(
     state: &CoreState,
     window: &SccpRecentWindowQuery,
-) -> Result<SccpRecentMessagesDto> {
+) -> Result<SccpRecentMessages> {
     const RECENT_SCCP_MESSAGES_CAP: usize = 50;
     if window.from == Some(0) {
         return Err(sccp_bad_request(
@@ -8945,11 +8802,11 @@ fn collect_recent_sccp_messages(
     let next = has_more
         .then_some(indexed_records.last())
         .flatten()
-        .map(|last| SccpRecentCursorDto {
+        .map(|last| SccpRecentCursor {
             from: last.descriptor.recorded_at_height,
             after_index: last.descriptor.commitment_index,
         });
-    Ok(SccpRecentMessagesDto { items, next })
+    Ok(SccpRecentMessages { items, next })
 }
 /// GET /v1/sccp/proofs/message/{message_id} — SORA-origin SCCP message bundle.
 #[iroha_futures::telemetry_future]
@@ -17556,21 +17413,24 @@ mod asset_transfer_request_tests {
         assert_eq!(queue.active_len(), 0);
     }
 }
-/// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
-#[iroha_futures::telemetry_future]
-async fn submit_contract_call_request(
+/// Exact public contract preparation awaiting optional certified submission.
+#[derive(Debug)]
+pub(crate) struct PreparedContractCallRequest {
+    pub(crate) response: ContractCallResponseDto,
+    pub(crate) transaction: Option<iroha_data_model::transaction::SignedTransaction>,
+}
+/// Resolve, quote and verify one contract call without admitting it locally.
+pub(crate) fn prepare_contract_call_request(
     queue: Arc<Queue>,
     state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
     req: ContractCallDto,
-    endpoint: &'static str,
-    expected_kind: Option<manifest::EntryPointKind>,
-) -> Result<ContractCallResponseDto> {
+) -> Result<PreparedContractCallRequest> {
     use iroha_data_model::prelude as dm;
     let ContractCallDto {
         authority,
         public_key_hex,
         signature_b64,
+        transaction_payload_b64,
         contract_address,
         contract_alias,
         entrypoint,
@@ -17580,6 +17440,21 @@ async fn submit_contract_call_request(
         transaction_ttl_ms,
         fee_payment,
     } = req;
+    let detached_submit = public_key_hex.is_some()
+        || signature_b64.is_some()
+        || transaction_payload_b64.is_some();
+    if detached_submit
+        && (public_key_hex.is_none() || signature_b64.is_none() || transaction_payload_b64.is_none())
+    {
+        return Err(conversion_error(
+            "contract call submission requires public_key_hex, signature_b64, and transaction_payload_b64 together".to_owned(),
+        ));
+    }
+    if detached_submit && creation_time_ms.is_none() {
+        return Err(conversion_error(
+            "contract call submission requires the prepared creation_time_ms".to_owned(),
+        ));
+    }
     fee_payment
         .validate()
         .map_err(|err| conversion_error(format!("invalid fee_payment: {err}")))?;
@@ -17614,7 +17489,7 @@ async fn submit_contract_call_request(
     }
     let resolved_entrypoint = explicit_contract_entrypoint(&entrypoint)?;
     let entrypoint_descriptor =
-        ensure_contract_call_entrypoint(&manifest, resolved_entrypoint, expected_kind)?;
+        ensure_contract_call_entrypoint(&manifest, resolved_entrypoint, None)?;
     {
         let world = state.world_view();
         iroha_core::smartcontracts::code::ensure_contract_entrypoint_lifecycle(
@@ -17660,64 +17535,46 @@ async fn submit_contract_call_request(
         arguments,
     };
     let builder = builder
+        .with_admission_intent(iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced)
         .with_metadata(metadata)
         .with_fee_payment_intent(fee_payment.clone())
         .with_executable(dm::Executable::ContractCall(executable));
-    let builder =
-        quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), endpoint)?;
+    let builder = if let Some(encoded) = transaction_payload_b64.as_deref() {
+        let (payload, canonical_bytes) = decode_app_api_transaction_payload_b64(encoded)?;
+        if &payload != builder.payload() || canonical_bytes != builder.encode_payload() {
+            return Err(conversion_error(
+                "prepared contract call payload does not match the exact requested invocation, metadata, fee payment, and QueuePlanSynced admission".to_owned(),
+            ));
+        }
+        // Keep the retained signed fee limits and payload bytes; admission validates them live.
+        dm::TransactionBuilder::from_payload(payload)
+            .map_err(|error| app_api_transaction_signing_error("/v1/contracts/call", error))?
+    } else {
+        quote_app_api_transaction_builder(builder, queue.as_ref(), state.as_ref(), "/v1/contracts/call")?
+    };
     let fee_payment = builder.payload().fee_payment.clone();
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
-    if public_key_hex.is_some() || signature_b64.is_some() {
+    let transaction = if public_key_hex.is_some() || signature_b64.is_some() {
         let signature = decode_app_api_detached_authority_signature(
             public_key_hex.as_deref(),
             signature_b64.as_deref(),
             &authority,
             "public_key_hex does not match authority",
         )?;
-        let tx = builder.build_with_signature(signature);
+        let tx = builder.clone().build_with_signature(signature);
         tx.verify_signature().map_err(|err| {
             conversion_error(format!(
                 "contract call detached signature verification failed: {err}"
             ))
         })?;
-        let tx_hash_hex = hex::encode(tx.hash().as_ref());
-        let entrypoint_hash_hex = hex::encode(tx.hash_as_entrypoint().as_ref());
-        handle_transaction_with_metrics(queue, state, tx, telemetry, endpoint).await?;
-        return Ok(ContractCallResponseDto {
-            ok: true,
-            submitted: true,
-            dataspace: dataspace.clone(),
-            contract_address: Some(contract_address.clone()),
-            code_hash_hex: code_hash_hex.clone(),
-            abi_hash_hex: abi_hash_hex.clone(),
-            creation_time_ms,
-            transaction_ttl_ms,
-            tx_hash_hex: Some(tx_hash_hex.clone()),
-            pipeline_status: Some(queued_pipeline_status_response(tx_hash_hex.clone())),
-            entrypoint_hash_hex: Some(entrypoint_hash_hex.clone()),
-            transaction_payload_b64: None,
-            signing_message_b64: None,
-            entrypoint: response_entrypoint.clone(),
-            operation_receipt: contract_call_operation_receipt(ContractCallReceiptInput {
-                status: "submitted",
-                dataspace: &dataspace,
-                contract_alias: contract_alias.as_ref(),
-                contract_address: &contract_address,
-                code_hash_hex: &code_hash_hex,
-                abi_hash_hex: &abi_hash_hex,
-                tx_hash_hex: Some(tx_hash_hex),
-                entrypoint: response_entrypoint.clone(),
-                entrypoint_hash_hex: Some(entrypoint_hash_hex),
-                gas_limit,
-                fee_payment: fee_payment.clone(),
-                payload_digest_hex: &payload_digest_hex,
-            }),
-        });
-    }
+        Some(tx)
+    } else {
+        None
+    };
     let draft = app_api_transaction_draft(&builder);
-    Ok(ContractCallResponseDto {
+    let response = ContractCallResponseDto {
         ok: true,
         submitted: false,
         dataspace: dataspace.clone(),
@@ -17746,7 +17603,8 @@ async fn submit_contract_call_request(
             fee_payment,
             payload_digest_hex: &payload_digest_hex,
         }),
-    })
+    };
+    Ok(PreparedContractCallRequest { response, transaction })
 }
 fn queued_pipeline_status_response(
     tx_hash_hex: String,
@@ -17928,7 +17786,7 @@ fn validate_sccp_taira_transfer_recipient(payload: &SccpPayloadV1) -> Result<()>
     }
     Ok(())
 }
-fn decode_sccp_transaction_payload_b64(
+fn decode_app_api_transaction_payload_b64(
     encoded: &str,
 ) -> Result<(
     iroha_data_model::transaction::signed::TransactionPayload,
@@ -18067,7 +17925,7 @@ fn build_exact_sccp_signed_transaction(
     signature_b64: &str,
     context: &str,
 ) -> Result<SignedTransaction> {
-    let (payload, payload_bytes) = decode_sccp_transaction_payload_b64(transaction_payload_b64)?;
+    let (payload, payload_bytes) = decode_app_api_transaction_payload_b64(transaction_payload_b64)?;
     let builder = exact_sccp_transaction_builder(
         state.network_id_ref(),
         authority,
@@ -18302,19 +18160,6 @@ pub async fn handle_post_asset_transfer(
     )
     .await?;
     pretty_json_response(&response)
-}
-/// POST /v1/contracts/call — submit a public contract call transaction and
-/// return the queued execution receipt metadata.
-pub async fn handle_post_contract_call(
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<ContractCallDto>,
-) -> Result<impl IntoResponse> {
-    let response =
-        submit_contract_call_request(queue, state, telemetry, req, "/v1/contracts/call", None)
-            .await?;
-    Ok(infallible_pretty_json_response(&response, "{}"))
 }
 /// POST /v1/contracts/call/batch/prepare — resolve and ABI-bind one exact ordered batch.
 pub fn handle_post_contract_call_batch_prepare(
@@ -25056,11 +24901,11 @@ mod multisig_selector_tests {
             &authority_keypair,
             &contract_address,
         );
-        let response = handle_post_contract_call(
+        let response = prepare_contract_call_request(
             build_queue(),
             state,
-            MaybeTelemetry::disabled(),
-            NoritoJson(ContractCallDto {
+            ContractCallDto {
+                transaction_payload_b64: None,
                 authority: authority.clone(),
                 public_key_hex: None,
                 signature_b64: None,
@@ -25075,11 +24920,13 @@ mod multisig_selector_tests {
                     Vec::new(),
                     std::num::NonZeroU64::new(10_000),
                 ),
-            }),
+            },
         )
-        .await
         .expect("contract address target should prepare");
-        let payload = decode_json_response(response.into_response()).await;
+        assert!(response.transaction.is_none(), "prepare does not submit");
+        let payload = decode_json_response(
+            infallible_pretty_json_response(&response.response, "{}"),
+        ).await;
         assert_eq!(payload["ok"].as_bool(), Some(true));
         assert_eq!(payload["submitted"].as_bool(), Some(false));
         assert_eq!(payload["dataspace"].as_str(), Some("universal"));
@@ -25092,15 +24939,204 @@ mod multisig_selector_tests {
             Some(contract_address.as_ref())
         );
         assert_exact_unsigned_transaction_draft(&payload);
+        let draft = base64::engine::general_purpose::STANDARD.decode(
+            payload["transaction_payload_b64"].as_str().expect("canonical draft"),
+        ).expect("decode payload");
+        let builder = dm::TransactionBuilder::decode_payload(&draft).expect("decode transaction");
+        assert_eq!(builder.payload().admission_intent(),
+            iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+    }
+    fn public_contract_call_fixture() -> (Arc<State>, Arc<Queue>, KeyPair, ContractCallDto) {
+        let key = checked_multisig_selector_keypair(0x6c, "derive public contract-call key");
+        let authority = dm::AccountId::new(key.public_key().clone());
+        let account = Account::new(authority.clone()).build(&authority);
+        let state = build_state(World::with([], [account], []));
+        let address = derived_universal_contract_address(&authority, 2);
+        install_contract_instance(state.as_ref(), &authority, &key, &address);
+        let request = ContractCallDto {
+            authority,
+            public_key_hex: None,
+            signature_b64: None,
+            transaction_payload_b64: None,
+            contract_address: Some(address),
+            contract_alias: None,
+            entrypoint: "main".to_owned(),
+            payload: None,
+            metadata: Metadata::default(),
+            creation_time_ms: Some(current_time_millis()),
+            transaction_ttl_ms: Some(60_000),
+            fee_payment: iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(), NonZeroU64::new(10_000),
+            ),
+        };
+        (state, build_queue(), key, request)
+    }
+    fn detached_public_contract_call(
+        state: &Arc<State>, queue: &Arc<Queue>, key: &KeyPair, request: &ContractCallDto,
+    ) -> (ContractCallDto, dm::TransactionBuilder) {
+        let prepared = prepare_contract_call_request(queue.clone(), state.clone(), request.clone())
+            .expect("prepare exact public contract call");
+        let encoded = prepared.response.transaction_payload_b64.expect("prepared bytes");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&encoded).expect("base64");
+        let builder = dm::TransactionBuilder::decode_payload(&bytes).expect("payload");
+        let signature = Signature::try_new(key.private_key(), &builder.payload_hash_bytes())
+            .expect("sign exact prepared payload");
+        let mut request = request.clone();
+        request.fee_payment = builder.payload().fee_payment.clone();
+        request.public_key_hex = Some(hex::encode(key.public_key().to_bytes().1));
+        request.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        request.transaction_payload_b64 = Some(encoded);
+        (request, builder)
+    }
+    routing_test! { sync contract_call_detached_submission_retains_exact_queue_plan_payload
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
+        let prepared = prepare_contract_call_request(queue.clone(), state, request)
+            .expect("verify exact retained submission");
+        let transaction = prepared.transaction.expect("detached transaction");
+        transaction.verify_signature().expect("retained signature verifies");
+        assert_eq!(transaction, builder.clone().try_sign(key.private_key()).expect("exact expected signature"));
+        assert_eq!(transaction.admission_intent(), iroha_data_model::transaction::TransactionAdmissionIntent::QueuePlanSynced);
+        assert!(!prepared.response.submitted, "preparation cannot claim public admission");
+        assert!(prepared.response.pipeline_status.is_none());
+        assert_eq!(prepared.response.operation_receipt.fee_payment.as_ref(), Some(&builder.payload().fee_payment));
+        assert_eq!(queue.active_len(), 0, "verification never enters the Ordinary queue");
+    }
+    routing_test! { sync contract_call_detached_submission_preserves_retained_fee_limits_without_requote
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (mut request, builder) = detached_public_contract_call(&state, &queue, &key, &request);
+        let retained_fee = dm::FeePaymentIntent::authority(
+            vec![dm::FeeChargeLimit::new(
+                dm::FeeChargeKind::PipelineGas, test_asset_definition_id(), dm::Quantity::from(100_u32),
+            )],
+            NonZeroU64::new(10_000),
+        );
+        retained_fee.validate().expect("canonical retained fee intent");
+        assert_ne!(builder.payload().fee_payment, retained_fee, "fixture quote differs from retained limits");
+        let builder = builder.with_fee_payment_intent(retained_fee.clone());
+        let signature = Signature::try_new(key.private_key(), &builder.payload_hash_bytes()).expect("sign retained fee limits");
+        request.fee_payment = retained_fee.clone();
+        request.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(builder.encode_payload()));
+        request.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        let prepared = prepare_contract_call_request(queue.clone(), state, request).expect("signed fees are validated unchanged");
+        assert_eq!(prepared.transaction.expect("exact transaction"), builder.try_sign(key.private_key()).expect("expected signed payload"));
+        assert_eq!(prepared.response.operation_receipt.fee_payment, Some(retained_fee));
+        assert_eq!(queue.active_len(), 0, "live fee admissibility remains the public ingress owner's work");
+    }
+    routing_test! { sync contract_call_detached_submission_rejects_changed_or_noncanonical_payload
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (exact, builder) = detached_public_contract_call(&state, &queue, &key, &request);
+        let ordinary = builder.clone().with_admission_intent(
+            iroha_data_model::transaction::TransactionAdmissionIntent::Ordinary,
+        );
+        let signature = Signature::try_new(key.private_key(), &ordinary.payload_hash_bytes()).expect("sign other intent");
+        let mut changed = exact.clone();
+        changed.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(ordinary.encode_payload()));
+        changed.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        let error = prepare_contract_call_request(queue.clone(), state.clone(), changed)
+            .expect_err("even a valid Ordinary signature cannot enter the public contract surface");
+        assert!(expect_conversion(error).contains("exact requested invocation"));
+        let mut bytes = builder.encode_payload();
+        bytes.push(0);
+        let mut noncanonical = exact.clone();
+        noncanonical.transaction_payload_b64 = Some(base64::engine::general_purpose::STANDARD.encode(bytes));
+        assert!(prepare_contract_call_request(queue.clone(), state.clone(), noncanonical).is_err(), "trailing payload bytes must fail");
+        let mut replaced_signature = exact;
+        replaced_signature.signature_b64 = Some(base64::engine::general_purpose::STANDARD.encode(signature.payload()));
+        let error = prepare_contract_call_request(queue.clone(), state, replaced_signature)
+            .expect_err("a signature over another intent cannot authenticate retained QP bytes");
+        assert!(expect_conversion(error).contains("detached signature verification failed"));
+        assert_eq!(queue.active_len(), 0);
+    }
+    routing_test! { async contract_call_detached_handler_requires_certified_public_admission
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (request, _) = detached_public_contract_call(&state, &queue, &key, &request);
+        let mut app = crate::mk_app_state_for_tests();
+        let inner = Arc::get_mut(&mut app).expect("unique fixture AppState");
+        inner.state = state;
+        inner.queue = queue.clone();
+        let response = crate::handler_post_contract_call(
+            axum::extract::State(app),
+            axum::http::HeaderMap::new(),
+            axum::extract::ConnectInfo("127.0.0.1:3030".parse().expect("remote")),
+            NoritoJson(request),
+        ).await.unwrap_or_else(axum::response::IntoResponse::into_response);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let bytes = response.into_body().collect().await.expect("response body").to_bytes();
+        let error: iroha_torii_shared::ErrorEnvelope = norito::decode_from_bytes(&bytes).expect("public error envelope");
+        #[cfg(feature = "connect")]
+        assert_eq!(error.code(), "route_unavailable");
+        #[cfg(not(feature = "connect"))]
+        assert_eq!(error.code(), "queue_plan_synced_transport_unavailable");
+        assert_eq!(queue.active_len(), 0, "no local enqueue can mask absent public admission authority");
+    }
+    routing_test! { sync contract_call_detached_submission_requires_complete_retained_envelope
+        let (state, queue, key, request) = public_contract_call_fixture();
+        let (exact, _) = detached_public_contract_call(&state, &queue, &key, &request);
+        for present in 1..7 {
+            let mut incomplete = exact.clone();
+            if present & 1 == 0 { incomplete.public_key_hex = None; }
+            if present & 2 == 0 { incomplete.signature_b64 = None; }
+            if present & 4 == 0 { incomplete.transaction_payload_b64 = None; }
+            let error = prepare_contract_call_request(queue.clone(), state.clone(), incomplete)
+                .expect_err("every partial detached envelope fails before preparation");
+            assert!(expect_conversion(error).contains("together"));
+        }
+        let mut missing_time = exact;
+        missing_time.creation_time_ms = None;
+        let error = prepare_contract_call_request(queue.clone(), state, missing_time)
+            .expect_err("detached submit cannot invent a signing timestamp");
+        assert!(expect_conversion(error).contains("prepared creation_time_ms"));
+        assert_eq!(queue.active_len(), 0);
+    }
+    routing_test! { async contract_call_prepare_serializes_complete_canonical_response
+        let (state, queue, _, mut request) = public_contract_call_fixture();
+        request.transaction_ttl_ms = None;
+        let prepared = prepare_contract_call_request(queue.clone(), state.clone(), request.clone()).expect("prepare");
+        let encoded = prepared.response.transaction_payload_b64.as_ref().expect("exact payload");
+        let bytes = base64::engine::general_purpose::STANDARD.decode(encoded).expect("base64");
+        let builder = dm::TransactionBuilder::decode_payload(&bytes).expect("canonical payload");
+        assert_eq!(builder.payload().time_to_live(),
+            Some(iroha_data_model::transaction::DEFAULT_TRANSACTION_TIME_TO_LIVE),
+            "an omitted TTL selects the canonical default; it never creates an unbounded transaction");
+        let value = norito::json::to_value(&prepared.response).expect("actual response serializer");
+        let root_fields = ["ok", "submitted", "dataspace", "contract_address", "code_hash_hex", "abi_hash_hex", "creation_time_ms", "transaction_ttl_ms", "tx_hash_hex", "pipeline_status", "entrypoint_hash_hex", "transaction_payload_b64", "signing_message_b64", "entrypoint", "operation_receipt"];
+        let object = value.as_object().expect("response object");
+        assert_eq!(object.len(), root_fields.len());
+        for field in root_fields { assert!(object.contains_key(field), "missing root field {field}"); }
+        for field in ["transaction_ttl_ms", "tx_hash_hex", "pipeline_status", "entrypoint_hash_hex"] {
+            assert!(object.get(field).is_some_and(norito::json::Value::is_null), "explicit root null {field}");
+        }
+        let receipt_fields = ["operation_kind", "status", "transport", "dataspace", "contract_alias", "contract_address", "code_hash_hex", "abi_hash_hex", "tx_hash_hex", "entrypoint", "entrypoint_hash_hex", "gas_limit", "gas_used", "fee_payment", "payload_digest_hex"];
+        let receipt = value["operation_receipt"].as_object().expect("receipt object");
+        assert_eq!(receipt.len(), receipt_fields.len());
+        for field in receipt_fields { assert!(receipt.contains_key(field), "missing receipt field {field}"); }
+        for field in ["contract_alias", "tx_hash_hex", "entrypoint_hash_hex", "gas_used"] {
+            assert!(receipt.get(field).is_some_and(norito::json::Value::is_null), "explicit receipt null {field}");
+        }
+        let mut app = crate::mk_app_state_for_tests();
+        let inner = Arc::get_mut(&mut app).expect("unique fixture AppState");
+        inner.state = state;
+        inner.queue = queue.clone();
+        let response = crate::handler_post_contract_call(
+            axum::extract::State(app),
+            axum::http::HeaderMap::new(),
+            axum::extract::ConnectInfo("127.0.0.1:3030".parse().expect("remote")),
+            NoritoJson(request),
+        ).await.expect("prepare handler returns canonical JSON");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()[axum::http::header::CONTENT_TYPE], "application/json");
+        assert_eq!(decode_json_response(response).await, value);
+        assert_eq!(queue.active_len(), 0, "preparation never admits a transaction");
     }
     routing_test! { async contract_call_rejects_missing_target
         let authority =
             checked_multisig_selector_account_id(0x6a, "derive missing-target authority key");
-        let result = handle_post_contract_call(
+        let result = prepare_contract_call_request(
             build_queue(),
             build_state(World::default()),
-            MaybeTelemetry::disabled(),
-            NoritoJson(ContractCallDto {
+            ContractCallDto {
+                transaction_payload_b64: None,
                 authority,
                 public_key_hex: None,
                 signature_b64: None,
@@ -25115,9 +25151,8 @@ mod multisig_selector_tests {
                     Vec::new(),
                     std::num::NonZeroU64::new(10_000),
                 ),
-            }),
-        )
-        .await;
+            },
+        );
         let err = match result {
             Ok(_) => panic!("missing canonical contract target must fail"),
             Err(err) => err,
@@ -25130,11 +25165,11 @@ mod multisig_selector_tests {
             0x6b,
             "derive missing-contract-alias authority key",
         );
-        let result = handle_post_contract_call(
+        let result = prepare_contract_call_request(
             build_queue(),
             build_state(World::default()),
-            MaybeTelemetry::disabled(),
-            NoritoJson(ContractCallDto {
+            ContractCallDto {
+                transaction_payload_b64: None,
                 authority,
                 public_key_hex: None,
                 signature_b64: None,
@@ -25149,9 +25184,8 @@ mod multisig_selector_tests {
                     Vec::new(),
                     std::num::NonZeroU64::new(10_000),
                 ),
-            }),
-        )
-        .await;
+            },
+        );
         let err = match result {
             Ok(_) => panic!("missing contract alias must fail"),
             Err(err) => err,
@@ -29301,6 +29335,8 @@ mod proof_retention_summary_tests {
 app_api_items! {
 derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVkRegisterDto")]
 #[norito(deny_unknown_fields)]
 /// DTO for registering a verifying key
 pub struct ZkVkRegisterDto {
@@ -29365,6 +29401,8 @@ fn _assert_vk_register_dto_json() {
 }
 derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ZkVkUpdateDto")]
 #[norito(deny_unknown_fields)]
 /// DTO for updating a verifying key record
 pub struct ZkVkUpdateDto {
@@ -30043,6 +30081,8 @@ derived_items! {
 #[allow(missing_copy_implementations)]
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request for binding, updating, or clearing a contract alias.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SetContractAliasDto")]
 #[norito(deny_unknown_fields)]
 pub struct SetContractAliasDto {
     /// Transaction authority.
@@ -30214,6 +30254,8 @@ fn dataspace_alias_for_contract_address(
 }
 derived_items! {
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AssetTransferRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Exact request payload for a detached, single-instruction quantity transfer.
 ///
@@ -30330,6 +30372,8 @@ pub struct AssetTransferResponseDto {
 }
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking a deployed contract.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractCallDto")]
 #[norito(deny_unknown_fields)]
 pub struct ContractCallDto {
     /// Account authorizing the call.
@@ -30340,6 +30384,10 @@ pub struct ContractCallDto {
     /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
     #[norito(default)]
     pub signature_b64: Option<String>,
+    /// Exact canonical payload returned by preparation; required with both detached signature fields.
+    /// Torii validates and submits these bytes without rebuilding or re-quoting a signed envelope.
+    #[norito(default)]
+    pub transaction_payload_b64: Option<String>,
     /// Optional canonical contract address.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -30403,6 +30451,8 @@ pub struct ContractCallBatchPrepareItemDto {
     pub instruction_b64: Option<String>,
 }
 ( Clone, Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractCallBatchPrepareDto")]
 #[norito(deny_unknown_fields)]
 /// Request for canonical ordered contract-call batch preparation.
 pub struct ContractCallBatchPrepareDto {
@@ -30498,6 +30548,8 @@ pub struct ContractCallBatchPlanDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for simulating a deployed contract call without submitting a transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractCallSimulateDto")]
 #[norito(deny_unknown_fields)]
 pub struct ContractCallSimulateDto {
     /// Account authorizing the call.
@@ -30529,51 +30581,41 @@ pub struct OperationReceiptDto {
     pub dataspace: String,
     /// Optional contract alias used for the operation.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_alias: Option<String>,
     /// Optional canonical contract address.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub contract_address: Option<String>,
     /// Optional code hash of the deployed or invoked artifact.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
     /// Optional ABI hash of the deployed or invoked artifact.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub abi_hash_hex: Option<String>,
     /// Optional submitted transaction hash.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub tx_hash_hex: Option<String>,
     /// Optional contract entrypoint for calls.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint: Option<String>,
     /// Optional transaction entrypoint hash.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub entrypoint_hash_hex: Option<String>,
     /// Optional gas limit attached to the operation.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_limit: Option<u64>,
     /// Optional gas actually consumed when available.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub gas_used: Option<u64>,
     /// Exact signature-bound fee payment used by this transaction.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub fee_payment: Option<iroha_data_model::transaction::FeePaymentIntent>,
     /// Public digest of the normalized operation payload or artifact bytes.
     pub payload_digest_hex: String,
 }
 (Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)
-/// Response payload returned after enqueuing a contract call transaction.
+/// Canonical preparation or certified-admission response for a contract call transaction.
 pub struct ContractCallResponseDto {
-    /// Whether queuing succeeded.
+    /// Whether preparation or certified admission succeeded.
     pub ok: bool,
     /// Whether Torii submitted the transaction to the pipeline.
     pub submitted: bool,
@@ -30590,14 +30632,12 @@ pub struct ContractCallResponseDto {
     pub creation_time_ms: u64,
     /// Optional transaction time-to-live in milliseconds embedded in the payload.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub transaction_ttl_ms: Option<u64>,
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
     /// Pipeline status envelope for the submitted transaction, when available.
     #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub pipeline_status: Option<iroha_torii_shared::PipelineTransactionStatusResponse>,
     /// Hex-encoded transaction entrypoint hash used by committed transaction queries.
     #[norito(default)]
@@ -30820,6 +30860,8 @@ impl norito::json::JsonDeserialize for BridgeProofSubmitDto {
             .map(Into::into)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::BridgeSubmitResponseDto")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 #[norito(deny_unknown_fields)]
 /// Exact response returned by both SCCP bridge submit endpoints.
@@ -30958,6 +31000,8 @@ impl norito::json::JsonDeserialize for BridgeMessageSubmitDto {
 derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking a read-only contract view entrypoint.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractViewDto")]
 pub struct ContractViewDto {
     /// Account identity used as the read authority and host context.
     pub authority: iroha_data_model::account::AccountId,
@@ -30998,6 +31042,8 @@ pub struct ContractViewBatchItemDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for invoking multiple read-only contract view entrypoints in one HTTP round-trip.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::ContractViewBatchDto")]
 pub struct ContractViewBatchDto {
     /// Account identity used as the read authority and host context.
     pub authority: iroha_data_model::account::AccountId,
@@ -31092,6 +31138,8 @@ pub struct MultisigAccountSelectorDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for proposing a generic multisig instruction batch.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigProposeDto")]
 #[norito(deny_unknown_fields)]
 pub struct MultisigProposeDto {
     /// Alias-aware selector for the multisig authority controlling the action.
@@ -31133,6 +31181,8 @@ pub struct MultisigProposeDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for approving a generic multisig proposal.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigApproveDto")]
 #[norito(deny_unknown_fields)]
 pub struct MultisigApproveDto {
     /// Alias-aware selector for the multisig authority controlling the action.
@@ -31159,6 +31209,8 @@ pub struct MultisigApproveDto {
     pub instructions_hash: Option<String>,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigContractCallProposeDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for proposing a multisig-wrapped contract call.
 pub struct MultisigContractCallProposeDto {
@@ -31191,6 +31243,8 @@ pub struct MultisigContractCallProposeDto {
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigContractCallApproveDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for approving a multisig-wrapped contract call proposal.
 pub struct MultisigContractCallApproveDto {
@@ -31230,8 +31284,8 @@ mod multisig_native_norito_dto_tests {
         IrohaJson, MultisigAccountSelectorDto, MultisigContractCallProposeDto, MultisigProposeDto,
     };
     use iroha_data_model::{account::AccountId, smart_contract::ContractAlias};
-    use norito::{NoritoSerialize, SerializePayload};
-    fn bare_payload_with_flags<T: NoritoSerialize>(
+    use norito::SerializePayload;
+    fn bare_payload_with_flags<T: SerializePayload>(
         value: &T,
         flags: u8,
     ) -> Vec<u8> {
@@ -31320,6 +31374,8 @@ mod multisig_native_norito_dto_tests {
 derived_items! {
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for canceling a multisig proposal through a multisig action.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigCancelRequestDto")]
 #[norito(deny_unknown_fields)]
 pub struct MultisigCancelRequestDto {
     /// Alias-aware selector for the multisig authority controlling the action.
@@ -31416,6 +31472,8 @@ pub struct MultisigCancelResponseDto {
     pub signing_message_b64: Option<String>,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigSpecRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a multisig spec through the alias-aware selector.
 pub struct MultisigSpecRequestDto {
@@ -31438,6 +31496,8 @@ pub struct MultisigProposalsQueryResponseDto {
     pub next_cursor: Option<String>,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigProposalsResolveRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for resolving a single multisig proposal.
 pub struct MultisigProposalsResolveRequestDto {
@@ -31466,6 +31526,8 @@ pub struct MultisigProposalResolveResponseDto {
     pub terminal_at_ms: Option<u64>,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::MultisigProposalsQueryRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Request payload for querying multisig proposals.
 pub struct MultisigProposalsQueryRequestDto {
@@ -31521,6 +31583,8 @@ pub struct AccountRecoveryDetachedAuthDto {
     pub fee_payment: iroha_data_model::transaction::FeePaymentIntent,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryPolicySetDto")]
 #[norito(deny_unknown_fields)]
 /// Configure the exact regulated 2-of-3, 72-hour account-recovery policy.
 pub struct AccountRecoveryPolicySetDto {
@@ -31536,6 +31600,8 @@ pub struct AccountRecoveryPolicySetDto {
     pub timelock_ms: u64,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryProposeDto")]
 #[norito(deny_unknown_fields)]
 /// Propose an alias-bound controller replacement through regulated recovery.
 pub struct AccountRecoveryProposeDto {
@@ -31547,6 +31613,8 @@ pub struct AccountRecoveryProposeDto {
     pub new_controller: iroha_data_model::account::AccountController,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryApproveDto")]
 #[norito(deny_unknown_fields)]
 /// Approve an alias-bound regulated account-recovery request.
 pub struct AccountRecoveryApproveDto {
@@ -31556,6 +31624,8 @@ pub struct AccountRecoveryApproveDto {
     pub auth: AccountRecoveryDetachedAuthDto,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryFinalizeDto")]
 #[norito(deny_unknown_fields)]
 /// Finalize an alias-bound regulated account-recovery request after quorum and cooling.
 pub struct AccountRecoveryFinalizeDto {
@@ -31565,6 +31635,8 @@ pub struct AccountRecoveryFinalizeDto {
     pub auth: AccountRecoveryDetachedAuthDto,
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountRecoveryStatusRequestDto")]
 #[norito(deny_unknown_fields)]
 /// Query an alias-bound recovery policy, request, and proposal-invalidation evidence.
 pub struct AccountRecoveryStatusRequestDto {
@@ -31611,6 +31683,8 @@ pub struct AccountRecoveryStatusResponseDto {
 }
 ( Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for reading asset-transfer control state for one account and asset definition.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AssetTransferControlGetRequestDto")]
 pub struct AssetTransferControlGetRequestDto {
     pub account_id: iroha_data_model::account::AccountId,
     pub asset_definition_id: iroha_data_model::asset::AssetDefinitionId,
@@ -31735,12 +31809,16 @@ pub struct PorExportQueryDto {
 }
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for recording a PoR proof submitted by a provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordPorProofDto")]
 pub struct RecordPorProofDto {
     /// Base64-encoded Norito `PorProofV1`.
     pub proof_b64: String,
 }
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for recording a PoR audit verdict.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::RecordPorVerdictDto")]
 pub struct RecordPorVerdictDto {
     /// Base64-encoded Norito `AuditVerdictV1`.
     pub verdict_b64: String,
@@ -34396,6 +34474,8 @@ mod base64_bytes {
 }
 app_api_items! {
 // ---------------------- v1 App-Facing Endpoints ----------------------
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::TxProjection")]
 #[derive(Clone, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize, Default)]
 struct TxProjection {
     authority: Option<String>,
@@ -42622,6 +42702,8 @@ mod explorer_lookup_tests {
         let account = dm::AccountId::new(keypair.public_key().clone());
         (account, keypair)
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_torii::routing::explorer_lookup_tests::ExplorerInstructionsEndpointQuery")]
     #[derive(
         crate::json_macros::JsonDeserialize,
         norito::derive::NoritoDeserialize,
@@ -57233,6 +57315,8 @@ fn account_onboarding_receipt_signature_is_valid(
         .is_some_and(|signatory| signature.verify(signatory, plan_hash.as_ref()).is_ok())
 }
 /// Public operation identity bound into every server-prepared transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::PreparedOperationBindingV1")]
 #[derive(
     Clone,
     Debug,
@@ -57667,6 +57751,8 @@ mod sponsored_onboarding_dto_tests {
         ));
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::AccountFaucetRequestDto")]
 #[derive(
     Clone,
     Debug,
@@ -61562,6 +61648,8 @@ pub(crate) async fn handle_v1_nexus_dataspaces_account_summary_with_visibility(
 derived_items! {
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for preparing a space-directory manifest transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SpaceDirectoryManifestPublishDto")]
 #[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryManifestPublishDto {
     /// Account that authorizes the manifest publication.
@@ -61575,6 +61663,8 @@ pub struct SpaceDirectoryManifestPublishDto {
 }
 ( crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize,)
 /// Request payload for revoking a manifest from the space directory.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::routing::SpaceDirectoryManifestRevokeDto")]
 #[norito(deny_unknown_fields)]
 pub struct SpaceDirectoryManifestRevokeDto {
     /// Account that owns the dataspace and authorizes the revocation.

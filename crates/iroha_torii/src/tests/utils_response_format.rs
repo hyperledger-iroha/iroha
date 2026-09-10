@@ -1,5 +1,7 @@
 use super::*;
 use http_body_util::BodyExt as _;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::utils::response_format_tests::DummyPayload")]
 #[derive(
     Clone,
     Debug,
@@ -12,6 +14,8 @@ use http_body_util::BodyExt as _;
 struct DummyPayload {
     value: u32,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::utils::response_format_tests::LegacyJsonSerializerMustNotRun")]
 #[derive(norito::derive::NoritoSerialize)]
 struct LegacyJsonSerializerMustNotRun;
 impl norito::json::JsonSerialize for LegacyJsonSerializerMustNotRun {

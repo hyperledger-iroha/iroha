@@ -136,6 +136,10 @@ impl PreparedConsumedCreditV1 {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldEffectV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ReceiveFoldEffectV1 {
     credit_id: CreditIdV1,
@@ -148,12 +152,20 @@ const RECEIVE_FOLD_DECISION_ID_DOMAIN_V1: &[u8] =
 const RECEIVE_FOLD_DECISION_VALUE_DOMAIN_V1: &[u8] =
     b"iroha:kagemusha:v1:receive-fold:terminal-decision-value\0";
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionIdV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ReceiveFoldDecisionIdV1 {
     predecessor_state_commitment: DigestV1,
     credit_id: CreditIdV1,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::receive_fold_operation::ReceiveFoldDecisionValueV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
 struct ReceiveFoldDecisionValueV1 {
     successor_state_commitment: DigestV1,

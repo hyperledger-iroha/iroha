@@ -3935,6 +3935,8 @@ mod tests {
             .insert("rank".parse().expect("metadata key"), Json::new(rank));
         domain
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::smartcontracts::isi::query::tests::StatefulLengthHint")]
     struct StatefulLengthHint {
         body: [u8; 32],
         actual: usize,
@@ -3951,7 +3953,6 @@ mod tests {
             }
         }
     }
-    impl NoritoSerialize for StatefulLengthHint {}
     impl SerializePayload for StatefulLengthHint {
         fn serialize(
             &self,
@@ -3966,8 +3967,11 @@ mod tests {
             Some(self.exact_hint)
         }
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(
+        name = "iroha_core::smartcontracts::isi::query::tests::ErrorSwallowingSerializer"
+    )]
     struct ErrorSwallowingSerializer;
-    impl NoritoSerialize for ErrorSwallowingSerializer {}
     impl SerializePayload for ErrorSwallowingSerializer {
         fn serialize(
             &self,
@@ -4274,6 +4278,8 @@ mod tests {
         .expect_err("sorting must meter a value before inserting it into the heap");
         assert!(matches!(error, Error::GasBudgetExceeded));
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::smartcontracts::isi::query::tests::CountingTiebreakValue")]
     #[derive(norito::derive::NoritoSerialize)]
     struct CountingTiebreakValue {
         id: u8,

@@ -2,8 +2,13 @@
 
 This ledger records the implementation and qualification work for the final V1
 privacy stack. It is not an audit certificate or permission to activate an
-unqualified protocol. Source observations below were checked on 2026-09-06–09 in a
+unqualified protocol. Source observations below were checked on 2026-09-06–10 in a
 shared working tree; they do not identify a sealed release candidate.
+
+The [2026-09-10 current-source checks](../docs/history/2026-09-10/privacy-current-source-verification.md)
+pass 18 FASTPQ regressions and 140 Core source/reservation tests on separate
+unchanged source captures, without compiler diagnostics. The production proof
+ceiling, runtime admission and complete qualification remain open.
 
 The [2026-09-09 validation checkpoint](../docs/history/2026-09-09/privacy-validation-checkpoint.md)
 records the retained native23 four-validator failure, completed SDK20 Apple

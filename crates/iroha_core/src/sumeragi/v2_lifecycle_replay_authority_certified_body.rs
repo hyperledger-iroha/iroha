@@ -3458,12 +3458,16 @@ impl WalReplaySourceV1 {
             .ok_or(ReplayAuthorityValidationError::RecordMismatch)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::BodyPipelineReplaySourceV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct BodyPipelineReplaySourceV1 {
     tag: ReplayEventTagV1,
     origin: BodyPipelineOriginV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::BodyPipelineOriginV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences, clippy::large_enum_variant)]
 enum BodyPipelineOriginV1 {
@@ -3642,6 +3646,8 @@ fn certified_sources_are_bounded_unique(certified_sources: &[PeerId]) -> bool {
             .len()
             == certified_sources.len()
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::InvalidBodyReplaySourceV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct InvalidBodyReplaySourceV1 {
@@ -3649,6 +3655,8 @@ struct InvalidBodyReplaySourceV1 {
     certificate: wire::QuorumCertificate,
     outcome: RejectedBodyOutcomeBindingV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::RejectedBodyOutcomeBindingV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct RejectedBodyOutcomeBindingV1 {
@@ -3739,6 +3747,8 @@ impl InvalidBodyReplaySourceV1 {
         ))
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::CertifiedServeStorageSourceV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct CertifiedServeStorageSourceV1 {
@@ -3806,6 +3816,8 @@ impl CertifiedServeStorageSourceV1 {
         Ok(ReplayShape::new(key, work_class, requested_stage))
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::replay_authority::ReplayPayloadBindingV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[allow(variant_size_differences)]
 enum ReplayPayloadBindingV1 {

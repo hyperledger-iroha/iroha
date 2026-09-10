@@ -2,6 +2,7 @@
 
 use super::*;
 use std::{
+    fs::OpenOptions,
     io,
     net::Shutdown,
     os::{

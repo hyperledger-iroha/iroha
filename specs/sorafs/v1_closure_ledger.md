@@ -33,6 +33,63 @@ envelope containing the nine ordered prerequisite IDs, and emit
 `recognized_summary_count=17`. Documentation, canary builders, dry runs, and
 synthetic fixtures cannot override a blocked aggregate.
 
+## 2026-09-10 merge reconciliation checkpoint
+
+This checkpoint records work prepared after the resolved merge at HEAD
+`641474bdeb14ebd573df0965d162397ad0228959`. The shared source and build owner
+continues Core qualification. Exact per-file preconditions, rather than a raw
+Git index-file hash or an older frozen tree, govern integration.
+
+A bounded comparison rechecked the 70 previously published defensive-security
+paths: 59 remain byte-identical to their published postimages. The other eleven
+have incoming schema declarations, current test dependency construction,
+shared-wire reexports or unrelated contract-call routing changes. Review of
+those diffs found the published SoraFS security logic retained. This is source
+continuity evidence, not a new complete security audit or native qualification.
+The receipt is `target/evidence/sorafs-v1/current-merged-sorafs-root-reconciliation/security70-continuity-ready.json`
+(SHA-256 `8dd084fe4ce0bf11bd372133c391437ef3ed6f8554ba320e6aed6d80df479885`).
+
+The incoming Norito migration already supplies the prior SoraFS and Connect
+schema declarations. Minimal private successors preserve those identities and
+restore missing regression tests and cohesive source extractions. The Core,
+Node, Model/orchestrator, Connect and CLI portions do not restore superseded
+production schema patches. The daemon PoR fixture still needs the canonical
+repair-handoff acknowledgement field in the exact production order and the
+correct acknowledged value when no repair is required.
+
+A private viewer successor gives each returned grant one publication owner,
+settles definite unpublished failures after releasing service locks, preserves
+committed or uncertain grants, and requires a fresh nonzero issuance nonce in
+canonical claims and active session checkpoints. Its 14 Node and one daemon
+regressions cover qualification drift, concurrent winners, local-cache failure,
+restart and ambiguous late commits. It has no compatibility decoder or missing
+field default. Failed cleanup remains unresolved until authenticated expiry;
+this implementation does not claim crash settlement or a wall-time bound on an
+arbitrary synchronous provider.
+
+These successors are prepared and source-checked; their native tests are still
+unrun. Private formatting, exact forward/inverse patch replay, current source
+precondition checks and scoped line-budget checks do not establish compilation.
+All proposed source-budget changes are downward. The preceding historical
+native results do not qualify these new merged bytes. Current packets and
+reviews under `target/evidence/sorafs-v1/current-merged-*` remain ignored evidence
+until the publication owner integrates their reviewed exact deltas.
+
+The separate shared prover owner completed its 18-test focused selection with
+zero failures or ignored tests against 19,880 unchanged captured repository entries
+and an unchanged binary. The exact receipt is
+`target/privacy-release-evidence/2026-09-07-recovery/native25-current-prover-repairs/result.json`
+(SHA-256 `9d055cdcbf57a93e7eecc2902cc7960c4d303881fd6949bf2bd0aad36824fa02`).
+That scoped result does not qualify the SoraFS successors, the later State
+reservation changes, or production proof-size/allocation limits.
+
+G08 is active because its defensive source work is underway; no goal or lane
+is completed by this checkpoint. HSM/KMS qualification, genuine four-validator
+mandatory-DA/RBC deployment, independently administered regional gateways,
+workspace/SDK checks, load/soak, independent security review, recovery rehearsal
+and all 17 signed readiness lanes remain mandatory. The stopped verifier work
+and its existing recorded restriction are unchanged.
+
 ## 2026-09-08 hardware and replay checkpoint
 
 The 137-file hardware stream-token candidate and its reviewed fixture/CLI

@@ -4,14 +4,26 @@
 //! The generic bridge does not synthesize a coordinator, monetary result, storage handle,
 //! or hardware authority. Its exported open/invoke functions validate these inputs and
 //! fail closed until a qualified platform build supplies the authenticated durable coordinator.
+//!
+//! The admission, observation and revocation kernels below are test-only and do not qualify
+//! a production backend. TODO: connect these kernels to an installed qualified backend before
+//! enabling their lifecycle ownership in production.
 
 pub(crate) mod archive_boundary;
 mod archives;
+// These lifecycle kernels have only structural test owners. Production sessions are owned
+// by the qualified backend installed through KagemushaCoreCoordinatorBackendV1.
+#[cfg(test)]
 mod enrolled_open;
+#[cfg(test)]
 mod enrolled_session;
+#[cfg(test)]
 mod initial_enrollment;
+#[cfg(test)]
 mod native_deadline;
+#[cfg(test)]
 mod session_registry;
+#[cfg(test)]
 pub(crate) mod startup_qualification;
 pub use crate::kagemusha_device_bridge_v1::sender_payload::{
     SenderPreparationSelectorV1 as KagemushaCoreSenderPreparationSelectorV1,

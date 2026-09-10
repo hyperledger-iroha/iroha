@@ -1,7 +1,7 @@
 //! Complete pre-extraction publication frames and signed transcript evidence.
 
 use super::*;
-use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, SerializePayload, json};
+use norito::{NoritoDeserialize, NoritoSchema, NoritoSerialize, json};
 
 pub(crate) fn check_identity<T>(fixtures: &[json::Value])
 where

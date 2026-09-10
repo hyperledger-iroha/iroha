@@ -9,6 +9,8 @@ use iroha_crypto::HashOf;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 /// A time-triggered entrypoint, forming the second half of the transaction entrypoints.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::trigger::time::TimeTriggerEntrypoint")]
 #[derive(
     Debug,
     Display,

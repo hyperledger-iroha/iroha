@@ -95,6 +95,10 @@ pub const PRIVATE_SETTLEMENT_RECONCILIATION_MAX_PAGE_RECORDS_V1: usize = 256;
 
 /// Exact staged-lock counts bound by the non-shipping private-settlement
 /// sidecar commitment used in adversarial real-process tests.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::PrivateSettlementStagedLockCountsV1"
+)]
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct PrivateSettlementStagedLockCountsV1 {
@@ -276,6 +280,10 @@ impl Default for PrivateSettlementSidecarStoreConfigV1 {
 }
 
 /// Durable lifecycle of one encrypted restricted sidecar.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::PrivateSettlementSidecarLifecycleV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum PrivateSettlementSidecarLifecycleV1 {
     /// Authenticated bytes are durable while auditor approvals are collected.
@@ -699,6 +707,10 @@ pub enum PrivateSettlementSidecarStoreErrorV1 {
     UnsupportedPlatform,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::DurablePrivateSettlementSidecarV1"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 struct DurablePrivateSettlementSidecarV1 {
     magic: [u8; 4],
@@ -715,6 +727,10 @@ struct DurablePrivateSettlementSidecarV1 {
     lifecycle_evidence_digest: Option<Hash>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::PrivateSettlementRestrictedSidecarWireV1"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 struct PrivateSettlementRestrictedSidecarWireV1 {
     manifest: AtomicPrivateSettlementV1,
@@ -724,6 +740,10 @@ struct PrivateSettlementRestrictedSidecarWireV1 {
     stored_at_height: u64,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::private_settlement::sidecar_store::DurablePrivateSettlementProvisionalSidecarV1"
+)]
 #[derive(Clone, PartialEq, Eq, Decode, Encode)]
 struct DurablePrivateSettlementProvisionalSidecarV1 {
     magic: [u8; 4],

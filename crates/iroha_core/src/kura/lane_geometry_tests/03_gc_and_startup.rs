@@ -1161,6 +1161,8 @@ fn geometry_gc_rejects_symlink_inside_archive_tree() {
 }
 #[test]
 fn recovery_rejects_pre_release_journal_layout() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_pre_release_journal_layout::PreReleaseLaneGeometryJournal")]
     #[derive(Encode)]
     struct PreReleaseLaneGeometryJournal {
         version: u8,
@@ -1273,6 +1275,8 @@ fn recovery_rejects_noncontiguous_phase_frontiers() {
 }
 #[test]
 fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_both_branch_v5_journal_layouts_without_migration::HeightCursorJournalV5")]
     #[derive(Encode)]
     struct HeightCursorJournalV5 {
         version: u8,
@@ -1282,6 +1286,8 @@ fn recovery_rejects_both_branch_v5_journal_layouts_without_migration() {
         pending_archive_gc: Vec<LaneGeometryPendingArchiveGc>,
         records: Vec<LaneGeometryIntent>,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::lane_geometry::tests::recovery_rejects_both_branch_v5_journal_layouts_without_migration::LineageJournalV5")]
     #[derive(Encode)]
     struct LineageJournalV5 {
         version: u8,

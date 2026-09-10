@@ -894,6 +894,15 @@ export class AccountAddress {
     return out;
   }
 
+  /**
+   * Return an independent canonical controller snapshot. Mutating it cannot
+   * change this address or any later signature/transaction encoding.
+   * @returns {object} Canonical single-key or multisig controller fields.
+   */
+  controllerInfo() {
+    return decodeController(this.canonicalBytes(), 1)[0];
+  }
+
   canonicalHex() {
     const canonical = this.canonicalBytes();
     return `0x${bytesToHex(canonical).toLowerCase()}`;

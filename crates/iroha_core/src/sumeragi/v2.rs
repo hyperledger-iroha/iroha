@@ -209,6 +209,8 @@ impl RecoveredWalFrameIdentity {
 /// Decoding this value establishes only a structural locator. It is never
 /// accepted as runtime WAL authority; the executable recovery seal remains
 /// [`RecoveredWalFrameIdentity`] and has no decoding implementation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2::PersistedWalFrameLocatorV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct PersistedWalFrameLocatorV1 {
@@ -18719,12 +18721,16 @@ fn progress_rank(event: &reducer::Event) -> u8 {
         | reducer::Event::ApplicationCompleted { .. } => 0,
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2::WalEnvelopeV2")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct WalEnvelopeV2 {
     protocol_version: u16,
     persistence_id: u64,
     record: WalRecordV2,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2::WalRecordV2")]
 #[derive(Clone, Debug, Decode, Encode)]
 enum WalRecordV2 {
     ProposalIntent(wire::Proposal),

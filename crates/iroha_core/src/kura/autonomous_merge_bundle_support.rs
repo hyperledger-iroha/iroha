@@ -1,6 +1,8 @@
 /// Complete hash-addressed evidence required to execute one autonomous lane
 /// block in a canonical merge batch on a validator that missed original
 /// committee fanout.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::AutonomousLaneMergeBundleV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct AutonomousLaneMergeBundleV1 {

@@ -72,7 +72,9 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
-use iroha_test_network::{NetworkBuilder, NetworkPeer, genesis_factory_with_post_topology};
+use iroha_test_network::{
+    NetworkBuilder, NetworkPeer, unexecuted_genesis_factory_with_post_topology,
+};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use norito::codec::{DecodeAll, Encode};
 use norito::json::Value as JsonValue;
@@ -323,7 +325,7 @@ fn localnet_builder(seed: &str) -> NetworkBuilder {
         .with_genesis_block(|topology, topology_entries| {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
-            let mut genesis = genesis_factory_with_post_topology(
+            let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 npos_override_transactions(VALIDATORS_PER_LANE),
                 post_topology,
                 topology,

@@ -18409,6 +18409,7 @@ impl Kura {
         }
         Ok(total)
     }
+    #[cfg(test)]
     fn merge_log_tracked_bytes(&self) -> Result<u64> {
         if self.store_root.as_os_str().is_empty() {
             return Ok(0);
@@ -23259,6 +23260,8 @@ impl BlockIndex {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::BlockStoreCommitMarker")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct BlockStoreCommitMarker {
@@ -23270,6 +23273,8 @@ struct BlockStoreCommitMarker {
     tip_hash: Option<HashOf<BlockHeader>>,
 }
 /// Exact old or replacement image for one height in a staged canonical rewrite.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::DaBlockRewriteImageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct DaBlockRewriteImageV1 {
@@ -23293,6 +23298,8 @@ impl DaBlockRewriteImageV1 {
     }
 }
 /// Write-ahead record making DA-sidecar and canonical-journal rewrites recoverable.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::DaBlockRewriteStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct DaBlockRewriteStageV1 {
@@ -23314,6 +23321,8 @@ struct DaBlockRewriteStageV1 {
     replacement: Vec<DaBlockRewriteImageV1>,
 }
 /// Exact canonical identity of one body moved to DA storage by compaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::EvictionCompactionEntryV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct EvictionCompactionEntryV1 {
@@ -23327,6 +23336,8 @@ struct EvictionCompactionEntryV1 {
     wire_len: u64,
 }
 /// Roll-forward manifest for the two-file body-eviction compaction publication.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::EvictionCompactionStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct EvictionCompactionStageV1 {
@@ -23372,6 +23383,8 @@ struct LaneArtifactPhysicalTarget {
     blocks_path: PathBuf,
 }
 /// Durable lane/merge association decision resolved only after the canonical marker is known.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::CanonicalAssociationStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct CanonicalAssociationStageV1 {
@@ -23389,6 +23402,8 @@ struct CanonicalAssociationStageV1 {
     merge_entry: Option<MergeLedgerEntry>,
 }
 /// Authenticated metadata for a body-less Kura suffix recovered from a verified local snapshot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::VerifiedSnapshotTailMarkerV1")]
 #[derive(Debug, Clone, Encode, Decode)]
 struct VerifiedSnapshotTailMarkerV1 {
     /// Marker format version.

@@ -209,6 +209,8 @@ impl ChallengeRecord {
         Ok(())
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::ChallengeRecordSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ChallengeRecordSnapshot {
     challenge: PorChallengeV1,
@@ -251,6 +253,8 @@ impl ChallengeRecordSnapshot {
         })
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::ForcedProviderSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct ForcedProviderSnapshot {
     provider_id: [u8; 32],
@@ -266,6 +270,8 @@ impl<'a> norito::core::DecodeFromSlice<'a> for ForcedProviderSnapshot {
         norito::core::decode_field_canonical::<ForcedProviderSnapshot>(bytes)
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::PorCoordinatorSnapshot")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct PorCoordinatorSnapshot {
     version: u8,
@@ -1507,6 +1513,8 @@ const DRAND_STATE_VERSION_V1: u8 = 1;
 const MAX_DRAND_DNS_ADDRESSES: usize = 16;
 #[cfg(feature = "app_api")]
 const MIN_DRAND_RESPONSE_BYTES: usize = 128;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::DrandHighWaterStateV1")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
 struct DrandHighWaterStateV1 {

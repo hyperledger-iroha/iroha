@@ -182,18 +182,44 @@ fn sample_bond_entry() -> RelayBondLedgerEntryV1 {
         exit_capable: true,
     }
 }
-#[derive(Debug, NoritoSerialize)]
+#[derive(Debug, NoritoSerialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "cli_smoke::TestLedgerExport",
+    frame = "iroha::commands::sorafs::LedgerExportFile"
+)]
 struct TestLedgerExport {
     version: u16,
     transfers: Vec<LedgerTransferRecord>,
 }
 fn encode_ledger_export(export: &TestLedgerExport) -> Vec<u8> {
-    const SCHEMA_OFFSET: usize = 4 + 1 + 1;
-    const SCHEMA_LEN: usize = 16;
-    let mut bytes = to_bytes(export).expect("encode ledger export");
-    let schema = norito::core::schema_hash_for_name("iroha::commands::sorafs::LedgerExportFile");
-    bytes[SCHEMA_OFFSET..SCHEMA_OFFSET + SCHEMA_LEN].copy_from_slice(&schema);
-    bytes
+    to_bytes(export).expect("encode ledger export")
+}
+
+#[test]
+fn ledger_export_fixture_declares_its_shared_frame_without_header_rewriting() {
+    use norito::NoritoSchema as _;
+    let export = TestLedgerExport {
+        version: 1,
+        transfers: Vec::new(),
+    };
+    let bytes = encode_ledger_export(&export);
+    assert_eq!(
+        TestLedgerExport::nominal_name(),
+        "cli_smoke::TestLedgerExport"
+    );
+    assert_eq!(
+        TestLedgerExport::frame_name(),
+        "iroha::commands::sorafs::LedgerExportFile"
+    );
+    assert_ne!(
+        TestLedgerExport::nominal_name(),
+        TestLedgerExport::frame_name()
+    );
+    assert_eq!(
+        &bytes[6..22],
+        &norito::schema::identity::frame_hash::<TestLedgerExport>()
+    );
+    assert_eq!(bytes, to_bytes(&export).expect("canonical fixture frame"));
 }
 fn parse_instruction_stdout(stdout: &str) -> Vec<InstructionBox> {
     norito::json::from_str(stdout.trim()).expect("instruction output JSON")

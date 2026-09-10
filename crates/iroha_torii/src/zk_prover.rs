@@ -86,6 +86,8 @@ use tokio::{
     sync::Semaphore,
     task::{self, JoinSet},
 };
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_prover::ProverReportProcessing")]
 #[derive(
     Debug,
     Clone,
@@ -112,6 +114,8 @@ pub struct ProverReportProcessing {
     #[norito(required)]
     pub processing_context_hash: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_prover::ProofReportEntry")]
 #[derive(
     Debug,
     Clone,
@@ -144,6 +148,8 @@ pub struct ProofReportEntry {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub circuit_id: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_prover::ProverReport")]
 #[derive(
     Debug,
     Clone,
@@ -201,6 +207,8 @@ pub struct ProverReport {
     #[norito(required)]
     pub processing: Option<ProverReportProcessing>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::zk_prover::ProverReportSummary")]
 #[derive(
     Debug,
     Clone,

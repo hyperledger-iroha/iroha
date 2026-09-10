@@ -774,13 +774,16 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         AutonomousLifecycleTerminalOutcomeV1::decode_framed(&malformed_bytes).is_err(),
         "a semantically invalid canonical V1 terminal outcome must fail closed",
     );
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeBasisV1")]
     #[derive(Encode)]
     enum UnknownTerminalOutcomeBasisV1 {
         #[codec(index = 2)]
         FutureReplica,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeBodyV1", frame = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1")]
     #[derive(Encode)]
-    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeBodyV1")]
     struct UnknownTerminalOutcomeBodyV1 {
         version: u16,
         binding: AutonomousLifecycleAttemptBindingV1,
@@ -788,8 +791,9 @@ fn canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custo
         source: AutonomousLifecycleTerminalOutcomeSourceV1,
         stage: AutonomousLifecycleTerminalOutcomeStageV1,
     }
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::kura::tests::canonical_replica_terminal_outcome_uses_nonowning_basis_without_private_custody::UnknownTerminalOutcomeV1", frame = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1")]
     #[derive(Encode)]
-    #[norito(schema_name = "iroha_core::kura::AutonomousLifecycleTerminalOutcomeV1")]
     struct UnknownTerminalOutcomeV1 {
         body: UnknownTerminalOutcomeBodyV1,
         outcome_hash: Hash,

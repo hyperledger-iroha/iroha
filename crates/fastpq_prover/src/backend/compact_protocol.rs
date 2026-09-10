@@ -41,7 +41,7 @@ pub(super) mod metal_diagnostic;
 #[path = "compact_protocol/profile.rs"]
 mod profile;
 #[cfg(test)]
-#[path = "compact_protocol/test_fixture.rs"]
+#[path = "compact_protocol/constant_fixture.rs"]
 mod test_fixture;
 use profile::{Binding, ProtocolTranscript};
 
@@ -1203,7 +1203,13 @@ mod tests {
         let work = verify_shared(&air, &shared, diagnostic_limits()).unwrap();
         let encoded = norito::core::to_bytes(&shared).unwrap();
         assert_eq!(
-            shared_openings::codec::decode_and_verify(&air, &encoded, diagnostic_limits()).unwrap(),
+            shared_openings::codec::decode_and_verify_with_allocation(
+                &air,
+                &encoded,
+                diagnostic_limits(),
+                64 * 1024 * 1024
+            )
+            .unwrap(),
             work,
         );
         assert_eq!(work.transcripts, 1);
@@ -1234,10 +1240,11 @@ mod tests {
             Err(Error::FriTerminalDegreeMismatch { .. })
         ));
         assert!(matches!(
-            shared_openings::codec::decode_and_verify(
+            shared_openings::codec::decode_and_verify_with_allocation(
                 &false_air,
                 &norito::core::to_bytes(&false_shared).unwrap(),
-                diagnostic_limits()
+                diagnostic_limits(),
+                64 * 1024 * 1024
             ),
             Err(Error::FriTerminalDegreeMismatch { .. })
         ));
@@ -1606,13 +1613,29 @@ mod tests {
             },
         )
         .unwrap();
-        binding
-            .verify_tree(&plan, role, sole.root(), &[leaf], &[leaf])
+        // The ordinary path above contains the duplicated leaf. The minimal
+        // multiproof frontier omits it: the plan duplicates its sole input.
+        assert!(plan.sibling_positions().is_empty());
+        let work = binding
+            .verify_tree(&plan, role, sole.root(), &[leaf], &[])
             .unwrap();
-        assert!(
-            binding
-                .verify_tree(&plan, MerkleTreeRoleV1::Lde, sole.root(), &[leaf], &[leaf])
-                .is_err()
+        assert_eq!(
+            work,
+            crate::backend::merkle_multiproof::MultiproofWork {
+                queried_leaves: 1,
+                siblings: 0,
+                parent_hashes: 1,
+                max_frontier_width: 1,
+            }
         );
+        assert!(matches!(
+            binding.verify_tree(&plan, role, sole.root(), &[leaf], &[leaf]),
+            Err(Error::InvalidTraceShape { details })
+                if details == "multiproof leaf or sibling count mismatch"
+        ));
+        assert!(matches!(
+            binding.verify_tree(&plan, MerkleTreeRoleV1::Lde, sole.root(), &[leaf], &[]),
+            Err(Error::QueryMerklePathMismatch { index: 0 })
+        ));
     }
 }

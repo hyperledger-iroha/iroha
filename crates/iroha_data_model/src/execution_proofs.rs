@@ -99,6 +99,8 @@ pub struct RaceInputFrameV1 {
 }
 
 /// Consensus-authorized removals applied before one exact simulation tick.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceDnfEventV1")]
 #[derive(
     Clone,
     Debug,
@@ -321,6 +323,8 @@ pub struct ExecutionPublicInputsV1 {
 }
 
 /// Exact first-release application-neutral native execution proof envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::ExecutionProofEnvelopeV1")]
 #[derive(
     Clone,
     Debug,
@@ -347,6 +351,8 @@ pub struct ExecutionProofEnvelopeV1 {
 
 /// Public replay availability and the exact native cryptographic execution proof.
 /// Replay data is intentionally public, allowing any replaceable worker to prove the race.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceProofPayloadV1")]
 #[derive(
     Clone,
     Debug,
@@ -380,6 +386,8 @@ pub struct RaceProofPayloadV1 {
 }
 
 /// Portable input to a local native prover or an untrusted proof worker.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::RaceProverRequestV1")]
 #[derive(
     Clone,
     Debug,
@@ -461,6 +469,8 @@ pub struct ExecutionProofProfileV1 {
 }
 
 /// Compact receipt for mathematical execution validity; it does not authorize a race payout.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::execution_proofs::ExecutionProofVerificationV1")]
 #[derive(
     Clone,
     Copy,

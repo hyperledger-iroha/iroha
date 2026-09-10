@@ -382,12 +382,13 @@ fn completion_runtime_cut_blocks_then_reliefs_an_exact_worker_head() {
         admission: Arc::clone(&admission),
     });
 
-    assert!(matches!(
-        service
-            .prepare_completion_runtime_cut(true)
-            .expect("inspect cut with free runtime capacity"),
-        V2CompletionRuntimeCutDecisionV1::RetryCompletion
-    ),
+    assert!(
+        matches!(
+            service
+                .prepare_completion_runtime_cut(true)
+                .expect("inspect cut with free runtime capacity"),
+            V2CompletionRuntimeCutDecisionV1::RetryCompletion
+        ),
         "a pending completion must return the outer driver to Completion rank"
     );
     assert!(matches!(
@@ -1925,4 +1926,141 @@ fn io_queue_duplicate_apply_coalesces_and_conflicting_work_id_fails_closed() {
     drop(command_rx);
     command_tx.acknowledge_completion(work_id);
     assert!(command_tx.queue.lock().work.is_empty());
+}
+
+fn deferred_apply_retry_queue_fixture() -> (ProductionV2Services, V2IoCommandReceiver, ApplyTask) {
+    let (mut service, keys) = fixture();
+    allow_fixture_block_payload(&mut service.context);
+    let (_, _, proposal) = proposal_body_and_payload(&service.context, &keys);
+    let durable = DurableBodyReceipt::for_test(
+        service.context.id(),
+        proposal.round,
+        proposal.subject,
+        HashOf::new(&proposal.manifest),
+    );
+    let validated = ValidatedBodyReceipt::for_test(durable);
+    let certificate = wire::QuorumCertificate {
+        round: proposal.round,
+        proposal_round: proposal.round,
+        phase: wire::GlobalPhase::Commit,
+        subject: proposal.subject,
+        execution_commitment: validated.execution_commitment(),
+        signers: vec![0, 1, 2],
+        aggregate_signature: vec![0; 96],
+    };
+    let task = ApplyTask::for_test(
+        7,
+        EventTag::new(
+            service.context.height,
+            proposal.round.view,
+            Generation::new(service.context.height),
+        ),
+        proposal.subject,
+        certificate,
+        validated,
+    );
+    let (command_tx, command_rx, admission) = test_io_command_channel(1);
+    let (_completion_tx, completion_rx) = mpsc::sync_channel(1);
+    service.io = Some(V2IoHandle {
+        command_tx,
+        completion_rx,
+        join: None,
+        allow_finalized_disconnect: Arc::new(AtomicBool::new(false)),
+        admission,
+    });
+    (service, command_rx, task)
+}
+
+#[test]
+fn deferred_apply_retry_full_queue_preserves_output_and_exact_task() {
+    let (mut service, command_rx, task) = deferred_apply_retry_queue_fixture();
+    service
+        .io
+        .as_ref()
+        .expect("worker")
+        .command_tx
+        .try_send(V2IoCommand::Shutdown)
+        .expect("fill the real bounded queue");
+    for _ in 0..3 {
+        assert!(
+            !service
+                .try_enqueue_apply(task.clone())
+                .expect("Full must defer")
+        );
+        assert!(!service.output_guard.restart_required());
+        assert_eq!(service.io.as_ref().expect("worker").admission.queued(), 1);
+    }
+    assert!(matches!(command_rx.try_recv(), Ok(V2IoCommand::Shutdown)));
+    assert!(
+        service
+            .try_enqueue_apply(task.clone())
+            .expect("admit after capacity releases")
+    );
+    assert!(
+        service
+            .try_enqueue_apply(task.clone())
+            .expect("coalesce the exact queued retry")
+    );
+    let V2IoCommand::Apply(queued) = command_rx.try_recv().expect("one queued Apply") else {
+        panic!("retry changed command kind");
+    };
+    assert_eq!(queued.id(), task.id());
+    assert_eq!(queued.tag(), task.tag());
+    assert_eq!(queued.authorized_owner_tag(), task.authorized_owner_tag());
+    assert_eq!(queued.subject(), task.subject());
+    assert_eq!(queued.certificate(), task.certificate());
+    assert_eq!(queued.validated_receipt(), task.validated_receipt());
+    assert_eq!(queued.lifecycle_ordinal(), task.lifecycle_ordinal());
+    assert!(matches!(
+        command_rx.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    command_rx.complete_work(task.id());
+    service
+        .io
+        .as_ref()
+        .expect("worker")
+        .command_tx
+        .acknowledge_completion(task.id());
+    assert!(!service.output_guard.restart_required());
+}
+
+#[test]
+fn deferred_apply_retry_disconnected_or_conflicting_queue_fails_closed() {
+    let (mut service, command_rx, task) = deferred_apply_retry_queue_fixture();
+    drop(command_rx);
+    assert!(
+        service
+            .try_enqueue_apply(task)
+            .expect_err("disconnected is fatal")
+            .contains("disconnected")
+    );
+    assert!(service.output_guard.restart_required());
+
+    let (mut service, _command_rx, task) = deferred_apply_retry_queue_fixture();
+    let conflicting = ApplyTask::for_test(
+        task.id().get(),
+        EventTag::new(
+            service.context.height,
+            task.tag().view() + 1,
+            Generation::new(service.context.height),
+        ),
+        task.subject(),
+        task.certificate().clone(),
+        task.validated_receipt().clone(),
+    );
+    service
+        .io
+        .as_ref()
+        .expect("worker")
+        .command_tx
+        .try_send(V2IoCommand::Apply(conflicting))
+        .expect("queue conflicting owner");
+    assert!(
+        service
+            .try_enqueue_apply(task)
+            .expect_err("conflict is fatal")
+            .contains("conflicting")
+    );
+    assert!(service.output_guard.restart_required());
 }

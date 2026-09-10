@@ -246,6 +246,8 @@ const FAUCET_CLAIM_EXECUTABLE_SHAPE_ERROR: &str = "faucet claim marker requires 
     non-zero authority-sourced asset transfer to a different account, optionally preceded by a \
     plain registration of the same destination";
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tx::FaucetClaimConsumptionRecordV1")]
 #[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
 struct FaucetClaimConsumptionRecordV1 {
     marker_version: u64,
@@ -431,6 +433,8 @@ pub(crate) fn commit_faucet_claim_consumption(
             .insert(path.clone(), record.clone());
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::tx::PendingSealedTransactionCommitment")]
 #[derive(Debug, Clone, norito::codec::Decode, norito::codec::Encode)]
 struct PendingSealedTransactionCommitment {
     payload: SealedTransactionCommitmentPayload,
@@ -1527,8 +1531,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<usize, norito::core::Error> {
         const EXTERNAL_ENTRYPOINT_TAG: u32 = 0;
         let view = norito::core::from_bytes_view(framed)?;
-        if view.schema() != <TransactionEntrypoint as norito::core::NoritoSerialize>::schema_hash()
-        {
+        if view.schema() != norito::schema::identity::frame_hash::<TransactionEntrypoint>() {
             return Err(norito::core::Error::SchemaMismatch);
         }
         let payload = view.as_bytes();

@@ -54,7 +54,7 @@ use iroha_data_model::{
 };
 use iroha_primitives::json::Json;
 use iroha_test_network::{
-    NetworkBuilder, genesis_factory_with_post_topology, read_on_dedicated_thread,
+    NetworkBuilder, read_on_dedicated_thread, unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use reqwest::{Client as HttpClient, StatusCode};
@@ -243,7 +243,7 @@ fn localnet_builder() -> NetworkBuilder {
         .with_genesis_block(|topology, topology_entries| {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
-            let mut genesis = genesis_factory_with_post_topology(
+            let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 npos_override_transactions(TOTAL_PEERS),
                 post_topology,
                 topology,
@@ -615,8 +615,7 @@ async fn wait_for_route_probe_approval(
     let entry_hash = transaction.hash_as_entrypoint();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter
-            .account_client()
+        account
             .events()
             .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )
@@ -725,8 +724,7 @@ async fn wait_for_route_probe_rejection(
     let hash = transaction.hash();
     let mut events = timeout(
         STATUS_WAIT_TIMEOUT,
-        submitter
-            .account_client()
+        account
             .events()
             .subscribe([TransactionEventFilter::default().for_hash(hash)]),
     )

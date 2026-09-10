@@ -3,7 +3,7 @@
 //! The scenario captures telemetry snapshots while producing a fixed number of
 //! blocks, aggregates queue depths and throughput, then persists a JSON summary
 //! for reporting.
-use eyre::{Context as _, Result, bail, ensure, eyre};
+use eyre::{Context as _, Result, bail, ensure};
 use integration_tests::{metrics::MetricsReader, sandbox};
 use iroha::data_model::{
     Level,

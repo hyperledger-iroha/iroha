@@ -170,10 +170,14 @@ fn capture_binds_global_index_and_rejects_invalid_plan_before_retention() {
 #[test]
 fn actual_oversized_signed_frame_is_rejected_before_retained_encoding() {
     let mut metadata = Metadata::default();
-    metadata.insert(
-        "large_fixture".parse::<Name>().unwrap(),
-        "x".repeat(MAX_SIGNED_REQUEST_BYTES),
-    );
+    // Keep each JSON value valid while their combined signed frame exceeds the request limit.
+    for key in ["large_fixture_a", "large_fixture_b"] {
+        metadata.insert(
+            key.parse::<Name>().unwrap(),
+            Json::try_new("x".repeat(MAX_SIGNED_REQUEST_BYTES / 2))
+                .expect("fixture value stays within the JSON byte limit"),
+        );
+    }
     let tx = transaction_with_metadata(metadata);
     assert!(norito::canonical_frame_len(&tx).unwrap() > MAX_SIGNED_REQUEST_BYTES);
     assert!(capture(tx, plan(1), 0).is_err());
@@ -536,7 +540,7 @@ fn actual_journal_canceled_receipt_fails_before_writing_the_request() {
             .sender
             .0
             .try_send(JournalCommand::RetainSignedRequest(
-                capture(transaction(), plan(1), 0).unwrap().request,
+                Box::new(capture(transaction(), plan(1), 0).unwrap().request),
                 acknowledgment
             ))
             .is_ok()

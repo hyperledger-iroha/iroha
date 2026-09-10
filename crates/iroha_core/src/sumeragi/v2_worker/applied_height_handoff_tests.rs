@@ -317,6 +317,258 @@ fn applied_height_handoff_counts_and_clears_parked_reply_cursor_atomically() {
     assert_eq!(rejected.shared_ownership_units, 1);
 }
 #[test]
+fn independent_applied_handoff_releases_covered_states_and_retains_lane_owners() {
+    let (service, keys) = fixture();
+    let (_, artifact) = durable_finality_fixture(&service, &keys);
+    let peer = service.context.roster[1].validator.clone();
+    let other_peer = service.context.roster[2].validator.clone();
+    let global =
+        ProductionV2Services::preencode_v2_network_message(global_commit_qc_message(&artifact))
+            .expect("encode global CommitQC");
+    let lane = NetworkMessage::SumeragiBlock(Arc::new(
+        BlockMessageWire::try_preencoded(Arc::new(lane_commit_qc_block_message(peer.clone())))
+            .expect("encode lane output that still requires its own authority"),
+    ));
+    for state in [
+        "ranked",
+        "parked",
+        "writer_pending",
+        "corrupt_returned",
+        "corrupt_flush",
+    ] {
+        let mut routes = NetworkReplyRouteTestFixture::new(peer.clone());
+        let route = routes.mint(peer.clone());
+        let mut pending = PendingExactOutput::new(3, 1, 1, &[]).expect("three owned fanouts");
+        for (index, target) in [peer.clone(), peer.clone(), other_peer.clone()]
+            .into_iter()
+            .enumerate()
+        {
+            let fanout = if index == 1 {
+                PendingExactFanout::claimed_with_routes(
+                    vec![global.clone()],
+                    vec![target],
+                    vec![ExactTargetRoute::Reply(route.clone())],
+                    ExactOutputRolloverClaim::GlobalV2(service.exact_output_scope()),
+                )
+            } else {
+                PendingExactFanout::claimed(
+                    vec![lane.clone()],
+                    vec![target],
+                    ExactOutputRolloverClaim::Lane(service.exact_output_scope()),
+                )
+            }
+            .expect("valid typed creation claim")
+            .expect("nonempty fanout");
+            assert_eq!(pending.enqueue(fanout), Ok(ExactFanoutOwnership::Owned));
+        }
+        pending.applied_height_finality = Some(artifact.clone());
+        assert_eq!(
+            pending
+                .handoff_independently_reconstructible_applied_output(
+                    service.kura.as_ref(),
+                    &mut BTreeSet::new()
+                )
+                .expect("fresh output has no failed transport owner"),
+            0
+        );
+        assert_eq!(
+            pending.fanouts.len(),
+            3,
+            "every fresh target must get its first transport attempt"
+        );
+        let fifo_ids = pending
+            .fanouts
+            .iter()
+            .map(|fanout| fanout.fifo_id)
+            .collect::<Vec<_>>();
+        let next_fifo_id = pending.next_fanout_fifo_id;
+        pending.next_fanout_index = 1;
+        let mut actor = None;
+        let mut writer = None;
+        match state {
+            "parked" => {
+                assert!(routes.retire(&route));
+                pending
+                    .retire_inactive_reply_target(1, 0)
+                    .expect("park the exact reply");
+                pending.next_fanout_index = 1;
+            }
+            "writer_pending" | "corrupt_flush" => {
+                let (post, _, _, _) = pending.fanouts[1]
+                    .take_attempt(0)
+                    .expect("writer's exact post");
+                let (control, ack) = NetworkReplyFlushAckTestFixture::for_reply(&post, &route);
+                writer = Some(control);
+                pending.fanouts[1].targets[0].pending_flush = Some(PendingExactReplyFlush {
+                    flush_ack: ack,
+                    reply_writer_timeout_attempt: u8::from(state == "corrupt_flush"),
+                    sidecar_admission: None,
+                });
+            }
+            _ => {
+                let (post, _, _, _) = pending.fanouts[1]
+                    .take_attempt(0)
+                    .expect("actor's exact post");
+                let (owner, ticket) =
+                    NetworkActorAdmissionTicketTestFixture::for_reply(&post, &route);
+                assert_eq!(ticket.rank(), Some(1));
+                actor = Some(owner);
+                pending.fanouts[1]
+                    .retain_returned(0, post, Some(ticket))
+                    .expect("retain ranked output");
+                if state == "corrupt_returned" {
+                    pending.fanouts[1].targets[0]
+                        .current
+                        .as_mut()
+                        .expect("returned post")
+                        .data = lane.clone();
+                }
+            }
+        }
+        pending.applied_height_finality = Some(artifact.clone());
+        let sources_before = pending.source_fifo_owners.clone();
+        let reservations_before = pending.reservation_owner_counts.clone();
+        let mut released = BTreeSet::new();
+        let result = pending.handoff_independently_reconstructible_applied_output(
+            service.kura.as_ref(),
+            &mut released,
+        );
+        if state.starts_with("corrupt_") {
+            let error = result.expect_err("corrupted ownership cannot cross any durable handoff");
+            assert!(error.contains("changed before finality handoff"), "{error}");
+            assert_eq!(pending.fanouts.len(), 3);
+            assert_eq!(pending.source_fifo_owners, sources_before);
+            assert_eq!(pending.reservation_owner_counts, reservations_before);
+            assert_eq!(pending.ownership_units, 3);
+            if let Some(actor) = &actor {
+                assert_eq!(actor.waiter_count(), 1);
+            }
+            assert!(released.is_empty());
+            continue;
+        }
+        assert_eq!(
+            result.expect("retire independently proven global response"),
+            1
+        );
+        assert_eq!(
+            pending
+                .fanouts
+                .iter()
+                .map(|fanout| fanout.fifo_id)
+                .collect::<Vec<_>>(),
+            vec![fifo_ids[0], fifo_ids[2]]
+        );
+        assert_eq!(pending.next_fanout_fifo_id, next_fifo_id);
+        assert_eq!(
+            pending.next_fanout_index, 1,
+            "preserve the next surviving cyclic owner"
+        );
+        assert_eq!(pending.ownership_units, 2);
+        assert_eq!(pending.shared_ownership_units, 2);
+        assert_eq!(pending.reservation_owner_counts.values().sum::<usize>(), 2);
+        assert!(
+            pending.admitted_sidecar_chunks.is_empty(),
+            "handoff cannot fabricate writer acknowledgements"
+        );
+        if let Some(actor) = &actor {
+            assert_eq!(
+                actor.waiter_count(),
+                0,
+                "durable handoff cancels the exact ranked waiter"
+            );
+        }
+        if let Some(writer) = &mut writer {
+            assert!(
+                !writer.flush(),
+                "the retired writer completion has no volatile receiver"
+            );
+        }
+        assert_eq!(
+            pending
+                .handoff_independently_reconstructible_applied_output(
+                    service.kura.as_ref(),
+                    &mut released
+                )
+                .expect("idempotent retry"),
+            0
+        );
+        assert!(
+            pending
+                .handoff_applied_height_to_durable_reconstruction(
+                    &artifact,
+                    None,
+                    Some(service.kura.as_ref())
+                )
+                .is_err(),
+            "terminal handoff still requires lane authority"
+        );
+        assert_eq!(pending.fanouts.len(), 2);
+    }
+}
+
+#[test]
+fn independent_applied_handoff_retains_active_historical_recovery_request() {
+    let (service, keys) = fixture();
+    let (_, artifact) = durable_finality_fixture(&service, &keys);
+    let peer = service.context.roster[1].validator.clone();
+    let request = LaneHistoricalRecoveryRequestV1 {
+        version: super::super::message::LANE_HISTORICAL_RECOVERY_VERSION_V1,
+        requester: service.local_peer.clone(),
+        certificate: None,
+        signer_pops: BTreeMap::new(),
+        kind: super::super::message::LaneHistoricalRecoveryKindV1::CanonicalBlock {
+            finality_artifact_hash: HashOf::new(&artifact),
+        },
+    };
+    let request_hash = HashOf::new(&request);
+    let message = NetworkMessage::SumeragiBlock(Arc::new(
+        BlockMessageWire::try_preencoded(Arc::new(BlockMessage::LaneHistoricalRecoveryRequest(
+            Box::new(request),
+        )))
+        .expect("encode the active canonical-body repair request"),
+    ));
+    let mut pending = PendingExactOutput::new(1, 1, 1, &[]).expect("one active repair owner");
+    pending
+        .enqueue(
+            PendingExactFanout::claimed(
+                vec![message],
+                vec![peer.clone()],
+                ExactOutputRolloverClaim::HistoricalLaneRecoveryRequest {
+                    scope: service.exact_output_scope(),
+                    target: peer,
+                    request_hash,
+                },
+            )
+            .expect("exact recovery claim")
+            .expect("one repair fanout"),
+        )
+        .expect("retain repair request");
+    let (post, _, _, _) = pending.fanouts[0]
+        .take_attempt(0)
+        .expect("attempt actual repair output");
+    let (owner, ticket) = NetworkActorAdmissionTicketTestFixture::for_topology(&post);
+    pending.fanouts[0]
+        .retain_returned(0, post, Some(ticket))
+        .expect("retain ranked repair owner");
+    pending.applied_height_finality = Some(artifact);
+    assert_eq!(
+        pending
+            .handoff_independently_reconstructible_applied_output(
+                service.kura.as_ref(),
+                &mut BTreeSet::new()
+            )
+            .expect("preflight repair remains live"),
+        0
+    );
+    assert_eq!(pending.fanouts.len(), 1);
+    assert_eq!(
+        owner.waiter_count(),
+        1,
+        "committed height does not complete canonical-body recovery"
+    );
+}
+
+#[test]
 fn applied_height_handoff_rejects_unbound_lane_output_atomically() {
     let (service, keys) = fixture();
     let peer = service.context.roster[1].validator.clone();
@@ -1088,6 +1340,154 @@ fn prepared_historical_body_retries_after_exact_output_capacity_rejection() {
         admitted.load(Ordering::Relaxed),
         2,
         "the retained prepared response reaches actor admission exactly once"
+    );
+    assert!(
+        !historical_body_server.has_pending_historical_body_serve(),
+        "successful retry releases the worker-owned ingress carrier"
+    );
+    assert!(
+        !service
+            .has_pending_exact_output()
+            .expect("inspect the drained exact-output corridor")
+    );
+}
+
+#[test]
+fn prepared_historical_body_capacity_recovers_from_applied_finality_without_peer_delivery() {
+    let history = durable_history_fixture();
+    let mut service = successor_service_for_history_as(
+        Arc::clone(&history.kura),
+        &history.artifact,
+        &history.validators,
+        3,
+    );
+    service
+        .set_exact_output_shared_unit_capacity_for_test(1)
+        .expect("install one shared exact-output ownership unit");
+    let actor_owners = install_applied_height_ranked_backpressure(&mut service);
+
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid historical CommitQC response operation");
+    service
+        .post_durable_history_response_with_permit(
+            history.requester.clone(),
+            history.commit_response.clone(),
+            operation.permit(),
+        )
+        .expect("fill the only shared exact-output ownership unit");
+    operation.complete();
+
+    let mut route_fixture = NetworkReplyRouteTestFixture::new(history.requester.clone());
+    let (mut historical_body_server, prepared_body) =
+        prepared_historical_body_output(&history, &mut route_fixture);
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid capacity-rejected body operation");
+    let retained = match service
+        .post_prepared_historical_body_response_on_reply_routes_with_permit(
+            prepared_body,
+            operation.permit(),
+        )
+        .expect("capacity rejection remains retryable")
+    {
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::SourceRetained(
+            retained,
+        ) => retained,
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted => {
+            panic!("a full one-unit corridor cannot own the prepared body")
+        }
+    };
+    historical_body_server
+        .defer_prepared_historical_body_output(retained)
+        .expect("retain the exact worker completion for another actor turn");
+    operation.complete();
+    assert!(
+        historical_body_server.has_pending_historical_body_serve(),
+        "the deferred response must keep rollover blocked"
+    );
+    assert_eq!(
+        service
+            .lock_pending_exact_output()
+            .expect("inspect the capacity blocker")
+            .fanouts
+            .len(),
+        1,
+        "capacity rejection must not insert or lose the prepared response"
+    );
+
+    let (_, applied_artifact) = durable_finality_fixture(&service, &history.validators);
+    service
+        .lock_pending_exact_output()
+        .expect("publish the applied-finality cache boundary")
+        .applied_height_finality = Some(applied_artifact);
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("durable history releases the capacity blocker")
+    );
+    assert!(
+        actor_owners
+            .lock()
+            .expect("inspect released ranked owners")
+            .iter()
+            .all(|owner| owner.waiter_count() == 0)
+    );
+    let attempted_before_retry = actor_owners
+        .lock()
+        .expect("inspect exact actor attempts")
+        .len();
+
+    let prepared_body = match historical_body_server
+        .try_recv_historical_body_completion()
+        .expect("take the retained worker completion")
+        .expect("the retained worker completion remains present")
+    {
+        crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::Prepared(prepared) => {
+            prepared
+        }
+        crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::NoResponse(_) => {
+            panic!("a prepared retry cannot become no-response")
+        }
+        crate::sumeragi::v2_block_sync::HistoricalBodyServeCompletion::Failed(_, error) => {
+            panic!("a prepared retry cannot become failure: {error}")
+        }
+    };
+    let guard = Arc::clone(&service.output_guard);
+    let operation = guard
+        .begin_fail_stop_operation()
+        .expect("valid retried body operation");
+    assert!(matches!(
+        service
+            .post_prepared_historical_body_response_on_reply_routes_with_permit(
+                prepared_body,
+                operation.permit(),
+            )
+            .expect("retry the exact prepared response"),
+        crate::sumeragi::v2_block_sync::PreparedHistoricalBodyPostOutcome::Posted
+    ));
+    operation.complete();
+    assert_eq!(
+        actor_owners
+            .lock()
+            .expect("inspect exact actor attempts")
+            .len(),
+        attempted_before_retry + 1,
+        "a fresh durable response must first attempt its exact actor route"
+    );
+    assert!(
+        !service
+            .retry_pending_exact_output()
+            .expect("durable reconstruction retires the blocked response")
+    );
+    assert!(
+        actor_owners
+            .lock()
+            .expect("inspect retired response waiter")
+            .iter()
+            .all(|owner| owner.waiter_count() == 0)
     );
     assert!(
         !historical_body_server.has_pending_historical_body_serve(),

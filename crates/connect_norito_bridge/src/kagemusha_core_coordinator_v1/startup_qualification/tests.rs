@@ -240,8 +240,11 @@ fn stage(
     owner.stage_qualification(&fields)
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.active-hardware-credential-reply")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::QualificationReply",
+    frame = "iroha.kagemusha.device.v1.active-hardware-credential-reply"
+)]
 struct QualificationReply {
     version: u16,
     operation: u8,
@@ -669,8 +672,11 @@ fn abandoned_read_attempts_have_fixed_live_capacity_and_never_reserve_money() {
     );
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::SnapshotReply",
+    frame = "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply"
+)]
 struct SnapshotReply {
     version: u16,
     operation: u8,
@@ -779,16 +785,22 @@ fn independently_selected_native_network_and_lane_remain_required() {
     );
 }
 
-#[derive(Clone, Copy, Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-watermark")]
+#[derive(Clone, Copy, Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::Watermark",
+    frame = "iroha.kagemusha.device.v1.pending-credit-watermark"
+)]
 struct Watermark {
     hardware_epoch_generation: u128,
     hardware_epoch_id: [u8; 32],
     inbox_revision: u128,
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-watermark-reply")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkReply",
+    frame = "iroha.kagemusha.device.v1.pending-credit-watermark-reply"
+)]
 struct WatermarkReply {
     version: u16,
     operation: u8,
@@ -939,15 +951,21 @@ fn signed_snapshot_cannot_choose_another_wallet_or_qualification_context() {
     }
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.pending-credit-target")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::PendingTarget",
+    frame = "iroha.kagemusha.device.v1.pending-credit-target"
+)]
 enum PendingTarget {
     DrainAll,
     RequiredBalance(u128),
 }
 
-#[derive(Encode)]
-#[norito(schema_name = "iroha.kagemusha.device.v1.read-pending-credit-watermark-command")]
+#[derive(Encode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkCommand",
+    frame = "iroha.kagemusha.device.v1.read-pending-credit-watermark-command"
+)]
 struct WatermarkCommand {
     version: u16,
     operation: u8,
@@ -1682,4 +1700,68 @@ fn reopen_requires_fresh_qualification_and_preserves_the_original_owner_on_confl
     assert!(active.prepare_reopen(candidate).is_err());
     assert_eq!(active.current.as_ref(), Some(&selected));
     assert_eq!(active.last_credential, Some(selected.credential));
+}
+
+#[cfg(test)]
+mod explicit_schema_identity_tests {
+    use super::*;
+
+    macro_rules! identity {
+        ($root:ty, $nominal:literal, $frame:literal) => {
+            assert_eq!(<$root as norito::NoritoSchema>::nominal_name(), $nominal);
+            assert_eq!(<$root as norito::NoritoSchema>::frame_name(), $frame);
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$root>(),
+                norito::core::schema_hash_for_name($frame)
+            );
+            assert_eq!(
+                <Vec<$root> as norito::NoritoSchema>::nominal_name(),
+                format!("alloc::vec::Vec<{}>", $nominal)
+            );
+        };
+    }
+
+    #[test]
+    fn framed_roots_keep_nominal_and_protocol_identities() {
+        identity!(
+            QualificationReply,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::QualificationReply",
+            "iroha.kagemusha.device.v1.active-hardware-credential-reply"
+        );
+        identity!(
+            SnapshotReply,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::SnapshotReply",
+            "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply"
+        );
+        identity!(
+            WatermarkReply,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkReply",
+            "iroha.kagemusha.device.v1.pending-credit-watermark-reply"
+        );
+        identity!(
+            WatermarkCommand,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkCommand",
+            "iroha.kagemusha.device.v1.read-pending-credit-watermark-command"
+        );
+
+        let qualification = qualification(1);
+        let bytes = reply(&qualification);
+        let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+        assert_eq!(
+            header.schema,
+            norito::schema::identity::frame_hash::<QualificationReply>()
+        );
+        let canonical: iroha_data_model::kagemusha::KagemushaDeviceQualificationReplyV1 =
+            norito::decode_canonical(&bytes).expect("fixture decodes as the actual device reply");
+        assert_eq!(canonical.credential, qualification.credential);
+        assert_eq!(norito::encode_canonical(&canonical).unwrap(), bytes);
+        assert_ne!(
+            <QualificationReply as norito::NoritoSchema>::nominal_name(),
+            <iroha_data_model::kagemusha::KagemushaDeviceQualificationReplyV1 as norito::NoritoSchema>::nominal_name(),
+        );
+        assert!(matches!(
+            norito::decode_canonical::<u32>(&bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
 }

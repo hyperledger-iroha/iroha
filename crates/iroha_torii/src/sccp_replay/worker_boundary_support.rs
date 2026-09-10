@@ -249,7 +249,10 @@ fn refresh_torii(app: &crate::SharedAppState) -> crate::Torii {
         app.da_receipt_signer.clone(),
         app.online_peers.clone(),
         None,
-        crate::routing::MaybeTelemetry::disabled(),
+        crate::ToriiRuntimeDeps::new(
+            crate::build_identity_test_fixture::build_identity(),
+            crate::routing::MaybeTelemetry::disabled(),
+        ),
     )
     .expect("ordinary Torii constructor accepts the disabled-service test configuration");
     torii.sccp_replay_archive = app.sccp_replay_archive.clone();

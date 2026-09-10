@@ -854,17 +854,6 @@ impl InrouProbeScope {
         }
     }
 
-    pub(super) fn check_names(self) -> &'static [&'static str] {
-        match self {
-            Self::Candidate => &["inrou_authoritative_status", "inrou_public_routes"],
-            Self::Public => &[
-                "inrou_authoritative_status",
-                "inrou_public_routes",
-                "inrou_public_discovery",
-            ],
-        }
-    }
-
     fn validate_root(self, root: &str) -> Result<()> {
         if self == Self::Candidate {
             let root = Url::parse(&normalize_root_url(root)?)?;
@@ -5132,7 +5121,8 @@ fn submit_server_prepared_operation(
         .checked_add(Duration::from_secs(args.timeout_secs))
         .ok_or_else(|| eyre!("prepared server submission deadline overflow"))?;
     let signer = resolve_canary_signer(config)?;
-    let mut client_builder = IrohaClient::builder(write_canary_config(config, public_root, &signer)?);
+    let mut client_builder =
+        IrohaClient::builder(write_canary_config(config, public_root, &signer)?);
     let request_budget = Duration::from_secs(args.timeout_secs);
     client_builder.torii_request_timeout = if client_builder.torii_request_timeout.is_zero() {
         request_budget
@@ -5214,6 +5204,7 @@ fn submit_server_prepared_operation(
     }
 }
 /// Poll only the already authenticated transaction; submission is never repeated here.
+/// Timeouts imposed by the remaining confirmation budget retain the last observation.
 fn await_exact_prepared_operation(
     client: &IrohaClient,
     validated: &ValidatedPreparedOperation,
@@ -5253,13 +5244,32 @@ fn await_exact_prepared_operation(
         if request_budget.is_zero() {
             return Ok(classification);
         }
-        bounded_builder.torii_request_timeout = if client.torii_request_timeout().is_zero() {
+        let deadline_limits_request = client.torii_request_timeout().is_zero()
+            || request_budget < client.torii_request_timeout();
+        bounded_builder.torii_request_timeout = if deadline_limits_request {
             request_budget
         } else {
-            client.torii_request_timeout().min(request_budget)
+            client.torii_request_timeout()
         };
         let bounded_client = bounded_builder.build()?;
-        classification = classify_exact_prepared_operation(&bounded_client, validated)?;
+        match classify_exact_prepared_operation(&bounded_client, validated) {
+            Ok(observed) => classification = observed,
+            Err(error)
+                if deadline_limits_request
+                    && error.chain().any(|cause| {
+                        cause
+                            .downcast_ref::<reqwest::Error>()
+                            .is_some_and(reqwest::Error::is_timeout)
+                            || cause.downcast_ref::<std::io::Error>().is_some_and(|error| {
+                                error.kind() == std::io::ErrorKind::TimedOut
+                            })
+                    }) =>
+            {
+                // A shrinking deadline can cancel even a healthy read. Keep the
+                // last observation and retry only within the original deadline.
+            }
+            Err(error) => return Err(error),
+        }
     }
 }
 
@@ -7848,6 +7858,87 @@ mod tests {
         )
     }
 
+    #[derive(Clone, Copy, Debug)]
+    enum PreparedStatusPoll {
+        Status(&'static str, &'static str),
+        Failure(std::io::ErrorKind),
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("scripted prepared status transport failure")]
+    struct PreparedStatusTransportError(#[source] std::io::Error);
+
+    #[derive(Debug)]
+    struct PreparedStatusTransport {
+        transaction: SignedTransaction,
+        polls: Vec<PreparedStatusPoll>,
+        timeouts: Mutex<Vec<Option<Duration>>>,
+    }
+
+    impl iroha::http::HttpTransport for PreparedStatusTransport {
+        fn send_blocking(
+            &self,
+            request: iroha::http::TransportRequest,
+        ) -> Result<iroha::http::Response<Vec<u8>>> {
+            assert_eq!(request.method, iroha::http::Method::GET);
+            assert_eq!(request.url.path(), "/v1/pipeline/transactions/status");
+            assert_eq!(
+                request.url.query_pairs().into_owned().collect::<Vec<_>>(),
+                vec![
+                    ("hash".to_owned(), self.transaction.hash().to_string()),
+                    ("scope".to_owned(), "global".to_owned()),
+                ]
+            );
+            assert!(request.body.is_empty());
+            let mut timeouts = self.timeouts.lock().expect("prepared status timeouts");
+            let poll = self.polls[timeouts.len().min(self.polls.len() - 1)];
+            timeouts.push(request.timeout);
+            drop(timeouts);
+            match poll {
+                PreparedStatusPoll::Status(kind, source) => {
+                    let response = prepared_status_response(&self.transaction, kind, source);
+                    Ok(iroha::http::Response::builder()
+                        .status(response.status)
+                        .header("Content-Type", response.content_type)
+                        .body(response.body)
+                        .expect("prepared status response"))
+                }
+                PreparedStatusPoll::Failure(kind) => {
+                    Err(PreparedStatusTransportError(std::io::Error::new(
+                        kind,
+                        "scripted prepared status failure",
+                    )))
+                        .wrap_err("prepared status transport failed")
+                }
+            }
+        }
+
+        fn send(&self, request: iroha::http::TransportRequest) -> iroha::http::TransportFuture<'_> {
+            Box::pin(async move { self.send_blocking(request) })
+        }
+    }
+
+    fn prepared_status_transport_client(
+        validated: &ValidatedPreparedOperation,
+        request_timeout: Duration,
+        polls: &[PreparedStatusPoll],
+    ) -> (IrohaClient, Arc<PreparedStatusTransport>) {
+        assert!(!polls.is_empty());
+        let transport = Arc::new(PreparedStatusTransport {
+            transaction: validated.transaction().unwrap().clone(),
+            polls: polls.to_vec(),
+            timeouts: Mutex::new(Vec::new()),
+        });
+        let mut config = crate::fallback_config();
+        config.torii_api_url = Url::parse("http://127.0.0.1:1").unwrap();
+        config.torii_request_timeout = request_timeout;
+        let client = IrohaClient::builder(config)
+            .http_transport(transport.clone())
+            .build()
+            .expect("valid Taira fixture context");
+        (client, transport)
+    }
+
     #[test]
     fn prepared_server_confirmation_polls_queued_then_verifies_exact_applied_wire() {
         use iroha::data_model::{
@@ -7906,7 +7997,9 @@ mod tests {
         let mut config = crate::fallback_config();
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
         let outcome = await_exact_prepared_operation(
-            &IrohaClient::builder(config).build().expect("valid Taira fixture context"),
+            &IrohaClient::builder(config)
+                .build()
+                .expect("valid Taira fixture context"),
             &validated,
             PreparedRecoveryClassification::Absent,
             Instant::now() + Duration::from_secs(5),
@@ -7946,7 +8039,9 @@ mod tests {
             });
             let mut config = crate::fallback_config();
             config.torii_api_url = Url::parse(&server.base_url).unwrap();
-            let client = IrohaClient::builder(config).build().expect("valid Taira fixture context");
+            let client = IrohaClient::builder(config)
+                .build()
+                .expect("valid Taira fixture context");
             let outcome = await_exact_prepared_operation(
                 &client,
                 &validated,
@@ -7981,20 +8076,23 @@ mod tests {
             );
         }
         let validated = queued_onboarding_fixture();
-        let transaction = validated.transaction().unwrap().clone();
-        let server = spawn_mock_http(100, move |_| {
-            prepared_status_response(&transaction, "Expired", "cache")
-        });
-        let mut config = crate::fallback_config();
-        config.torii_api_url = Url::parse(&server.base_url).unwrap();
-        let client = IrohaClient::builder(config).build().expect("valid Taira fixture context");
+        let configured_timeout = Duration::from_secs(5);
+        let wait_budget = Duration::from_millis(200);
+        let (client, transport) = prepared_status_transport_client(
+            &validated,
+            configured_timeout,
+            &[
+                PreparedStatusPoll::Status("Expired", "cache"),
+                PreparedStatusPoll::Failure(std::io::ErrorKind::TimedOut),
+            ],
+        );
         let first = classify_exact_prepared_operation(&client, &validated).unwrap();
         let started = Instant::now();
         let outcome = await_exact_prepared_operation(
             &client,
             &validated,
             first,
-            started + Duration::from_millis(100),
+            started + wait_budget,
             Duration::from_millis(10),
         )
         .unwrap();
@@ -8005,8 +8103,117 @@ mod tests {
             },
             "cache expiry cannot become a definitive failure at the wait deadline"
         );
+        assert!(started.elapsed() >= wait_budget);
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(finish_mock(server).len() > 1);
+        let timeouts = transport.timeouts.lock().unwrap();
+        assert_eq!(timeouts[0], Some(configured_timeout));
+        assert!(timeouts.iter().skip(1).all(|timeout| {
+            timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget / 3)
+        }));
+    }
+
+    #[test]
+    fn prepared_server_confirmation_retries_deadline_timeout_until_fixed_failure() {
+        let validated = queued_onboarding_fixture();
+        let wait_budget = Duration::from_secs(5);
+        for configured_timeout in [Duration::ZERO, Duration::from_secs(30)] {
+            let (client, transport) = prepared_status_transport_client(
+                &validated,
+                configured_timeout,
+                &[
+                    PreparedStatusPoll::Failure(std::io::ErrorKind::TimedOut),
+                    PreparedStatusPoll::Status("Rejected", "state"),
+                ],
+            );
+            let outcome = await_exact_prepared_operation(
+                &client,
+                &validated,
+                PreparedRecoveryClassification::Pending {
+                    terminal_kind: "Queued".to_owned(),
+                },
+                Instant::now() + wait_budget,
+                Duration::from_millis(1),
+            )
+            .expect("a deadline-bounded timeout must allow a later definitive observation");
+            assert_eq!(
+                outcome,
+                PreparedRecoveryClassification::Rejected {
+                    terminal_kind: "Rejected".to_owned(),
+                }
+            );
+            let timeouts = transport.timeouts.lock().unwrap();
+            assert_eq!(timeouts.len(), 2);
+            assert!(timeouts.iter().all(|timeout| {
+                timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget / 3)
+            }));
+        }
+    }
+
+    #[test]
+    fn prepared_server_confirmation_preserves_configured_timeout_errors() {
+        let validated = queued_onboarding_fixture();
+        let configured_timeout = Duration::from_millis(1);
+        let (client, transport) = prepared_status_transport_client(
+            &validated,
+            configured_timeout,
+            &[PreparedStatusPoll::Failure(std::io::ErrorKind::TimedOut)],
+        );
+        let error = await_exact_prepared_operation(
+            &client,
+            &validated,
+            PreparedRecoveryClassification::Pending {
+                terminal_kind: "Queued".to_owned(),
+            },
+            Instant::now() + Duration::from_secs(5),
+            Duration::from_millis(1),
+        )
+        .expect_err("a shorter configured timeout must remain a transport failure");
+        assert_eq!(
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        assert_eq!(
+            *transport.timeouts.lock().unwrap(),
+            vec![Some(configured_timeout)]
+        );
+    }
+
+    #[test]
+    fn prepared_server_confirmation_preserves_other_transport_errors() {
+        let validated = queued_onboarding_fixture();
+        let wait_budget = Duration::from_secs(5);
+        let (client, transport) = prepared_status_transport_client(
+            &validated,
+            Duration::from_secs(30),
+            &[PreparedStatusPoll::Failure(std::io::ErrorKind::ConnectionReset)],
+        );
+        let error = await_exact_prepared_operation(
+            &client,
+            &validated,
+            PreparedRecoveryClassification::Pending {
+                terminal_kind: "Queued".to_owned(),
+            },
+            Instant::now() + wait_budget,
+            Duration::from_millis(1),
+        )
+        .expect_err("a non-timeout transport failure must not become a pending observation");
+        assert_eq!(
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::ConnectionReset
+        );
+        let timeouts = transport.timeouts.lock().unwrap();
+        assert_eq!(timeouts.len(), 1);
+        assert!(timeouts[0].is_some_and(|timeout| {
+            !timeout.is_zero() && timeout <= wait_budget / 3
+        }));
     }
 
     #[test]
@@ -8025,7 +8232,9 @@ mod tests {
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
         assert!(
             await_exact_prepared_operation(
-                &IrohaClient::builder(config).build().expect("valid Taira fixture context"),
+                &IrohaClient::builder(config)
+                    .build()
+                    .expect("valid Taira fixture context"),
                 &validated,
                 PreparedRecoveryClassification::Absent,
                 Instant::now() + Duration::from_secs(5),
@@ -8039,7 +8248,9 @@ mod tests {
         config.torii_api_url = Url::parse(&server.base_url).unwrap();
         assert!(
             await_exact_prepared_operation(
-                &IrohaClient::builder(config).build().expect("valid Taira fixture context"),
+                &IrohaClient::builder(config)
+                    .build()
+                    .expect("valid Taira fixture context"),
                 &validated,
                 PreparedRecoveryClassification::Pending {
                     terminal_kind: "Queued".to_owned()
@@ -11000,6 +11211,16 @@ mod tests {
                 .get("checks")
                 .and_then(Value::as_array)
                 .expect("probe checks");
+            let expected_checks: &[&str] = match scope {
+                InrouProbeScope::Candidate => {
+                    &["inrou_authoritative_status", "inrou_public_routes"]
+                }
+                InrouProbeScope::Public => &[
+                    "inrou_authoritative_status",
+                    "inrou_public_routes",
+                    "inrou_public_discovery",
+                ],
+            };
             assert_eq!(
                 checks
                     .iter()
@@ -11008,7 +11229,7 @@ mod tests {
                         .and_then(Value::as_str)
                         .expect("check name"))
                     .collect::<Vec<_>>(),
-                scope.check_names()
+                expected_checks
             );
             let accepted =
                 crate::taira_public_reset::validate_inrou_checks_for_test(&report, scope);

@@ -172,6 +172,7 @@ use reservation_journal::{
 };
 #[cfg(test)]
 use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
+#[cfg(test)]
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
@@ -410,6 +411,8 @@ pub const QUEUE_PLAN_GLOBAL_ADMISSION_IDENTITY_VERSION_V1: u16 = 1;
 /// This identity is persisted inside the exact journal record. Together with the record's
 /// canonical enqueue timestamp and claim digest it lets restart recovery reconstruct the same
 /// global admission binding that every authority attested.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanGlobalAdmissionIdentityV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanGlobalAdmissionIdentityV1 {
     /// Identity layout version.
@@ -420,6 +423,8 @@ pub struct QueuePlanGlobalAdmissionIdentityV1 {
     pub request_id: Hash,
 }
 /// One routing leg paired with the exact active lane incarnation that admitted it.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanRouteIncarnationV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanRouteIncarnationV1 {
     /// Coordinator or participant route in canonical routing-plan order.
@@ -438,6 +443,8 @@ pub struct QueuePlanRouteIncarnationV1 {
     pub durability_threshold: u16,
 }
 /// Generation-stable lifecycle context for one queue-plan admission attempt.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanAdmissionContextV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanAdmissionContextV1 {
     /// Context layout version.
@@ -617,6 +624,8 @@ impl QueuePlanAdmissionContextV1 {
     }
 }
 /// Exact evidence returned only after the pending-plan journal Put is durably synchronized.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::QueuePlanDurableAdmissionV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct QueuePlanDurableAdmissionV1 {
     /// Claim layout version.
@@ -737,6 +746,8 @@ pub enum QueuePlanAdmissionContextError {
 /// The two identity hashes are supplied by lane consensus: `reservation_owner_hash` identifies
 /// the leader/session taking ownership, while `proposal_identity_hash` identifies the provisional
 /// proposal slot before its transaction-dependent final descriptor is assembled.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationScopeV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct LaneQueueReservationScopeV1 {
     /// Lane allowed to coordinate execution of selected transactions.
@@ -816,6 +827,8 @@ impl LaneQueueReservationRoutingMode {
     }
 }
 /// Complete exact identity of one durable lane queue reservation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationKeyV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct LaneQueueReservationKeyV1 {
@@ -888,6 +901,8 @@ impl LaneQueueReservationKeyV1 {
 /// Ordinals start at one and are never reused while a transaction remains
 /// tracked. The reservation journal retains this identity while the hash is
 /// absent from the ordinary FIFO so later admissions cannot overtake it.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueFifoOrderV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 struct LaneQueueFifoOrderV1 {
@@ -923,6 +938,8 @@ impl LaneQueueFifoOrderV1 {
 /// The first-release V1 layout binds every reservation to an exact globally
 /// committed QueuePlan admission identity and persists atomic ordered release
 /// batches.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationRecordV1 {
@@ -949,6 +966,8 @@ impl LaneQueueReservationRecordV1 {
 /// The retirement digest alone is not sufficient here: retaining the
 /// consensus/lifecycle coordinates in the journal lets replay reject an ABA
 /// attempt before it can touch a live reservation from a recreated lane.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReleaseBarrierV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReleaseBarrierV1 {
@@ -1387,6 +1406,8 @@ impl LaneQueueReleaseFinalizationGate {
 /// A completion frame moves the exact live records here atomically. Keeping
 /// the original durable ordinals makes a crash between that frame and FIFO
 /// reinsertion restartable without changing global queue order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReleaseCompletionV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReleaseCompletionV1 {
@@ -1496,6 +1517,8 @@ pub struct LaneQueueReservationReplaySummary {
 /// carrying these exact lifecycle and proposal coordinates belongs to the same immutable group
 /// for restart classification, including when journal compaction has flattened the original
 /// atomic `PutBatch` frame.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationGroupIdentityV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationGroupIdentityV1 {
@@ -2123,6 +2146,8 @@ pub(crate) struct LaneQueueReservationReconciliationRecordV1 {
     pub(crate) durable_admission: QueuePlanDurableAdmissionV1,
 }
 /// Complete FIFO-ordered membership of one exact autonomous proposal slot.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::queue::LaneQueueReservationReconciliationGroupV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct LaneQueueReservationReconciliationGroupV1 {

@@ -123,6 +123,8 @@ impl Platform {
     }
 }
 /// Request payload for `POST /v1/notify/devices`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::push::RegisterDeviceRequest")]
 #[derive(
     Debug,
     Clone,
@@ -146,6 +148,8 @@ pub struct RegisteredDevice {
     pub topics: Vec<String>,
     pub token_fingerprint: String,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::push::PushActivityPayload")]
 #[derive(
     Clone,
     Debug,
@@ -217,6 +221,8 @@ pub enum DispatchOutcome {
     InvalidToken(String),
     PermanentFailure(String),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::push::AppliedBlockCursor")]
 #[derive(
     Clone,
     Debug,
@@ -1340,6 +1346,8 @@ async fn replay_with_queue_drain(
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::push::DeviceRecord")]
 #[derive(
     Clone,
     Debug,
@@ -1359,6 +1367,8 @@ struct DeviceRecord {
     topics: Vec<String>,
     updated_at_ms: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::push::DeliveryJob")]
 #[derive(
     Clone,
     Debug,

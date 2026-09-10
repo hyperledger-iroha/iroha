@@ -12,10 +12,10 @@ pub(in crate::transaction_load) fn expected() -> Expected {
     }
 }
 pub(in crate::transaction_load) fn value(journal: usize, trace: usize) -> Value {
-    norito::json!({"schema": resource::RESPONSE_SCHEMA, "kind": "admit", "sequence": 0,
+    norito::json!({"schema": (resource::RESPONSE_SCHEMA), "kind": "admit", "sequence": 0,
       "outcome": "complete", "admission": {"schema": ADMISSION_SCHEMA,
-      "budget_sha256": "a".repeat(64), "pair_index": 1, "variant": "one_lane",
-      "geometry": {"peers": 4, "interval_ns": NS, "measurement_ns": 20 * NS, "drain_ns": NS},
+      "budget_sha256": ("a".repeat(64)), "pair_index": 1, "variant": "one_lane",
+      "geometry": {"peers": 4, "interval_ns": NS, "measurement_ns": (20 * NS), "drain_ns": NS},
       "journal": {"label": "pair1.one_lane.journal", "max_bytes": journal},
       "trace": {"label": "pair1.one_lane.trace", "max_bytes": trace}}})
 }

@@ -2703,3 +2703,4 @@ async fn ballot_zk_v1_rejects_partial_lock_hints() {
 }
 include!("ballot_v1_strictness_tests.rs");
 include!("ballotproof_shape_tests.rs");
+include!("norito_frame_tests.rs");

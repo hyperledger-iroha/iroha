@@ -978,10 +978,10 @@ fn moderation_quarantine_wrap_and_unwrap_discard_outputs_on_provider_drift() {
         test_key_wrapper(0x85, "software://sorafs/moderation/drifting-unwrap"),
         QualificationDriftTrigger::Unwrap,
     );
-    assert_eq!(
+    assert!(matches!(
         open_moderation_quarantine_object(&envelope, &record, &binding, &unwrapping),
         Err(ModerationQuarantineObjectError::KeyWrapperUnqualified)
-    );
+    ));
 }
 #[test]
 fn moderation_quarantine_discards_wrap_output_when_active_key_changes() {
@@ -1738,3 +1738,5 @@ fn moderation_read_views_bound_clones_before_response_materialization() {
             .is_some()
     );
 }
+
+include!("moderation/schema_identity_tests.rs");

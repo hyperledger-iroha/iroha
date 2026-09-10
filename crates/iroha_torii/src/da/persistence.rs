@@ -64,6 +64,8 @@ const DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_MAX_BYTES_V1: usize = 128 * 1024;
 static ARTIFACT_TEMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 static DA_INGEST_SERVER_ASSIGNMENT_LOCK: OnceLock<NonPoisoningMutex<()>> = OnceLock::new();
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::persistence::DaIngestServerAssignmentV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -105,6 +107,8 @@ pub(super) struct DaIngestServerAssignmentV1 {
     pub(super) assignment_signature: Signature,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV1")]
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -1840,12 +1844,16 @@ pub struct DaReceiptLogEntry {
     /// Full DA ingest receipt payload.
     pub receipt: DaIngestReceipt,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::persistence::StoredDaReceipt")]
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 pub(super) struct StoredDaReceipt {
     pub(super) version: u16,
     pub(super) sequence: u64,
     pub(super) receipt: DaIngestReceipt,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::persistence::DaReceiptSigningPayload")]
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct DaReceiptSigningPayload {
     version: u16,
@@ -4682,6 +4690,8 @@ pub(super) fn persist_da_commitment_record(
     );
     Ok(Some(target_path))
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::da::persistence::DaCommitmentScheduleEntry")]
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 /// On-disk schedule entry combining commitment record and PDP commitment bytes.
 pub(super) struct DaCommitmentScheduleEntry {

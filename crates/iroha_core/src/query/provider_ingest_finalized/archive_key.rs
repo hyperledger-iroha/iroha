@@ -1,4 +1,6 @@
 /// Exact finalized identity of one archived committed view.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1")]
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
 )]

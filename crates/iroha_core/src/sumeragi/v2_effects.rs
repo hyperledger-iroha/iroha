@@ -1746,6 +1746,10 @@ pub(crate) trait V2EffectServices {
     /// repeated task identifier requests an idempotent retry of the same
     /// durable operation.
     fn enqueue_apply(&mut self, task: ApplyTask) -> Result<(), Self::Error>;
+    /// Retry one exact deferred Apply without consuming its executor owner on
+    /// backpressure. `false` retains the task until bounded worker capacity is
+    /// available; a conflicting command or disconnected worker is an error.
+    fn try_enqueue_apply(&mut self, task: ApplyTask) -> Result<bool, Self::Error>;
     /// Observe a reducer-authorized view installation and its authenticated
     /// durable-lock projection for timer/status and ingress recovery wiring.
     fn entered_view(
@@ -10180,12 +10184,14 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
     ///
     /// The complete matching owner set is preflighted before callbacks. Work
     /// identifiers are reused verbatim, and deferred entries are removed only
-    /// after every enqueue succeeds.
+    /// after every enqueue succeeds. `None` means the worker was full: the exact
+    /// Apply owners and the caller's completed-sidecar notification must remain
+    /// ready for another bounded scheduler turn.
     pub(crate) fn retry_deferred_merge_sidecar<S: V2EffectServices>(
         &mut self,
         entry_hash: HashOf<MergeLedgerEntry>,
         services: &mut S,
-    ) -> Result<usize, EffectExecutorError> {
+    ) -> Result<Option<usize>, EffectExecutorError> {
         self.ensure_open()?;
         let work_ids = self
             .deferred_merge_work
@@ -10208,8 +10214,10 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             .collect::<Result<Vec<_>, EffectExecutorError>>()
             .map_err(|error| self.close(error, services))?;
         for task in plans {
-            if let Err(error) = services.enqueue_apply(task) {
-                return Err(self.close(service_error(error), services));
+            match services.try_enqueue_apply(task) {
+                Ok(true) => {}
+                Ok(false) => return Ok(None),
+                Err(error) => return Err(self.close(service_error(error), services)),
             }
         }
         for work_id in &work_ids {
@@ -10219,7 +10227,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
             self.publish_status(services)
                 .map_err(|error| self.close(error, services))?;
         }
-        Ok(work_ids.len())
+        Ok(Some(work_ids.len()))
     }
     /// Fail closed when a decided Apply references a uniquely invalid merge entry.
     ///

@@ -154,6 +154,8 @@ struct BoundSidecarIndexSnapshot {
 /// This is the first-release V1 layout; pre-release development markers that
 /// omitted the relative identity intentionally fail closed instead of using a
 /// legacy decoding fallback.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::BoundProgressAppendIntentV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct BoundProgressAppendIntentV1 {
@@ -359,6 +361,8 @@ impl BoundProgressPair {
     }
 }
 /// One canonical outbound SCCP payload retained in commitment-index order.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraRetainedSccpMessage")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct KuraRetainedSccpMessage {
@@ -370,6 +374,8 @@ struct KuraRetainedSccpMessage {
     payload_bytes: Vec<u8>,
 }
 /// Immutable Kura-local block evidence retained before body eviction or finality publication.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraRetainedBlockRecord")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct KuraRetainedBlockRecord {
@@ -941,6 +947,8 @@ impl Kura {
 /// resultless proposal and the exact result-bearing executed block. Readers
 /// require the subject and execution commitment to match those respective
 /// hashes in addition to this envelope's canonical-header association.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::KuraV2FinalityRecord")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct KuraV2FinalityRecord {

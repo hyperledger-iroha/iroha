@@ -339,6 +339,8 @@ pub trait ProviderIngestCompletedMusubiSignedCaptureLedgerV1: Send + Sync + 'sta
         >,
     >;
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCaptureSessionMaterialV1")]
 #[derive(NoritoSerialize)]
 struct ProviderIngestCompletedMusubiCaptureSessionMaterialV1 {
     version: u8,
@@ -347,6 +349,8 @@ struct ProviderIngestCompletedMusubiCaptureSessionMaterialV1 {
     reader_generation: u64,
     public_key: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCaptureRequestMaterialV1")]
 #[derive(NoritoSerialize)]
 struct ProviderIngestCompletedMusubiCaptureRequestMaterialV1 {
     version: u8,
@@ -361,6 +365,8 @@ struct ProviderIngestCompletedMusubiCaptureRequestMaterialV1 {
     limit: u16,
     generation: u64,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::provider_ingest_runtime::ProviderIngestCompletedMusubiCapturePageHeaderMaterialV1")]
 #[derive(NoritoSerialize)]
 struct ProviderIngestCompletedMusubiCapturePageHeaderMaterialV1 {
     network_id: NetworkId,

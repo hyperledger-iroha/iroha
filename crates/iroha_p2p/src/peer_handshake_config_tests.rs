@@ -767,13 +767,20 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     let second_started = Arc::new(AtomicBool::new(false));
     let (release_first, wait_for_release) = std_mpsc::channel();
     let first_started_by_work = Arc::clone(&first_started);
-    let first = tokio::spawn(run_soranet_admission_work(Arc::clone(&gate), move || {
-        first_started_by_work.store(true, Ordering::Release);
-        wait_for_release
-            .recv_timeout(Duration::from_secs(2))
-            .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
-        Ok(1_u8)
-    }));
+    let first = tokio::spawn(run_soranet_admission_work(
+        Arc::clone(&gate),
+        move |cancellation| {
+            first_started_by_work.store(true, Ordering::Release);
+            wait_for_release
+                .recv_timeout(Duration::from_secs(2))
+                .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+            assert!(
+                cancellation.is_cancelled(),
+                "aborting the owner must stop further evaluations"
+            );
+            Ok(1_u8)
+        },
+    ));
     tokio::time::timeout(Duration::from_secs(1), async {
         while !first_started.load(Ordering::Acquire) {
             tokio::task::yield_now().await;
@@ -788,10 +795,13 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     let _ = first.await;
     let cancelled_waiter_started = Arc::new(AtomicBool::new(false));
     let cancelled_waiter_started_by_work = Arc::clone(&cancelled_waiter_started);
-    let cancelled_waiter = tokio::spawn(run_soranet_admission_work(Arc::clone(&gate), move || {
-        cancelled_waiter_started_by_work.store(true, Ordering::Release);
-        Ok(3_u8)
-    }));
+    let cancelled_waiter = tokio::spawn(run_soranet_admission_work(
+        Arc::clone(&gate),
+        move |_cancellation| {
+            cancelled_waiter_started_by_work.store(true, Ordering::Release);
+            Ok(3_u8)
+        },
+    ));
     tokio::task::yield_now().await;
     assert!(
         !cancelled_waiter_started.load(Ordering::Acquire),
@@ -800,10 +810,13 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
     cancelled_waiter.abort();
     let _ = cancelled_waiter.await;
     let second_started_by_work = Arc::clone(&second_started);
-    let second = tokio::spawn(run_soranet_admission_work(Arc::clone(&gate), move || {
-        second_started_by_work.store(true, Ordering::Release);
-        Ok(2_u8)
-    }));
+    let second = tokio::spawn(run_soranet_admission_work(
+        Arc::clone(&gate),
+        move |_cancellation| {
+            second_started_by_work.store(true, Ordering::Release);
+            Ok(2_u8)
+        },
+    ));
     tokio::time::sleep(Duration::from_millis(25)).await;
     assert!(
         !second_started.load(Ordering::Acquire),
@@ -822,6 +835,58 @@ async fn puzzle_work_is_offloaded_serialized_and_remains_bounded_after_cancellat
         "disconnecting while queued must remove work before it reaches Argon2"
     );
 }
+#[tokio::test(start_paused = true)]
+async fn authentication_deadline_cancels_puzzle_work_without_releasing_inflight_memory() {
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc as std_mpsc,
+    };
+
+    let gate = Arc::new(Semaphore::new(1));
+    let started = Arc::new(AtomicBool::new(false));
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let (release, evaluation) = std_mpsc::channel();
+    let deadline = PreauthDeadline::from_now(Duration::from_secs(35)).expect("auth deadline");
+    let work_gate = Arc::clone(&gate);
+    let work_started = Arc::clone(&started);
+    let work_cancelled = Arc::clone(&cancelled);
+    let handshake = tokio::spawn(async move {
+        deadline
+            .run(
+                None,
+                run_soranet_admission_work(work_gate, move |cancellation| {
+                    work_started.store(true, Ordering::Release);
+                    evaluation
+                        .recv_timeout(Duration::from_secs(2))
+                        .map_err(|error| Error::HandshakeSoranet(error.to_string()))?;
+                    work_cancelled.store(cancellation.is_cancelled(), Ordering::Release);
+                    Ok(())
+                }),
+            )
+            .await
+    });
+    while !started.load(Ordering::Acquire) {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(35)).await;
+    assert!(handshake.await.expect("handshake task").is_err());
+    assert_eq!(
+        gate.available_permits(),
+        0,
+        "the current evaluation still owns its memory"
+    );
+    tokio::time::resume();
+    release.send(()).expect("complete the current evaluation");
+    let permit = tokio::time::timeout(Duration::from_secs(2), gate.acquire())
+        .await
+        .expect("cancelled evaluation must release its permit")
+        .expect("open gate");
+    assert!(
+        cancelled.load(Ordering::Acquire),
+        "deadline expiry must cancel further evaluations"
+    );
+    drop(permit);
+}
 #[tokio::test(flavor = "current_thread")]
 async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_responsive() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -835,7 +900,7 @@ async fn puzzle_work_gate_bounds_concurrency_and_keeps_the_async_runtime_respons
         let peak = Arc::clone(&peak);
         workers.push(tokio::spawn(run_soranet_admission_work(
             Arc::clone(&gate),
-            move || {
+            move |_cancellation| {
                 let current = active.fetch_add(1, Ordering::AcqRel) + 1;
                 peak.fetch_max(current, Ordering::AcqRel);
                 std::thread::sleep(Duration::from_millis(10));
@@ -901,7 +966,7 @@ async fn closed_puzzle_work_gate_fails_closed_without_running_work() {
     gate.close();
     let started = Arc::new(AtomicBool::new(false));
     let started_by_work = Arc::clone(&started);
-    let error = run_soranet_admission_work(gate, move || {
+    let error = run_soranet_admission_work(gate, move |_cancellation| {
         started_by_work.store(true, Ordering::Release);
         Ok(())
     })

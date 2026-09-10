@@ -19729,6 +19729,8 @@ enum DepositInstructionError {
     Forbidden(String),
     Invalid(String),
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceDepositExpectation")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AppealFinanceDepositExpectation {
     case_id: String,
@@ -19745,6 +19747,8 @@ struct AppealFinanceDepositExpectation {
 }
 const APPEAL_FINANCE_SETTLEMENT_OUTBOX_CONTEXT_VERSION_V1: u8 = 1;
 const APPEAL_FINANCE_DEPOSIT_OUTBOX_CONTEXT_VERSION_V1: u8 = 1;
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceSettlementOutboxContextV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AppealFinanceSettlementOutboxContextV1 {
     version: u8,
@@ -19754,6 +19758,8 @@ struct AppealFinanceSettlementOutboxContextV1 {
     outcome: String,
     panel_size: u32,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceSettlementSnapshotV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AppealFinanceSettlementSnapshotV1 {
     config_version: String,
@@ -19789,6 +19795,8 @@ impl AppealFinanceSettlementSnapshotV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::api::AppealFinanceDepositOutboxContextV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct AppealFinanceDepositOutboxContextV1 {
     version: u8,

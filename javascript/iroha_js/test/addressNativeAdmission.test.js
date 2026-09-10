@@ -114,3 +114,28 @@ test("browser account admission has no structural validation fallback", async ()
     () => new BrowserAddress(HEADER, { tag: 0, curve: 1, publicKey }),
   ]) assert.throws(call, /Native binding required;.*unavailable in browser/u);
 });
+
+test("controller snapshots cannot mutate canonical single-key or multisig ownership", () => {
+  const single = AccountAddress.fromAccount({ publicKey: Buffer.from(VALID_KEY_HEX, "hex") });
+  const member = single.controllerInfo();
+  const multi = new AccountAddress(
+    { version: 0, classId: 1, normVersion: 1, extFlag: false },
+    { tag: 1, version: 1, threshold: 1, members: [{ curve: member.curve, publicKey: member.publicKey, weight: 1 }] },
+  );
+  for (const address of [single, multi]) {
+    const original = address.canonicalHex();
+    const snapshot = address.controllerInfo();
+    if (snapshot.tag === 1) {
+      snapshot.members[0].publicKey.fill(0);
+      snapshot.members[0].weight = 0;
+      snapshot.threshold = 0;
+      snapshot.members.length = 0;
+    } else {
+      snapshot.publicKey.fill(0);
+      snapshot.curve = 0;
+    }
+    snapshot.tag = 99;
+    assert.equal(address.canonicalHex(), original);
+    assert.notEqual(address.controllerInfo().tag, 99);
+  }
+});

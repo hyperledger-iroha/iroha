@@ -72,7 +72,7 @@ fn streamed_canonical_frame_rejects_second_pass_flag_drift() {
     #[derive(crate::NoritoSchema)]
     #[norito_schema(name = "norito.test.core.write_canonical_tests.ChangingFlags")]
     struct ChangingFlags(Cell<usize>);
-    
+
 impl SerializePayload for ChangingFlags {
         fn serialize(&self, writer: &mut Encoder<'_>) -> Result<(), Error> {
             let call = self.0.get();

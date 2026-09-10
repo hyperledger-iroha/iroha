@@ -137,9 +137,7 @@ mod tests {
         roster.sort_by(|left, right| left.validator.cmp(&right.validator));
         let network_id = crate::sumeragi::synthetic_network_id("autonomous-reservation-slot-test");
         let (kagemusha_mint_finality_epoch_id, kagemusha_mint_finality_epoch_roster) =
-            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(
-                network_id, 7, &roster,
-            );
+            crate::kagemusha_v1_test_fixtures::mint_finality_roster_and_id(network_id, 7, &roster);
         wire::HeightContext {
             network_id,
             protocol_version: wire::PROTOCOL_VERSION,
@@ -445,9 +443,8 @@ mod tests {
                 .is_retryable_after_state_or_kura_progress()
         );
         assert!(
-            !AutonomousLaneReservationSlotPlanError::ConflictingPredecessor {
-                lane_id,
-                dataspace_id,
+            !AutonomousLaneReservationSlotPlanError::Storage {
+                reason: "corrupt occupied evidence".to_owned(),
             }
             .is_retryable_after_state_or_kura_progress()
         );

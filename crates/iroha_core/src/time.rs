@@ -22,6 +22,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 /// Outbound time probe message (peer → peer).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::time::TimePing")]
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePing {
     /// Monotonic probe identifier.
@@ -30,6 +32,8 @@ pub struct TimePing {
     pub t1_ms: u64,
 }
 /// Inbound time probe response (peer → peer).
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::time::TimePong")]
 #[derive(Clone, Copy, Debug, Encode, Decode)]
 pub struct TimePong {
     /// Echoed probe identifier.

@@ -241,6 +241,8 @@ fn decode_stream_token_observer_request(
     Ok(request)
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::runtime_provider_broker::protocol::StreamTokenObserverReplyWireV1")]
 #[derive(Decode, Encode)]
 enum StreamTokenObserverReplyWireV1 {
     Current {

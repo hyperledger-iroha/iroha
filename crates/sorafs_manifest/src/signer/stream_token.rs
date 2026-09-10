@@ -825,6 +825,9 @@ fn verify_stream_token_role_signature_v1(
 }
 
 #[cfg(test)]
+#[path = "stream_token/receipt_test_support.rs"]
+pub(super) mod receipt_test_support;
+#[cfg(test)]
 mod receipt_tests;
 #[cfg(test)]
 mod subject_tests;

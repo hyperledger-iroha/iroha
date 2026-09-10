@@ -38,6 +38,8 @@ use std::{
 };
 const HEIGHT: u64 = 1;
 /// Test-only mirror of Kura's private retained SCCP message layout.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::strict_replay_tests::CorruptedKuraRetainedSccpMessage")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
 struct CorruptedKuraRetainedSccpMessage {
@@ -46,6 +48,8 @@ struct CorruptedKuraRetainedSccpMessage {
     payload_bytes: Vec<u8>,
 }
 /// Test-only mirror used to install a disk-corrupted retained record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::strict_replay_tests::CorruptedKuraRetainedBlockRecord")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
 struct CorruptedKuraRetainedBlockRecord {
@@ -60,6 +64,8 @@ struct CorruptedKuraRetainedBlockRecord {
     sccp_archive: Vec<CorruptedKuraRetainedSccpMessage>,
 }
 /// Test-only mirror used to install a disk-corrupted v2 finality envelope.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::strict_replay_tests::CorruptedKuraV2FinalityRecord")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 #[norito(deny_unknown_fields)]
 struct CorruptedKuraV2FinalityRecord {

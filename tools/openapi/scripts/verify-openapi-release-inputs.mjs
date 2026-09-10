@@ -403,6 +403,7 @@ export function validatePinnedOpenApiProvenance({
 export async function verifyOpenApiReleaseInputs({
   repoRoot = defaultRepoRoot,
   requireCleanWorkingTree = true,
+  outputDir,
   beforeFinalStateCheck,
 } = {}) {
   if (
@@ -412,7 +413,8 @@ export async function verifyOpenApiReleaseInputs({
     throw new TypeError('beforeFinalStateCheck must be a function');
   }
   const root = resolve(repoRoot);
-  const openapiDir = join(root, 'artifacts', 'openapi');
+  const openapiDir = outputDir === undefined
+    ? join(root, 'artifacts', 'openapi') : resolve(outputDir);
   const inventoryPath = join(
     root,
     'release',
@@ -671,6 +673,97 @@ export async function verifyOpenApiReleaseInputs({
     openapi_versions_sha256_hex: sha256Hex(versionsBytes),
     release_version_map_sha256_hex: sha256Hex(releaseVersionMapBytes),
   };
+}
+
+/**
+ * Capture the clean source authority for unsigned authored-spec metadata.
+ * Uses the verifier's exact inventory, Git, lock pin and final-state contract.
+ * No source or generated artifact is written here.
+ */
+export async function captureOpenApiGeneratorSource({repoRoot, expectedCommit}) {
+  const root = resolve(repoRoot);
+  const headCommit = await readGitCommitOid(root, 'HEAD', 'HEAD');
+  if (!GIT_SHA1_HEX.test(expectedCommit ?? '') || headCommit !== expectedCommit) {
+    throw new Error('OpenAPI generator requires the exact expected clean HEAD commit');
+  }
+  const reads = new Map();
+  function validateRelativePath(relativePath) {
+    if (!relativePath || relativePath.startsWith('/') || relativePath.includes('\\') ||
+        relativePath.split('/').some((part) => !part || part === '.' || part === '..')) {
+      throw new Error('OpenAPI source input must be a canonical repository-relative path');
+    }
+  }
+  async function readTrackedFile(relativePath, maxBytes, {optional = false} = {}) {
+    validateRelativePath(relativePath);
+    const entry = await gitBytes(root, ['ls-tree', '-z', '--full-tree', headCommit, '--', relativePath]);
+    if (optional && entry.length === 0) return null;
+    const match = /^100(?:644|755) blob ([0-9a-f]{40})\t[^\0]+\0$/.exec(entry.toString('utf8'));
+    if (!match) throw new Error(`OpenAPI source input ${relativePath} must be one tracked regular file`);
+    const committed = await gitBytes(root, ['cat-file', 'blob', match[1]]);
+    const bytes = await readOpenApiStableFile(join(root, relativePath), {
+      label: `OpenAPI source input ${relativePath}`, maxBytes,
+    });
+    if (!bytes.equals(committed)) {
+      throw new Error(`OpenAPI source input ${relativePath} differs from the clean commit`);
+    }
+    reads.set(relativePath, {bytes: Buffer.from(bytes), maxBytes});
+    return bytes;
+  }
+  async function listTrackedDirectories(relativePath) {
+    validateRelativePath(relativePath);
+    const tree = await gitBytes(root, ['ls-tree', '-z', `${headCommit}:${relativePath}`]);
+    const names = tree.toString('utf8').split('\0');
+    if (names.pop() !== '') throw new Error('OpenAPI version tree has invalid Git framing');
+    return names.map((entry) => {
+      const match = /^040000 tree [0-9a-f]{40}\t([A-Za-z0-9][A-Za-z0-9._-]*)$/.exec(entry);
+      if (!match || match[1] === 'latest') throw new Error('OpenAPI versions must contain tracked canonical directories');
+      return match[1];
+    });
+  }
+  const inventoryBytes = await readTrackedFile(
+    'release/openapi-generator-inputs-v1.txt', GENERATOR_INPUT_INVENTORY_MAX_BYTES,
+  );
+  const inventoryPaths = parseOpenApiGeneratorInputInventory(inventoryBytes);
+  const [headTreeOid, headTreeBytes, generatedUnixMs, trackedCargoLockGitState] = await Promise.all([
+    readGitTreeOid(root, headCommit),
+    readGeneratorInputTree(root, headCommit, inventoryPaths),
+    readGitCommitTimestampMs(root, headCommit),
+    validateOpenApiTrackedCargoLockGitState(root, headCommit, headCommit),
+  ]);
+  const [pinBytes, committedCargoLockBytes] = await Promise.all([
+    readOpenApiCargoLockPinBlob(root, trackedCargoLockGitState.pinBlobOid),
+    readOpenApiCargoLockBlob(root, trackedCargoLockGitState.cargoLockBlobOid),
+  ]);
+  const lockPath = join(root, OPENAPI_TRACKED_GENERATOR_INPUT_PATH);
+  const lockSnapshot = await captureOpenApiTrackedCargoLock(lockPath);
+  if (!lockSnapshot.bytes.equals(committedCargoLockBytes)) {
+    throw new Error('OpenAPI Cargo.lock working bytes differ from the authenticated Git blob');
+  }
+  validateOpenApiTrackedCargoLockAgainstPin({trackedInputBytes: committedCargoLockBytes, pinBytes});
+  const headSourceSha256Hex = computeOpenApiGeneratorInputTreeSha256({
+    inventoryBytes, inventoryPaths, treeBytes: headTreeBytes,
+    trackedInputBytes: committedCargoLockBytes,
+  });
+  async function assertUnchanged() {
+    for (const [path, {bytes, maxBytes}] of reads) {
+      const current = await readOpenApiStableFile(join(root, path), {
+        label: `OpenAPI source input ${path}`, maxBytes,
+      });
+      if (!bytes.equals(current)) throw new Error(`OpenAPI source input ${path} changed during generation`);
+    }
+    await assertOpenApiTrackedCargoLockUnchanged(lockPath, lockSnapshot);
+    await assertOpenApiFinalGitState({
+      root, generatorCommit: headCommit, headCommit, headTreeOid,
+      inventoryBytes, inventoryPaths, headTreeBytes, headSourceSha256Hex,
+      trackedCargoLockGitState, committedCargoLockBytes, pinBytes,
+      requireCleanWorkingTree: true,
+    });
+  }
+  await assertUnchanged();
+  return Object.freeze({
+    commit: headCommit, tree: headTreeOid, generatedUnixMs,
+    sourceSha256Hex: headSourceSha256Hex, readTrackedFile, listTrackedDirectories, assertUnchanged,
+  });
 }
 
 async function readGeneratorInputTree(repoRoot, commit, inventoryPaths) {

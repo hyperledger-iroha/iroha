@@ -10144,6 +10144,8 @@ fn sha256_to_hash(bytes: &[u8]) -> Hash {
     arr.copy_from_slice(&digest);
     Hash::prehashed(arr)
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmTraceBundleV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -10154,6 +10156,8 @@ struct IvmTraceBundleV1 {
     register_log: Vec<IvmRegEventV1>,
     step_log: Vec<IvmStepEntryV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmRegisterStateV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -10162,6 +10166,8 @@ struct IvmRegisterStateV1 {
     gpr: Vec<u64>,
     tags: Vec<u8>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmConstraintV1")]
 #[derive(
     Debug,
     Clone,
@@ -10176,6 +10182,8 @@ enum IvmConstraintV1 {
     Eq { reg1: u16, reg2: u16, cycle: u64 },
     Range { reg: u16, bits: u8, cycle: u64 },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmMemEventV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -10195,6 +10203,8 @@ enum IvmMemEventV1 {
         root: [u8; 32],
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmRegEventV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
@@ -10214,6 +10224,8 @@ enum IvmRegEventV1 {
         root: [u8; 32],
     },
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmStepEntryV1")]
 #[derive(
     Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]

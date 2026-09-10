@@ -94,6 +94,10 @@ const NEGATIVE_FAILED: u8 = 2;
 /// key's domain-separated `(block subject, exact signed request hash)` Serve
 /// subject; the remaining fields authenticate the request, certificate
 /// authorization, and optional terminal receipt without opaque bytes.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::CertifiedServePayloadReferenceV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct CertifiedServePayloadReferenceV1 {
@@ -201,6 +205,10 @@ impl CertifiedServePayloadReferenceV1 {
 /// still needs its authenticated proposal provenance and a certified body
 /// still needs its exact QC. Keeping the byte identity in LedgerV1 ensures a
 /// later replay-source join cannot silently substitute another local frame.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::BodyFramePayloadReferenceV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct BodyFramePayloadReferenceV1 {
@@ -236,6 +244,10 @@ impl BodyFramePayloadReferenceV1 {
 ///
 /// Certified-Serve references contain canonical Norito bytes for a small
 /// typed reference envelope. Canonical block bodies remain in the body store.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecyclePayloadReferenceV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(super) struct LifecyclePayloadReferenceV1 {
@@ -434,6 +446,10 @@ impl LifecyclePayloadReferenceV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::PersistedLifecycleKeyV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedLifecycleKeyV1 {
@@ -476,6 +492,10 @@ impl PersistedLifecycleKeyV1 {
         ))
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::PersistedTerminalV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedTerminalV1 {
@@ -525,6 +545,10 @@ impl PersistedTerminalV1 {
     }
 }
 /// Canonical wire representation of one typed durable continuation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::PersistedDurableContinuationV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 struct PersistedDurableContinuationV1 {
@@ -644,6 +668,10 @@ impl PersistedDurableContinuationV1 {
     }
 }
 /// One restart-stable lifecycle record in `LifecycleLedgerV1`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecycleLedgerRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(super) struct LifecycleLedgerRecordV1 {
@@ -1404,6 +1432,10 @@ impl LifecycleLedgerRecordV1 {
     }
 }
 /// Durable adjacent Serve-to-producer obligation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecycleProducerDebtV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(super) struct LifecycleProducerDebtV1 {
@@ -1534,6 +1566,8 @@ impl RecoveredLifecycleSignedBroadcastAndSignLedgerProjectionV1 {
     }
 }
 /// Complete version-one durable lifecycle ledger.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::sumeragi::v2_lifecycle_coordinator::ledger::LifecycleLedgerV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 #[norito(deny_unknown_fields)]
 pub(in crate::sumeragi) struct LifecycleLedgerV1 {

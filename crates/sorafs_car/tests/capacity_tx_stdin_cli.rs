@@ -2,10 +2,7 @@
 #![cfg(feature = "cli")]
 use assert_cmd::cargo::cargo_bin_cmd;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
-use iroha_data_model::{
-    isi::{Instruction, sorafs::RegisterCapacityDeclaration},
-    prelude::InstructionBox,
-};
+use iroha_data_model::{isi::sorafs::RegisterCapacityDeclaration, prelude::InstructionBox};
 use norito::{
     decode_from_bytes,
     json::{self, Value},

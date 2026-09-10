@@ -2324,12 +2324,8 @@ impl PendingExactOutput {
         self.fanouts.push_back(fanout);
         Ok(ExactFanoutOwnership::Owned)
     }
-    fn handoff_applied_height_to_durable_reconstruction(
-        &mut self,
-        artifact: &wire::finality::V2FinalityArtifact,
-        durable_lane_authority: Option<&DurableLaneRolloverAuthority>,
-        durable_history: Option<&Kura>,
-    ) -> Result<usize, String> {
+    /// Authenticate every volatile owner before either partial or terminal handoff.
+    fn validate_durable_handoff_ownership(&self) -> Result<usize, String> {
         let mut remaining_posts = 0usize;
         let mut expected_source_fifo_owners =
             BTreeMap::<ExactTargetSource, BTreeSet<ExactFanoutFifoId>>::new();
@@ -2376,14 +2372,9 @@ impl PendingExactOutput {
                     "Sumeragi v2 outbound handoff ownership count overflowed".to_owned()
                 })?;
             }
-            applied_height_reconstruction_covers(
-                &fanout.messages,
-                &fanout.semantic_peers(),
-                &fanout.rollover_claim,
-                artifact,
-                durable_lane_authority,
-                durable_history,
-            )?;
+            fanout
+                .rollover_claim
+                .validate_fanout(&fanout.messages, &fanout.semantic_peers())?;
             for (target_index, target) in fanout.targets.iter().enumerate() {
                 if target.message_index > fanout.messages.len() {
                     return Err(
@@ -2518,6 +2509,121 @@ impl PendingExactOutput {
         remaining_posts = remaining_posts
             .checked_add(sidecar_completions)
             .ok_or_else(|| "Sumeragi v2 applied-height output count overflowed".to_owned())?;
+        Ok(remaining_posts)
+    }
+    /// Release only output independently covered by committed global finality and Kura.
+    ///
+    /// This does not seal the corridor or manufacture a writer-flush receipt.
+    /// In particular, winning lane output and admitted sidecar receipts retain
+    /// their owners until the terminal handoff supplies lane authority.
+    fn handoff_independently_reconstructible_applied_output(
+        &mut self,
+        durable_history: &Kura,
+        released_kura_replica_advert_heights: &mut BTreeSet<u64>,
+    ) -> Result<usize, String> {
+        let Some(artifact) = self.applied_height_finality.as_ref() else {
+            return Ok(0);
+        };
+        let _ = self.validate_durable_handoff_ownership()?;
+        let mut covered_fifo_ids = BTreeSet::new();
+        let mut released_advert_heights = BTreeSet::new();
+        for fanout in &self.fanouts {
+            // Scope-only supersession is valid only after lane preflight. These
+            // claims instead have an independent committed reconstruction source.
+            if !matches!(
+                &fanout.rollover_claim,
+                ExactOutputRolloverClaim::GlobalV2(_)
+                    | ExactOutputRolloverClaim::PayloadChunks { .. }
+                    | ExactOutputRolloverClaim::DurableCommitCertificateResponse { .. }
+                    | ExactOutputRolloverClaim::DurableCertifiedBodyResponse { .. }
+                    | ExactOutputRolloverClaim::DurableLaneCertificateResponse { .. }
+                    | ExactOutputRolloverClaim::HistoricalLaneCertification { .. }
+                    | ExactOutputRolloverClaim::HistoricalLaneRecoveryResponse { .. }
+                    | ExactOutputRolloverClaim::DurableKuraReplicaAdvert { .. }
+                    | ExactOutputRolloverClaim::QueuePlanAdmission { .. }
+            ) || !fanout.targets.iter().enumerate().all(|(index, target)| {
+                fanout.target_is_complete(index)
+                    || target.current.is_some()
+                    || target.pending_flush.is_some()
+                    || target.parked
+            }) {
+                continue;
+            }
+            if applied_height_reconstruction_covers(
+                &fanout.messages,
+                &fanout.semantic_peers(),
+                &fanout.rollover_claim,
+                artifact,
+                None,
+                Some(durable_history),
+            )
+            .is_err()
+            {
+                continue;
+            }
+            covered_fifo_ids.insert(
+                fanout
+                    .fifo_id
+                    .expect("validated output retains its FIFO owner"),
+            );
+            if let ExactOutputRolloverClaim::DurableKuraReplicaAdvert { source_height, .. } =
+                &fanout.rollover_claim
+            {
+                released_advert_heights.insert(*source_height);
+            }
+        }
+        if covered_fifo_ids.is_empty() {
+            return Ok(0);
+        }
+        let mut plan = self.plan_fanout_removal(
+            |fanout| {
+                fanout
+                    .fifo_id
+                    .is_some_and(|id| covered_fifo_ids.contains(&id))
+            },
+            |_| Ok(()),
+            "independently durable applied output handoff",
+        )?;
+        // Preserve the next surviving target in cyclic scheduling order; a
+        // removal must not reset FIFO age or grant a different fanout priority.
+        if let Some(next_fifo_id) = self
+            .fanouts
+            .iter()
+            .cycle()
+            .skip(self.next_fanout_index)
+            .take(self.fanouts.len())
+            .filter_map(|fanout| fanout.fifo_id)
+            .find(|id| !covered_fifo_ids.contains(id))
+        {
+            plan.retained_next_fanout_index = self
+                .fanouts
+                .iter()
+                .filter_map(|fanout| fanout.fifo_id)
+                .filter(|id| !covered_fifo_ids.contains(id))
+                .position(|id| id == next_fifo_id)
+                .expect("next surviving fanout retains its FIFO position");
+        }
+        let retired = self.commit_fanout_removal(plan);
+        released_kura_replica_advert_heights.extend(released_advert_heights);
+        Ok(retired)
+    }
+    fn handoff_applied_height_to_durable_reconstruction(
+        &mut self,
+        artifact: &wire::finality::V2FinalityArtifact,
+        durable_lane_authority: Option<&DurableLaneRolloverAuthority>,
+        durable_history: Option<&Kura>,
+    ) -> Result<usize, String> {
+        let remaining_posts = self.validate_durable_handoff_ownership()?;
+        for fanout in &self.fanouts {
+            applied_height_reconstruction_covers(
+                &fanout.messages,
+                &fanout.semantic_peers(),
+                &fanout.rollover_claim,
+                artifact,
+                durable_lane_authority,
+                durable_history,
+            )?;
+        }
         self.fanouts.clear();
         // The per-height lane transport and worker are dropped together.
         // Pending target acknowledgements and flushed-but-unapplied receipts
@@ -3223,7 +3329,17 @@ impl PendingExactOutput {
                         {
                             released_kura_replica_advert_heights.insert(*source_height);
                         }
-                        drop(message);
+                        let fanout = self
+                            .fanouts
+                            .get_mut(fanout_index)
+                            .expect("released reconstructible fanout must remain present");
+                        fanout.retain_returned(target_index, message, ticket)?;
+                        let (returned, ticket, _, _) =
+                            fanout.take_attempt(target_index).ok_or_else(|| {
+                                "reconstructible output lost its returned post".to_owned()
+                            })?;
+                        drop(returned);
+                        drop(ticket);
                         self.fanouts
                             .get_mut(fanout_index)
                             .expect("released reconstructible fanout must remain present")

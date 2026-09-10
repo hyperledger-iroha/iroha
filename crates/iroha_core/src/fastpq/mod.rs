@@ -8,7 +8,10 @@ mod source_capture;
 mod source_prefix_lengths;
 #[cfg(test)]
 mod source_reservation;
-pub(crate) use source_capture::preflight_fastpq_source_transcripts;
+pub(crate) use source_capture::{
+    FastpqSourceTranscriptUsage, measure_fastpq_source_statement_usage,
+    preflight_fastpq_source_transcripts,
+};
 mod source_context;
 pub use quantity_statement::{
     FastpqQuantityStatement, quantity_statement_from_finalized_transcripts,

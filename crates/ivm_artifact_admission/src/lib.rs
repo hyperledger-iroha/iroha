@@ -29,7 +29,7 @@ use ivm_abi::{
     },
 };
 #[cfg(test)]
-use norito::{NoritoSerialize, SerializePayload};
+use norito::NoritoSerialize;
 use std::{error::Error as StdError, fmt, fmt::Write as _};
 mod policy;
 /// Maximum executable-image bytes admitted by IVM code memory.

@@ -28,14 +28,20 @@ fn event_set_preserves_captured_identity() {
         norito::schema::identity::frame_hash::<TestEventSet>(),
         captured
     );
+    let value = TestEventSet::all();
+    let frame = norito::to_bytes(&value).expect("encode event set");
+    let header = norito::core::Header::read(frame.as_slice()).expect("read event set header");
+    assert_eq!(header.schema, captured);
     assert_eq!(
-        <TestEventSet as norito::NoritoSerialize>::schema_hash(),
-        captured
+        norito::decode_from_bytes::<TestEventSet>(&frame).unwrap(),
+        value
     );
-    assert_eq!(
-        <TestEventSet as norito::NoritoDeserialize>::schema_hash(),
-        captured
-    );
+    let mut wrong_schema = frame;
+    wrong_schema[6] ^= 1;
+    assert!(matches!(
+        norito::decode_from_bytes::<TestEventSet>(&wrong_schema),
+        Err(norito::Error::SchemaMismatch)
+    ));
 }
 fn array(strings: &[&str]) -> Value {
     json::array(strings.iter().copied()).expect("serialize string array")
@@ -61,15 +67,20 @@ fn production_event_sets_preserve_captured_frames() {
         let bytes = norito::to_bytes(value).expect("frame encoding");
         let decoded = norito::decode_from_bytes::<T>(&bytes).expect("frame decoding");
         assert_eq!(&decoded, value);
+        let header = norito::core::Header::read(bytes.as_slice()).expect("read frame header");
+        assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+        let mut wrong_schema = bytes.clone();
+        wrong_schema[6] ^= 1;
+        assert!(matches!(
+            norito::decode_from_bytes::<T>(&wrong_schema),
+            Err(norito::Error::SchemaMismatch)
+        ));
         hex(&bytes)
     }
     let mut rows = Vec::new();
     macro_rules! record {
         ($ty:ty) => {{
-            assert_eq!(
-                norito::schema::identity::frame_hash::<$ty>(),
-                <$ty as norito::NoritoSerialize>::schema_hash(),
-            );
+            let identity_hash = norito::schema::identity::frame_hash::<$ty>();
             let all_json = json::to_value(&<$ty>::all()).expect("all event names");
             let first_json =
                 Value::Array(vec![all_json.as_array().expect("event names")[0].clone()]);
@@ -92,14 +103,8 @@ fn production_event_sets_preserve_captured_frames() {
                         "nominal",
                         Value::String(<$ty as norito::NoritoSchema>::nominal_name()),
                     ),
-                    (
-                        "serialize_hash",
-                        Value::String(hex(&<$ty as norito::NoritoSerialize>::schema_hash())),
-                    ),
-                    (
-                        "deserialize_hash",
-                        Value::String(hex(&<$ty as norito::NoritoDeserialize>::schema_hash())),
-                    ),
+                    ("serialize_hash", Value::String(hex(&identity_hash))),
+                    ("deserialize_hash", Value::String(hex(&identity_hash))),
                     ("cases", Value::Array(cases)),
                 ])
                 .expect("type object"),

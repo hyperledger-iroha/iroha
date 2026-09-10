@@ -496,7 +496,7 @@ function accountInfo(value, context, expectedDiscriminant) {
   if (canonical !== literal) {
     fail(INVALID_ACCOUNT, `${context} must use its exact${TEXT_CANONICAL}I105 form`);
   }
-  const controller = parsed.address._controller;
+  const controller = parsed.address.controllerInfo();
   if (
     !controller ||
     controller.tag !== 0 ||
@@ -2383,6 +2383,7 @@ function validateTransactionPayloadEnvelope(
  *
  * @param {ArrayBufferView | ArrayBuffer | Buffer} payloadBytes
  * @param {string | null} expectedAuthority
+ * @param {"ordinary" | "queue_plan_synced"} expectedAdmissionIntent
  * @returns {{
  *   networkId: Buffer,
  *   creationTimeMs: bigint,
@@ -2394,24 +2395,31 @@ function validateTransactionPayloadEnvelope(
  */
 export function inspectCanonicalTransactionPayloadBindings(
   payloadBytes,
-  expectedAuthority = null,
+  expectedAuthority,
+  expectedAdmissionIntent,
 ) {
   return inspectTransactionPayloadBindings(
     payloadBytes,
     expectedAuthority,
+    expectedAdmissionIntent,
     MAX_EXECUTION_PAYLOAD_BYTES,
     assertTransactionPayloadByteBound,
   );
 }
 
-/** @internal Multisig and contract-call drafts retain the ordinary payload bound. */
+/**
+ * @internal Multisig and contract-call drafts retain the ordinary payload bound;
+ * their admission intent must still match the caller's explicit expectation.
+ */
 export function _inspectOrdinaryCanonicalTransactionPayloadBindings(
   payloadBytes,
-  expectedAuthority = null,
+  expectedAuthority,
+  expectedAdmissionIntent,
 ) {
   return inspectTransactionPayloadBindings(
     payloadBytes,
     expectedAuthority,
+    expectedAdmissionIntent,
     MAX_PAYLOAD_BYTES,
     assertTransferPayloadByteBound,
   );
@@ -2420,9 +2428,18 @@ export function _inspectOrdinaryCanonicalTransactionPayloadBindings(
 function inspectTransactionPayloadBindings(
   payloadBytes,
   expectedAuthority,
+  expectedAdmissionIntent,
   maximumBytes,
   validatePayloadBound,
 ) {
+  const expectedAdmissionTag = expectedAdmissionIntent === "ordinary"
+    ? TRANSACTION_ADMISSION_ORDINARY_TAG
+    : expectedAdmissionIntent === "queue_plan_synced"
+      ? TRANSACTION_ADMISSION_QUEUE_PLAN_SYNCED_TAG
+      : null;
+  if (expectedAdmissionTag === null) {
+    fail(UNSUPPORTED_PAYLOAD, "transaction payload requires one explicit expected admission intent");
+  }
   const payload = bytes(payloadBytes, CONTEXT_TRANSACTION_PAYLOAD, {
     maxBytes: maximumBytes,
   });
@@ -2466,7 +2483,7 @@ function inspectTransactionPayloadBindings(
   const feePaymentArchive = reader.readField(FIELD_FEE_PAYMENT);
   validateTransactionAdmissionIntentArchive(
     reader.readField(FIELD_ADMISSION_INTENT),
-    TRANSACTION_ADMISSION_ORDINARY_TAG,
+    expectedAdmissionTag,
     (TEXT_TRANSACTION_PAYLOAD + "admissionIntent"),
   );
   const metadataArchive = reader.readField(FIELD_METADATA);

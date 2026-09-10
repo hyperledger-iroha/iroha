@@ -176,6 +176,16 @@ enum ValidatorDialRole {
     /// The other endpoint owns the immediate attempt; this endpoint is backup.
     Standby,
 }
+/// One outbound authentication tenure includes its bounded dial and the
+/// configured pre-authentication work, never established-session idleness.
+fn checked_outbound_authentication_timeout(
+    dial_timeout: Duration,
+    preauth_timeout: Duration,
+) -> Option<Duration> {
+    let timeout = dial_timeout.checked_add(preauth_timeout)?;
+    PreauthDeadline::from_now(timeout)?;
+    Some(timeout)
+}
 impl ValidatorDialScheduler {
     fn new(roster: HashSet<PeerId>, takeover_delay: Duration) -> Self {
         let roster: BTreeSet<_> = roster.into_iter().collect();
@@ -7050,6 +7060,15 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
                 "network.preauth_timeout_ms cannot be represented by the monotonic clock",
             )
         })?;
+        let outbound_authentication_timeout =
+            checked_outbound_authentication_timeout(dial_timeout, preauth_timeout).ok_or_else(
+                || {
+                    io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        "network.dial_timeout_ms + network.preauth_timeout_ms cannot be represented by the monotonic clock",
+                    )
+                },
+            )?;
         let authenticated_source_credit_capacity = inbound_source_credit_capacity(
             p2p_subscriber_queue_cap.get(),
             max_total_connections,
@@ -7131,7 +7150,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             .retain(|peer_id| peer_id == &self_id || initial_trusted_sources.contains(peer_id));
         let validator_dial_scheduler = ValidatorDialScheduler::new(
             initial_validator_dial_roster,
-            dial_timeout.saturating_add(idle_timeout),
+            outbound_authentication_timeout,
         );
         initial_trusted_sources.remove(&self_id);
         let authenticated_source_geometry =
@@ -7530,6 +7549,7 @@ impl<T: Pload + message::ClassifyTopic + Sync, E: Enc + Sync> NetworkBaseHandle<
             idle_timeout,
             reply_writer_flush_timeout,
             dial_timeout,
+            outbound_authentication_timeout,
             connect_startup_delay_until,
             network_id,
             consensus_caps,
@@ -11763,6 +11783,8 @@ struct NetworkBase<T: Pload, E: Enc> {
     reply_writer_flush_timeout: Duration,
     /// Timeout applied to an individual outbound dial attempt.
     dial_timeout: Duration,
+    /// Total dial-and-authentication tenure, also used for validator standby takeover.
+    outbound_authentication_timeout: Duration,
     /// Whether to enable `TCP_NODELAY` on TCP connections (best-effort).
     tcp_nodelay: bool,
     /// Optional TCP keepalive idle timeout (best-effort, platform-specific).
@@ -14249,6 +14271,14 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
         if self.exceeds_outbound_connection_cap(peer) {
             return false;
         }
+        let Some(authentication_deadline) =
+            PreauthDeadline::from_now(self.outbound_authentication_timeout)
+        else {
+            iroha_logger::error!(
+                "Refusing outbound handshake with an unrepresentable authentication deadline"
+            );
+            return false;
+        };
         let soranet_policy = match self.soranet_handshake.snapshot() {
             Ok(policy) => policy,
             Err(error) => {
@@ -14284,6 +14314,7 @@ impl<T: Pload + message::ClassifyTopic, E: Enc> NetworkBase<T, E> {
             service_message_sender,
             self.idle_timeout,
             self.dial_timeout,
+            authentication_deadline,
             self.network_id.clone(),
             self.consensus_caps.clone(),
             self.confidential_caps.clone(),
@@ -16561,6 +16592,24 @@ mod tests {
         ValidatorDialScheduler::new(roster.iter().cloned().collect(), takeover_delay)
     }
     #[test]
+    fn outbound_authentication_lifetime_rejects_unrepresentable_budgets() {
+        use iroha_config::parameters::defaults::network::{DIAL_TIMEOUT, PREAUTH_TIMEOUT};
+
+        assert_eq!(
+            checked_outbound_authentication_timeout(DIAL_TIMEOUT, PREAUTH_TIMEOUT),
+            Some(Duration::from_secs(35))
+        );
+        assert!(
+            checked_outbound_authentication_timeout(Duration::MAX, Duration::from_secs(1))
+                .is_none(),
+            "an overflowing budget must fail before spawning transport work"
+        );
+        assert!(
+            checked_outbound_authentication_timeout(Duration::MAX, Duration::ZERO).is_none(),
+            "a duration that does not fit the monotonic clock must fail closed"
+        );
+    }
+    #[test]
     fn four_validator_full_mesh_has_exactly_six_balanced_initial_dial_owners() {
         let roster = deterministic_validator_roster(4);
         let now = tokio::time::Instant::now();
@@ -16627,6 +16676,58 @@ mod tests {
             Some(deadline),
             "takeover becomes eligible without minting another retry epoch"
         );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn validator_standby_dials_after_authentication_tenure_despite_long_idle_timeout() {
+        let mut network = bare_network().expect("validator standby actor fixture must initialize");
+        let roster = deterministic_validator_roster(2);
+        network.self_id = roster[1].clone();
+        network.idle_timeout = Duration::from_secs(300);
+        network.dial_timeout = Duration::from_secs(5);
+        network.outbound_authentication_timeout =
+            checked_outbound_authentication_timeout(network.dial_timeout, Duration::from_secs(30))
+                .expect("bounded authentication tenure");
+        network.validator_dial_scheduler = ValidatorDialScheduler::new(
+            roster.iter().cloned().collect(),
+            network.outbound_authentication_timeout,
+        );
+        network.happy_eyeballs_stagger = Duration::ZERO;
+        let peer = Peer::new(socket_addr!(127.0.0.1:12091), roster[0].clone());
+        network.current_topology.insert(peer.id().clone());
+        network
+            .current_peers_addresses
+            .push((peer.id().clone(), peer.address().clone()));
+        let started = tokio::time::Instant::now();
+        network.update_topology();
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(
+            network.pending_connects[0].0,
+            started + network.outbound_authentication_timeout
+        );
+
+        tokio::time::advance(Duration::from_secs(34)).await;
+        network.update_topology();
+        network.process_pending_connects();
+        assert!(network.connecting_peers.is_empty());
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(
+            network.pending_connects[0].0,
+            started + network.outbound_authentication_timeout,
+            "topology refresh must preserve the original takeover deadline"
+        );
+
+        tokio::time::advance(Duration::from_secs(1)).await;
+        network.process_pending_connects();
+        assert!(tokio::time::Instant::now() < started + network.idle_timeout);
+        assert_eq!(network.connecting_peers.len(), 1);
+        assert!(
+            network
+                .connecting_peers
+                .values()
+                .any(|active| active == &peer)
+        );
+        assert_eq!(network.outbound_connections.len(), 1);
+        assert!(network.pending_connects.is_empty());
     }
     #[test]
     fn simultaneous_restart_and_roster_iteration_order_choose_the_same_pair_owners() {
@@ -18896,6 +18997,7 @@ mod tests {
                 reply_writer_flush_timeout:
                     iroha_config::parameters::defaults::network::REPLY_WRITER_FLUSH_TIMEOUT,
                 dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+                outbound_authentication_timeout: Duration::from_millis(50),
                 tcp_nodelay: true,
                 tcp_keepalive: None,
                 connect_startup_delay_until: tokio::time::Instant::now(),
@@ -19159,15 +19261,28 @@ mod tests {
     }
     #[test]
     fn failed_pre_handshake_dial_retains_exact_backoff_retry_owner() {
-        let_test_network!(network);
-        let peer = test_peer(socket_addr!(127.0.0.1:12092));
+        let mut network =
+            bare_network().expect("failed authentication actor fixture must initialize");
+        let roster = deterministic_validator_roster(2);
+        network.self_id = roster[0].clone();
+        network.validator_dial_scheduler = ValidatorDialScheduler::new(
+            roster.iter().cloned().collect(),
+            network.outbound_authentication_timeout,
+        );
+        let peer = Peer::new(socket_addr!(127.0.0.1:12092), roster[1].clone());
         let conn_id = 92;
+        network.max_total_connections = Some(1);
         network.current_topology.insert(peer.id().clone());
         network
             .current_peers_addresses
             .push((peer.id().clone(), peer.address().clone()));
         network.connecting_peers.insert(conn_id, peer.clone());
         network.outbound_connections.insert(conn_id);
+        assert!(network.exceeds_caps());
+        assert!(
+            !network.trigger_reconnect_for_peer(peer.id()),
+            "the unfinished authentication must retain exactly one dial owner"
+        );
 
         network.peer_terminated(Terminated {
             peer: None,
@@ -19176,6 +19291,14 @@ mod tests {
 
         assert!(!network.connecting_peers.contains_key(&conn_id));
         assert!(!network.outbound_connections.contains(&conn_id));
+        assert!(!network.exceeds_caps());
+        assert_eq!(
+            network
+                .validator_dial_scheduler
+                .role(&network.self_id, peer.id()),
+            ValidatorDialRole::Preferred,
+            "the failed preferred owner must remain eligible to retry"
+        );
         let key = peer.address().to_string();
         let (retry_at, _) = network
             .retry_backoff
@@ -19188,6 +19311,18 @@ mod tests {
         assert_eq!(*pending_at, retry_at);
         assert_eq!(pending_peer.id(), peer.id());
         assert_eq!(pending_peer.address(), peer.address());
+
+        network.peer_terminated(Terminated {
+            peer: None,
+            conn_id,
+        });
+        assert_eq!(network.pending_connects.len(), 1);
+        assert_eq!(network.pending_connects[0].0, retry_at);
+        assert_eq!(
+            network.retry_backoff[peer.id()][&key].0,
+            retry_at,
+            "a duplicate authentication teardown must not postpone the retained retry"
+        );
     }
     #[test]
     fn address_snapshot_revokes_retained_retry_before_scheduling_replacement() {

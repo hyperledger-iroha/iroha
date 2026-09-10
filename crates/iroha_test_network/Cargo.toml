@@ -10,6 +10,10 @@ license.workspace = true
 [features]
 default = []
 
+[[test]]
+name = "taira_consensus_contracts"
+path = "tests/taira_consensus_contracts.rs"
+
 [dependencies]
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha.workspace = true
@@ -31,7 +35,6 @@ url.workspace = true
 color-eyre.workspace = true
 rand.workspace = true
 tempfile.workspace = true
-unique_port = "0.2.1"
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "process", "sync", "io-util", "net", "signal"] }
 futures = { workspace = true, features = ["std", "async-await"] }
 toml = { workspace = true }

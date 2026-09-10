@@ -260,6 +260,8 @@ pub const KAGEMUSHA_MINT_FINALITY_ARTIFACT_ROLES_V1: [KagemushaArtifactRoleV1; 4
 ];
 
 /// The two non-interchangeable roles in the fixed Pasta recursion cycle.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_recursion::KagemushaPastaParityV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum KagemushaPastaParityV1 {
     /// Eq/Vesta group with canonical `Fp` accumulator challenges.
@@ -269,6 +271,8 @@ pub enum KagemushaPastaParityV1 {
 }
 
 /// Closed set of fixed-shape Kagemusha V1 recursive relations.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_recursion::KagemushaOperationV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 pub enum KagemushaOperationV1 {
     /// Establish a hardware-bound zero balance.
@@ -327,6 +331,8 @@ impl From<KagemushaOperationV1> for KagemushaOperationKindV1 {
 ///
 /// These values are proof inputs, not host assertions. The governed recursive backend must
 /// constrain them through the normalized `GuardBundle` helper proof.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::kagemusha_v1_recursion::KagemushaGuardContextV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaGuardContextV1 {
     /// Authenticated Kagemusha proof-release identifier.
@@ -442,6 +448,10 @@ fn normalized_lane_bindings(
 ///
 /// It mirrors `specs/kagemusha_guard_bundle_v1.md`. State nonce fields are opaque 32-byte
 /// hiding commitments; raw private nonce material never enters a public statement.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_recursion::KagemushaNormalizedGuardStatementV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaNormalizedGuardStatementV1 {
     /// Guard statement version.

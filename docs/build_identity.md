@@ -47,17 +47,27 @@ cargo iroha-fast --stable-local-metadata -- build -p iroha_core --features dev-t
 Keep the release-only `IROHA_GIT_COMMIT_HASH` unset in this development
 environment. The wrapper supplies `VERGEN_GIT_SHA=local-fast-build`; it never
 creates sealed artifact metadata. It rejects an inherited sealed marker before
-invoking Cargo, so contradictory metadata cannot waste a build and fail only at
+starting a build, so contradictory metadata cannot waste a build and fail only at
 startup. PK2 test fixtures supply explicit identities.
+
+The local wrapper resolves both Cargo target and intermediate build directories
+with offline, locked metadata before building. It rejects lanes whose
+`.taira-build-lane/role.json` assigns them to authenticated release work, including
+default and config-selected targets. Select one stable `--target-slot <name>` for
+concurrent development, or an existing external development lane. It creates no
+replacement cache. Use explicit Cargo command names; aliases can hide target
+selectors and are rejected. Direct Cargo remains outside this advisory wrapper
+guard, so authenticated preparation still owns its locks and immutable captures.
 
 For PK2 release verification, the authenticated source/artifact corridor must
 supply its already validated source commit to both build-time variables. Run in
-that corridor's captured source checkout, using its existing warm target:
+that corridor's captured source checkout through its controlled Cargo invocation,
+using its existing warm target; the local accelerator rejects release lanes:
 
 ```sh
 IROHA_GIT_COMMIT_HASH="$TAIRA_AUTHENTICATED_SOURCE_COMMIT" \
 VERGEN_GIT_SHA="$TAIRA_AUTHENTICATED_SOURCE_COMMIT" \
-cargo iroha-fast -- build --locked --release -p iroha_core --features dev-tools --bin pk2_bridge_finality_verify
+cargo build --locked --release -p iroha_core --features dev-tools --bin pk2_bridge_finality_verify
 ```
 
 An ordinary PK2 build without canonical metadata can show help, but cannot

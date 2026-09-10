@@ -756,22 +756,30 @@ struct FrozenGovernanceOverlaySource {
     parsed: Result<GovernanceCatalogFile, String>,
     content_digest: LaneManifestSourceContentDigestV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::LaneManifestSourceSetDigestV1")]
 #[derive(Encode)]
 struct LaneManifestSourceSetDigestV1 {
     version: u8,
     manifests: Vec<LaneManifestSourceDigestV1>,
     governance_overlay: Option<LaneManifestSourceContentDigestV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::LaneManifestSourceDigestV1")]
 #[derive(Encode)]
 struct LaneManifestSourceDigestV1 {
     alias: String,
     content: LaneManifestSourceContentDigestV1,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::LaneManifestSourceContentDigestV1")]
 #[derive(Debug, Clone, Encode)]
 struct LaneManifestSourceContentDigestV1 {
     valid: bool,
     digest: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::LaneManifestRegistryDigestV1")]
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -779,6 +787,8 @@ struct LaneManifestRegistryDigestV1 {
     version: u8,
     lanes: Vec<LaneManifestStatusDigestV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::LaneManifestStatusDigestV1")]
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -793,6 +803,8 @@ struct LaneManifestStatusDigestV1 {
     rules: Option<GovernanceRulesDigestV1>,
     privacy_commitments: Vec<LanePrivacyCommitmentDigestV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::GovernanceRulesDigestV1")]
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -804,6 +816,8 @@ struct GovernanceRulesDigestV1 {
     protected_namespaces: Vec<Name>,
     runtime_upgrade: Option<RuntimeUpgradeHookDigestV1>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::ManifestValidatorBindingDigestV1")]
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -812,6 +826,8 @@ struct ManifestValidatorBindingDigestV1 {
     peer_id: PeerId,
     torii_url: Option<String>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::RuntimeUpgradeHookDigestV1")]
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]
@@ -821,6 +837,8 @@ struct RuntimeUpgradeHookDigestV1 {
     metadata_key: Option<Name>,
     allowed_ids: Option<Vec<String>>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::governance::manifest::LanePrivacyCommitmentDigestV1")]
 #[cfg(any(test, feature = "telemetry"))]
 #[derive(Encode)]
 #[cfg(any(test, feature = "telemetry"))]

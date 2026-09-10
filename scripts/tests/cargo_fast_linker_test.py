@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from cargo_fast_test import _run_wrapper, _write_executable
+from cargo_fast_test import _run_wrapper, _write_executable, hermetic_wrapper_checkout
 
 
 GCC_DRIVER = r'''#!/bin/sh

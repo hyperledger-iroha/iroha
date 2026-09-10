@@ -7772,6 +7772,8 @@ state_test! { sync native_amx_participant_diagnostics_report_same_height_conflic
     assert_eq!(forward.application_block_hash, None);
 }
 state_test! { sync native_amx_participant_frontier_rejects_legacy_hash_only_layout
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::state::tests::LegacyNativeAmxParticipantFrontierMarkerV1")]
     #[derive(Encode)]
     struct LegacyNativeAmxParticipantFrontierMarkerV1 {
         version: u8,
@@ -34309,6 +34311,8 @@ state_test! { sync state_transaction_reports_confidential_digest
 }
 state_test! { sync governance_lock_record_rejects_missing_custody_on_wire_and_json
     use norito::codec::DecodeAll as _;
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::state::tests::LegacyGovernanceLockRecord")]
     #[derive(Encode)]
     struct LegacyGovernanceLockRecord {
         owner: AccountId,

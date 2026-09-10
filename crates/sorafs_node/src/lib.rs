@@ -3692,15 +3692,7 @@ impl Default for GovernanceOutboxRuntime {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-struct GcStorageIdentityV1 {
-    total_bytes: u64,
-    manifest_count: u64,
-    gc_freed_bytes_total: u64,
-    gc_evictions_total: u64,
-    manifest_set_digest: [u8; 32],
-    chunk_refcounts_digest: [u8; 32],
-}
+include!("lib/gc_storage_identity.rs");
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct GcEvictionIntentV1 {
     version: u8,
@@ -4736,30 +4728,7 @@ struct AdmittedReputationSnapshotV1 {
     encoded_len: u64,
     envelope: SignedReputationSnapshotV1,
 }
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
-struct AuxiliaryRuntimeCheckpointV5 {
-    version: u8,
-    capacity_runtime: CapacityRuntimeCheckpointV1,
-    por_tracker: por::PorTrackerCheckpointV1,
-    por_history: Vec<PorHistoryCheckpointEntryV1>,
-    gc_eviction_intent_next_sequence: u64,
-    gc_eviction_intents: Vec<GcEvictionIntentV1>,
-    gc_eviction_audit_links: Vec<GcEvictionAuditLinkV1>,
-    reputation_snapshots: Vec<AdmittedReputationSnapshotV1>,
-    latest_reputation_snapshot_id: Option<[u8; 16]>,
-    reputation_events: Vec<ReputationSnapshotEventV1>,
-    transparency_source_entries: Vec<TransparencyLedgerSourceEntry>,
-    privacy_source_events: Vec<PrivacyAggregateSourceEvent>,
-    privacy_source_event_receipts: Vec<transparency::PrivacySourceEventReceiptV1>,
-    privacy_publish_request_receipts: Vec<PrivacyPublishRequestReceiptV1>,
-    published_privacy_aggregate_cycles: Vec<[u8; 16]>,
-    privacy_composition_budget: PrivacyCompositionBudgetLedgerV1,
-    privacy_release_ledger: transparency::PrivacyReleaseLedgerV1,
-    transparency_leader_lease_fencing_floor: u64,
-    published_evidence_viewer_audit_cycles: Vec<[u8; 16]>,
-    governance_outbox_next_sequence: u64,
-    governance_outbox_entries: Vec<GovernanceOutboxEntryV1>,
-}
+include!("lib/auxiliary_runtime_checkpoint.rs");
 /// Unsigned deterministic reputation material intended for external governance signing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReputationSnapshotSigningMaterialV1 {
@@ -16183,4 +16152,9 @@ fn moderation_evidence_viewer_error_from_object_error(
 mod tests {
     include!("lib_tests.rs");
     include!("lib/quarantine_plaintext_hygiene_tests.rs");
+    include!("lib/runtime_checkpoint_schema_tests.rs");
 }
+
+#[cfg(test)]
+#[path = "schema_identity_test_support.rs"]
+mod schema_identity_test_support;

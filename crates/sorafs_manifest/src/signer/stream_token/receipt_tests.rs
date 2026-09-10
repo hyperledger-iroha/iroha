@@ -1,22 +1,14 @@
 //! Exact stream receipt tests with independently signed simulations, not hardware qualification.
-//!
-//! TODO: native execution requires the atomic provider-scoped purpose change, sibling visibility
-//! for custody::validate_binding, the Manifest token-body validator move and reviewed shared
-//! receipt helper integration. This isolated source candidate does not alter those owners.
 
 use super::*;
 use crate::signer::{
     custody::*,
     protocol::*,
-    receipt::{
-        SignerCompletedOperationV1, SignerOperationFinalizedAnchorV1, SignerOperationProvenanceV1,
-    },
+    receipt::{SignerCompletedOperationV1, SignerOperationProvenanceV1},
 };
-use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_crypto::Signature;
 
-#[path = "receipt_test_support.rs"]
-mod support;
-use support::*;
+use super::receipt_test_support::*;
 
 type Error = SignerStreamTokenReceiptErrorV1;
 type BodyMutation = (&'static str, fn(&mut StreamTokenBodyV1));

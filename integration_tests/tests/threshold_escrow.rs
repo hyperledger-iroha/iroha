@@ -1,7 +1,6 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end coverage for the canonical threshold escrow Kotodama sample.
-use base64::Engine as _;
-use eyre::{Result, eyre};
+use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
@@ -18,7 +17,7 @@ use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, smart_contract::CanRegisterSmartContractCode,
 };
 use iroha_primitives::json::Json;
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, read_on_dedicated_thread};
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, load_sample_ivm,
 };
@@ -27,8 +26,6 @@ use std::{
     time::{Duration, Instant},
 };
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
-const CONTRACT_CALL_ADMISSION_TIMEOUT: Duration = Duration::from_secs(30);
-const CONTRACT_CALL_ADMISSION_POLL: Duration = Duration::from_millis(250);
 const CONTRACT_GAS_LIMIT: u64 = 100_000;
 const SAMPLE_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 fn sample_asset_definition_id() -> AssetDefinitionId {
@@ -37,60 +34,51 @@ fn sample_asset_definition_id() -> AssetDefinitionId {
 }
 fn amount_args(amount: u64) -> norito::json::Value {
     let mut map = norito::json::Map::new();
-    map.insert("amount".to_owned(), norito::json!(amount));
+    map.insert("amount".to_owned(), norito::json!(amount.to_string()));
     norito::json::Value::Object(map)
 }
 fn open_escrow_args(target_amount: u64) -> norito::json::Value {
     let mut map = norito::json::Map::new();
-    map.insert("target_amount".to_owned(), norito::json!(target_amount));
+    map.insert(
+        "target_amount".to_owned(),
+        norito::json!(target_amount.to_string()),
+    );
     norito::json::Value::Object(map)
 }
-fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
-    let status = payload
-        .get("content")
-        .and_then(|content| content.get("status"))
-        .or_else(|| payload.get("status"))?;
-    match status {
-        norito::json::Value::String(kind) => Some(kind.as_str()),
-        norito::json::Value::Object(map) => map.get("kind").and_then(norito::json::Value::as_str),
-        _ => None,
-    }
-}
 async fn wait_for_tx_terminal_status(
-    http: &reqwest::Client,
-    torii_url: &reqwest::Url,
+    client: &Client,
     tx_hash_hex: &str,
     timeout: Duration,
     stage: &str,
 ) -> Result<(String, String)> {
-    let mut status_url = torii_url.join("v1/pipeline/transactions/status")?;
-    status_url
-        .query_pairs_mut()
-        .append_pair("hash", tx_hash_hex);
+    let hash = tx_hash_hex.parse::<iroha_crypto::HashOf<SignedTransaction>>()?;
     let deadline = Instant::now() + timeout;
-    let mut last_payload = String::new();
-    let mut last_kind = String::from("pending");
+    let mut last = String::from("not found");
     loop {
-        let response = http
-            .get(status_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await?;
-        let status = response.status();
-        let bytes = response.bytes().await?;
-        if status == reqwest::StatusCode::OK || status == reqwest::StatusCode::ACCEPTED {
-            let payload: norito::json::Value = norito::json::from_slice(&bytes)?;
-            last_payload = format!("{payload:?}");
-            if let Some(kind) = pipeline_status_kind(&payload) {
-                last_kind = kind.to_owned();
-                if matches!(kind, "Applied" | "Rejected" | "Expired") {
-                    return Ok((last_kind, last_payload));
+        if let Some(status) = client
+            .client()
+            .fetch_transaction_status_response_global(hash)
+            .await?
+        {
+            last = format!("{status:?}");
+            let kind = status.status.kind.as_str();
+            if kind == "Applied" {
+                if status.resolved_from != "state"
+                    || status.status.block_height.is_none_or(|height| height == 0)
+                {
+                    return Err(eyre!(
+                        "{stage}: Applied lacks exact committed-state evidence: {status:?}"
+                    ));
                 }
+                return Ok((kind.to_owned(), last));
+            }
+            if matches!(kind, "Rejected" | "Expired") {
+                return Ok((kind.to_owned(), last));
             }
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
-                "{stage}: timed out waiting for tx `{tx_hash_hex}` to finish; last_kind={last_kind}; last_payload={last_payload}"
+                "{stage}: timed out waiting for exact transaction `{tx_hash_hex}`; last={last}"
             ));
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
@@ -98,7 +86,6 @@ async fn wait_for_tx_terminal_status(
 }
 async fn deploy_threshold_escrow(
     client: &Client,
-    _http: &reqwest::Client,
 ) -> Result<iroha_data_model::smart_contract::ContractAddress> {
     let artifact = load_sample_ivm("threshold_escrow");
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
@@ -107,7 +94,7 @@ async fn deploy_threshold_escrow(
         "universal",
     )
     .expect("threshold escrow alias");
-    let (contract_address, _, _, _) = tokio::task::spawn_blocking({
+    let (contract_address, _, _, _) = read_on_dedicated_thread({
         let client = client.clone();
         move || {
             super::contracts::deploy_contract_locally_signed(
@@ -118,12 +105,38 @@ async fn deploy_threshold_escrow(
         }
     })
     .await
-    .expect("deploy threshold escrow task")?;
+    .wrap_err("deploy threshold escrow task")?;
+    read_on_dedicated_thread({
+        let client = client.clone();
+        let address = contract_address.clone();
+        move || {
+            client.submit_all(
+                [Grant::account_permission(
+                    iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                        contract: address,
+                        entrypoint: "hajimari".to_owned(),
+                    },
+                    client.client().account().clone(),
+                )],
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
+    }).await.wrap_err("grant exact constructor invocation task")?;
+    call_contract_expect_status(
+        client,
+        client.client().account(),
+        client.client().key_pair().private_key(),
+        &contract_address,
+        "hajimari",
+        None,
+        "Applied",
+        "initialize threshold escrow",
+    )
+    .await?;
     Ok(contract_address)
 }
 async fn call_contract_expect_status(
     client: &Client,
-    http: &reqwest::Client,
     authority: &AccountId,
     private_key: &iroha_crypto::PrivateKey,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -132,9 +145,8 @@ async fn call_contract_expect_status(
     expected_status: &str,
     stage: &str,
 ) -> Result<()> {
-    let response = submit_contract_call_json(
+    let hash = submit_contract_call_once(
         client,
-        http,
         authority,
         private_key,
         contract_address,
@@ -143,18 +155,8 @@ async fn call_contract_expect_status(
         stage,
     )
     .await?;
-    let tx_hash_hex = response
-        .get("tx_hash_hex")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("{stage}: missing tx_hash_hex in response: {response:?}"))?;
-    let observed = wait_for_tx_terminal_status(
-        http,
-        client.client().endpoint(),
-        tx_hash_hex,
-        TX_TIMEOUT,
-        stage,
-    )
-    .await?;
+    let tx_hash_hex = hex::encode(hash.as_ref());
+    let observed = wait_for_tx_terminal_status(client, &tx_hash_hex, TX_TIMEOUT, stage).await?;
     if observed.0 != expected_status {
         return Err(eyre!(
             "{stage}: expected `{expected_status}`, observed `{}` for tx `{tx_hash_hex}`; payload={}",
@@ -164,80 +166,173 @@ async fn call_contract_expect_status(
     }
     Ok(())
 }
-async fn submit_contract_call_json(
+fn threshold_contract_call_intent(
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
+    payload: Option<&norito::json::Value>,
+) -> Result<iroha::client::ContractCallDraftIntent> {
+    use iroha_data_model::transaction::executable::{ContractArgumentRecord, ContractInvocation};
+    let artifact = load_sample_ivm("threshold_escrow");
+    let verified = ivm::verify_contract_artifact(artifact.as_ref()).map_err(|error| {
+        eyre!("verify independently trusted threshold escrow artifact: {error}")
+    })?;
+    let descriptor = verified
+        .contract_interface
+        .entrypoints
+        .iter()
+        .find(|descriptor| descriptor.name == entrypoint)
+        .ok_or_else(|| eyre!("threshold escrow entrypoint `{entrypoint}` is missing"))?;
+    let canonical_payload = payload
+        .map(Json::from_norito_value_ref)
+        .transpose()
+        .map_err(|error| eyre!("canonical contract payload: {error}"))?;
+    let arguments = match (
+        descriptor.argument_schema.as_ref(),
+        canonical_payload.as_ref(),
+    ) {
+        (None, None) if descriptor.params.is_empty() => None,
+        (Some(schema), Some(payload)) => Some(
+            ContractArgumentRecord::try_new(
+                ivm::encode_argument_record_from_json(schema, payload)
+                    .map_err(|error| eyre!("encode trusted threshold escrow arguments: {error}"))?,
+            )
+            .map_err(|error| eyre!("bound trusted argument record: {error}"))?,
+        ),
+        _ => {
+            return Err(eyre!(
+                "threshold escrow payload does not match `{entrypoint}` argument schema"
+            ));
+        }
+    };
+    let mut metadata = Metadata::default();
+    for (key, value) in [
+        ("contract_address", contract_address.to_string()),
+        ("contract_code_hash", verified.code_hash.to_string()),
+        ("contract_entrypoint", entrypoint.to_owned()),
+    ] {
+        metadata.insert(key.parse::<Name>()?, Json::new(value));
+    }
+    if let Some(payload) = canonical_payload {
+        metadata.insert("contract_payload".parse::<Name>()?, payload);
+    }
+    Ok(iroha::client::ContractCallDraftIntent {
+        invocation: ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: verified.code_hash,
+            entrypoint: entrypoint.to_owned(),
+            arguments,
+        },
+        metadata,
+    })
+}
+async fn submit_contract_call_once(
     client: &Client,
-    http: &reqwest::Client,
     authority: &AccountId,
     private_key: &iroha_crypto::PrivateKey,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     payload: Option<&norito::json::Value>,
     stage: &str,
-) -> Result<norito::json::Value> {
-    let url = client.client().endpoint().join("v1/contracts/call")?;
-    let deadline = Instant::now() + CONTRACT_CALL_ADMISSION_TIMEOUT;
-    loop {
-        let mut body = norito::json::Map::new();
-        body.insert("authority".into(), authority.to_string().into());
-        body.insert(
-            "private_key".into(),
-            norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
-                private_key.clone(),
-            ))?,
-        );
-        body.insert(
-            "contract_address".into(),
-            norito::json::to_value(contract_address)?,
-        );
-        body.insert("entrypoint".into(), entrypoint.into());
-        if let Some(payload) = payload {
-            body.insert("payload".into(), payload.clone());
+) -> Result<iroha_crypto::HashOf<SignedTransaction>> {
+    let intent = threshold_contract_call_intent(contract_address, entrypoint, payload)?;
+    let mut signing_client = client.client().to_builder();
+    signing_client.account = authority.clone();
+    signing_client.key_pair = iroha_crypto::KeyPair::from_private_key(private_key.clone())?;
+    let account = signing_client.build()?.account_client()?;
+    // The SDK authenticates prepare, verifies it against the local artifact, signs the exact
+    // QueuePlan payload, and submits once. An ambiguous outcome must never restart preparation.
+    let result = account
+        .post_contract_call_json(
+            authority,
+            Some(private_key),
+            Some(contract_address),
+            None,
+            entrypoint,
+            payload,
+            None,
+            None,
+            None,
+            &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(CONTRACT_GAS_LIMIT)),
+            &intent,
+        )
+        .await;
+    match result {
+        Ok(response) => response
+            .get("tx_hash_hex")
+            .and_then(norito::json::Value::as_str)
+            .ok_or_else(|| eyre!("{stage}: submitted response has no exact transaction hash"))?
+            .parse()
+            .wrap_err_with(|| format!("{stage}: decode exact submitted transaction hash")),
+        Err(error) => {
+            if let Some(unknown) =
+                error.downcast_ref::<iroha::client::QueuePlanOutcomeUnknownError>()
+            {
+                // Reconcile this retained local identity without another prepare or POST.
+                return Ok(*unknown.signed_transaction_hash());
+            }
+            Err(error).wrap_err_with(|| format!("{stage}: exact public contract submission"))
         }
-        body.insert(
-            "fee_payment".into(),
-            norito::json::to_value(&FeePaymentIntent::authority(
-                Vec::new(),
-                NonZeroU64::new(CONTRACT_GAS_LIMIT),
-            ))?,
-        );
-        let response = http
-            .post(url.clone())
-            .header("Content-Type", "application/json")
-            .header("Accept", "application/json")
-            .body(norito::json::to_vec(&norito::json::Value::Object(body))?)
-            .send()
-            .await?;
-        let status = response.status();
-        let text = response.text().await.unwrap_or_default();
-        if status.is_success() {
-            return norito::json::from_str(&text).map_err(|err| {
-                eyre!("{stage}: decode contract call response: {err}; body={text}")
-            });
-        }
-        let last_response = format!("{status}: {text}");
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{stage}: contract call admission did not succeed before timeout; last response {last_response}",
-            ));
-        }
-        tokio::time::sleep(CONTRACT_CALL_ADMISSION_POLL).await;
     }
+}
+fn signed_contract_state_request(
+    client: &Client,
+    http: &reqwest::Client,
+    url: reqwest::Url,
+) -> Result<reqwest::RequestBuilder> {
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::{SystemTime, UNIX_EPOCH},
+    };
+    static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let timestamp: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "threshold-{}-{timestamp}-{}",
+        std::process::id(),
+        NONCE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let context = client.client();
+    let message = iroha::client::canonical_network_request_signature_message(
+        context.network_id(),
+        &iroha::http::Method::GET,
+        &url,
+        &[],
+        timestamp,
+        &nonce,
+    )?;
+    let signature = iroha_crypto::Signature::try_new(context.key_pair().private_key(), &message)?;
+    Ok(http
+        .get(url)
+        .header("Accept", "application/json")
+        .header(
+            "x-iroha-account",
+            iroha::client::canonical_request_account_header_value(context.account())?,
+        )
+        .header(
+            "x-iroha-signature",
+            iroha::client::canonical_request_signature_header_value(&signature)?,
+        )
+        .header(
+            "x-iroha-timestamp-ms",
+            iroha::client::canonical_request_timestamp_header_value(timestamp)?,
+        )
+        .header("x-iroha-nonce", nonce))
 }
 async fn contract_state_values(
     http: &reqwest::Client,
-    torii_url: &reqwest::Url,
+    client: &Client,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     paths: &[&str],
 ) -> Result<std::collections::BTreeMap<String, norito::json::Value>> {
-    let mut url = torii_url.join("v1/contracts/state")?;
+    let mut url = client.client().endpoint().join("v1/contracts/state")?;
     let contract_address = contract_address.to_string();
     url.query_pairs_mut()
         .append_pair("contract_address", contract_address.as_str())
         .append_pair("paths", &paths.join(","))
         .append_pair("decode", "json");
-    let response = http
-        .get(url)
-        .header("Accept", "application/json")
+    let response = signed_contract_state_request(client, http, url)?
         .send()
         .await?;
     if !response.status().is_success() {
@@ -269,147 +364,71 @@ async fn contract_state_values(
     Ok(out)
 }
 fn decode_contract_state_entry_json(entry: &norito::json::Value) -> Result<norito::json::Value> {
-    if let Some(value_json) = entry.get("value_json").cloned() {
-        return Ok(value_json);
-    }
-    let value_b64 = entry
-        .get("value_b64")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("contract state entry missing value_b64: {entry:?}"))?;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(value_b64)
-        .map_err(|err| eyre!("decode contract state value_b64: {err}"))?;
-    let tlv = ivm::pointer_abi::validate_tlv_bytes(&bytes)
-        .map_err(|err| eyre!("validate contract state TLV: {err}"))?;
-    let path = entry
-        .get("path")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("contract state entry missing path: {entry:?}"))?;
-    let value = match tlv.type_id {
-        ivm::pointer_abi::PointerType::AccountId => {
-            let account: AccountId = norito::decode_from_bytes(tlv.payload)
-                .map_err(|err| eyre!("decode AccountId contract state: {err}"))?;
-            norito::json::Value::from(account.to_string())
-        }
-        ivm::pointer_abi::PointerType::AssetDefinitionId => {
-            let asset_definition: AssetDefinitionId = norito::decode_from_bytes(tlv.payload)
-                .map_err(|err| eyre!("decode AssetDefinitionId contract state: {err}"))?;
-            norito::json::Value::from(asset_definition.to_string())
-        }
-        ivm::pointer_abi::PointerType::NoritoBytes => {
-            decode_contract_state_norito_bytes(path, tlv.payload)?
-        }
-        other => {
-            let decode_error = entry
-                .get("decode_error")
-                .and_then(norito::json::Value::as_str)
-                .unwrap_or("unknown decode error");
-            return Err(eyre!(
-                "unsupported contract state fallback decode for TLV type {other:?}: {decode_error}; entry={entry:?}"
-            ));
-        }
-    };
-    Ok(value)
-}
-fn decode_contract_state_norito_bytes(path: &str, payload: &[u8]) -> Result<norito::json::Value> {
-    match path {
-        "payer_account" | "recipient_account" | "escrow_account_id" => {
-            let account = decode_norito_value_with_optional_inner_tlv::<AccountId>(
-                payload,
-                ivm::pointer_abi::PointerType::AccountId,
-                "AccountId",
-            )?;
-            Ok(norito::json::Value::from(account.to_string()))
-        }
-        "escrow_asset_definition" => {
-            let asset_definition = decode_norito_value_with_optional_inner_tlv::<AssetDefinitionId>(
-                payload,
-                ivm::pointer_abi::PointerType::AssetDefinitionId,
-                "AssetDefinitionId",
-            )?;
-            Ok(norito::json::Value::from(asset_definition.to_string()))
-        }
-        "target_amount_value" | "funded_amount_value" => {
-            let quantity = decode_norito_value_with_optional_inner_tlv::<Quantity>(
-                payload,
-                ivm::pointer_abi::PointerType::Quantity,
-                "Quantity",
-            )?;
-            Ok(norito::json::Value::from(quantity.to_string()))
-        }
-        "is_open" | "is_released" | "is_refunded" => {
-            let flag = decode_norito_value_with_optional_inner_tlv::<i64>(
-                payload,
-                ivm::pointer_abi::PointerType::NoritoBytes,
-                "bool flag",
-            )?;
-            Ok(norito::json::Value::from(flag != 0))
-        }
-        _ => Err(eyre!(
-            "unsupported NoritoBytes contract state fallback for path `{path}`"
-        )),
-    }
-}
-fn decode_norito_value_with_optional_inner_tlv<T>(
-    payload: &[u8],
-    expected_inner_type: ivm::pointer_abi::PointerType,
-    label: &str,
-) -> Result<T>
-where
-    for<'de> T: norito::NoritoDeserialize<'de> + norito::NoritoSerialize,
-{
-    if let Ok(value) = norito::decode_from_bytes::<T>(payload) {
-        return Ok(value);
-    }
-    let inner = ivm::pointer_abi::validate_tlv_bytes(payload)
-        .map_err(|err| eyre!("decode {label} fallback inner TLV: {err}"))?;
-    if inner.type_id != expected_inner_type {
-        return Err(eyre!(
-            "decode {label} fallback expected inner TLV type {expected_inner_type:?}, got {:?}",
-            inner.type_id
-        ));
-    }
-    norito::decode_from_bytes(inner.payload)
-        .map_err(|err| eyre!("decode {label} fallback inner payload: {err}"))
-}
-fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> {
-    match client
-        .client()
-        .query_single(FindAssetById::new(asset_id.clone()))
+    if entry
+        .get("decode_error")
+        .is_some_and(|value| !value.is_null())
     {
-        Ok(asset) => Ok(Some(asset.value().clone())),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(
-            QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
-        ))) => Ok(None),
-        Err(err) => Err(eyre!(err)),
+        return Err(eyre!("contract state decoding failed: {entry:?}"));
     }
+    entry
+        .get("value_json")
+        .cloned()
+        .ok_or_else(|| eyre!("canonical decode=json state response omitted value_json: {entry:?}"))
 }
-fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
-    match client
-        .client()
-        .query_single(FindAccountById::new(account_id.clone()))
-    {
-        Ok(_) => Ok(true),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(
-            QueryExecutionFail::Find(FindError::Account(_)) | QueryExecutionFail::NotFound,
-        ))) => Ok(false),
-        Err(err) => Err(eyre!(err)),
-    }
+async fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quantity>> {
+    let client = client.clone();
+    let asset_id = asset_id.clone();
+    read_on_dedicated_thread(move || {
+        match client.client().query_single(FindAssetById::new(asset_id)) {
+            Ok(asset) => Ok(Some(asset.value().clone())),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::Find(FindError::Asset(_)) | QueryExecutionFail::NotFound,
+            ))) => Ok(None),
+            Err(err) => Err(eyre!(err)),
+        }
+    })
+    .await
+    .wrap_err("asset query worker failed")
 }
-fn asset_definition_exists(
+async fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
+    let client = client.clone();
+    let account_id = account_id.clone();
+    read_on_dedicated_thread(move || {
+        match client
+            .client()
+            .query_single(FindAccountById::new(account_id))
+        {
+            Ok(_) => Ok(true),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::Find(FindError::Account(_)) | QueryExecutionFail::NotFound,
+            ))) => Ok(false),
+            Err(err) => Err(eyre!(err)),
+        }
+    })
+    .await
+    .wrap_err("account query worker failed")
+}
+async fn asset_definition_exists(
     client: &Client,
     asset_definition_id: &AssetDefinitionId,
 ) -> Result<bool> {
-    match client
-        .client()
-        .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
-    {
-        Ok(_) => Ok(true),
-        Err(QueryError::Validation(ValidationFail::QueryFailed(
-            QueryExecutionFail::Find(FindError::AssetDefinition(_)) | QueryExecutionFail::NotFound,
-        ))) => Ok(false),
-        Err(err) => Err(eyre!(err)),
-    }
+    let client = client.clone();
+    let asset_definition_id = asset_definition_id.clone();
+    read_on_dedicated_thread(move || {
+        match client
+            .client()
+            .query_single(FindAssetDefinitionById::new(asset_definition_id))
+        {
+            Ok(_) => Ok(true),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(
+                QueryExecutionFail::Find(FindError::AssetDefinition(_))
+                | QueryExecutionFail::NotFound,
+            ))) => Ok(false),
+            Err(err) => Err(eyre!(err)),
+        }
+    })
+    .await
+    .wrap_err("asset definition query worker failed")
 }
 async fn setup_ledger_for_sample(
     client: &Client,
@@ -417,13 +436,13 @@ async fn setup_ledger_for_sample(
     initial_amount: u32,
 ) -> Result<()> {
     let mut instructions: Vec<InstructionBox> = Vec::new();
-    if !account_exists(client, &BOB_ID)? {
+    if !account_exists(client, &BOB_ID).await? {
         instructions.push(Register::account(Account::new(BOB_ID.clone())).into());
     }
-    if !account_exists(client, &CARPENTER_ID)? {
+    if !account_exists(client, &CARPENTER_ID).await? {
         instructions.push(Register::account(Account::new(CARPENTER_ID.clone())).into());
     }
-    if !asset_definition_exists(client, asset_definition_id)? {
+    if !asset_definition_exists(client, asset_definition_id).await? {
         instructions.push(
             Register::asset_definition(AssetDefinition::numeric(
                 asset_definition_id.clone(),
@@ -441,7 +460,7 @@ async fn setup_ledger_for_sample(
         )
         .into(),
     );
-    tokio::task::spawn_blocking({
+    read_on_dedicated_thread({
         let client = client.clone();
         move || {
             client.submit_all(
@@ -451,9 +470,9 @@ async fn setup_ledger_for_sample(
         }
     })
     .await
-    .expect("setup ledger task")?;
+    .wrap_err("setup ledger task")?;
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    tokio::task::spawn_blocking({
+    read_on_dedicated_thread({
         let client = client.clone();
         move || {
             let grant_transfer = Grant::account_permission(
@@ -462,18 +481,17 @@ async fn setup_ledger_for_sample(
                 },
                 ALICE_ID.clone(),
             );
-            let tx = TransactionBuilder::new(
-                *client.client().network_id(),
-                BOB_ID.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            let mut bob = client.client().to_builder();
+            bob.account = BOB_ID.clone();
+            bob.key_pair = BOB_KEYPAIR.clone();
+            Client::from_client(bob.build()?)?.submit_all(
+                [grant_transfer],
+                FeePaymentIntent::authority(Vec::new(), None),
             )
-            .with_instructions([grant_transfer])
-            .sign(BOB_KEYPAIR.private_key());
-            client.submit_transaction_and_wait(&tx)
         }
     })
     .await
-    .expect("grant escrow transfer permission task")?;
+    .wrap_err("grant escrow transfer permission task")?;
     Ok(())
 }
 fn threshold_state_paths() -> [&'static str; 9] {
@@ -517,10 +535,9 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     let http = integration_tests::http::client();
     let asset_definition_id = sample_asset_definition_id();
     setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
-    let contract_address = deploy_threshold_escrow(&client, &http).await?;
+    let contract_address = deploy_threshold_escrow(&client).await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -530,13 +547,8 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         "open_escrow",
     )
     .await?;
-    let opened_state = contract_state_values(
-        &http,
-        client.client().endpoint(),
-        &contract_address,
-        &threshold_state_paths(),
-    )
-    .await?;
+    let opened_state =
+        contract_state_values(&http, &client, &contract_address, &threshold_state_paths()).await?;
     assert_eq!(
         opened_state["payer_account"],
         norito::json::Value::from(ALICE_ID.to_string())
@@ -572,7 +584,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     );
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -586,17 +597,17 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     let recipient_asset = AssetId::new(asset_definition_id.clone(), CARPENTER_ID.clone());
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert_eq!(
-        asset_value(&client, &alice_asset)?,
+        asset_value(&client, &alice_asset).await?,
         Some(Quantity::from(16_u32))
     );
     assert_eq!(
-        asset_value(&client, &escrow_asset)?,
+        asset_value(&client, &escrow_asset).await?,
         Some(Quantity::from(4_u32))
     );
-    assert_eq!(asset_value(&client, &recipient_asset)?, None);
+    assert_eq!(asset_value(&client, &recipient_asset).await?, None);
     let partial_state = contract_state_values(
         &http,
-        client.client().endpoint(),
+        &client,
         &contract_address,
         &[
             "funded_amount_value",
@@ -621,7 +632,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     );
     call_contract_expect_status(
         &client,
-        &http,
         &BOB_ID.clone(),
         BOB_KEYPAIR.private_key(),
         &contract_address,
@@ -633,7 +643,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -645,7 +654,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -657,7 +665,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let early_release_state = contract_state_values(
         &http,
-        client.client().endpoint(),
+        &client,
         &contract_address,
         &["funded_amount_value", "is_open", "is_released"],
     )
@@ -667,13 +675,12 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         norito::json::Value::from("4")
     );
     assert_eq!(
-        asset_value(&client, &escrow_asset)?,
+        asset_value(&client, &escrow_asset).await?,
         Some(Quantity::from(4_u32))
     );
-    assert_eq!(asset_value(&client, &recipient_asset)?, None);
+    assert_eq!(asset_value(&client, &recipient_asset).await?, None);
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -685,7 +692,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let funded_state = contract_state_values(
         &http,
-        client.client().endpoint(),
+        &client,
         &contract_address,
         &["funded_amount_value", "is_open"],
     )
@@ -696,16 +703,15 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     );
     assert_eq!(funded_state["is_open"], norito::json::Value::from(true));
     assert_eq!(
-        asset_value(&client, &alice_asset)?,
+        asset_value(&client, &alice_asset).await?,
         Some(Quantity::from(10_u32))
     );
     assert_eq!(
-        asset_value(&client, &escrow_asset)?,
+        asset_value(&client, &escrow_asset).await?,
         Some(Quantity::from(10_u32))
     );
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -717,7 +723,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     let released_state = contract_state_values(
         &http,
-        client.client().endpoint(),
+        &client,
         &contract_address,
         &[
             "funded_amount_value",
@@ -741,17 +747,16 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         norito::json::Value::from(false)
     );
     assert_eq!(
-        asset_value(&client, &alice_asset)?,
+        asset_value(&client, &alice_asset).await?,
         Some(Quantity::from(10_u32))
     );
     assert_eq!(
-        asset_value(&client, &recipient_asset)?,
+        asset_value(&client, &recipient_asset).await?,
         Some(Quantity::from(10_u32))
     );
-    assert_eq!(asset_value(&client, &escrow_asset)?, None);
+    assert_eq!(asset_value(&client, &escrow_asset).await?, None);
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -763,7 +768,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -775,7 +779,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -787,7 +790,6 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -827,10 +829,9 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     let http = integration_tests::http::client();
     let asset_definition_id = sample_asset_definition_id();
     setup_ledger_for_sample(&client, &asset_definition_id, 20).await?;
-    let contract_address = deploy_threshold_escrow(&client, &http).await?;
+    let contract_address = deploy_threshold_escrow(&client).await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -842,7 +843,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -855,16 +855,15 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     let alice_asset = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     assert_eq!(
-        asset_value(&client, &alice_asset)?,
+        asset_value(&client, &alice_asset).await?,
         Some(Quantity::from(17_u32))
     );
     assert_eq!(
-        asset_value(&client, &escrow_asset)?,
+        asset_value(&client, &escrow_asset).await?,
         Some(Quantity::from(3_u32))
     );
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -876,7 +875,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
     let refunded_state = contract_state_values(
         &http,
-        client.client().endpoint(),
+        &client,
         &contract_address,
         &[
             "funded_amount_value",
@@ -900,13 +899,12 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         norito::json::Value::from(true)
     );
     assert_eq!(
-        asset_value(&client, &alice_asset)?,
+        asset_value(&client, &alice_asset).await?,
         Some(Quantity::from(20_u32))
     );
-    assert_eq!(asset_value(&client, &escrow_asset)?, None);
+    assert_eq!(asset_value(&client, &escrow_asset).await?, None);
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -918,7 +916,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -930,7 +927,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -942,7 +938,6 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     .await?;
     call_contract_expect_status(
         &client,
-        &http,
         &ALICE_ID.clone(),
         ALICE_KEYPAIR.private_key(),
         &contract_address,
@@ -953,4 +948,43 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+#[test]
+fn threshold_call_intent_uses_canonical_arguments_from_the_trusted_artifact() {
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(
+            b"threshold-intent-test",
+        )),
+    );
+    let address = iroha_data_model::smart_contract::ContractAddress::derive(
+        &network,
+        &ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .expect("fixture address");
+    let payload = open_escrow_args(10);
+    assert_eq!(payload["target_amount"].as_str(), Some("10"));
+    let intent = threshold_contract_call_intent(&address, "open_escrow", Some(&payload))
+        .expect("canonical threshold argument record");
+    assert!(intent.invocation.arguments.is_some());
+    assert_eq!(intent.invocation.contract_address, address);
+    assert!(
+        threshold_contract_call_intent(&address, "hajimari", None)
+            .expect("constructor has no arguments")
+            .invocation
+            .arguments
+            .is_none()
+    );
+    assert!(
+        threshold_contract_call_intent(
+            &address,
+            "open_escrow",
+            Some(&norito::json!({"target_amount": 10}))
+        )
+        .is_err(),
+        "numeric JSON alias cannot replace the canonical quantity string"
+    );
+    assert!(threshold_contract_call_intent(&address, "open_escrow", None).is_err());
 }

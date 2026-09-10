@@ -1132,6 +1132,7 @@ struct FakeServices {
         CertifiedMergeLedgerReference,
     )>,
     apply_tasks: Vec<ApplyTask>,
+    apply_retry_blocked: bool,
     entered_views: Vec<EventTag>,
     entered_view_locks: Vec<Option<(wire::ConsensusRound, wire::BlockSubject)>>,
     equivocations: Vec<wire::SumeragiV2Equivocation>,
@@ -1369,6 +1370,13 @@ impl V2EffectServices for FakeServices {
         self.check("apply")?;
         self.apply_tasks.push(task);
         Ok(())
+    }
+    fn try_enqueue_apply(&mut self, task: ApplyTask) -> Result<bool, Self::Error> {
+        if self.apply_retry_blocked {
+            return Ok(false);
+        }
+        self.enqueue_apply(task)?;
+        Ok(true)
     }
     fn entered_view(
         &mut self,

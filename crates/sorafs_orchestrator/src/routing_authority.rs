@@ -94,6 +94,10 @@ struct RoutingAuthorityRouteV1 {
     manifest_root_cid: ManifestRootCid,
     provider_ids: Vec<[u8; 32]>,
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_orchestrator::routing_authority::RoutingAuthorityProjectionEnvelopeV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize)]
 struct RoutingAuthorityProjectionEnvelopeV1 {
     version: u8,
@@ -968,6 +972,14 @@ mod tests {
             .expect("second replica projection");
         assert_eq!(first, second);
         assert_eq!(first.canonical_bytes(), second.canonical_bytes());
+        let header = norito::core::Header::read(first.canonical_bytes())
+            .expect("routing authority projection header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name(
+                "sorafs_orchestrator::routing_authority::RoutingAuthorityProjectionEnvelopeV1"
+            )
+        );
     }
     #[test]
     fn only_approved_manifests_with_completed_orders_grant_authority() {

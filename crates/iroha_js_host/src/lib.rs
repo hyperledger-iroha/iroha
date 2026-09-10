@@ -12956,7 +12956,7 @@ mod tests {
     };
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase, TransportPolicy};
     use norito::{
-        DeserializePayload, NoritoDeserialize,
+        DeserializePayload,
         codec::{Decode as NoritoDecode, Encode as NoritoEncode},
         from_bytes,
         json::{self, Value},

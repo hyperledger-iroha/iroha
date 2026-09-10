@@ -81,6 +81,10 @@ impl EvidenceViewerTransparencyProducerConfigV1 {
     }
 }
 /// Exact payload-free body installed under one monotonic public head.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerTransparencyHeadBodyV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerTransparencyHeadBodyV1 {
     /// Public-head schema version.
@@ -115,7 +119,10 @@ pub struct EvidenceViewerTransparencyHeadBodyV1 {
     pub publisher_public_key: [u8; 32],
 }
 /// Ed25519-authenticated public transparency head.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerSignedTransparencyHeadV1"
+)]
 pub struct EvidenceViewerSignedTransparencyHeadV1 {
     /// Exact payload-free public-head body.
     pub body: EvidenceViewerTransparencyHeadBodyV1,
@@ -1253,4 +1260,5 @@ mod tests {
             EvidenceViewerTransparencyProducerErrorV1::PublisherUnavailable
         );
     }
+    include!("transparency_producer_schema_identity_tests.rs");
 }

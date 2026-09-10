@@ -179,6 +179,8 @@ fn historical_autonomous_recovery_read_matches_accounting(
 /// relabel, retirement, archive GC, and recreation therefore move or retire
 /// the record with the rest of that incarnation instead of leaving a global
 /// orphan which a later incarnation could accidentally hydrate.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::HistoricalAutonomousLaneRecoveryRecordV1")]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub(crate) struct HistoricalAutonomousLaneRecoveryRecordV1 {

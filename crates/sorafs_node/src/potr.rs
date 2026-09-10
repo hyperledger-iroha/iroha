@@ -301,6 +301,8 @@ impl StoredPotrReceiptV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::potr::PotrTrackerCheckpointV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct PotrTrackerCheckpointV1 {
     version: u8,
@@ -2871,5 +2873,44 @@ mod tests {
     fn windows_potr_path_substitution_and_lock_contention_are_fenced() {
         assert_potr_root_path_substitution_is_rejected();
         assert_potr_os_lock_contention_is_busy();
+    }
+    #[cfg(any(unix, windows))]
+    #[test]
+    fn persisted_potr_checkpoint_frame_declares_identity_and_rejects_foreign_root() {
+        let directory = TempDir::new().unwrap();
+        let store = PotrCheckpointStore::new(
+            directory.path(),
+            POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1,
+        )
+        .unwrap();
+        let checkpoint = empty_checkpoint(1);
+        store.commit(&checkpoint, None).unwrap();
+        let bytes = fs::read(&store.checkpoint_path).unwrap();
+        assert_eq!(store.load(8).unwrap().0, Some(checkpoint.clone()));
+        assert_eq!(
+            norito::decode_from_bytes::<PotrTrackerCheckpointV1>(&bytes).unwrap(),
+            checkpoint
+        );
+        assert_eq!(norito::to_bytes(&checkpoint).unwrap(), bytes);
+        for (frame, identity) in [(
+            bytes.as_slice(),
+            "sorafs_node::potr::PotrTrackerCheckpointV1",
+        )] {
+            assert_eq!(
+                norito::core::Header::read(frame).unwrap().schema,
+                norito::core::schema_hash_for_name(identity)
+            );
+        }
+        let foreign = norito::encode_canonical(&7_u64).unwrap();
+        assert_eq!(norito::decode_canonical::<u64>(&foreign).unwrap(), 7);
+        assert!(matches!(
+            norito::decode_from_bytes::<PotrTrackerCheckpointV1>(&foreign),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        fs::write(&store.checkpoint_path, &foreign).unwrap();
+        assert!(matches!(
+            store.load(8),
+            Err(PotrTrackerError::InvalidCheckpoint(_))
+        ));
     }
 }

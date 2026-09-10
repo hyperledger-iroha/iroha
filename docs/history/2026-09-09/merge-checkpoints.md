@@ -51,3 +51,15 @@ transport and four-validator deployment remain unqualified.
 See the [current privacy evidence](specs/privacy_first_release_closure.md).
 
 <!-- END EXACT PRE-MERGE CHECKPOINTS -->
+
+## Earlier Taira startup checkpoint
+
+Retained verbatim from the incoming branch status at commit
+`3cac1dc8d93ae0a3f5c5970001ce2131adc35263`.
+This checkpoint predates the later native preparation and QueuePlan
+application findings in [current status](../../../status.md).
+
+Source status SHA-256: `de2d2bdbc0260843ee5991d8f8676fb3617d68bc1035473caefcb7aa17069ba0`.
+Excerpt SHA-256 (without trailing newline): `218483edabb1a34f1c1286f309e5190d85eaeb6eef6ad36569ba61a242d23527`.
+
+The latest Taira rollout failed before public cutover: daemon startup treated the QEMU executable as a directory during minimal-root attestation, so Torii never bound. A service stop during initialization also left a live nested QEMU outside its systemd unit cgroup. The exact orphan was stopped through a pidfd and native rollback completed with all four validators stopped. The directory/file fix and exact daemon-pidfd/cgroup watchdog are written. Host topology confirms bubblewrap’s retained PID1 reaper and QEMU share the private root and namespaces; compiled startup and supervisor-death validation remain pending. Prior standalone host probes did not exercise the complete daemon attestation path. No live finality, workload canary or application rollout is qualified.

@@ -1,6 +1,7 @@
 //! Mandatory admission before directory creation over test-owned local descriptors.
 
 use super::*;
+use std::fs::OpenOptions;
 use std::os::unix::{fs::OpenOptionsExt, net::UnixStream};
 
 fn request(kind: Kind) -> Request {
@@ -111,7 +112,7 @@ fn admission_actor_requires_one_ack_before_creation_and_real_preflight() {
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
         let manifest = norito::json!({"name": name,
-            "sha256": format!("{:x}", Sha256::digest(&bytes)), "bytes": bytes.len()});
+            "sha256": (format!("{:x}", Sha256::digest(&bytes))), "bytes": (bytes.len())});
         output
             .write_all(&response(request(Kind::Preflight), "complete", manifest))
             .unwrap();
@@ -153,7 +154,7 @@ fn admission_failed_unavailable_or_capture_reply_never_creates_directory() {
         ("unavailable", Value::Null),
         (
             "complete",
-            norito::json!({"name": "admit-0000000000.json", "sha256": "a".repeat(64), "bytes": 1}),
+            norito::json!({"name": "admit-0000000000.json", "sha256": ("a".repeat(64)), "bytes": 1}),
         ),
     ] {
         let (_root, pending, mut input, mut output) = fixture();
@@ -341,7 +342,7 @@ fn admission_actor_does_not_extend_preflight_after_admission_spends_time() {
         file.write_all(&bytes).unwrap();
         file.sync_all().unwrap();
         let manifest = norito::json!({"name": name,
-            "sha256": format!("{:x}", Sha256::digest(&bytes)), "bytes": bytes.len()});
+            "sha256": (format!("{:x}", Sha256::digest(&bytes))), "bytes": (bytes.len())});
         while peer_control.now() < deadline + 50_000_000 {
             std::thread::sleep(TURN);
         }

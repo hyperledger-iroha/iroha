@@ -54,6 +54,8 @@ mod model {
     ///
     /// - Permission tokens (see [`crate::permission::Permission`])
     /// - Configuration parameters (see [`crate::parameter::Parameter`])
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_data_model::executor::model::ExecutorDataModel")]
     #[derive(
         Default,
         Debug,

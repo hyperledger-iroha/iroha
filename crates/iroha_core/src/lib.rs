@@ -1,4 +1,8 @@
 //! Iroha — A simple, enterprise-grade decentralized ledger.
+//!
+//! Framed Core records declare their protocol identity with `NoritoSchema`.
+//! Borrowed query views retain distinct nominal identities and explicitly project
+//! to the owned result's frame; payload serialization does not choose an identity.
 #![allow(unexpected_cfgs)]
 // Nested `if` blocks remain intentional for readability/instrumentation; Clippy's
 // `collapsible_if` lint would force let-chains that obscure the control flow.
@@ -740,7 +744,7 @@ fn inbound_consensus_v2_decode_limits(
 }
 fn inbound_sumeragi_enum_field(framed: &[u8]) -> Result<(u32, &[u8], u8), norito::core::Error> {
     let view = norito::core::from_bytes_view(framed)?;
-    if view.schema() != <BlockMessage as norito::NoritoSerialize>::schema_hash() {
+    if view.schema() != norito::schema::identity::frame_hash::<BlockMessage>() {
         return Err(norito::core::Error::SchemaMismatch);
     }
     let align = norito::core::archived_payload_align::<BlockMessage>();
@@ -837,6 +841,8 @@ pub type Peers = UniqueVec<PeerId>;
 /// Type of `Sender<EventBox>` which should be used for channels of `Event` messages.
 pub type EventsSender = broadcast::Sender<EventBox>;
 /// Network message envelope exchanged between peers.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::NetworkMessage")]
 #[derive(Clone, Debug, Decode, Encode)]
 pub enum NetworkMessage {
     /// Live Sumeragi v2, lane-local, or authenticated auxiliary consensus data.
@@ -1224,6 +1230,8 @@ pub mod role {
     use mv::json::JsonKeyCodec;
     use norito::json;
     /// [`RoleId`] with owner [`AccountId`] attached to it.
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::role::RoleIdWithOwner")]
     #[derive(
         Debug,
         Clone,
@@ -1586,6 +1594,10 @@ mod tests {
     }
     #[test]
     fn raw_network_topic_is_total_for_restricted_gossip_and_fails_closed_on_unknown_layouts() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_network_topic_is_total_for_restricted_gossip_and_fails_closed_on_unknown_layouts::SingleFieldNetworkMessage"
+        )]
         #[derive(Encode)]
         enum SingleFieldNetworkMessage {
             Field(u8),
@@ -1672,11 +1684,19 @@ mod tests {
     }
     #[test]
     fn raw_consensus_struct_parser_accepts_each_advertised_packed_layout() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::TwoFieldFixture"
+        )]
         #[derive(Encode)]
         struct TwoFieldFixture {
             version: u16,
             payload: PayloadFixture,
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::raw_consensus_struct_parser_accepts_each_advertised_packed_layout::PayloadFixture"
+        )]
         #[derive(Encode)]
         enum PayloadFixture {
             Safety(u8),
@@ -2050,10 +2070,18 @@ mod tests {
             CertifiedMergeSidecarServiceGenerationV1, CertifiedMergeSidecarStreamEpochV1,
         };
         use iroha_data_model::merge::MergeLedgerEntry;
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::LegacySidecarCarrier"
+        )]
         #[derive(Encode)]
         enum LegacySidecarCarrier {
             Payload(Box<CertifiedMergeSidecarMessage>),
         }
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::certified_merge_sidecar_messages_roundtrip_on_bounded_consensus_topics::SharedSidecarCarrier"
+        )]
         #[derive(Encode)]
         enum SharedSidecarCarrier {
             Payload(Arc<CertifiedMergeSidecarMessage>),
@@ -2367,8 +2395,12 @@ mod tests {
     include!("tests/sumeragi_v2_decode_limits.rs");
     #[test]
     fn torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps() {
+        #[derive(norito::NoritoSchema)]
+        #[norito_schema(
+            name = "iroha_core::tests::torii_proxy_carriers_preserve_request_wire_and_have_explicit_decode_caps::BoxToriiProxyCarrier",
+            frame = "iroha_core::NetworkMessage"
+        )]
         #[derive(Encode)]
-        #[norito(schema_name = "iroha_core::NetworkMessage")]
         enum BoxToriiProxyCarrier {
             #[codec(index = 13)]
             Request(Box<ToriiProxyRequestV1>),
@@ -2401,12 +2433,13 @@ mod tests {
             shared, boxed,
             "Box-to-Arc ownership must not change wire bytes"
         );
-        let origin_key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+        let origin_key = KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::BlsNormal)
             .expect("generate proxy relay origin key");
         let origin = PeerId::new(origin_key.public_key().clone());
         let live = ncore::decode_from_bytes::<NetworkMessage>(&shared)
             .expect("decode live Arc proxy carrier");
         let p2p_wire_len = iroha_p2p::network::data_frame_wire_len(&origin, None, &live);
+        assert_ne!(p2p_wire_len, usize::MAX, "valid node relay geometry");
         let view = ncore::from_bytes_view(&shared).expect("inspect proxy carrier frame");
         assert!(
             <NetworkMessage as ClassifyTopic>::inbound_decode_limits(

@@ -32,6 +32,10 @@ pub const POR_PROOF_VERSION_V1: u8 = 1;
 pub const AUDIT_VERDICT_VERSION_V1: u8 = 1;
 /// Current challenge status schema version.
 pub const POR_CHALLENGE_STATUS_VERSION_V1: u8 = 1;
+/// Current bounded PoR status-page schema version.
+pub const POR_STATUS_PAGE_VERSION_V1: u8 = 1;
+/// Current bounded PoR status-export-page schema version.
+pub const POR_STATUS_EXPORT_PAGE_VERSION_V1: u8 = 1;
 /// Current weekly report schema version.
 pub const POR_WEEKLY_REPORT_VERSION_V1: u8 = 1;
 /// Maximum provider success rate expressed in basis points (100%).
@@ -2216,6 +2220,50 @@ impl PorChallengeStatusV1 {
         Ok(())
     }
 }
+/// Bounded, generation-bound PoR status page.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::PorStatusPageV1")]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct PorStatusPageV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Immutable coordinator generation against which this page was evaluated.
+    pub snapshot_generation: u64,
+    /// Maximum records requested by the caller.
+    pub record_limit: u32,
+    /// Maximum sum of canonical status-record bytes requested by the caller.
+    pub canonical_byte_limit: u64,
+    /// Exact sum of canonical bytes for all returned status records.
+    pub canonical_bytes: u64,
+    /// Exact number of indexed status candidates evaluated for this page.
+    pub inspected_candidates: u32,
+    /// Whether traversal can continue after the last consumed candidate.
+    ///
+    /// Sparse filter intersections may therefore return no statuses together
+    /// with `has_more = true` and a non-empty continuation cursor.
+    pub has_more: bool,
+    /// Opaque continuation bound to this generation, selection, and last consumed candidate.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+    /// Challenge status records in canonical index order.
+    pub statuses: Vec<PorChallengeStatusV1>,
+}
+/// Bounded PoR status export page for an optional inclusive epoch range.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_torii::sorafs::por::PorStatusExportPageV1")]
+#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
+pub struct PorStatusExportPageV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Optional inclusive epoch-range lower bound.
+    #[norito(default)]
+    pub start_epoch: Option<u64>,
+    /// Optional inclusive epoch-range upper bound.
+    #[norito(default)]
+    pub end_epoch: Option<u64>,
+    /// Bounded page evaluated against one exact coordinator generation.
+    pub page: PorStatusPageV1,
+}
 /// Validation errors for [`PorChallengeStatusV1`].
 #[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
 pub enum PorChallengeStatusValidationError {
@@ -3983,6 +4031,95 @@ mod tests {
             Err(PorStatusCursorValidationError::InvalidEpoch)
         );
     }
+    #[test]
+    fn status_page_roundtrips_its_declared_frame() {
+        let status = PorChallengeStatusV1 {
+            version: POR_CHALLENGE_STATUS_VERSION_V1,
+            challenge_id: [1; 32],
+            manifest_digest: [2; 32],
+            provider_id: [3; 32],
+            epoch_id: 10,
+            drand_round: 99,
+            status: PorChallengeOutcome::AwaitingProof,
+            sample_count: 64,
+            forced: false,
+            issued_at: 1_700_000_000,
+            responded_at: None,
+            proof_digest: None,
+            repair_task_id: None,
+            failure_reason: None,
+            verifier_latency_ms: None,
+        };
+        status.validate().expect("valid status fixture");
+        let canonical_bytes = u64::try_from(norito::encode_canonical(&status).unwrap().len())
+            .expect("fixture size fits u64");
+        let page = PorStatusPageV1 {
+            version: POR_STATUS_PAGE_VERSION_V1,
+            snapshot_generation: 7,
+            record_limit: 1,
+            canonical_byte_limit: canonical_bytes,
+            canonical_bytes,
+            inspected_candidates: 1,
+            has_more: false,
+            next_cursor: None,
+            statuses: vec![status],
+        };
+        let encoded = norito::encode_canonical(&page).expect("encode shared status page");
+        let header = norito::core::Header::read(&encoded[..]).expect("status page header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name("iroha_torii::sorafs::por::PorStatusPageV1"),
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<PorStatusPageV1>(&encoded).unwrap(),
+            page
+        );
+    }
+
+    #[test]
+    fn status_export_page_preserves_sparse_continuation_and_frame_identity() {
+        let cursor = PorStatusCursorV1 {
+            version: POR_STATUS_CURSOR_VERSION_V1,
+            snapshot_generation: 7,
+            selection_digest: [4; 32],
+            last_epoch_id: 3,
+            last_issued_at: 10,
+            last_challenge_id: [5; 32],
+        }
+        .encode_opaque()
+        .expect("valid sparse continuation cursor");
+        let export = PorStatusExportPageV1 {
+            version: POR_STATUS_EXPORT_PAGE_VERSION_V1,
+            start_epoch: Some(3),
+            end_epoch: Some(5),
+            page: PorStatusPageV1 {
+                version: POR_STATUS_PAGE_VERSION_V1,
+                snapshot_generation: 7,
+                record_limit: 10,
+                canonical_byte_limit: 4096,
+                canonical_bytes: 0,
+                inspected_candidates: 5,
+                has_more: true,
+                next_cursor: Some(cursor),
+                statuses: Vec::new(),
+            },
+        };
+        let encoded = norito::encode_canonical(&export).expect("encode shared export page");
+        let header = norito::core::Header::read(&encoded[..]).expect("export page header");
+        assert_eq!(
+            header.schema,
+            norito::core::schema_hash_for_name("iroha_torii::sorafs::por::PorStatusExportPageV1"),
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<PorStatusExportPageV1>(&encoded).unwrap(),
+            export
+        );
+        assert!(matches!(
+            norito::decode_from_bytes::<PorStatusPageV1>(&encoded),
+            Err(norito::core::Error::SchemaMismatch),
+        ));
+    }
+
     #[test]
     fn challenge_status_requires_failure_reason() {
         let status = PorChallengeStatusV1 {

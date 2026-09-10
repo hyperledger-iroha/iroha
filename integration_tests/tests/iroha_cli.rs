@@ -37,15 +37,8 @@ use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};
 use reqwest::Url;
 use std::{
-    collections::BTreeMap,
-    net::{TcpListener, TcpStream},
     num::NonZeroU32,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
@@ -696,12 +689,12 @@ fn soracloud_command_args_append_timeout_once() {
             "status".to_owned(),
             "--repo-id".to_owned(),
             "openai/gpt-oss".to_owned(),
+            "--timeout-secs".to_owned(),
+            "15".to_owned(),
             "--revision".to_owned(),
             SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION.to_owned(),
             "--storage-class".to_owned(),
             "warm".to_owned(),
-            "--timeout-secs".to_owned(),
-            "15".to_owned(),
         ]
     );
     assert_eq!(
@@ -718,136 +711,6 @@ fn soracloud_command_args_append_timeout_once() {
         ]),
         Duration::from_secs(30)
     );
-}
-#[derive(Clone)]
-struct MockHttpResponse {
-    content_type: &'static str,
-    body: Vec<u8>,
-}
-struct MockHttpServer {
-    base_url: String,
-    address: String,
-    stop: Arc<AtomicBool>,
-    handle: Option<thread::JoinHandle<()>>,
-}
-impl MockHttpServer {
-    fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
-        listener
-            .set_nonblocking(true)
-            .expect("set mock listener nonblocking");
-        let address = listener
-            .local_addr()
-            .expect("mock listener address")
-            .to_string();
-        let base_url = format!("http://{address}");
-        let routes = Arc::new(routes);
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_flag = Arc::clone(&stop);
-        let handle = thread::spawn(move || {
-            while !stop_flag.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((mut stream, _)) => {
-                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                        let stop_flag = Arc::clone(&stop_flag);
-                        let routes = Arc::clone(&routes);
-                        thread::spawn(move || {
-                            let path = read_mock_http_request_path(&mut stream);
-                            if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
-                                return;
-                            }
-                            let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
-                                content_type: "text/plain",
-                                body: b"not found".to_vec(),
-                            });
-                            let status = if routes.contains_key(&path) {
-                                "200 OK"
-                            } else {
-                                "404 Not Found"
-                            };
-                            let headers = format!(
-                                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
-                                response.body.len(),
-                                response.content_type
-                            );
-                            let _ = std::io::Write::write_all(&mut stream, headers.as_bytes());
-                            let _ = std::io::Write::write_all(&mut stream, &response.body);
-                        });
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::Interrupted
-                                | std::io::ErrorKind::ConnectionAborted
-                                | std::io::ErrorKind::TimedOut
-                        ) => {}
-                    Err(error) => {
-                        eprintln!("mock HTTP server accept error: {error}");
-                        thread::sleep(Duration::from_millis(50));
-                    }
-                }
-            }
-        });
-        Self {
-            base_url,
-            address,
-            stop,
-            handle: Some(handle),
-        }
-    }
-    fn api_base_url(&self) -> String {
-        format!("{}/api", self.base_url)
-    }
-}
-impl Drop for MockHttpServer {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        let _ = TcpStream::connect(&self.address);
-        if let Some(handle) = self.handle.take() {
-            let _ = handle.join();
-        }
-    }
-}
-fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
-    let mut request = Vec::new();
-    let mut buffer = [0_u8; 1024];
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match std::io::Read::read(stream, &mut buffer) {
-            Ok(0) => break,
-            Ok(read) => {
-                request.extend_from_slice(&buffer[..read]);
-                if request.windows(4).any(|window| window == b"\r\n\r\n") {
-                    break;
-                }
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                if Instant::now() >= deadline {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(error) => panic!("read mock HTTP request failed: {error}"),
-        }
-    }
-    let target = String::from_utf8_lossy(&request)
-        .lines()
-        .next()
-        .and_then(|line| line.split_whitespace().nth(1))
-        .unwrap_or_default()
-        .to_owned();
-    if let Ok(url) = Url::parse(&target) {
-        return url.path().to_owned();
-    }
-    target.split('?').next().unwrap_or_default().to_owned()
 }
 fn assert_requires_torii_url(output: &std::process::Output) {
     assert!(

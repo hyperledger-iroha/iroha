@@ -37,6 +37,10 @@ const ROOT_SELECTION_CERTIFICATE_DOMAIN_V1: &[u8] =
 const PROOF_ROOT_BRIDGE_DOMAIN_V1: &[u8] = b"iroha:kagemusha:v1:history-store:proof-root-bridge\0";
 
 /// Independent authenticated sparse-tree namespace.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryTreeV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
 pub enum KagemushaHistoryTreeV1 {
@@ -70,6 +74,10 @@ impl KagemushaHistoryTreeV1 {
 }
 
 /// One immutable sparse-tree node body.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryNodeBodyV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) enum KagemushaHistoryNodeBodyV1 {
     /// One exact key-to-value-digest binding.
@@ -93,6 +101,10 @@ pub(crate) enum KagemushaHistoryNodeBodyV1 {
 }
 
 /// Domain-separated immutable sparse-tree node record.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryNodeRecordV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaHistoryNodeRecordV1 {
     version: u16,
@@ -189,6 +201,10 @@ impl KagemushaHistoryNodeRecordV1 {
 }
 
 /// The two independently selected committed content-address roots.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryRootsV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaHistoryRootsV1 {
     replay: DigestV1,
@@ -237,6 +253,10 @@ impl Default for KagemushaHistoryRootsV1 {
 }
 
 /// Compare-and-swap transition for one independently selected tree root.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryRootCasV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaHistoryRootCasV1 {
     expected: DigestV1,
@@ -267,6 +287,10 @@ impl KagemushaHistoryRootCasV1 {
 }
 
 /// Independent optional root transitions covered by one prepared CAS.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryRootSelectionV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaHistoryRootSelectionV1 {
     replay: Option<KagemushaHistoryRootCasV1>,
@@ -354,6 +378,10 @@ impl KagemushaHistoryRootSelectionV1 {
 }
 
 /// Canonical content-addressed write retained by a prepared transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryNodeWriteV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct KagemushaHistoryNodeWriteV1 {
     address: DigestV1,
@@ -361,6 +389,10 @@ struct KagemushaHistoryNodeWriteV1 {
 }
 
 /// Immutable prepared CAS material stored in the live WAL overlay.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaPreparedHistoryCasV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaPreparedHistoryCasV1 {
     transaction_id: DigestV1,
@@ -369,6 +401,10 @@ pub struct KagemushaPreparedHistoryCasV1 {
     node_writes: Vec<KagemushaHistoryNodeWriteV1>,
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaPreparedHistoryCasSubjectV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct KagemushaPreparedHistoryCasSubjectV1 {
     version: u16,
@@ -480,6 +516,10 @@ impl KagemushaPreparedHistoryCasV1 {
 }
 
 /// Exact hardware-signed subject selecting the roots of one prepared CAS.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryRootSelectionSubjectV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaHistoryRootSelectionSubjectV1 {
     version: u16,
@@ -534,6 +574,10 @@ impl KagemushaHistoryRootSelectionSubjectV1 {
 }
 
 /// Hardware-authenticated selection of the exact roots in one prepared CAS.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryRootSelectionCertificateV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaHistoryRootSelectionCertificateV1 {
     subject: KagemushaHistoryRootSelectionSubjectV1,
@@ -1000,6 +1044,10 @@ pub(crate) enum KagemushaHistoryDualInsertPreparationV1 {
 ///
 /// SHA-256 content addresses and paired Pasta commitments are intentionally carried as distinct
 /// types and fields. Their byte representations are not interchangeable.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::KagemushaHistoryProofRootBridgeRequestV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub(crate) struct KagemushaHistoryProofRootBridgeRequestV1 {
     transaction_id: DigestV1,
@@ -1966,6 +2014,10 @@ impl<T> HistoryMutationPlan<T> {
     }
 }
 
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::zk::kagemusha_v1_state::sparse_merkle::authenticated_history::HistoryRecoveryOperationV1"
+)]
 #[derive(Encode)]
 enum HistoryRecoveryOperationV1 {
     Prepared(DigestV1),

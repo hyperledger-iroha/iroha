@@ -6,6 +6,8 @@ use super::protocol::{
 use norito::codec::{Decode, Encode};
 const TYPED_PAYLOAD_MAGIC_V1: [u8; 8] = *b"IRSGTP01";
 /// Exact purpose carried by one non-transaction external-signer request.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "irohad::external_software_signer::typed_payload::SoftwareSignerPurposeV1")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
 #[repr(u8)]
 pub enum SoftwareSignerPurposeV1 {
@@ -64,6 +66,10 @@ impl SoftwareSignerPurposeV1 {
         }
     }
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "irohad::external_software_signer::typed_payload::SoftwareSignerTypedPayloadV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct SoftwareSignerTypedPayloadV1 {
     magic: [u8; 8],

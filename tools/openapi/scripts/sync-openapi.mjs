@@ -372,7 +372,7 @@ async function stageVersion(versionDir, outputDir, specBytes, manifestTemplate) 
   );
 }
 
-async function buildVersionIndex(
+export async function buildVersionIndex(
   versionsDirPath = defaultVersionsDir,
   outputDirPath = defaultOutputDir,
   latestSpecPath = join(defaultOutputDir, 'torii.json'),
@@ -752,7 +752,12 @@ async function readVersionIndexOptional(path) {
   if (!bytes) {
     return null;
   }
-  const text = bytes.toString('utf8');
+  return parseOpenApiVersionIndex(bytes, path);
+}
+
+/** Parse a source-bound versions index without changing its timestamp authority. */
+export function parseOpenApiVersionIndex(bytes, path = 'OpenAPI versions index') {
+  const text = Buffer.from(bytes).toString('utf8');
   scanJsonRejectDuplicateKeys(text, `OpenAPI versions index ${path}`);
   let index;
   try {

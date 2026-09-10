@@ -1,4 +1,4 @@
-//! Process-local deadlines whose clocks advance while the handset sleeps.
+//! Test-only process-local deadlines whose clocks advance while the handset sleeps.
 //!
 //! These values are never serialized and are not trusted UTC, MiBank approval, or monetary
 //! commit-time authority. They only bound a native-owned challenge. Apple uses the public

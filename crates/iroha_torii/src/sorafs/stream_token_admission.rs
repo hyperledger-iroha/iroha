@@ -24,6 +24,10 @@ use thiserror::Error;
 /// Hard V1 ceiling for one reconciliation call.
 pub const STREAM_TOKEN_GATEWAY_RECONCILE_MAX_ITEMS_V1: u32 = 1_024;
 /// Exact public identity of a deployment-owned admission provider.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionQualificationV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionQualificationV1 {
     /// Stable identity derived from the chain and governed compliance gateway.
@@ -63,6 +67,10 @@ impl StreamTokenGatewayAdmissionQualificationV1 {
     }
 }
 /// Signed token quota inputs admitted atomically with one callback row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayQuotaRequestV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayQuotaRequestV1 {
     /// Canonical 16-byte token identifier rendered as lowercase hexadecimal.
@@ -100,6 +108,10 @@ impl StreamTokenGatewayQuotaRequestV1 {
     }
 }
 /// Complete payload-free input to one external gateway admission transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRequestV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionRequestV1 {
     /// Exact canonical serving context.
@@ -167,6 +179,10 @@ impl StreamTokenGatewayAdmissionRequestV1 {
     }
 }
 /// One externally committed, ordered callback row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionRecordV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionRecordV1 {
     /// Authoritative local serving provider.
@@ -333,6 +349,10 @@ fn exact_lease_expiry_unix_ms(
     Ok(expires_at_unix_ms)
 }
 /// Provider-authenticated state of the exact row returned by `admit`.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionDeliveryStateV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
     /// The row is pending after the exact immediately preceding sequence.
@@ -348,6 +368,10 @@ pub enum StreamTokenGatewayAdmissionDeliveryStateV1 {
     },
 }
 /// Exact atomic result of one deployment-owned admission transaction.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionResultV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionResultV1 {
     /// Byte-identical retained callback and optional lease record.
@@ -380,6 +404,10 @@ impl StreamTokenGatewayAdmissionResultV1 {
     }
 }
 /// Authenticated oldest-pending readback with contiguous sequence proofs.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionReadbackV1"
+)]
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub struct StreamTokenGatewayAdmissionReadbackV1 {
     /// Highest gateway sequence durably acknowledged without a gap.
@@ -437,6 +465,10 @@ impl StreamTokenGatewayAdmissionReadbackV1 {
     }
 }
 /// Durable acknowledgement result for one external callback row.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_torii::sorafs::stream_token_admission::StreamTokenGatewayAdmissionAckV1"
+)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum StreamTokenGatewayAdmissionAckV1 {
     /// The pending row was durably acknowledged now.

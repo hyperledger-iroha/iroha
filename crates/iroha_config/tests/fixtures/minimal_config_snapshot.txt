@@ -685,6 +685,11 @@ Root {
             ttl: 3600s,
             refresh_interval: 900s,
         },
+        fastpq_artifacts: KuraFastpqArtifactPolicy {
+            max_artifact_bytes: 2372085,
+            max_artifacts: 1024,
+            max_total_bytes: 268435456,
+        },
         debug_output_new_blocks: false,
         merge_ledger_cache_capacity: 256,
         fsync_mode: Batched,

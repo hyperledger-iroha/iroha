@@ -134,6 +134,8 @@ fn lane_reservation_key_current_layout_roundtrips() {
 
 #[test]
 fn lane_reservation_key_rejects_pre_release_duplicate_identity_layout() {
+    #[derive(norito::NoritoSchema)]
+    #[norito_schema(name = "iroha_core::queue::tests::lane_reservation_key_rejects_pre_release_duplicate_identity_layout::PreReleaseLaneQueueReservationKeyV1")]
     #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
     #[norito(deny_unknown_fields)]
     struct PreReleaseLaneQueueReservationKeyV1 {

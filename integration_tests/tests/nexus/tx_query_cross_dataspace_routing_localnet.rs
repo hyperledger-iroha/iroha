@@ -34,7 +34,7 @@ use iroha_config::parameters::actual::LaneConfig as ActualLaneConfig;
 use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};
-use iroha_test_network::{NetworkBuilder, genesis_factory_with_post_topology};
+use iroha_test_network::{NetworkBuilder, unexecuted_genesis_factory_with_post_topology};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
@@ -140,7 +140,7 @@ fn localnet_builder() -> NetworkBuilder {
         .with_genesis_block(|topology, topology_entries| {
             let post_topology =
                 npos_multilane_genesis_post_topology_transactions(topology.as_ref());
-            let mut genesis = genesis_factory_with_post_topology(
+            let mut genesis = unexecuted_genesis_factory_with_post_topology(
                 npos_override_transactions(VALIDATORS_PER_LANE),
                 post_topology,
                 topology,

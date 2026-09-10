@@ -82,8 +82,12 @@ struct MusubiResolverIndexPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiResolverIndexPageSource<'_> {fn schema_hash() -> [u8; 16] {
-        <MusubiResolverIndexPageV1 as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for MusubiResolverIndexPageSource<'_> {
+    fn nominal_name() -> String {
+        "iroha_core::smartcontracts::isi::musubi::MusubiResolverIndexPageSource<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <MusubiResolverIndexPageV1 as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for MusubiResolverIndexPageSource<'_> {
@@ -121,8 +125,12 @@ struct MusubiVersionPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiVersionPageSource<'_> {fn schema_hash() -> [u8; 16] {
-        <MusubiVersionPageV1 as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for MusubiVersionPageSource<'_> {
+    fn nominal_name() -> String {
+        "iroha_core::smartcontracts::isi::musubi::MusubiVersionPageSource<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <MusubiVersionPageV1 as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for MusubiVersionPageSource<'_> {
@@ -148,8 +156,12 @@ struct MusubiMaintainerPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiMaintainerPageSource<'_> {fn schema_hash() -> [u8; 16] {
-        <MusubiMaintainerPageV1 as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for MusubiMaintainerPageSource<'_> {
+    fn nominal_name() -> String {
+        "iroha_core::smartcontracts::isi::musubi::MusubiMaintainerPageSource<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <MusubiMaintainerPageV1 as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for MusubiMaintainerPageSource<'_> {
@@ -176,8 +188,12 @@ struct MusubiArchiveLocationPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiArchiveLocationPageSource<'_> {fn schema_hash() -> [u8; 16] {
-        <MusubiArchiveLocationPageV1 as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for MusubiArchiveLocationPageSource<'_> {
+    fn nominal_name() -> String {
+        "iroha_core::smartcontracts::isi::musubi::MusubiArchiveLocationPageSource<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <MusubiArchiveLocationPageV1 as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for MusubiArchiveLocationPageSource<'_> {
@@ -215,8 +231,12 @@ struct MusubiAliasHistoryPageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiAliasHistoryPageSource<'_> {fn schema_hash() -> [u8; 16] {
-        <MusubiAliasHistoryPageV1 as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for MusubiAliasHistoryPageSource<'_> {
+    fn nominal_name() -> String {
+        "iroha_core::smartcontracts::isi::musubi::MusubiAliasHistoryPageSource<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <MusubiAliasHistoryPageV1 as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for MusubiAliasHistoryPageSource<'_> {
@@ -244,8 +264,12 @@ struct MusubiOrderedPackagePageSource<'a> {
     next_cursor: Option<MusubiFinalizedCursorV1>,
     snapshot: MusubiRegistrySnapshotV1,
 }
-impl norito::core::NoritoSerialize for MusubiOrderedPackagePageSource<'_> {fn schema_hash() -> [u8; 16] {
-        <MusubiOrderedPackagePageV1 as norito::core::NoritoSerialize>::schema_hash()
+impl norito::NoritoSchema for MusubiOrderedPackagePageSource<'_> {
+    fn nominal_name() -> String {
+        "iroha_core::smartcontracts::isi::musubi::MusubiOrderedPackagePageSource<'_>".to_owned()
+    }
+    fn frame_name() -> String {
+        <MusubiOrderedPackagePageV1 as norito::NoritoSchema>::frame_name()
     }
 }
 impl norito::core::SerializePayload for MusubiOrderedPackagePageSource<'_> {
@@ -1279,4 +1303,28 @@ where
 }
 fn query_invalid(error: iroha_data_model::ParseError) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
+}
+
+#[cfg(test)]
+mod query_source_identity_tests {
+    use super::*;
+
+    fn assert_owned_projection<S: norito::NoritoSchema, T: norito::NoritoSchema>() {
+        assert_ne!(S::nominal_name(), T::nominal_name());
+        assert_eq!(S::frame_name(), T::frame_name());
+        assert_eq!(
+            norito::schema::identity::frame_hash::<S>(),
+            norito::schema::identity::frame_hash::<T>(),
+        );
+    }
+
+    #[test]
+    fn musubi_query_sources_advertise_their_owned_page_frames() {
+        assert_owned_projection::<MusubiResolverIndexPageSource<'_>, MusubiResolverIndexPageV1>();
+        assert_owned_projection::<MusubiVersionPageSource<'_>, MusubiVersionPageV1>();
+        assert_owned_projection::<MusubiMaintainerPageSource<'_>, MusubiMaintainerPageV1>();
+        assert_owned_projection::<MusubiArchiveLocationPageSource<'_>, MusubiArchiveLocationPageV1>();
+        assert_owned_projection::<MusubiAliasHistoryPageSource<'_>, MusubiAliasHistoryPageV1>();
+        assert_owned_projection::<MusubiOrderedPackagePageSource<'_>, MusubiOrderedPackagePageV1>();
+    }
 }

@@ -97,6 +97,10 @@ impl ReserveTransactionForwarderPolicyV1 {
     }
 }
 /// Exact finalized reserve projection required to validate an operation.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transaction_forwarder::ReserveTransactionProjectionV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveTransactionProjectionV1 {
     /// Provider registration, bound to the separate finalized provider registry.
@@ -214,6 +218,8 @@ pub enum ReserveTransactionKindV1 {
     DecideAppeal,
 }
 /// Validated native reserve operation retained for isolated external signing.
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "sorafs_node::reserve_transaction_forwarder::ReserveOperationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub enum ReserveOperationV1 {
     /// Register one provider reserve partition.
@@ -697,6 +703,10 @@ struct StoredDeadReserveTransactionV1 {
     observed_finalized_height: u64,
     observed_finalized_block_hash: [u8; 32],
 }
+#[derive(norito::NoritoSchema)]
+#[norito_schema(
+    name = "sorafs_node::reserve_transaction_forwarder::ReserveTransactionForwarderCheckpointV1"
+)]
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ReserveTransactionForwarderCheckpointV1 {
     version: u8,
@@ -3250,5 +3260,76 @@ mod tests {
             poisoned.pending(1),
             Err(ReserveTransactionForwarderError::RuntimePoisoned)
         ));
+    }
+    #[test]
+    fn persisted_checkpoint_and_operation_frames_use_distinct_declared_identities() {
+        let context = provider_context(&key(1), &key(2), &key(3), 7, cursor(10, 0xA1));
+        let operation = request_operation(&context);
+        let directory = TempDir::new().unwrap();
+        let forwarder =
+            ReserveTransactionForwarder::open(directory.path(), forwarder_policy()).unwrap();
+        let id = forwarder
+            .enqueue_unsigned_operation(operation.clone(), &context)
+            .unwrap()
+            .operation_id();
+        let bytes = fs::read(
+            directory
+                .path()
+                .join(RESERVE_TRANSACTION_FORWARDER_CHECKPOINT_FILE_NAME_V1),
+        )
+        .unwrap();
+        let checkpoint =
+            decode_checkpoint(&bytes, forwarder_policy()).expect("persisted canonical checkpoint");
+        assert_eq!(checkpoint.pending.len(), 1);
+        assert_eq!(checkpoint.pending[0].operation, operation);
+        assert_eq!(norito::to_bytes(&checkpoint).unwrap(), bytes);
+        let operation_bytes = norito::to_bytes(&operation).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<ReserveOperationV1>(&operation_bytes).unwrap(),
+            operation
+        );
+        let projection_bytes = norito::to_bytes(&context.projection).unwrap();
+        assert_eq!(
+            norito::decode_from_bytes::<ReserveTransactionProjectionV1>(&projection_bytes).unwrap(),
+            context.projection
+        );
+        for (frame, identity) in [
+            (
+                bytes.as_slice(),
+                "sorafs_node::reserve_transaction_forwarder::ReserveTransactionForwarderCheckpointV1",
+            ),
+            (
+                operation_bytes.as_slice(),
+                "sorafs_node::reserve_transaction_forwarder::ReserveOperationV1",
+            ),
+            (
+                projection_bytes.as_slice(),
+                "sorafs_node::reserve_transaction_forwarder::ReserveTransactionProjectionV1",
+            ),
+        ] {
+            assert_eq!(
+                norito::core::Header::read(frame).unwrap().schema,
+                norito::core::schema_hash_for_name(identity)
+            );
+        }
+        assert!(matches!(
+            norito::decode_from_bytes::<ReserveTransactionForwarderCheckpointV1>(&operation_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            decode_checkpoint(&operation_bytes, forwarder_policy()),
+            Err(ReserveTransactionForwarderError::InvalidCheckpoint)
+        ));
+        drop(forwarder);
+        let reopened =
+            ReserveTransactionForwarder::open(directory.path(), forwarder_policy()).unwrap();
+        assert_eq!(
+            reopened
+                .operation_for_reconciliation(id)
+                .unwrap()
+                .request
+                .operation,
+            operation
+        );
     }
 }
