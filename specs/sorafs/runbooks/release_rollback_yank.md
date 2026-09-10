@@ -34,7 +34,7 @@ incident. Before changing any deployment pointer:
    issuer, provenance subject, release tag/commit binding, and reviewed signer
    fingerprint. Do not fall back to an unsigned local build.
 3. Extract the archive into a new empty directory and run
-   `sorafs_cli --help`, `sorafs_fetch --help`, and `sorafs-validate --help` from
+   `sorafs_cli --help`, `sorafs_fetch --help`, and `iroha --help` from
    that directory. Retain the clean-consumer smoke log.
 4. Confirm that its configuration/schema version is accepted by the reference
    deployment. V1 state is reseeded when incompatible; legacy codec or state

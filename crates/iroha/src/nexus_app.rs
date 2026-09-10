@@ -712,8 +712,8 @@ mod tests {
     use iroha_data_model::{
         account::address::{self, ChainDiscriminantGuard},
         asset::AssetDefinitionId,
-        prelude::Name,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use norito::json::Value as JsonValue;
     use std::{cell::RefCell, rc::Rc};

@@ -3,9 +3,10 @@
 use crate::{
     metadata::Metadata,
     nft::NftData,
-    prelude::{AccountId, DomainId, Hash, Json, Name, NumericSpec, PublicKey, Quantity, RoleId},
+    prelude::{AccountId, DomainId, Hash, Json, NumericSpec, PublicKey, Quantity, RoleId},
     rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
 };
+use iroha_model_base::name::Name;
 
 const OWNER_KEY: &str = "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016";
 const CONTROLLER_KEY: &str =

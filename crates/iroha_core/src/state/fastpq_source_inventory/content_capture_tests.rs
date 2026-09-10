@@ -11,8 +11,8 @@ use crate::{
 use iroha_data_model::{
     asset::AssetId,
     fastpq::{TransferDeltaTranscript, TransferTranscript},
-    state_path::StatePath,
 };
+use iroha_model_base::state_path::StatePath;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 

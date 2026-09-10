@@ -33,7 +33,7 @@ use iroha::{
         block::{BlockHeader, consensus_v2::SumeragiV2Status},
         nexus::FeeSponsorProgramId,
         peer::PeerId,
-        prelude::{Name, SignedTransaction},
+        prelude::SignedTransaction,
         soracloud::{
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SoraContainerManifestV1, SoraContainerRuntimeV1,
             SoraDeploymentBundleV1, SoraInrouGuestIsaV1, SoraInrouPlacementTargetV1,
@@ -43,6 +43,7 @@ use iroha::{
     },
 };
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::name::Name;
 use iroha_torii_shared::{
     AccountOnboardingCurrentStateRequestV1, AccountOnboardingCurrentStateResponseV1,
     FeeQuoteResponse,
@@ -3622,6 +3623,7 @@ fn require_vacant_unit(admitted: &HostAdmission, allow_failed: bool) -> Result<(
     require_no_live_target_references(admitted)
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn target_path_is_occupied(path: &Path, roots: &[&Path]) -> bool {
     // procfs appends this suffix to an unlinked referenced pathname. Strip it
     // before component matching, including an open descriptor of the root itself.
@@ -12834,6 +12836,57 @@ pub(super) enum PreparedMutationOutcome {
     Rejected(String),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CoreWriteRejectionReason {
+    Rejected,
+    Expired,
+}
+
+impl CoreWriteRejectionReason {
+    fn parse(evidence: &str) -> Result<Self> {
+        match evidence {
+            "Rejected" => Ok(Self::Rejected),
+            "Expired" => Ok(Self::Expired),
+            _ => Err(eyre!("unsupported core write rejection evidence")),
+        }
+    }
+
+    const fn recovery_class(self) -> &'static str {
+        match self {
+            Self::Rejected => "transaction_rejected",
+            Self::Expired => "transaction_expired",
+        }
+    }
+}
+
+fn core_prepared_write_outcome(
+    value: norito::json::Value,
+    prepared: &RetainedPreparedMutation,
+) -> Result<PreparedMutationOutcome> {
+    let outcome = value
+        .as_object()
+        .and_then(|object| object.get("recovery_outcome"))
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("prepared write child report omits recovery_outcome"))?;
+    let outcome = match outcome {
+        "Applied" => {
+            let evidence = canonical_json_report_bytes(&value)?;
+            PreparedMutationOutcome::Applied { value, evidence }
+        }
+        "Pending" => PreparedMutationOutcome::Pending,
+        "Rejected" => PreparedMutationOutcome::Rejected(
+            CoreWriteRejectionReason::parse(required_report_evidence(
+                &value,
+                "prepared write child",
+            )?)?
+            .recovery_class()
+            .to_owned(),
+        ),
+        _ => return Err(eyre!("prepared write child report has an invalid outcome")),
+    };
+    Ok(retain_applied_mutation_outcome(prepared, outcome))
+}
+
 #[derive(Clone, Copy)]
 enum PreparedChildProtocol {
     WriteCanary,
@@ -14184,18 +14237,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             outcome,
             Some(prepared),
         )?;
-        let outcome = match outcome {
-            "Applied" => {
-                let evidence = canonical_json_report_bytes(&value)?;
-                PreparedMutationOutcome::Applied { value, evidence }
-            }
-            "Pending" => PreparedMutationOutcome::Pending,
-            "Rejected" => PreparedMutationOutcome::Rejected(
-                required_report_evidence(&value, "prepared write child")?.to_owned(),
-            ),
-            _ => return Err(eyre!("prepared write child report has an invalid outcome")),
-        };
-        Ok(retain_applied_mutation_outcome(prepared, outcome))
+        core_prepared_write_outcome(value, prepared)
     }
 
     fn write_canary_base_args(
@@ -16274,19 +16316,6 @@ fn validate_prepared_write_report(
     expected_outcome: &str,
     retained: Option<&RetainedPreparedMutation>,
 ) -> Result<()> {
-    const PENDING_EVIDENCE: &[&str] = &[
-        "Absent",
-        "AcceptedNotVisible",
-        "OnboardingAliasConflict",
-        "OnboardingStateAbsent",
-        "Queued",
-        "Approved",
-        "Committed",
-        "Applied",
-        "Rejected",
-        "Expired",
-    ];
-    const REJECTED_EVIDENCE: &[&str] = &["Rejected", "Expired"];
     validate_common_report(
         value,
         "taira_write_canary",
@@ -16387,16 +16416,16 @@ fn validate_prepared_write_report(
             evidence.ok_or_else(|| eyre!("Applied write report omits committed evidence"))?,
             "prepared write committed evidence",
         )?,
-        "Pending" if applied_height.is_none() => validate_report_evidence_token(
-            evidence.ok_or_else(|| eyre!("Pending write report omits its evidence class"))?,
-            PENDING_EVIDENCE,
-            "prepared write Pending evidence",
-        )?,
-        "Rejected" if applied_height.is_none() => validate_report_evidence_token(
-            evidence.ok_or_else(|| eyre!("Rejected write report omits its evidence class"))?,
-            REJECTED_EVIDENCE,
-            "prepared write Rejected evidence",
-        )?,
+        "Pending" if applied_height.is_none() => {
+            crate::taira::PreparedWritePendingReason::parse(
+                evidence.ok_or_else(|| eyre!("Pending write report omits its evidence class"))?,
+            )?;
+        }
+        "Rejected" if applied_height.is_none() => {
+            CoreWriteRejectionReason::parse(
+                evidence.ok_or_else(|| eyre!("Rejected write report omits its evidence class"))?,
+            )?;
+        }
         _ => {
             return Err(eyre!(
                 "prepared write report height/evidence does not match its outcome"
@@ -21647,6 +21676,173 @@ time.sleep(30)
         );
     }
 
+    fn core_report_consumer_fixture(
+        report: &norito::json::Value,
+        bytes: Vec<u8>,
+    ) -> (AdmittedReset, RetainedPreparedMutation, String) {
+        let object = report.as_object().unwrap();
+        let mut admitted = admitted_reset_fixture();
+        let root = object
+            .get("public_root")
+            .and_then(norito::json::Value::as_str)
+            .unwrap();
+        admitted.inventory.validator_clients[0].probe_origin = format!("{root}/");
+        admitted.authorization_sha256 = object
+            .get("authorization_sha256")
+            .and_then(norito::json::Value::as_str)
+            .unwrap()
+            .to_owned();
+        admitted.inventory.authorization_nonce = object
+            .get("authorization_nonce")
+            .and_then(norito::json::Value::as_str)
+            .unwrap()
+            .to_owned();
+        admitted.authorization.claims.execution_expires_at_unix_ms = object
+            .get("execution_expires_at_unix_ms")
+            .and_then(norito::json::Value::as_u64)
+            .unwrap();
+        let key = object
+            .get("idempotency_key")
+            .and_then(norito::json::Value::as_str)
+            .unwrap();
+        let retained = RetainedPreparedMutation {
+            state: "submitted".to_owned(),
+            sha256: sha256_hex(&bytes),
+            transaction_hash: prepared_envelope_transaction_hash(&bytes).unwrap(),
+            bytes,
+        };
+        (admitted, retained, key.to_owned())
+    }
+
+    #[test]
+    fn every_core_pending_report_variant_reaches_the_exact_host_consumer() {
+        for reason in crate::taira::PreparedWritePendingReason::ALL
+            .iter()
+            .copied()
+        {
+            let cases = crate::taira::core_pending_report_cases_for_test(reason).unwrap();
+            assert_eq!(
+                cases.len(),
+                4,
+                "three operations including both onboarding forms"
+            );
+            for (kind, bytes, report) in cases {
+                let (admitted, retained, key) = core_report_consumer_fixture(&report, bytes);
+                validate_prepared_write_report(
+                    &report,
+                    &admitted,
+                    "pre_edge",
+                    &kind,
+                    &key,
+                    "Pending",
+                    Some(&retained),
+                )
+                .unwrap_or_else(|error| panic!("{kind}/{reason:?}: {error:#}"));
+                for unknown in [
+                    norito::json::Value::from("queued"),
+                    norito::json::Value::from("ObservationDeadlineReached"),
+                    norito::json::Value::from("SubmissionOutcomeUnknown"),
+                    norito::json::Value::from("Unknown"),
+                    norito::json::Value::from("Queued "),
+                    norito::json::Value::from(1_u64),
+                    norito::json::Value::Null,
+                    norito::json!([]),
+                    norito::json!({}),
+                ] {
+                    let mut changed = report.clone();
+                    changed
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("evidence".to_owned(), unknown.clone());
+                    assert!(
+                        validate_prepared_write_report(
+                            &changed,
+                            &admitted,
+                            "pre_edge",
+                            &kind,
+                            &key,
+                            "Pending",
+                            Some(&retained),
+                        )
+                        .is_err(),
+                        "wrong typed evidence {unknown:?} for {kind}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn core_terminal_reports_map_to_exact_executor_recovery_classes() {
+        for (evidence, expected_class) in [
+            ("Rejected", "transaction_rejected"),
+            ("Expired", "transaction_expired"),
+        ] {
+            let mut operations = BTreeSet::new();
+            for (kind, bytes, report) in
+                crate::taira::core_rejected_report_cases_for_test(evidence).unwrap()
+            {
+                let (admitted, retained, key) = core_report_consumer_fixture(&report, bytes);
+                if retained.transaction_hash.is_empty() {
+                    continue; // A current-state proof has no transaction to reject or expire.
+                }
+                operations.insert(kind.clone());
+                validate_prepared_write_report(
+                    &report,
+                    &admitted,
+                    "pre_edge",
+                    &kind,
+                    &key,
+                    "Rejected",
+                    Some(&retained),
+                )
+                .unwrap();
+                let PreparedMutationOutcome::Rejected(class) =
+                    core_prepared_write_outcome(report.clone(), &retained).unwrap()
+                else {
+                    panic!("authenticated terminal report must remain terminal");
+                };
+                assert_eq!(class, expected_class);
+                super::super::executor_model::tests::assert_core_recovery_rejection_for_test(
+                    &class,
+                );
+                for invalid in [
+                    "rejected",
+                    "expired",
+                    "transaction_rejected",
+                    "transaction_expired",
+                    "Rejected ",
+                ] {
+                    let mut changed = report.clone();
+                    changed
+                        .as_object_mut()
+                        .unwrap()
+                        .insert("evidence".to_owned(), invalid.into());
+                    assert!(
+                        validate_prepared_write_report(
+                            &changed,
+                            &admitted,
+                            "pre_edge",
+                            &kind,
+                            &key,
+                            "Rejected",
+                            Some(&retained),
+                        )
+                        .is_err(),
+                        "only exact authenticated report labels may map into recovery"
+                    );
+                }
+            }
+            assert_eq!(
+                operations,
+                ["onboarding", "faucet", "write_canary"]
+                    .map(str::to_owned)
+                    .into_iter()
+                    .collect::<BTreeSet<_>>()
+            );
+        }
+    }
+
     fn prepared_write_report_fixture(
         admitted: &AdmittedReset,
         kind: &str,
@@ -22748,7 +22944,12 @@ time.sleep(30)
             sha256: prepared.prepared_sha256.clone(),
             transaction_hash: String::new(),
         };
-        for evidence in ["OnboardingAliasConflict", "OnboardingStateAbsent"] {
+        for evidence in [
+            "OnboardingAliasConflict",
+            "OnboardingStateAbsent",
+            "AppliedEvidencePending",
+            "ObservationUnavailable",
+        ] {
             let report = norito::json!({
                 "command": "taira_write_canary",
                 "status": "ok",

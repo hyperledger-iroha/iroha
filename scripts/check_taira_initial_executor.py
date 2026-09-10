@@ -5,6 +5,7 @@ Requires Python 3.10+ and repository sources; no environment inputs or writes.
 This early source check supplements the authoritative Rust census and execution tests.
 It accepts the concrete registry grammar used by these two source files and fails
 closed on family entries it cannot parse, duplicate types, or missing dispositions.
+Removed citizen-bond operations must stay absent from both production registries.
 """
 from __future__ import annotations
 
@@ -15,12 +16,9 @@ import re
 
 CLOSED = {
     "soracloud": {"RecordSoracloudMailboxMessage", "ApplySoracloudOrderedMailboxResult"},
-    "sorafs": {
-        "RegisterProviderOwner", "UnregisterProviderOwner", "RegisterSorafsCitizenBond",
-        "RotateSorafsCitizenBondAuthorization", "RequestSorafsCitizenBondExit",
-    },
+    "sorafs": {"RegisterProviderOwner", "UnregisterProviderOwner"},
 }
-UNAVAILABLE = {
+RETIRED_SORAFS_INSTRUCTIONS = {
     "RegisterSorafsCitizenBond", "RotateSorafsCitizenBondAuthorization",
     "RequestSorafsCitizenBondExit",
 }
@@ -89,6 +87,8 @@ def census(registry_source: str, wire_source: str) -> dict:
         wire_types = re.findall(rf"built_in_wire_id!\(\s*{family}::(\w+)\s*=>", wire)
         if len(types) != len(set(types)) or len(wire_types) != len(set(wire_types)):
             raise ValueError(f"{family}: duplicate native instruction type")
+        if family == "sorafs" and RETIRED_SORAFS_INSTRUCTIONS.intersection(types + wire_types):
+            raise ValueError("sorafs: retired citizen-bond operations must not be registered")
         if set(types) != set(wire_types):
             raise ValueError(f"{family}: wire/dispatch mismatch: {sorted(set(types) ^ set(wire_types))}")
         if not rows or any(row[2] not in {"CoreAuthorized", "Closed"} for row in rows):
@@ -96,10 +96,9 @@ def census(registry_source: str, wire_source: str) -> dict:
         actual_closed = {row[1] for row in rows if row[2] == "Closed"}
         if actual_closed != closed:
             raise ValueError(f"{family}: explicit closed operation set changed")
-        for handler, name, disposition in rows:
-            expected = "unavailable_instruction" if name in UNAVAILABLE else "dispatch_instruction"
-            if handler != expected or (handler == "unavailable_instruction" and disposition != "Closed"):
-                raise ValueError(f"{family}::{name}: unexpected typed handler or unavailable admission")
+        for handler, name, _ in rows:
+            if handler != "dispatch_instruction":
+                raise ValueError(f"{family}::{name}: unexpected typed handler")
         result[family] = {"wire": len(wire_types), "admitted": len(rows) - len(closed), "closed": len(closed)}
     return result
 
@@ -115,7 +114,12 @@ def mutation_tests(registry: str, wire: str) -> int:
         (registry, wire + '\nbuilt_in_wire_id!(soracloud::UnreviewedNewInstruction => "new"),\n'),
         (registry.replace(marker, marker + "\n" + marker), wire),
         (registry.replace(marker, marker.replace("CoreAuthorized", "Closed")), wire),
+        (registry.replace(marker, marker.replace("dispatch_instruction", "unavailable_instruction")), wire),
     ]
+    for name in sorted(RETIRED_SORAFS_INSTRUCTIONS):
+        row = f"dispatch_instruction::<iroha_data_model::isi::sorafs::{name}> => CoreAuthorized,"
+        wire_entry = f'\nbuilt_in_wire_id!(sorafs::{name} => "iroha.instruction.v1::sorafs::{name}"),\n'
+        mutations.append((registry.replace(marker, marker + "\n" + row), wire + wire_entry))
     for index, (changed_registry, changed_wire) in enumerate(mutations):
         try:
             census(changed_registry, changed_wire)

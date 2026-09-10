@@ -2,6 +2,32 @@
 mod strict_verifying_key_preparation_tests {
     use super::*;
 
+    #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
+    #[test]
+    fn verifier_key_cache_reuses_exact_key_and_rejects_empty_substitution() {
+        let params: PastaParams = pasta_params_new(5);
+        let backend = "halo2/pasta/cache-test";
+        let circuit = pasta_tiny::Add;
+        let canonical = halo2_backend::keygen_vk(&params, &circuit).expect("canonical vk");
+        let mut bytes = zk1::wrap_start();
+        zk1::wrap_append_ipa_k(&mut bytes, 5);
+        zk1::wrap_append_vk_pasta(&mut bytes, &canonical);
+        let supplied = VerifyingKeyBox::new(backend.to_owned(), bytes);
+        let resolve = |key: &VerifyingKeyBox| {
+            resolve_vk_cached(backend, &params, key, &circuit, || {
+                halo2_backend::keygen_vk(&params, &circuit)
+            })
+        };
+        let first = resolve(&supplied).expect("first canonical key");
+        let second = resolve(&supplied).expect("reused canonical key");
+        assert!(Arc::ptr_eq(&first, &second));
+        let empty = VerifyingKeyBox::new(backend.to_owned(), Vec::new());
+        assert!(
+            resolve(&empty).is_err(),
+            "a cache hit must not replace absent key bytes"
+        );
+    }
+
     fn portable_off_ledger_record() -> VerifyingKeyRecord {
         let mut record = VerifyingKeyRecord::new(
             1,

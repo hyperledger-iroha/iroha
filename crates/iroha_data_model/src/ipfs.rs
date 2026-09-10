@@ -1,7 +1,7 @@
 //! Module with [`IpfsPath`] and related impls.
 pub use self::model::*;
-use crate::error::ParseError;
 use iroha_data_model_derive::model;
+use iroha_model_base::error::ParseError;
 use iroha_primitives::conststr::ConstString;
 use norito::{Decode, codec::Encode};
 use std::{format, str::FromStr, string::String, vec::Vec};

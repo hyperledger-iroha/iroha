@@ -19,6 +19,7 @@ use iroha::{
     },
     executor_data_model::isi::multisig::*,
 };
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{
     ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in,

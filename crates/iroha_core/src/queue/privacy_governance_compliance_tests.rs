@@ -134,8 +134,11 @@ async fn lane_compliance_policy_blocks_transactions() {
     let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let (allowed_id, allowed_keypair) = gen_account_in("wonderland");
+    register_test_authority(&state, &allowed_id);
     let (denied_id, denied_keypair) = gen_account_in("wonderland");
+    register_test_authority(&state, &denied_id);
     let (confidential_id, confidential_keypair) = gen_account_in("wonderland");
+    register_test_authority(&state, &confidential_id);
     // Build a Merkle commitment + witness for privacy-gated policies
     let first_leaf = [0x01_u8; 32];
     let proof = MerkleProof::from_audit_path_bytes(0, vec![[0x02_u8; 32]]);

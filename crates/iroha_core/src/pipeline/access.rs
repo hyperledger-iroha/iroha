@@ -4,6 +4,7 @@
 //! scheduler described in `new_pipeline.md`.
 use core::fmt::Write as _;
 use iroha_crypto::Hash as IrohaHash;
+use iroha_model_base::name::Name;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{Arc, OnceLock},
@@ -2589,6 +2590,7 @@ mod tests {
             TransactionBuilder,
         },
     };
+    use iroha_model_base::state_path::StatePath;
     use iroha_primitives::json::Json;
     const LITERAL_SECTION_MAGIC: [u8; 4] = *b"LTLB";
     const TEST_GAS_LIMIT: u64 = 50_000_000;

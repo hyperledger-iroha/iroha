@@ -25,12 +25,12 @@ use iroha_data_model::{
         staking::{BondPublicLaneStake, RegisterPublicLaneValidator},
     },
     metadata::Metadata,
-    name::Name,
     nexus::LaneId,
     peer::PeerId,
     permission::Permission,
 };
 use iroha_executor_data_model::permission::governance::CanManageConsensusKeys;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::json::{self, Value};
 use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};

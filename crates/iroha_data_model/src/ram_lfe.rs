@@ -1,11 +1,12 @@
 //! Generic hidden-program RAM-LFE policy and receipt types.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, name::Name, proof::ProofBox};
+use crate::{account::AccountId, proof::ProofBox};
 use iroha_crypto::{
     Algorithm, Hash, PolicyCommitment, PublicKey, RamLfeBackend, RamLfeVerificationMode, Signature,
     SignatureOf,
 };
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{fmt, str::FromStr, string::String, vec::Vec};

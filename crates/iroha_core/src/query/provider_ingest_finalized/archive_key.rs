@@ -1,8 +1,18 @@
 /// Exact finalized identity of one archived committed view.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1")]
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(
+    name = "iroha_core::query::provider_ingest_finalized::ProviderIngestFinalizedArchiveKeyV1"
 )]
 pub struct ProviderIngestFinalizedArchiveKeyV1 {
     /// Exact genesis-derived network containing the committed state.

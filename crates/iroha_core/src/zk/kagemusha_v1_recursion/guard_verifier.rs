@@ -98,12 +98,11 @@ pub(super) struct KagemushaGuardVerifierMaterialV1<'a> {
     pub(super) provider_policy_root: DigestV1,
 }
 
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_recursion::guard_verifier::GuardProofWire",
     frame = "iroha.kagemusha.core.v1.monetary-guard-proof"
 )]
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
 struct GuardProofWire {
     version: u16,
     binding: KagemushaGuardVerifierBindingV1,
@@ -617,6 +616,10 @@ fn public_column<F: KagemushaPoseidonFieldV1>(
 }
 
 #[cfg(test)]
+#[path = "frame_identity_tests.rs"]
+pub(super) mod frame_identity_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::zk::kagemusha_v1_state::KagemushaTransitionKindV1;
@@ -770,6 +773,14 @@ mod tests {
     }
 
     #[test]
+    fn captured_recursive_guard_frame_identity() {
+        let (_, _, wire, lengths) = fixture();
+        super::frame_identity_tests::check("GuardProofWire", &wire);
+        let bytes = norito::encode_canonical(&wire).unwrap();
+        assert!(decode_wire(&bytes, lengths).unwrap() == wire);
+    }
+
+    #[test]
     fn guard_archive_canonical_roundtrip_does_not_authorize_mock_proofs() {
         let (_, normalized, wire, lengths) = fixture();
         validate_normalized_release(&normalized, &wire.binding, EMPTY).expect("release projection");
@@ -862,7 +873,15 @@ mod tests {
             eq_history: wire.eq_history,
             ep_history: wire.ep_history,
         };
-        let bytes = norito::encode_canonical(&old).expect("old archive shape");
+        let (payload, flags) = norito::codec::encode_with_header_flags(&old);
+        let bytes = norito::core::frame_bare_with_header_flags::<GuardProofWire>(&payload, flags)
+            .expect("frame old archive payload under the actual guard owner");
+        let view = norito::core::from_bytes_view(&bytes).expect("valid frame and checksum");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<GuardProofWire>()
+        );
+        assert_eq!(view.as_bytes(), payload);
         assert!(decode_wire(&bytes, lengths).is_err());
     }
 

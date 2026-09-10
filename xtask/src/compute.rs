@@ -122,10 +122,10 @@ fn route_report(
     targets: SloTargets,
     samples: usize,
     price_families: &BTreeMap<
-        iroha_data_model::name::Name,
+        iroha_model_base::name::Name,
         iroha_data_model::compute::ComputePriceWeights,
     >,
-    default_price_family: iroha_data_model::name::Name,
+    default_price_family: iroha_model_base::name::Name,
 ) -> Result<RouteReport> {
     let mut durations = Vec::with_capacity(samples);
     let mut egress_bytes = Vec::with_capacity(samples);

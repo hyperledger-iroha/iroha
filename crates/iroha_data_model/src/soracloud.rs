@@ -11,7 +11,6 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
-    name::Name,
     nexus::LaneId,
     peer::PeerId,
     proof::ProofAttachment,
@@ -36,6 +35,7 @@ use iroha_crypto::{
         validate_public_key as validate_bfv_public_key,
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, NumericOperationError, Quantity},

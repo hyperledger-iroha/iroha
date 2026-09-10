@@ -6,7 +6,7 @@ use super::{
 };
 use crate::state::{State, TransactionsBlockError};
 use iroha_crypto::HashOf;
-use iroha_data_model::state_path::StatePath;
+use iroha_model_base::state_path::StatePath;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

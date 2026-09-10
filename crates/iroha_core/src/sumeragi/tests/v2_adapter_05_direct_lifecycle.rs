@@ -1269,7 +1269,7 @@ fn ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit() {
         let (tag, manifest, _durable, validated) =
             advance_direct_validation_fixture_to_durable(&mut adapter, 0xBD);
         if phase == wire::GlobalPhase::Commit {
-            let prepare = wire::QuorumCertificate {
+            let mut prepare = wire::QuorumCertificate {
                 round: manifest.round,
                 proposal_round: manifest.round,
                 phase: wire::GlobalPhase::Prepare,
@@ -1278,6 +1278,11 @@ fn ready_validate_crash_after_wal_append_replays_exact_prepare_and_commit() {
                 signers: vec![0, 1, 2],
                 aggregate_signature: vec![0xBD; 96],
             };
+            #[cfg(feature = "bls")]
+            {
+                let (_, keys, _) = authenticated_context();
+                authenticate_qc(&mut prepare, &keys);
+            }
             let observed = adapter
                 .receive_authenticated(AuthenticatedConsensusMessage::for_test(
                     wire::ConsensusMessageV2::new(

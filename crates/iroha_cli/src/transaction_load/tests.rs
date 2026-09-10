@@ -44,6 +44,8 @@ fn arguments(root: &Path) -> Args {
         "/usr/bin/python3",
         "--resource-worker",
         "/tmp/resource_probe_worker.py",
+        "--resource-budget-sha256",
+        &"a".repeat(64),
         "--resource-config",
         "/tmp/runtime-only-probe-config.json",
         "--resource-capture-dir",
@@ -579,7 +581,13 @@ fn strict_trace_encoding_and_publication_require_complete_rows_and_absent_paths(
         row.submission_finished = true;
         row.applied = Some((row.plan.scheduled_offset_ns + 1000, 1));
     }
-    publish_trace(&args.trace_out, &args, &rows).expect("publish exact trace");
+    publish_trace(
+        &args.trace_out,
+        &args,
+        &rows,
+        allocation::tests::writers(MAX_FILE_BYTES, MAX_FILE_BYTES).trace,
+    )
+    .expect("publish exact trace");
     let value: Value = json::from_slice(&std::fs::read(&args.trace_out).expect("trace bytes"))
         .expect("strict JSON");
     assert_eq!(
@@ -609,7 +617,15 @@ fn strict_trace_encoding_and_publication_require_complete_rows_and_absent_paths(
         6
     );
     let original = std::fs::read(&args.trace_out).expect("original bytes");
-    assert!(publish_trace(&args.trace_out, &args, &rows).is_err());
+    assert!(
+        publish_trace(
+            &args.trace_out,
+            &args,
+            &rows,
+            allocation::tests::writers(MAX_FILE_BYTES, MAX_FILE_BYTES).trace
+        )
+        .is_err()
+    );
     assert_eq!(
         std::fs::read(&args.trace_out).expect("retained bytes"),
         original
@@ -618,7 +634,7 @@ fn strict_trace_encoding_and_publication_require_complete_rows_and_absent_paths(
     assert!(rows[0].trace_value().is_err());
     let mut bytes = Vec::new();
     let mut written = MAX_FILE_BYTES;
-    assert!(bounded_write(&mut bytes, &mut written, b"x").is_err());
+    assert!(bounded_write(&mut bytes, &mut written, b"x", MAX_FILE_BYTES).is_err());
     assert!(bytes.is_empty());
 }
 
@@ -630,7 +646,12 @@ fn diagnostic_journal_retains_scheduled_records_and_never_replaces_an_owned_path
         .canonicalize()
         .expect("canonical journal parent")
         .join("journal.jsonl");
-    let journal = Journal::start(&path, 1).expect("new journal");
+    let journal = Journal::start(
+        &path,
+        1,
+        allocation::tests::writers(MAX_FILE_BYTES, MAX_FILE_BYTES).journal,
+    )
+    .expect("new journal");
     journal
         .blocking_record(norito::json!({"event": "scheduled", "sequence": 1}))
         .expect("schedule record");
@@ -654,7 +675,14 @@ fn diagnostic_journal_retains_scheduled_records_and_never_replaces_an_owned_path
             .count(),
         2
     );
-    assert!(Journal::start(&path, 1).is_err());
+    assert!(
+        Journal::start(
+            &path,
+            1,
+            allocation::tests::writers(MAX_FILE_BYTES, MAX_FILE_BYTES).journal
+        )
+        .is_err()
+    );
     assert_eq!(std::fs::read(&path).expect("retained journal"), original);
 }
 
@@ -788,6 +816,8 @@ fn root_command_routes_load_through_the_existing_transaction_surface() {
         "/usr/bin/python3",
         "--resource-worker",
         "/tmp/resource_probe_worker.py",
+        "--resource-budget-sha256",
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         "--resource-config",
         "/tmp/runtime-only-probe-config.json",
         "--resource-capture-dir",
@@ -936,4 +966,168 @@ fn virtual_clock_yields_before_advancing_and_rechecks_new_waiters() {
     let mut due = clock.clone().sleep(50);
     assert_eq!(due.as_mut().poll(&mut context), Poll::Ready(50));
     assert_eq!(clock.now(), 50);
+}
+
+#[test]
+fn trace_allocation_includes_header_rows_and_closing_bytes_without_partial_publication() {
+    let dir = tempfile::tempdir().unwrap();
+    let args = arguments(dir.path());
+    let schedule = Schedule::from_args(&args).unwrap();
+    let mut rows = schedule.plan(&args.seed, 1).unwrap();
+    for (index, row) in rows.iter_mut().enumerate() {
+        row.hash = Some(exact_hash(index as u8 + 1));
+        row.offer_ns = Some(row.plan.scheduled_offset_ns);
+        row.acknowledgment_ns = Some(row.plan.scheduled_offset_ns + 2000);
+        row.submission_finished = true;
+        row.applied = Some((row.plan.scheduled_offset_ns + 1000, 1));
+    }
+    let baseline_path = dir.path().canonicalize().unwrap().join("baseline.json");
+    publish_trace(
+        &baseline_path,
+        &args,
+        &rows,
+        allocation::tests::writers(1, MAX_FILE_BYTES).trace,
+    )
+    .unwrap();
+    let baseline = std::fs::read(&baseline_path).unwrap();
+    assert!(baseline.ends_with(b"]}\n"));
+    let parsed: Value = json::from_slice(&baseline).unwrap();
+    let decoded_rows = parsed.get("transactions").unwrap().as_array().unwrap();
+    assert_eq!(decoded_rows.len(), rows.len());
+    for (decoded, row) in decoded_rows.iter().zip(&rows) {
+        assert_eq!(*decoded, row.trace_value().unwrap());
+    }
+    for cap in [baseline.len(), baseline.len() - 1, 1] {
+        let path = dir
+            .path()
+            .canonicalize()
+            .unwrap()
+            .join(format!("trace-{cap}.json"));
+        let result = publish_trace(
+            &path,
+            &args,
+            &rows,
+            allocation::tests::writers(1, cap).trace,
+        );
+        let stage = path.with_file_name(format!("trace-{cap}.json.collecting"));
+        if cap == baseline.len() {
+            assert!(result.is_ok());
+            assert_eq!(std::fs::read(&path).unwrap(), baseline);
+            assert!(!stage.exists());
+        } else {
+            assert!(result.is_err());
+            assert!(!path.exists());
+            assert!(stage.is_file());
+            assert!(std::fs::metadata(&stage).unwrap().len() <= cap as u64);
+            let before = std::fs::read(&stage).unwrap();
+            assert!(
+                publish_trace(
+                    &path,
+                    &args,
+                    &rows,
+                    allocation::tests::writers(1, MAX_FILE_BYTES).trace
+                )
+                .is_err()
+            );
+            assert_eq!(std::fs::read(&stage).unwrap(), before);
+        }
+    }
+}
+
+#[test]
+fn trusted_budget_digest_is_required_and_validated_before_any_output_owner() {
+    let command = <TestCli as clap::CommandFactory>::command();
+    let hash_arg = command
+        .get_arguments()
+        .find(|arg| arg.get_id() == "resource_budget_sha256")
+        .unwrap();
+    assert!(hash_arg.is_required_set());
+    let dir = tempfile::tempdir().unwrap();
+    let mut args = arguments(dir.path());
+    let schedule = Schedule::from_args(&args).unwrap();
+    assert!(allocation::Expected::new(&args, &schedule, NS).is_ok());
+    for invalid in [
+        String::new(),
+        "a".repeat(63),
+        "a".repeat(65),
+        "A".repeat(64),
+        "g".repeat(64),
+    ] {
+        args.resource.resource_budget_sha256 = invalid;
+        assert!(allocation::Expected::new(&args, &schedule, NS).is_err());
+        assert!(!args.trace_out.exists());
+        assert!(!args.diagnostic_out.exists());
+    }
+}
+
+#[test]
+fn invalid_client_context_fails_before_collection_or_output_admission() {
+    use iroha_i18n::{Bundle, Language, Localizer};
+
+    struct Context {
+        config: Config,
+        i18n: Localizer,
+        printed: usize,
+    }
+    impl RunContext for Context {
+        fn config(&self) -> &Config {
+            &self.config
+        }
+        fn transaction_metadata(&self) -> Option<&Metadata> {
+            None
+        }
+        fn input_instructions(&self) -> bool {
+            false
+        }
+        fn output_instructions(&self) -> bool {
+            false
+        }
+        fn i18n(&self) -> &Localizer {
+            &self.i18n
+        }
+        fn print_data<V: norito::json::JsonSerialize + ?Sized>(&mut self, _data: &V) -> Result<()> {
+            self.printed += 1;
+            Ok(())
+        }
+        fn println(&mut self, _data: impl std::fmt::Display) -> Result<()> {
+            self.printed += 1;
+            Ok(())
+        }
+    }
+
+    for invalid_endpoint in [true, false] {
+        let root = tempfile::tempdir().expect("collector fixture directory");
+        let mut args = arguments(root.path());
+        // The real run must pass schedule/resource geometry before SDK admission.
+        args.measurement_seconds = "20".to_owned();
+        let mut config = crate::fallback_config();
+        if invalid_endpoint {
+            config.torii_api_url = "ftp://127.0.0.1/".parse().expect("fixture URL");
+        } else {
+            config.account_chain_discriminant = 0;
+        }
+        let mut context = Context {
+            config,
+            i18n: Localizer::new(Bundle::Cli, Language::English),
+            printed: 0,
+        };
+        let error = args
+            .run(&mut context)
+            .expect_err("invalid first-release client context must fail before collection");
+        assert!(
+            matches!(
+                error.downcast_ref::<iroha::Error>(),
+                Some(iroha::Error::Context(_))
+            ),
+            "preserve the real builder context error, not a later worker failure: {error:#}"
+        );
+        assert_eq!(context.printed, 0);
+        assert!(
+            std::fs::read_dir(root.path())
+                .expect("collector fixture census")
+                .next()
+                .is_none(),
+            "invalid context must not create a journal, trace, or other output"
+        );
+    }
 }

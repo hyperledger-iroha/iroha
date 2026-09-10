@@ -9,11 +9,11 @@ use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use crate::{
     account::AccountId,
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
-    name::Name,
     sorafs::pin_registry::{ManifestAliasBinding, StorageClass},
 };
 use core::{fmt, str::FromStr};
 use iroha_crypto::{Algorithm, KeyPair, PublicKey, SignatureOf};
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::collections::BTreeSet;

@@ -36,9 +36,8 @@ struct AdvertReplayHighWater {
     issued_at: u64,
     fingerprint: [u8; FINGERPRINT_LEN],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_torii::sorafs::discovery::ProviderAdvertReplayEntryV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ProviderAdvertReplayEntryV1 {
     version: u8,
     provider_id: [u8; 32],
@@ -1306,6 +1305,14 @@ mod capability_name_tests {
 #[cfg(test)]
 mod replay_checkpoint_tests {
     use super::*;
+    fn private_tempdir() -> tempfile::TempDir {
+        // Resolve only the operating system's temporary root. Keep deliberate checkpoint
+        // and parent symlinks intact so the no-follow tests exercise the actual boundary.
+        let root = std::env::temp_dir()
+            .canonicalize()
+            .expect("resolve system temporary directory");
+        tempfile::tempdir_in(root).expect("private temporary directory")
+    }
     fn max_entries(value: usize) -> NonZeroUsize {
         NonZeroUsize::new(value).expect("test checkpoint capacity is non-zero")
     }
@@ -1329,7 +1336,11 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_rejects_empty_payload() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        crate::frame_test_support::assert_current_frame(
+            &entry(0x42, 7),
+            "iroha_torii::sorafs::discovery::ProviderAdvertReplayEntryV1",
+        );
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         write_private(
             &path,
@@ -1343,7 +1354,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn persistent_cache_rejects_configured_limit_above_hard_bound() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let err = ProviderAdvertCache::new_persistent(
             [],
             Arc::new(AdmissionRegistry::empty()),
@@ -1362,7 +1373,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_lock_rejects_second_owner_until_first_drops() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         let first = checkpoint_store(path.clone(), 4);
         assert!(matches!(
@@ -1377,7 +1388,7 @@ mod replay_checkpoint_tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_lock_refuses_hard_links() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         let lock_path = path.with_added_extension("lock");
         let alias = temp.path().join("replay.lock.alias");
@@ -1391,7 +1402,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_preflights_declared_entry_count() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         write_private(&path, &to_bytes(&vec![entry(1, 10), entry(2, 20)]).unwrap());
         let store = checkpoint_store(path, 1);
@@ -1405,7 +1416,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_rejects_oversized_file_before_decode() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         let store = checkpoint_store(path.clone(), 1);
         let oversized = vec![0u8; usize::try_from(store.maximum_bytes()).unwrap() + 1];
@@ -1419,7 +1430,7 @@ mod replay_checkpoint_tests {
     #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_read_and_write_refuse_hard_links() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         let alias = temp.path().join("replay.alias.to");
         let store = checkpoint_store(path.clone(), 4);
@@ -1443,7 +1454,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_rejects_unknown_version_before_admission_lookup() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         let mut unsupported = entry(1, 10);
         unsupported.version = REPLAY_CHECKPOINT_VERSION_V1 + 1;
@@ -1456,7 +1467,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_rejects_unsorted_and_duplicate_provider_ids() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let store = checkpoint_store(temp.path().join("replay.to"), 4);
         for entries in [
             vec![entry(2, 10), entry(1, 20)],
@@ -1471,7 +1482,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_rejects_decodable_noncanonical_layout() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         let entries = vec![entry(1, 10)];
         let canonical = to_bytes(&entries).unwrap();
@@ -1493,7 +1504,7 @@ mod replay_checkpoint_tests {
     }
     #[test]
     fn checkpoint_rejects_unadmitted_identity() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         write_private(&path, &to_bytes(&vec![entry(3, 10)]).unwrap());
         let store = checkpoint_store(path, 4);
@@ -1508,7 +1519,7 @@ mod replay_checkpoint_tests {
     #[test]
     fn checkpoint_read_and_write_refuse_symlinks() {
         use std::os::unix::fs::symlink;
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let external = temp.path().join("external.to");
         let checkpoint = temp.path().join("replay.to");
         let sentinel = b"do not replace";
@@ -1535,7 +1546,7 @@ mod replay_checkpoint_tests {
     #[test]
     fn checkpoint_write_refuses_symlinked_parent() {
         use std::os::unix::fs::symlink;
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let real_parent = temp.path().join("real-parent");
         let linked_parent = temp.path().join("linked-parent");
         fs::create_dir(&real_parent).expect("create real checkpoint parent");
@@ -1552,7 +1563,7 @@ mod replay_checkpoint_tests {
     #[cfg(unix)]
     #[test]
     fn checkpoint_rejects_permissive_file_mode() {
-        let temp = tempfile::tempdir().expect("temporary directory");
+        let temp = private_tempdir();
         let path = temp.path().join("replay.to");
         fs::write(&path, to_bytes(&vec![entry(1, 10)]).unwrap()).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();

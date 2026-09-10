@@ -24,10 +24,10 @@ use iroha_data_model::{
     block::BlockHeader,
     domain::{Domain, DomainId},
     isi::{InstructionBox, governance::RegisterCitizen},
-    name::Name,
     permission::Permission,
     smart_contract::manifest::ContractManifest,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::ALICE_ID;
 use nonzero_ext::nonzero;
@@ -1694,6 +1694,7 @@ async fn standalone_plain_ballot_rejects_stored_typed_proposal_fingerprint() {
             duration_blocks: "600".to_owned(),
             direction: "Aye".to_owned(),
         };
+        crate::frame_test_support::assert_current_frame(&dto, "iroha_torii::gov::PlainBallotDto");
         let error = handle_gov_ballot_plain_with_policy(
             Arc::clone(&state),
             &authenticated,
@@ -1702,11 +1703,11 @@ async fn standalone_plain_ballot_rejects_stored_typed_proposal_fingerprint() {
         )
         .await
         .expect_err("typed proposal alias must not enter the standalone plain ballot path");
-        assert!(
-            error
-                .to_string()
-                .contains("authenticated Parliament lifecycle"),
-            "unexpected error for {selector:?}: {error:?}"
+        let message = conversion_message(error);
+        assert_eq!(
+            message,
+            "typed proposal fingerprints use the authenticated Parliament lifecycle, not standalone referendum ballots",
+            "unexpected typed rejection for {selector:?}"
         );
     }
 }
@@ -2703,3 +2704,4 @@ async fn ballot_zk_v1_rejects_partial_lock_hints() {
 }
 include!("ballot_v1_strictness_tests.rs");
 include!("ballotproof_shape_tests.rs");
+include!("norito_frame_tests.rs");

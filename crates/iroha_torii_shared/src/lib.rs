@@ -1227,13 +1227,13 @@ mod tests {
         asset::AssetDefinitionId,
         block::BlockHeader,
         domain::DomainId,
-        name::Name,
         nexus::{DataSpaceId, FeeDebitSource, FeeSponsorProgramId},
         prelude::Quantity,
         transaction::{
             FeeChargeKind, FeeChargeLimit, FeePaymentIntent, TransactionBuilder, TransactionPayload,
         },
     };
+    use iroha_model_base::name::Name;
     use std::num::NonZeroU64;
 
     fn checked_test_keypair(seed: u8) -> KeyPair {

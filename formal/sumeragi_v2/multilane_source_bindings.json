@@ -458,7 +458,7 @@
         {
           "path": "ci/run_native_amx_v2_grouped_sdk_parity.sh",
           "required_tokens": [
-            "readonly expected_negative_control_count=56",
+            "readonly expected_negative_control_count=58",
             "openapi|python|javascript|swift|kotlin|java)",
             "grouped Native AMX V2 negative controls must fail closed",
             "--suite-source-manifest-sha256"
@@ -716,7 +716,7 @@
             "bash scripts/check_no_legacy_codec.sh",
             "native-amx-rust-fixture-check command 0",
             "regenerate Native AMX Rust fixture authority twice into disjoint private roots and byte-authenticate both outputs",
-            "for sdk_diagnostics_test_count in 129 88 34 50 59; do",
+            "for sdk_diagnostics_test_count in 129 90 34 50 59; do",
             "SumeragiV2WireFixtureTest"
           ]
         }
@@ -889,7 +889,36 @@
         "kind": "fn",
         "symbol": "check_production_in_flight_first_release_observe_replica_queue_release_transition",
         "required_tokens": [
-          "witness_derived_first_release_transition(refinement::check_production_in_flight_first_release_observe_replica_queue_release_transition(before, exact_ordinary_fifo_preserved,)?,)"
+          "witness_derived_first_release_transition(",
+          "refinement::check_production_in_flight_first_release_observe_replica_queue_release_transition(",
+          "before,",
+          "exact_ordinary_fifo_preserved,",
+          ")?,"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "kind": "fn",
+        "symbol": "witness_derived_first_release_transition",
+        "required_tokens": [
+          "checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>",
+          "check_production_in_flight_first_release_transition(checked.into_projection())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
+        "kind": "fn",
+        "symbol": "check_production_in_flight_first_release_observe_replica_queue_release_transition",
+        "required_tokens": [
+          "let mut after = before;",
+          "after.queue.reservation_state = if exact_ordinary_fifo_preserved",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT",
+          "check_derived_production_in_flight_first_release_transition(",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE,",
+          "if exact_ordinary_fifo_preserved { 1 } else { 0 },",
+          "before,",
+          "after,"
         ]
       },
       {
@@ -1315,17 +1344,29 @@
         "symbol": "Queue::complete_lane_reservation_startup_reconciliation",
         "required_tokens": [
           "receipt: LaneReservationStartupReconciliationReceipt",
+          "self.lane_reservation_transition_lock.lock()",
+          "self.push_remove_lock.lock()",
+          "self.transaction_selection_durability_faulted()",
           "Some(&receipt.replay_receipt)",
+          "Some(&receipt.plan_replay_receipt)",
           "let reconciliation_pending = self",
           ".lane_reservation_reconciliation_pending",
           ".load(Ordering::Acquire)",
-          "if !receipt.initial_snapshot.is_empty() && !reconciliation_pending",
+          "if self.lane_reservation_startup_completion.lock().is_some()",
+          "|| (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)",
           "startup reconciliation receipt is stale at the final publication gate",
+          "let store = self.lane_reservations.lock()",
           "store.commit_barriers",
+          "store.plan_tombstoned",
           "store.release_barriers",
           "store.completed_releases",
           "store.missing_payload_hashes",
           "initial_snapshot\n                .ordered_records",
+          "let final_snapshot = self.lane_reservation_reconciliation_snapshot_locked()?;",
+          "*self.lane_reservation_startup_completion.lock() =",
+          "Some(CompletedLaneReservationStartupReconciliation {",
+          "replay_receipt: receipt.replay_receipt",
+          "plan_replay_receipt: receipt.plan_replay_receipt",
           ".store(false, Ordering::Release)"
         ]
       },
@@ -2438,14 +2479,16 @@
         "kind": "fn",
         "symbol": "schedule_local_proposal",
         "required_tokens": [
-          "let certified_execution_carrier = attachments",
-          "let assembly = if certified_execution_carrier",
-          "CertifiedExecutionCarrierWorkProvider",
-          ".prepare_certified_execution_carrier(context, directive.tag().view(), &[])",
-          "else if proposal_state.heartbeat_only == Some(owner)",
-          "claim_certified_execution_proposal_turn(",
+          "if !executor.can_schedule_local_proposal()?",
+          "let attachments = candidate_attachments(",
+          "let assembly = assembler.assemble(CandidateRequest {",
+          "work_provider: &mut *lane_work",
           "let candidate = match assembly",
-          "candidate_work_requires_wait("
+          "CandidateAssemblyOutcome::NoProposalWork(report)",
+          "if report.work_deferred > 0",
+          "proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound)",
+          "lane_work.bind_local_candidate(",
+          "proposal_state.attempted = Some(owner)"
         ]
       },
       {
@@ -2468,23 +2511,6 @@
         "required_tokens": [
           "PendingCertifiedMergeSelection::ControlOnly",
           "PendingCertifiedMergeSelection::Any"
-        ]
-      },
-      {
-        "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "kind": "fn",
-        "symbol": "candidate_work_requires_wait",
-        "required_tokens": [
-          "!heartbeat_only && !certified_execution_carrier && selected == 0 && work_deferred > 0"
-        ]
-      },
-      {
-        "path": "crates/iroha_core/src/sumeragi/v2_runner.rs",
-        "kind": "fn",
-        "symbol": "claim_certified_execution_proposal_turn",
-        "required_tokens": [
-          "if certified_execution_carrier",
-          "proposal_state.heartbeat_only = None"
         ]
       },
       {
@@ -2668,22 +2694,37 @@
         "symbol": "Kura::persist_lane_block_execution_input",
         "required_tokens": [
           "let _prune_guard = self.prune_lock.lock();",
-          "self.persist_lane_block_execution_input_under_prune_guard(recovered)"
+          "self.ensure_prune_recovery_not_required()?;",
+          "lane_block_application_receipt_available_under_prune_guard(&recovered.proposal)?",
+          "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+          "pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?",
+          "self.persist_lane_block_execution_input_under_prune_and_canonical_guards(",
+          "pending_canonical_bytes,"
         ]
       },
       {
         "path": "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
         "kind": "method",
-        "symbol": "Kura::persist_lane_block_execution_input_under_prune_guard",
+        "symbol": "Kura::persist_lane_block_execution_input_under_prune_and_canonical_guards",
         "required_tokens": [
-          "ensure_prune_recovery_not_required()",
+          "self.ensure_prune_recovery_not_required()?;",
+          "lane_block_application_receipt_available_under_prune_and_canonical_guards(",
           "recover_lane_block_execution_input_source(",
           "if &verified != recovered",
           "LaneBlockExecutionInputArtifact::new(verified)",
-          "read_autonomous_lane_block_artifact_with_recovery_policy(",
-          "authorize_autonomous_execution_input_persistence(",
-          "write_lane_block_execution_input_artifact(",
-          "execution_input_authorization"
+          "let execution_input_authorization = match artifact.source.autonomous_binding()",
+          "Some((network_id, epoch, payload_hash))",
+          ".read_lane_completion_autonomous_artifact_under_guards(",
+          "&artifact.proposal,",
+          "network_id,",
+          "epoch,",
+          "autonomous.executable_payload.payload_hash != payload_hash",
+          "self.authorize_autonomous_execution_input_persistence(",
+          "&autonomous.executable_payload,",
+          "&artifact,",
+          "self.write_lane_block_execution_input_artifact(",
+          "execution_input_authorization,",
+          "pending_canonical_bytes,"
         ]
       },
       {
@@ -2692,14 +2733,33 @@
         "symbol": "Kura::write_lane_block_execution_input_artifact",
         "required_tokens": [
           "AutonomousLaneExecutionInputPersistenceAuthorization",
+          "Self::validate_lane_block_execution_input_artifact(artifact)",
           "authorization.matches_input(artifact)",
+          "let observed_existing =",
+          "self.read_lane_block_execution_input_for_write_observation(lane_id, lane_block_height)?;",
+          "for input in std::iter::once(artifact).chain(observed_existing.iter())",
+          "if let Some(source) = input.source.global_artifact()",
+          "self.read_block_body_under_prune_and_canonical_guards(height)?;",
+          "self.lane_block_execution_input_matches_canonical_payload(existing, false)",
+          "let _geometry_guard = self.lane_geometry_lock.lock();",
+          "self.require_active_lane_artifact(&entry, descriptor)?;",
+          "let _guard = self.sidecar_lock.lock();",
+          "self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(",
+          "let existing = self.read_lane_block_execution_input_for_write_locked(",
+          "if existing != observed_existing",
+          "lane execution input changed after canonical authority validation",
+          "if let Some(existing) = existing",
+          "if existing == *artifact",
+          "return Ok(());",
+          "let publication = self.preflight_lane_block_execution_input_publication_locked(",
           "if autonomous_input",
           "authorization.consume_for_persistence(artifact)",
-          "IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
+          "projection.action != IN_FLIGHT_FIRST_RELEASE_ACTION_PERSIST_EXECUTION_INPUT",
           "check_production_in_flight_first_release_transition(projection)",
           "checked.into_projection() != projection",
-          "preflight_lane_block_execution_input_publication_locked(",
-          "append_indexed_progress_sidecar("
+          "let before_bytes =",
+          "Self::append_indexed_progress_sidecar(",
+          "&publication.namespace"
         ]
       },
       {
@@ -3522,9 +3582,170 @@
           "if reference.execution_batch_hash.is_none()",
           "finalize_certified_merge_reservations(state, queue, kura, &entry, expected_network_id)"
         ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::observe_completed_lane_reservation_startup_reconciliation",
+        "required_tokens": [
+          "self.lane_reservation_transition_lock.lock()",
+          "self.push_remove_lock.lock()",
+          "self.transaction_selection_durability_faulted()",
+          "let Some(completed) = self.lane_reservation_startup_completion.lock().clone() else",
+          "return Ok(None);",
+          ".lane_reservation_reconciliation_pending",
+          "|| !completed.final_snapshot.is_empty()",
+          "|| completed.final_snapshot != *expected_snapshot",
+          "Some(&completed.replay_receipt)",
+          "Some(&completed.plan_replay_receipt)",
+          "self.lane_reservation_reconciliation_snapshot_locked()? != *expected_snapshot",
+          "!store.missing_payload_hashes.is_empty() || !store.plan_tombstoned.is_empty()",
+          "Ok(Some(completed))"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::revalidate_completed_lane_reservation_startup_reconciliation",
+        "required_tokens": [
+          "observe_completed_lane_reservation_startup_reconciliation(&observation.final_snapshot)?",
+          ".as_ref()",
+          "== Some(observation)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+        "kind": "method",
+        "symbol": "Kura::read_lane_completion_autonomous_artifact_under_guards",
+        "required_tokens": [
+          "self.read_current_autonomous_lane_block_artifact_under_guards(",
+          "proposal.descriptor.lane_id,",
+          "proposal.descriptor.lane_block_height,",
+          "network_id,",
+          "epoch,",
+          "artifact.executable_payload.origin_proposal != *proposal",
+          "occupied autonomous completion slot conflicts with the finalized proposal",
+          "Ok(artifact)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+        "kind": "method",
+        "symbol": "Kura::read_current_autonomous_lane_block_artifact_under_guards",
+        "required_tokens": [
+          "let _geometry = self.lane_geometry_lock.lock();",
+          "let marker = self.active_lane_incarnation_marker(&entry)?;",
+          "let _sidecar = self.sidecar_lock.lock();",
+          "self.ensure_prune_recovery_not_required()?;",
+          "AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,",
+          "if pointer.lane_id != lane_id",
+          "|| pointer.dataspace_id != entry.dataspace_id",
+          "|| pointer.lane_block_height != lane_block_height",
+          "|| pointer.lane_incarnation != marker.0",
+          "|| pointer.proposal_height <= marker.1",
+          ".read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(",
+          "network_id,",
+          "epoch,",
+          "AutonomousLaneBlockViewStateReadMode::LatestReadOnly",
+          "record.retirement.is_none().then_some(record.artifact)",
+          "self.active_lane_incarnation_marker(&entry)? != marker",
+          ")? != bytes",
+          "autonomous current pointer or active marker changed during authentication"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "kind": "method",
+        "symbol": "Kura::read_lane_block_execution_input_for_write_observation",
+        "required_tokens": [
+          "self.lane_geometry_lock.lock()",
+          "self.lane_storage_entry(lane_id)?",
+          "Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root)",
+          "self.sidecar_lock.lock()",
+          "self.read_lane_block_execution_input_for_write_locked(",
+          "&entry,",
+          "lane_block_height,",
+          "&data_path,",
+          "&index_path,"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "kind": "method",
+        "symbol": "Kura::read_lane_block_execution_input_for_write_locked",
+        "required_tokens": [
+          "self.ensure_prune_recovery_not_required()?;",
+          "self.active_lane_incarnation_marker(entry)?;",
+          "self.bound_progress_sidecar_directory_is_absent(data_path, index_path)?",
+          "self.open_bound_progress_namespace(data_path, index_path)?",
+          "self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(",
+          "self.open_bound_progress_pair(data_path, index_path)?",
+          "self.read_populated_consensus_lane_slot(",
+          "Self::read_indexed_sidecar_from_open_files(",
+          "norito::decode_canonical::<LaneBlockExecutionInputArtifact>",
+          "Self::validate_lane_block_execution_input_artifact(artifact)",
+          "artifact.proposal.descriptor.lane_id != entry.lane_id",
+          "artifact.proposal.descriptor.lane_block_height != lane_block_height",
+          "self.require_active_lane_artifact(entry, &artifact.proposal.descriptor)?;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+        "kind": "method",
+        "symbol": "Kura::read_populated_consensus_lane_slot",
+        "required_tokens": [
+          "if height == 0",
+          "self.bound_indexed_sidecar_height_range(pair, kind)?",
+          "if !range.contains(&height)",
+          "SidecarIndexLayout::read_from(&mut pair.index, length)",
+          ".entry_position(height)",
+          "SidecarIndexEntry::from_bytes(bytes)",
+          "if slot.len == 0",
+          "if slot.offset != 0",
+          "Some(decode(pair).ok_or_else(",
+          "if !self.bound_progress_sidecar_unchanged(pair)",
+          "Ok(value)"
+        ]
       }
     ],
     "ordered_source_checks": [
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "kind": "fn",
+        "symbol": "check_production_in_flight_first_release_observe_replica_queue_release_transition",
+        "tokens": [
+          "witness_derived_first_release_transition(",
+          "refinement::check_production_in_flight_first_release_observe_replica_queue_release_transition(",
+          "before,",
+          "exact_ordinary_fifo_preserved,",
+          ")?,"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core.rs",
+        "kind": "fn",
+        "symbol": "witness_derived_first_release_transition",
+        "tokens": [
+          "checked: CheckedProductionTransition<ProductionInFlightFirstReleaseTransitionProjection>",
+          "check_production_in_flight_first_release_transition(checked.into_projection())"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/sumeragi/v2_core/refinement/post_carrier_transition.rs",
+        "kind": "fn",
+        "symbol": "check_production_in_flight_first_release_observe_replica_queue_release_transition",
+        "tokens": [
+          "let mut after = before;",
+          "after.queue.reservation_state = if exact_ordinary_fifo_preserved",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_FIFO_PRESERVED",
+          "IN_FLIGHT_FIRST_RELEASE_RESERVATION_REPLICA_QUEUE_ABSENT",
+          "check_derived_production_in_flight_first_release_transition(",
+          "IN_FLIGHT_FIRST_RELEASE_ACTION_OBSERVE_REPLICA_QUEUE_RELEASE,",
+          "if exact_ordinary_fifo_preserved { 1 } else { 0 },",
+          "before,",
+          "after,"
+        ]
+      },
       {
         "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
         "kind": "fn",
@@ -3671,17 +3892,29 @@
         "kind": "method",
         "symbol": "Queue::complete_lane_reservation_startup_reconciliation",
         "tokens": [
+          "self.lane_reservation_transition_lock.lock()",
+          "self.push_remove_lock.lock()",
           "self.transaction_selection_durability_faulted()",
           "Some(&receipt.replay_receipt)",
+          "Some(&receipt.plan_replay_receipt)",
           "let reconciliation_pending = self",
           ".lane_reservation_reconciliation_pending",
           ".load(Ordering::Acquire)",
-          "if !receipt.initial_snapshot.is_empty() && !reconciliation_pending",
+          "if self.lane_reservation_startup_completion.lock().is_some()",
+          "|| (!receipt.initial_snapshot.is_empty() && !reconciliation_pending)",
           "startup reconciliation receipt is stale at the final publication gate",
           "let store = self.lane_reservations.lock()",
           "store.commit_barriers",
+          "store.plan_tombstoned",
+          "store.release_barriers",
+          "store.completed_releases",
           "store.missing_payload_hashes",
           "initial_snapshot\n                .ordered_records",
+          "let final_snapshot = self.lane_reservation_reconciliation_snapshot_locked()?;",
+          "*self.lane_reservation_startup_completion.lock() =",
+          "Some(CompletedLaneReservationStartupReconciliation {",
+          "replay_receipt: receipt.replay_receipt",
+          "plan_replay_receipt: receipt.plan_replay_receipt",
           ".store(false, Ordering::Release)"
         ]
       },
@@ -4132,11 +4365,12 @@
         "kind": "method",
         "symbol": "Kura::publish_certified_frontier_and_consume_capacity_locked",
         "tokens": [
-          "self.publish_latest_certified_lane_block_frontier_locked(entry, artifact, authority)?;",
-          "self.read_latest_certified_lane_block_frontier_structural_locked(entry, false)?",
+          "publish_latest_certified_lane_block_frontier_locked(entry, artifact, authority)?",
+          "let durable_frontier = self",
+          "read_latest_certified_lane_block_frontier_structural_locked(entry, false)?",
           "durable_frontier.frontier.artifact != *artifact",
-          "self.confirm_latest_certified_lane_block_frontier_read_locked(",
-          "self.consume_certified_bundle_frontier_capacity(artifact)?;",
+          "confirm_latest_certified_lane_block_frontier_read_locked(",
+          "consume_certified_bundle_frontier_capacity(artifact)?",
           "FAIL_AFTER_NEXT_AUTONOMOUS_CERTIFIED_FRONTIER",
           "Ok(frontier_changed)"
         ]
@@ -4173,24 +4407,37 @@
         "symbol": "Kura::persist_lane_block_execution_input",
         "tokens": [
           "let _prune_guard = self.prune_lock.lock();",
-          "self.persist_lane_block_execution_input_under_prune_guard(recovered)"
+          "self.ensure_prune_recovery_not_required()?;",
+          "lane_block_application_receipt_available_under_prune_guard(&recovered.proposal)?",
+          "let _canonical_chain_guard = self.canonical_chain_lock.lock();",
+          "pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?",
+          "self.persist_lane_block_execution_input_under_prune_and_canonical_guards(",
+          "pending_canonical_bytes,"
         ]
       },
       {
         "path": "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
         "kind": "method",
-        "symbol": "Kura::persist_lane_block_execution_input_under_prune_guard",
+        "symbol": "Kura::persist_lane_block_execution_input_under_prune_and_canonical_guards",
         "tokens": [
           "self.ensure_prune_recovery_not_required()?;",
+          "lane_block_application_receipt_available_under_prune_and_canonical_guards(",
           "recover_lane_block_execution_input_source(",
           "if &verified != recovered",
           "LaneBlockExecutionInputArtifact::new(verified)",
-          "let execution_input_authorization = match (",
-          ".read_autonomous_lane_block_artifact_with_recovery_policy(",
+          "let execution_input_authorization = match artifact.source.autonomous_binding()",
+          "Some((network_id, epoch, payload_hash))",
+          ".read_lane_completion_autonomous_artifact_under_guards(",
+          "&artifact.proposal,",
+          "network_id,",
+          "epoch,",
           "autonomous.executable_payload.payload_hash != payload_hash",
           "self.authorize_autonomous_execution_input_persistence(",
+          "&autonomous.executable_payload,",
+          "&artifact,",
           "self.write_lane_block_execution_input_artifact(",
-          "execution_input_authorization"
+          "execution_input_authorization,",
+          "pending_canonical_bytes,"
         ]
       },
       {
@@ -4201,7 +4448,19 @@
           "Self::validate_lane_block_execution_input_artifact(artifact)",
           "authorization.matches_input(artifact)",
           "let observed_existing =",
-          "if let Some(existing) = Self::read_indexed_sidecar_from_paths_with_recovery(",
+          "self.read_lane_block_execution_input_for_write_observation(lane_id, lane_block_height)?;",
+          "for input in std::iter::once(artifact).chain(observed_existing.iter())",
+          "if let Some(source) = input.source.global_artifact()",
+          "self.read_block_body_under_prune_and_canonical_guards(height)?;",
+          "self.lane_block_execution_input_matches_canonical_payload(existing, false)",
+          "let _geometry_guard = self.lane_geometry_lock.lock();",
+          "self.require_active_lane_artifact(&entry, descriptor)?;",
+          "let _guard = self.sidecar_lock.lock();",
+          "self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(",
+          "let existing = self.read_lane_block_execution_input_for_write_locked(",
+          "if existing != observed_existing",
+          "lane execution input changed after canonical authority validation",
+          "if let Some(existing) = existing",
           "if existing == *artifact",
           "return Ok(());",
           "let publication = self.preflight_lane_block_execution_input_publication_locked(",
@@ -4552,13 +4811,14 @@
         "kind": "fn",
         "symbol": "schedule_local_proposal",
         "tokens": [
-          "let certified_execution_carrier = attachments",
-          "claim_certified_execution_proposal_turn(",
-          "let assembly = if certified_execution_carrier",
-          ".prepare_certified_execution_carrier(context, directive.tag().view(), &[])",
-          "work_provider: CertifiedExecutionCarrierWorkProvider",
+          "if !executor.can_schedule_local_proposal()?",
+          "let attachments = candidate_attachments(",
+          "let assembly = assembler.assemble(CandidateRequest {",
+          "work_provider: &mut *lane_work",
           "let candidate = match assembly",
-          "candidate_work_requires_wait(",
+          "CandidateAssemblyOutcome::NoProposalWork(report)",
+          "if report.work_deferred > 0",
+          "proposal_state.defer_candidate_work(owner, now, candidate_work_wait_bound)",
           "lane_work.bind_local_candidate("
         ]
       },
@@ -4721,6 +4981,130 @@
           "self.preflight_lane_reservation_plan_journal(&journal_preflight)",
           "for group in carriers.into_iter().flatten()",
           "self.commit_lane_reservation("
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::observe_completed_lane_reservation_startup_reconciliation",
+        "tokens": [
+          "self.lane_reservation_transition_lock.lock()",
+          "self.push_remove_lock.lock()",
+          "self.transaction_selection_durability_faulted()",
+          "let Some(completed) = self.lane_reservation_startup_completion.lock().clone() else",
+          "return Ok(None);",
+          ".lane_reservation_reconciliation_pending",
+          "|| !completed.final_snapshot.is_empty()",
+          "|| completed.final_snapshot != *expected_snapshot",
+          "Some(&completed.replay_receipt)",
+          "Some(&completed.plan_replay_receipt)",
+          "self.lane_reservation_reconciliation_snapshot_locked()? != *expected_snapshot",
+          "!store.missing_payload_hashes.is_empty() || !store.plan_tombstoned.is_empty()",
+          "Ok(Some(completed))"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/queue.rs",
+        "kind": "method",
+        "symbol": "Queue::revalidate_completed_lane_reservation_startup_reconciliation",
+        "tokens": [
+          "observe_completed_lane_reservation_startup_reconciliation(&observation.final_snapshot)?",
+          ".as_ref()",
+          "== Some(observation)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+        "kind": "method",
+        "symbol": "Kura::read_lane_completion_autonomous_artifact_under_guards",
+        "tokens": [
+          "self.read_current_autonomous_lane_block_artifact_under_guards(",
+          "proposal.descriptor.lane_id,",
+          "proposal.descriptor.lane_block_height,",
+          "network_id,",
+          "epoch,",
+          "artifact.executable_payload.origin_proposal != *proposal",
+          "occupied autonomous completion slot conflicts with the finalized proposal",
+          "Ok(artifact)"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+        "kind": "method",
+        "symbol": "Kura::read_current_autonomous_lane_block_artifact_under_guards",
+        "tokens": [
+          "let _geometry = self.lane_geometry_lock.lock();",
+          "let marker = self.active_lane_incarnation_marker(&entry)?;",
+          "let _sidecar = self.sidecar_lock.lock();",
+          "self.ensure_prune_recovery_not_required()?;",
+          "AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_MAX_BYTES,",
+          "if pointer.lane_id != lane_id",
+          "|| pointer.dataspace_id != entry.dataspace_id",
+          "|| pointer.lane_block_height != lane_block_height",
+          "|| pointer.lane_incarnation != marker.0",
+          "|| pointer.proposal_height <= marker.1",
+          ".read_autonomous_lane_block_attempt_artifact_with_view_state_mode_locked(",
+          "network_id,",
+          "epoch,",
+          "AutonomousLaneBlockViewStateReadMode::LatestReadOnly",
+          "record.retirement.is_none().then_some(record.artifact)",
+          "self.active_lane_incarnation_marker(&entry)? != marker",
+          ")? != bytes",
+          "autonomous current pointer or active marker changed during authentication"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "kind": "method",
+        "symbol": "Kura::read_lane_block_execution_input_for_write_observation",
+        "tokens": [
+          "self.lane_geometry_lock.lock()",
+          "self.lane_storage_entry(lane_id)?",
+          "Self::lane_block_execution_input_paths_for_entry(&entry, &self.store_root)",
+          "self.sidecar_lock.lock()",
+          "self.read_lane_block_execution_input_for_write_locked(",
+          "&entry,",
+          "lane_block_height,",
+          "&data_path,",
+          "&index_path,"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/autonomous_execution_view_capacity.rs",
+        "kind": "method",
+        "symbol": "Kura::read_lane_block_execution_input_for_write_locked",
+        "tokens": [
+          "self.ensure_prune_recovery_not_required()?;",
+          "self.active_lane_incarnation_marker(entry)?;",
+          "self.bound_progress_sidecar_directory_is_absent(data_path, index_path)?",
+          "self.open_bound_progress_namespace(data_path, index_path)?",
+          "self.ensure_bound_progress_pair_has_no_recovery_artifacts_locked(",
+          "self.open_bound_progress_pair(data_path, index_path)?",
+          "self.read_populated_consensus_lane_slot(",
+          "Self::read_indexed_sidecar_from_open_files(",
+          "norito::decode_canonical::<LaneBlockExecutionInputArtifact>",
+          "Self::validate_lane_block_execution_input_artifact(artifact)",
+          "artifact.proposal.descriptor.lane_id != entry.lane_id",
+          "artifact.proposal.descriptor.lane_block_height != lane_block_height",
+          "self.require_active_lane_artifact(entry, &artifact.proposal.descriptor)?;"
+        ]
+      },
+      {
+        "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+        "kind": "method",
+        "symbol": "Kura::read_populated_consensus_lane_slot",
+        "tokens": [
+          "if height == 0",
+          "self.bound_indexed_sidecar_height_range(pair, kind)?",
+          "if !range.contains(&height)",
+          "SidecarIndexLayout::read_from(&mut pair.index, length)",
+          ".entry_position(height)",
+          "SidecarIndexEntry::from_bytes(bytes)",
+          "if slot.len == 0",
+          "if slot.offset != 0",
+          "Some(decode(pair).ok_or_else(",
+          "if !self.bound_progress_sidecar_unchanged(pair)",
+          "Ok(value)"
         ]
       }
     ],
@@ -6027,9 +6411,13 @@
           "symbol": "lane_has_drain_blocking_evidence",
           "required_tokens": [
             "unmerged_merge_admissible_relay_progress",
-            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
             "pending_certified_merge_work_for_lane",
-            "unwrap_or(true)"
+            "unwrap_or(true)",
+            ".native_amx_participant_frontiers_pending_durable_evidence_snapshot()",
+            ".map_or(true, |markers|",
+            "marker.lane_id == lane_id",
+            "marker.dataspace_id == dataspace_id",
+            "marker.lane_incarnation == lane_incarnation"
           ]
         },
         {
@@ -6453,10 +6841,14 @@
           "symbol": "V2LaneWorkAdapter::native_body_matches_context",
           "required_tokens": [
             "body.authority_context_height == self.context.height",
-            "self.native_coordinator_height_is_current(body)",
             "self.native_participant_predecessor_is_current(body)",
             "body.coordinator_lane_incarnation",
-            "body.participant_lane_incarnation"
+            "body.participant_lane_incarnation",
+            "self.globally_locked_body.is_none()",
+            "!self.decision_pending()",
+            ".native_coordinator_height_is_current(body)\n                .unwrap_or(false)",
+            "== Some(body.coordinator_lane_incarnation)",
+            "== Some(body.participant_lane_incarnation)"
           ]
         },
         {
@@ -6466,7 +6858,9 @@
           "required_tokens": [
             "request.validate_plan_binding().is_ok()",
             "self.native_body_matches_context(&request.body, active_view)",
-            "self.native_coordinator_predecessor_is_current(request)"
+            "request.participant_settlement.source_ids().len() <= source_capacity",
+            ".native_coordinator_predecessor_is_current(request)\n                .unwrap_or(false)",
+            "self.native_control_predecessor_is_current(request)"
           ]
         },
         {
@@ -6502,7 +6896,9 @@
           "required_tokens": [
             "let prepare = &leg.prepare_qc.body;",
             "let commit = &leg.commit_qc.body;",
-            "compute_settlement_hash(&leg.participant_settlement)",
+            ".participant_settlement",
+            ".computed_hash()",
+            "map_err(|_| \"Native AMX participant settlement cannot be hashed\")?",
             "settlement_hash != leg.participant_settlement_hash",
             "Native AMX participant leg identity is internally inconsistent",
             "Native AMX same-route leg differs from the coordinator identity",
@@ -6589,12 +6985,12 @@
           "kind": "fn",
           "symbol": "participant_application_role_rejects_settlement_identity_and_content_tampering",
           "required_tokens": [
-            "leg.participant_settlement.lane_id =",
-            "leg.participant_settlement.dataspace_id =",
-            "leg.participant_settlement.lane_incarnation =",
-            "leg.participant_settlement.block_height += 1",
-            "leg.participant_settlement.receipts[0].source_id =",
-            "leg.participant_settlement.receipts[0].timestamp_ms += 1",
+            "fields.lane_id =",
+            "fields.dataspace_id =",
+            "fields.lane_incarnation =",
+            "fields.participant_lane_block_height += 1",
+            "fields.source_ids[0] =",
+            "fields.authority_context_height += 1",
             "leg.participant_settlement_hash =",
             "for index in 0..receipt.legs.len()",
             "mutate(&mut altered.legs[index])",
@@ -6841,11 +7237,15 @@
             "commit.source_id != source.receipt.source_id",
             "prepare.tx_entrypoint_hash != source.entrypoint_hash",
             "commit.tx_entrypoint_hash != source.entrypoint_hash",
-            "settlement.tx_count",
-            "settlement.receipts.len()",
-            "receipt.timestamp_ms != authority_context_height",
-            "settlement.nexus_fee_receipts.is_empty()",
-            "settlement.native_amx_receipts.is_empty()",
+            "leg.participant_settlement.computed_hash().map_err(|_|",
+            "computed_settlement_hash != leg.participant_settlement_hash",
+            "settlement.lane_id() != descriptor.lane_id",
+            "settlement.dataspace_id() != descriptor.dataspace_id",
+            "settlement.lane_incarnation() != descriptor.lane_incarnation",
+            "settlement.participant_lane_block_height() != descriptor.lane_block_height",
+            "settlement.authority_context_height() != authority_context_height",
+            "let settlement_source_ids = settlement.source_ids().to_vec();",
+            "source_ids.iter().copied().collect::<BTreeSet<_>>().len() != source_ids.len()",
             "BTreeMap::<(LaneId, DataSpaceId, Hash), u64>",
             "BTreeMap::<(LaneId, DataSpaceId, Hash, u64)",
             "route_heights",
@@ -7148,7 +7548,6 @@
             "certified_snapshot.pair_repairs",
             "certified_snapshot.earliest_unapplied",
             "ordinary_pairs.len().saturating_add(ordinary_sessions.len())",
-            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
             "preflight_finalized_merge_carrier_repairs",
             "missing_merge_carrier_bodies",
             "into_parts()",
@@ -7165,7 +7564,8 @@
             "needs.into_values().collect()",
             "LaneApplicationEvidenceRepairPlanning::Ready",
             "merge_carriers",
-            "repair_capacity"
+            "repair_capacity",
+            ".native_amx_participant_frontiers_pending_durable_evidence_snapshot()\n        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;"
           ]
         },
         {
@@ -7193,8 +7593,8 @@
             "repair_native_amx_participant_application_evidence_for_markers",
             "&carrier.markers",
             "repaired_routes != carrier.markers.len()",
-            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
-            "failed exact readback"
+            "failed exact readback",
+            ".native_amx_participant_frontiers_pending_durable_evidence_snapshot()\n        .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;"
           ]
         },
         {
@@ -7321,32 +7721,43 @@
             "pair_repair_required",
             "lane_route_and_incarnation_matches",
             "previous_lane_block_height.checked_add(1)",
-            "certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
             "read_certified_lane_block_artifact_read_only",
             "previous_descriptor.lane_incarnation != descriptor.lane_incarnation",
             "traversed_total",
             "earliest.sort_by_key",
-            "pair_repairs.sort_by_key"
+            "pair_repairs.sort_by_key",
+            "self.certified_lane_block_session_is_applied_or_snapshot_anchored(&session)?",
+            "self.certified_lane_block_predecessor_is_applied_or_snapshot_anchored(\n                    &session.proposal,\n                )?"
           ]
         },
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "method",
-          "symbol": "State::certified_lane_block_session_is_applied_or_snapshot_anchored_cached",
+          "symbol": "State::certified_lane_block_session_is_applied_or_snapshot_anchored",
           "required_tokens": [
             "certified_lane_block_proposal_has_hash_only_snapshot_anchor",
-            "lane_block_application_receipt_available_without_sidecar_repair"
+            "if session.prepare_qc.payload_availability_qc.is_some() {",
+            "return self.certified_autonomous_lane_block_is_globally_applied(&session.proposal);",
+            "self.certified_lane_block_proposal_has_authenticated_application_receipt(\n                &session.proposal,\n            )?",
+            ".certified_lane_block_proposal_has_hash_only_snapshot_anchor(&session.proposal)?"
           ]
         },
         {
           "path": "crates/iroha_core/src/state.rs",
           "kind": "method",
-          "symbol": "State::certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached",
+          "symbol": "State::certified_lane_block_predecessor_is_applied_or_snapshot_anchored",
           "required_tokens": [
             "previous_height == 0",
-            "return false",
-            "read_lane_block_artifact_without_sidecar_repair",
-            "lane_block_predecessor_application_receipt_available_without_sidecar_repair"
+            "return Ok(false)",
+            "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+            "let native_snapshot = self.native_amx_participant_application_snapshot()?;",
+            ".contains_key(&(descriptor.lane_id, descriptor.dataspace_id))",
+            "let Some(previous_descriptor_hash) = descriptor.previous_lane_block_descriptor_hash else {\n            return Ok(true);\n        };",
+            ".read_lane_block_artifact_read_only(descriptor.lane_id, previous_height)",
+            "artifact.ownership.lane_incarnation == descriptor.lane_incarnation",
+            "artifact.ownership.lane_block_descriptor_hash == Some(previous_descriptor_hash)",
+            "self.lane_block_predecessor_has_authenticated_receipt(proposal, &native_snapshot)",
+            "if native_snapshot\n            .blocked\n            .contains_key(&(descriptor.lane_id, descriptor.dataspace_id))\n        {\n            return Ok(false);\n        }"
           ]
         },
         {
@@ -7598,10 +8009,14 @@
             "recovery.drain_effects(1)",
             "V2LaneWorkEffect::PostLaneBlock",
             "can_retain_lane_work_effect",
-            "recovery.requeue_effect",
             "dispatch_lane_work_effect",
             "LaneWorkEffectDispatch::Complete",
-            "LaneWorkEffectDispatch::SourceRetained"
+            "LaneWorkEffectDispatch::SourceRetained",
+            "let Some(effect) = recovery.next_effect() else {",
+            "if is_request && !is_current_request {",
+            "require_peeked_lane_work_effect(recovery.drain_effects(1).pop())?",
+            ".can_retain_lane_work_effect(&effect)\n            .map_err(V2RunnerError::Service)?",
+            "LaneWorkEffectDispatch::SourceRetained(_) => break,"
           ]
         },
         {
@@ -8223,14 +8638,14 @@
             "apply_lane_application_evidence_repair",
             "summary.native_carriers",
             "summary.native_routes",
-            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached",
             "read_native_amx_participant_application_receipt",
             "receipt.executed_block_wire_hash",
             "repair_native_amx_participant_application_evidence_for_markers",
             "preflight_native_amx_participant_application_evidence_repair",
             "[drifted_marker]",
             "absent from its authenticated carrier manifest",
-            "Some(receipt)"
+            "Some(receipt)",
+            "native_amx_participant_frontiers_pending_durable_evidence_snapshot"
           ]
         },
         {
@@ -8301,11 +8716,10 @@
           "required_tokens": [
             "!self.historical_recovery_sessions.is_empty()",
             ".proposals_without_commit_qc()",
-            "self.historical_proposal_still_needs_recovery(proposal)",
             ".qcs_for_incomplete_sessions()",
             "qc.body.proposal_height < self.context.height",
-            "self.historical_autonomous_recovery_proposal_for_vote_body(&qc.body)",
-            "self.canonical_proposal_for_vote_body(&qc.body)"
+            "self.historical_proposal_still_needs_recovery(&proposal)?",
+            "let Some(proposal) = self.available_proposal_for_vote_body(&qc.body)?"
           ]
         },
         {
@@ -8314,12 +8728,12 @@
           "symbol": "V2LaneWorkAdapter::ensure_globally_applied_lane_receipts_durable",
           "required_tokens": [
             "lane_application_certified_repair_snapshot_cached(self.limits.session_capacity.get())",
-            "native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()",
             "!ordinary.pair_repairs.is_empty()",
             "!ordinary.earliest_unapplied.is_empty()",
             "!native.is_empty()",
             "return Err(V2LaneWorkError::Persistence(",
-            "not completed by startup repair"
+            "not completed by startup repair",
+            ".native_amx_participant_frontiers_pending_durable_evidence_snapshot()\n            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?;"
           ]
         },
         {
@@ -8757,25 +9171,6 @@
         },
         {
           "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
-          "kind": "struct",
-          "symbol": "NativeAmxParticipantReceiptLatestIndexV2",
-          "required_tokens": [
-            "version: u8",
-            "lane_id: LaneId",
-            "dataspace_id: DataSpaceId",
-            "lane_incarnation: Hash",
-            "lane_block_height: u64",
-            "participant_proposal_hash: Hash",
-            "participant_settlement_hash: HashOf<NativeAmxParticipantSettlement>",
-            "application_block_height: u64",
-            "application_block_hash: HashOf<BlockHeader>",
-            "executed_block_wire_hash: Hash",
-            "finality_artifact_hash: HashOf<V2FinalityArtifact>",
-            "manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>"
-          ]
-        },
-        {
-          "path": "crates/iroha_core/src/kura/pipeline_and_lane_artifacts.rs",
           "kind": "enum",
           "symbol": "NativeAmxLatestIndexTempReconciliation",
           "required_tokens": [
@@ -9099,12 +9494,9 @@
           "kind": "fn",
           "symbol": "native_coordinator_predecessor_is_current",
           "required_tokens": [
-            "latest_lane_block_artifact_matching",
-            "coordinator_lane_incarnation",
-            "previous_lane_block_height",
-            "previous_lane_block_descriptor_hash",
-            "lane_block_descriptor_hash",
-            "checked_add(1)"
+            "if !self.native_coordinator_height_is_current(&request.body)?\n            || request.body.planned_coordinator_block_height\n                != request.coordinator_proposal.descriptor.lane_block_height\n        {\n            return Ok(false);\n        }",
+            "let view = self.state.view();",
+            "self.consensus_storage_read(State::lane_block_predecessor_is_applied_for_snapshot(\n            &view,\n            &request.coordinator_proposal,\n            crate::state::LanePredecessorApplicationMode::CurrentTip,\n        ))"
           ]
         },
         {
@@ -9541,6 +9933,427 @@
             "(Some(attestation), false)",
             "if executor.has_pending_lifecycle_output_admissions()",
             "AdvanceExecutorYieldCauseV1::DelayedLifecycleOutputAdmitted"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "native_coordinator_tip",
+          "required_tokens": [
+            "if !self.lane_route_active(\n            body.coordinator_lane_id,\n            body.coordinator_dataspace_id,\n            body.coordinator_lane_incarnation,\n            body.authority_context_height,\n        ) {\n            return Ok(None);\n        }",
+            "let pending = self.consensus_storage_read(",
+            ".unapplied_lane_block_artifact_heights_snapshot_cached(),\n        )?;",
+            "if pending.contains_key(&(body.coordinator_lane_id, body.coordinator_dataspace_id)) {\n            return Ok(None);\n        }",
+            "self.consensus_storage_read(v2_known_lane_tip_for_route(\n            self.state.as_ref(),\n            self.kura.as_ref(),\n            body.authority_context_height,\n            body.coordinator_lane_id,\n            body.coordinator_dataspace_id,\n            body.coordinator_lane_incarnation,\n        ))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "native_coordinator_height_is_current",
+          "required_tokens": [
+            "let Some((height, descriptor_hash)) = self.native_coordinator_tip(body)? else {\n            return Ok(false);\n        }",
+            "(height == 0) == descriptor_hash.is_none()",
+            "height.checked_add(1) == Some(body.planned_coordinator_block_height)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "consensus_storage_read",
+          "required_tokens": [
+            "read.map_err(|error| {",
+            "self.output_guard.close_admission_for_restart();",
+            "V2LaneWorkError::Persistence(error.to_string())"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "lane_block_predecessor_is_applied_for_snapshot",
+          "required_tokens": [
+            "height <= prefix_height\n                && index.is_some_and(|index| state.block_hashes().get(index) == Some(&hash))",
+            "Self::validate_native_amx_participant_shared_frontier(state.world(), &marker)?;",
+            ".read_native_amx_participant_application_history(descriptor.lane_id)\n            .map_err(MergeLedgerCommitError::Persistence)?;",
+            "if application_height > prefix_height {\n                if mode == LanePredecessorApplicationMode::CurrentTip {\n                    return Ok(false);\n                }\n                continue;\n            }",
+            "if !prefix_contains(application_height, application_hash)",
+            "route_matches &= same_route;",
+            "pending |= !matches!(observation, Observation::Applied(_));",
+            "if pending || !route_matches {\n            return Ok(false);\n        }",
+            "(Some(_), None) | (None, Some(_)) => return Ok(false),",
+            "if !Self::native_amx_participant_receipt_matches_frontier(&receipt, marker)",
+            "&& (mode == LanePredecessorApplicationMode::CurrentTip\n                        || artifact.ownership.proposal_height <= prefix_height)",
+            "if ownership.proposal_height > prefix_height {\n                return Ok(false);\n            }",
+            "Self::lane_block_artifact_matches_certified_proposal(&artifact, &receipt.proposal)\n                    && prefix_contains(receipt.application_block_height, receipt.application_block_hash)",
+            "if !state.kura().is_audited_snapshot_import_height(height) {\n                        return Ok(false);\n                    }",
+            "if mode != LanePredecessorApplicationMode::OrdinaryBodyStatePrefix {\n                        return Ok(false);\n                    }",
+            "if canonical.as_slice() != [artifact.clone()] {\n                        return Ok(false);\n                    }",
+            "if ownership.proposal_height >= descriptor.proposal_height {\n                return Ok(false);\n            }",
+            "if height == latest_height && hash != latest_hash =>",
+            "descriptor.previous_lane_block_height == 0\n                    && descriptor.previous_lane_block_descriptor_hash.is_none()\n                    && descriptor.lane_block_height == 1",
+            "descriptor.previous_lane_block_height == height\n                    && descriptor.previous_lane_block_descriptor_hash == Some(hash)\n                    && height.checked_add(1) == Some(descriptor.lane_block_height)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/lane_planner.rs",
+          "kind": "fn",
+          "symbol": "v2_known_lane_tip_for_route",
+          "required_tokens": [
+            "let mut matching = v2_known_lane_tips(state, proposal_height)?",
+            "tip.lane_id == lane_id\n                && tip.dataspace_id == dataspace_id\n                && tip.lane_incarnation == lane_incarnation",
+            ".read_latest_native_amx_participant_application_receipt(lane_id)\n            .map_err(crate::state::MergeLedgerCommitError::Persistence)?;",
+            "crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_) => {",
+            "if descriptor.dataspace_id != dataspace_id\n                    || descriptor.lane_incarnation != lane_incarnation\n                    || latest_receipt.application_block_height >= proposal_height",
+            "} else if matching.is_empty() {",
+            "if matching.is_empty() {\n        return Ok(Some((0, None)));\n    }",
+            "if hashes.len() > 1 {\n        return Ok(None);\n    }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "lane_route_active",
+          "required_tokens": [
+            "self.state.lane_route_and_incarnation_active_at_height(\n            lane_id,\n            dataspace_id,\n            lane_incarnation,\n            proposal_height,\n        )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "native_amx_participant_application_snapshot",
+          "required_tokens": [
+            "for lane in lifecycle.nexus.lane_catalog.lanes()",
+            ".read_native_amx_participant_application_history(lane.id),",
+            ".map_err(MergeLedgerCommitError::Persistence)?;",
+            "Self::canonical_native_amx_participant_frontier_from_world(",
+            "Self::validate_native_amx_participant_shared_frontier(&world, &marker)?;",
+            "observed_lane != lane.id",
+            "observed_dataspace != lane.dataspace_id",
+            "observed_incarnation != incarnation",
+            "if !marker_matches {",
+            ") || marker.is_none_or(|marker| height > marker.lane_block_height)",
+            "snapshot.applied_slots.insert((",
+            "snapshot.repair.push(marker);",
+            "Some(NativeAmxParticipantApplicationObservation::Applied(_))",
+            "                if !matches!(\n                    observation,\n                    NativeAmxParticipantApplicationObservation::Applied(_)\n                ) || marker.is_none_or(|marker| height > marker.lane_block_height)\n                {\n                    snapshot\n                        .blocked\n                        .entry(route)\n                        .and_modify(|blocked| *blocked = (*blocked).max(height))\n                        .or_insert(height);\n                } else {\n                    snapshot.applied_slots.insert((\n                        lane.id,\n                        lane.dataspace_id,\n                        incarnation,\n                        height,\n                    ));\n                }",
+            "            if matches!(\n                history.get(marker.lane_block_height),\n                Some(NativeAmxParticipantApplicationObservation::Applied(_))\n            ) {\n                snapshot.applied.push(marker);\n            } else {\n                snapshot.repair.push(marker);\n                snapshot\n                    .blocked\n                    .entry(route)\n                    .and_modify(|blocked| *blocked = (*blocked).max(marker.lane_block_height))\n                    .or_insert(marker.lane_block_height);\n            }"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "native_amx_participant_frontiers_pending_durable_evidence_snapshot",
+          "required_tokens": [
+            "Ok(self.native_amx_participant_application_snapshot()?.repair)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "certified_lane_block_proposal_has_authenticated_application_receipt",
+          "required_tokens": [
+            ".read_lane_application_receipt(descriptor.lane_id, descriptor.lane_block_height)",
+            "})?;",
+            "Ok(receipt.is_some_and(|receipt| receipt.proposal == *proposal))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state.rs",
+          "kind": "fn",
+          "symbol": "certified_lane_block_proposal_has_hash_only_snapshot_anchor",
+          "required_tokens": [
+            ".read_lane_block_artifact_read_only(descriptor.lane_id, descriptor.lane_block_height)",
+            "})?",
+            "if !Self::lane_block_artifact_matches_certified_proposal(&artifact, proposal) {\n            return Ok(false);\n        }",
+            "Ok(self.lane_block_artifact_has_hash_only_snapshot_anchor(&artifact))"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+          "kind": "fn",
+          "symbol": "lane_block_predecessor_has_authenticated_receipt",
+          "required_tokens": [
+            "previous_height.checked_add(1) != Some(descriptor.lane_block_height)",
+            ".read_lane_application_receipt(descriptor.lane_id, previous_height)",
+            ".read_native_amx_participant_application_history(descriptor.lane_id)",
+            "Some(crate::kura::NativeAmxParticipantApplicationObservation::Applied(receipt))",
+            "previous.lane_incarnation == descriptor.lane_incarnation",
+            "previous.descriptor_hash == previous_descriptor_hash",
+            "receipt.application_block_height < descriptor.proposal_height"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/state/autonomous_predecessor_application.rs",
+          "kind": "fn",
+          "symbol": "certified_autonomous_lane_block_is_globally_applied",
+          "required_tokens": [
+            "Self::canonical_merged_lane_frontier_from_world(",
+            ".read_lane_application_receipt(descriptor.lane_id, descriptor.lane_block_height)",
+            "})?;",
+            "crate::kura::LaneBlockApplicationReceiptArtifactFormat::MergeExecution",
+            "receipt.proposal == *proposal"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "fn",
+          "symbol": "next_effect",
+          "required_tokens": [
+            "self.output_guard.acquire()?;",
+            "self.effects.front().cloned()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work/canonical_executed_block_application_repair.rs",
+          "kind": "fn",
+          "symbol": "is_current_request_effect",
+          "required_tokens": [
+            "let Some(outstanding) = self.outstanding.as_ref() else {",
+            "peer == &outstanding.responder.peer",
+            "request.as_ref() == &outstanding.request"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/v2_lane_work.rs",
+          "kind": "fn",
+          "symbol": "available_proposal_for_vote_body",
+          "required_tokens": [
+            ".lane_sessions\n            .proposal_for_vote_body(body)",
+            "self.historical_autonomous_recovery_proposal_for_vote_body(body)",
+            "return Ok(Some(proposal));",
+            "self.canonical_proposal_for_vote_body(body)"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+          "kind": "fn",
+          "symbol": "read_lane_completion_certificate",
+          "required_tokens": [
+            "if self.emergency_fast_startup_enabled()",
+            "return Err(Error::EmergencyFastAuxiliaryUnavailable",
+            "self.ensure_prune_recovery_not_required()?;",
+            "self.read_certified_lane_block_artifact_read_only_under_prune_and_canonical_guards(\n            lane_id,\n            lane_block_height,\n            true,\n        )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+          "kind": "fn",
+          "symbol": "read_current_autonomous_lane_block_artifact",
+          "required_tokens": [
+            "self.ensure_prune_recovery_not_required()?;",
+            "self.read_current_autonomous_lane_block_artifact_under_guards(\n            lane_id,\n            lane_block_height,\n            network_id,\n            epoch,\n        )"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/consensus_storage_reads.rs",
+          "kind": "fn",
+          "symbol": "read_current_autonomous_lane_block_artifact_under_guards",
+          "required_tokens": [
+            "pointer.lane_id != lane_id",
+            "pointer.dataspace_id != entry.dataspace_id",
+            "pointer.lane_block_height != lane_block_height",
+            "pointer.lane_incarnation != marker.0",
+            "pointer.proposal_height <= marker.1",
+            "AutonomousLaneBlockViewStateReadMode::LatestReadOnly",
+            "record.retirement.is_none().then_some(record.artifact)",
+            "if self.active_lane_incarnation_marker(&entry)? != marker",
+            ")? != bytes"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "read_latest_native_amx_participant_application_receipt",
+          "required_tokens": [
+            "let mut history = self.read_native_amx_participant_application_history(lane_id)?;",
+            ".pop_last()",
+            "None => NativeAmxLatestReceiptObservation::Absent,",
+            "NativeAmxLatestReceiptObservation::PendingTipMetadata(receipt)",
+            "Some(NativeAmxParticipantApplicationObservation::PendingManifestRepair(_))",
+            "Some(NativeAmxParticipantApplicationObservation::PendingReceiptRepair(_))",
+            "return Err(Self::invalid_lane_artifact_error("
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura.rs",
+          "kind": "fn",
+          "symbol": "read_native_amx_participant_application_history",
+          "required_tokens": [
+            "self.ensure_prune_recovery_not_required()?;",
+            "self.require_native_amx_evidence_prune_intent_absent_locked(&namespace)?;",
+            "self.require_native_amx_latest_index_temp_absent_locked(&namespace)?;",
+            "self.inventory_native_amx_evidence_files_locked(&namespace, true)?",
+            "if !inventory.temporaries.is_empty()",
+            "Self::validate_native_amx_retained_history_continuity(",
+            "self.read_block_body_under_prune_and_canonical_guards(*height)?;",
+            "|| self.active_lane_incarnation_marker(&current)? != marker",
+            "|| !Self::progress_mutation_namespace_unchanged(&namespace)",
+            "|| u64::try_from(self.exact_durable_blocks_count()?)? != exact_tip",
+            "if !confirmed_inventory.temporaries.is_empty()",
+            "if !Self::stable_sidecar_metadata_unchanged(metadata, &confirmed)",
+            "if retained_manifests.get(height) != Some(&confirmed)",
+            "if retained_receipts.get(height) != Some(&confirmed)",
+            "if metadata.get(height) != Some(&confirmed)",
+            "Ok(NativeAmxParticipantApplicationHistory {"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxParticipantReceiptLatestIndexV2",
+          "required_tokens": [
+            "version: u8",
+            "lane_id: LaneId",
+            "dataspace_id: DataSpaceId",
+            "lane_incarnation: Hash",
+            "lane_block_height: u64",
+            "participant_proposal_hash: Hash",
+            "participant_settlement_hash:\n        HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>",
+            "application_block_height: u64",
+            "application_block_hash: HashOf<BlockHeader>",
+            "executed_block_wire_hash: Hash",
+            "finality_artifact_hash: HashOf<V2FinalityArtifact>",
+            "manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "struct",
+          "symbol": "NativeAmxParticipantSettlement",
+          "required_tokens": [
+            "lane_id: LaneId",
+            "dataspace_id: DataSpaceId",
+            "lane_incarnation: Hash",
+            "participant_lane_block_height: u64",
+            "authority_context_height: u64",
+            "previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>",
+            "source_ids: Vec<[u8; Hash::LENGTH]>"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::lane_id",
+          "required_tokens": [
+            "self.lane_id"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::dataspace_id",
+          "required_tokens": [
+            "self.dataspace_id"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::lane_incarnation",
+          "required_tokens": [
+            "self.lane_incarnation"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::participant_lane_block_height",
+          "required_tokens": [
+            "self.participant_lane_block_height"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::authority_context_height",
+          "required_tokens": [
+            "self.authority_context_height"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::previous_native_settlement_hash",
+          "required_tokens": [
+            "self.previous_native_settlement_hash"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::source_ids",
+          "required_tokens": [
+            "self.source_ids"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::computed_hash",
+          "required_tokens": [
+            "b\"iroha:native-amx:participant-settlement:v1\"",
+            "let bytes = norito::encode_canonical(self)?;",
+            "u64::try_from(DOMAIN.len())",
+            ".to_le_bytes();",
+            "&domain_len,",
+            "DOMAIN,",
+            "&bytes,"
+          ]
+        },
+        {
+          "path": "crates/iroha_data_model/src/block/consensus.rs",
+          "kind": "method",
+          "symbol": "NativeAmxParticipantSettlement::try_new",
+          "required_tokens": [
+            "participant_lane_block_height == 0",
+            "authority_context_height == 0",
+            "participant_lane_block_height == 1 && previous_native_settlement_hash.is_some()",
+            "source_ids.is_empty() || source_ids.len() > NATIVE_AMX_GROUP_SOURCES_MAX",
+            "!native_amx_nonzero(source)",
+            "collect::<std::collections::BTreeSet<_>>()",
+            "!= source_ids.len()"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/native_amx/participant_application_role_tests.rs",
+          "kind": "fn",
+          "symbol": "mutate_participant_settlement",
+          "required_tokens": [
+            "mutate(&mut fields);",
+            "leg.participant_settlement = NativeAmxParticipantSettlement::try_new(",
+            "fields.participant_lane_block_height,",
+            "fields.authority_context_height,",
+            "settlement.previous_native_settlement_hash(),",
+            "fields.source_ids,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs",
+          "kind": "method",
+          "symbol": "ApplyFixture::new_with_options",
+          "required_tokens": [
+            "Self::new_with_options_and_retention(",
+            "include_lane_payload,",
+            "include_projection_policies,",
+            "include_lane_lifecycle,",
+            "include_native_lane,",
+            "iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs",
+          "kind": "method",
+          "symbol": "ApplyFixture::new_with_options_and_retention",
+          "required_tokens": [
+            "(1_u8..=4)",
+            "Algorithm::BlsNormal",
+            "if include_lane_lifecycle {",
+            "locked_lane_work_test_kura(blocks_in_memory)",
+            "State::new_with_chain_and_network_id_for_testing(",
+            "context.network_id,",
+            "install_fixture_validator_authority(&state, &context, &validator_set_pops);",
+            "if include_native_lane {",
+            "install_fixture_native_lane(&mut state, &mut context);"
           ]
         }
       ]
@@ -10859,12 +11672,21 @@
           "kind": "fn",
           "symbol": "validate_autonomous_lane_payload_slot",
           "required_tokens": [
-            "read_autonomous_lane_block_artifact",
-            "read_certified_lane_block_artifact",
             "latest_certified_lane_block_artifact_matching",
             "latest_lane_block_artifact_matching",
-            "latest_native_amx_participant_application_receipt_matching",
-            "block.hash()"
+            "block.hash()",
+            ".read_current_autonomous_lane_block_artifact(",
+            "expected_network_id,",
+            "expected_epoch,",
+            ".read_lane_completion_certificate(",
+            ".read_lane_block_artifact_read_only(",
+            ".read_latest_native_amx_participant_application_receipt(",
+            "crate::kura::NativeAmxLatestReceiptObservation::PendingTipMetadata(_)",
+            "slot_error(&format!(\"local autonomous slot is unreadable: {error}\"))\n                })?",
+            "slot_error(&format!(\"local certified slot is unreadable: {error}\"))\n                })?",
+            "slot_error(&format!(\"local Native AMX slot is unreadable: {error}\"))\n                })?;",
+            "return Err(slot_error(\"awaits exact Native AMX application metadata\"));",
+            "&& stored.lane_block_height >= lane_block_height"
           ]
         },
         {
@@ -12591,9 +13413,11 @@
           "required_tokens": [
             "!origin_matches || block.header().height().get() != self.context.height",
             "if crate::block::external_queue_plan_synced_entrypoint_index(block).is_some()",
-            "let canonical_recovery = canonical_v2_lane_payload_matches_kura(",
             "retain_pending_certified_merge_entry_for_locked_carrier(",
-            "retire_autonomous_payload_batch(&losing_pending)"
+            "retire_autonomous_payload_batch(&losing_pending)",
+            "let canonical_recovery = (|| -> crate::kura::Result<bool> {",
+            "Ok(canonical_v2_lane_payload_matches_kura(",
+            "let Ok(canonical_recovery) = self.consensus_storage_read(canonical_recovery) else {\n            return V2LaneIngressOutcome::Rejected;\n        };"
           ]
         },
         {

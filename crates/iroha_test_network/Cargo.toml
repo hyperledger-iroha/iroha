@@ -15,6 +15,7 @@ name = "taira_consensus_contracts"
 path = "tests/taira_consensus_contracts.rs"
 
 [dependencies]
+iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 iroha.workspace = true
 

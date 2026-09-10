@@ -1267,3 +1267,171 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod explicit_schema_identity_tests {
+    use super::*;
+
+    macro_rules! identity {
+        ($root:ty, $nominal:literal, $frame:literal) => {
+            assert_eq!(<$root as norito::NoritoSchema>::nominal_name(), $nominal);
+            assert_eq!(<$root as norito::NoritoSchema>::frame_name(), $frame);
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$root>(),
+                norito::core::schema_hash_for_name($frame)
+            );
+            assert_eq!(
+                <Vec<$root> as norito::NoritoSchema>::nominal_name(),
+                format!("alloc::vec::Vec<{}>", $nominal)
+            );
+        };
+    }
+
+    fn roundtrip<T>(value: &T) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let frame = norito::encode_canonical(value).expect("canonical fixture frame");
+        let header = norito::core::Header::read(frame.as_slice()).expect("typed frame header");
+        assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+        let decoded: T = norito::decode_canonical(&frame).expect("same root canonical replay");
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        assert!(matches!(
+            norito::decode_canonical::<Vec<T>>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn framed_roots_keep_nominal_and_protocol_identities() {
+        identity!(
+            SignAcknowledgementPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::SignAcknowledgementPayloadV1",
+            "iroha.kagemusha.device.v1.sign-receive-acknowledgement-command"
+        );
+        identity!(
+            ReadTimeOrLeasePayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::ReadTimeOrLeasePayloadV1",
+            "iroha.kagemusha.device.v1.read-trusted-time-or-lease-command"
+        );
+        identity!(
+            PrepareMintPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PrepareMintPayloadV1",
+            "iroha.kagemusha.device.v1.prepare-mint-authorization-command"
+        );
+        identity!(
+            RecoverMintPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RecoverMintPayloadV1",
+            "iroha.kagemusha.device.v1.recover-mint-authorization-command"
+        );
+        identity!(
+            FoldReceiveCreditPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::FoldReceiveCreditPayloadV1",
+            "iroha.kagemusha.device.v1.fold-receive-credit-command"
+        );
+        identity!(
+            ReadPendingWatermarkPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::ReadPendingWatermarkPayloadV1",
+            "iroha.kagemusha.device.v1.read-pending-credit-watermark-command"
+        );
+        identity!(
+            RotateHardwareEpochPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RotateHardwareEpochPayloadV1",
+            "iroha.kagemusha.device.v1.rotate-hardware-epoch-command"
+        );
+        identity!(
+            BootstrapAggregateStatePayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::BootstrapAggregateStatePayloadV1",
+            "iroha.kagemusha.device.v1.bootstrap-aggregate-state-command"
+        );
+        identity!(
+            RecoverWalletSnapshotPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RecoverWalletSnapshotPayloadV1",
+            "iroha.kagemusha.device.v1.recover-wallet-snapshot-command"
+        );
+        identity!(
+            CreateSignedPaymentRequestPayloadV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::CreateSignedPaymentRequestPayloadV1",
+            "iroha.kagemusha.device.v1.create-signed-payment-request-command"
+        );
+        identity!(
+            AcknowledgementReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::AcknowledgementReplyV1",
+            "iroha.kagemusha.device.v1.receive-acknowledgement-reply"
+        );
+        identity!(
+            TimeOrLeaseReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::TimeOrLeaseReplyV1",
+            "iroha.kagemusha.device.v1.trusted-time-or-lease-reply"
+        );
+        identity!(
+            MintConstructionBundleReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::MintConstructionBundleReplyV1",
+            "iroha.kagemusha.device.v1.mint-construction-bundle-reply"
+        );
+        identity!(
+            FoldReceiveCreditReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::FoldReceiveCreditReplyV1",
+            "iroha.kagemusha.device.v1.fold-receive-credit-reply"
+        );
+        identity!(
+            PendingWatermarkReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::PendingWatermarkReplyV1",
+            "iroha.kagemusha.device.v1.pending-credit-watermark-reply"
+        );
+        identity!(
+            RotationReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::RotationReplyV1",
+            "iroha.kagemusha.device.v1.rotate-hardware-epoch-reply"
+        );
+        identity!(
+            BootstrapAggregateStateReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::BootstrapAggregateStateReplyV1",
+            "iroha.kagemusha.device.v1.bootstrap-aggregate-state-reply"
+        );
+        identity!(
+            WalletRecoverySnapshotReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::WalletRecoverySnapshotReplyV1",
+            "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply"
+        );
+        identity!(
+            SignedPaymentRequestReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::control_payload::SignedPaymentRequestReplyV1",
+            "iroha.kagemusha.device.v1.signed-payment-request-reply"
+        );
+
+        let payload = FoldReceiveCreditPayloadV1 {
+            version: VERSION,
+            operation: FOLD_RECEIVE_CREDIT,
+            operation_id: [7; 32],
+            kind: PendingCreditKindV1::Receive,
+            credit_id: [8; 32],
+        };
+        let bytes = roundtrip(&payload);
+        assert!(decode_control_command_v1(FOLD_RECEIVE_CREDIT, [7; 32], &bytes).is_ok());
+        let watermark = PendingCreditWatermarkV1 {
+            hardware_epoch_generation: 9,
+            hardware_epoch_id: [4; 32],
+            inbox_revision: 31,
+        };
+        let reply = PendingWatermarkReplyV1 {
+            version: VERSION,
+            operation: READ_PENDING_WATERMARK,
+            watermark,
+            next_pending: Some(PendingCreditSelectorV1 {
+                kind: PendingCreditKindV1::Mint,
+                credit_id: [6; 32],
+            }),
+        };
+        let command = ControlCommandV1::ReadPendingWatermark {
+            watermark: Some(watermark),
+            target: PendingCreditTargetV1::RequiredBalance(500),
+        };
+        assert!(validate_control_reply_v1(&command, &roundtrip(&reply)).is_ok());
+    }
+}

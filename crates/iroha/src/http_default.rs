@@ -59,13 +59,19 @@ impl DefaultHttpTransport {
     }
 
     pub(crate) fn from_shared(transport: Arc<dyn HttpTransport>) -> Self {
-        Self { inner: transport, deadline: None }
+        Self {
+            inner: transport,
+            deadline: None,
+        }
     }
 
     pub(crate) fn with_deadline(&self, deadline: std::time::Instant) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            deadline: Some(self.deadline.map_or(deadline, |current| current.min(deadline))),
+            deadline: Some(
+                self.deadline
+                    .map_or(deadline, |current| current.min(deadline)),
+            ),
         }
     }
 
@@ -79,14 +85,21 @@ impl DefaultHttpTransport {
             if remaining.is_zero() {
                 return Err(request_deadline_elapsed());
             }
-            request.timeout = Some(request.timeout.map_or(remaining, |limit| limit.min(remaining)));
+            request.timeout = Some(
+                request
+                    .timeout
+                    .map_or(remaining, |limit| limit.min(remaining)),
+            );
         }
         Ok(request)
     }
 
     fn send_blocking(&self, request: TransportRequest) -> Result<Response<Bytes>> {
         let response = self.inner.send_blocking(self.bound_request(request)?);
-        if self.deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+        if self
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
             return Err(request_deadline_elapsed());
         }
         response
@@ -97,9 +110,12 @@ impl DefaultHttpTransport {
             // Recompute on dispatch, including requests built before earlier I/O.
             let request = self.bound_request(request)?;
             if let Some(deadline) = self.deadline {
-                tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), self.inner.send(request))
-                    .await
-                    .map_err(|_| request_deadline_elapsed())?
+                tokio::time::timeout_at(
+                    tokio::time::Instant::from_std(deadline),
+                    self.inner.send(request),
+                )
+                .await
+                .map_err(|_| request_deadline_elapsed())?
             } else {
                 self.inner.send(request).await
             }
@@ -123,7 +139,11 @@ impl DefaultHttpTransport {
 }
 
 pub(crate) fn request_deadline_elapsed() -> Error {
-    std::io::Error::new(std::io::ErrorKind::TimedOut, "HTTP operation deadline elapsed").into()
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "HTTP operation deadline elapsed",
+    )
+    .into()
 }
 fn header_name_from_str(str: &str) -> Result<HeaderName> {
     str.parse::<HeaderName>()
@@ -788,12 +808,21 @@ mod tests {
         let observed = Arc::new(Mutex::new(Vec::new()));
         let recorded = Arc::clone(&observed);
         let transport = DefaultHttpTransport::mock(Arc::new(move |request| {
-            recorded.lock().expect("recorded budgets").push(request.timeout.expect("deadline budget"));
+            recorded
+                .lock()
+                .expect("recorded budgets")
+                .push(request.timeout.expect("deadline budget"));
             thread::sleep(Duration::from_millis(25));
             Ok(Response::new(Vec::new()))
-        })).with_deadline(Instant::now() + Duration::from_secs(2));
-        let request = || DefaultRequestBuilder::new(Method::GET, "http://localhost/status".parse().unwrap())
-            .with_transport(transport.clone()).timeout(Duration::from_secs(70)).build().unwrap();
+        }))
+        .with_deadline(Instant::now() + Duration::from_secs(2));
+        let request = || {
+            DefaultRequestBuilder::new(Method::GET, "http://localhost/status".parse().unwrap())
+                .with_transport(transport.clone())
+                .timeout(Duration::from_secs(70))
+                .build()
+                .unwrap()
+        };
         // Build both first: the second dispatch must account for earlier I/O.
         let first = request();
         let second = request();
@@ -813,13 +842,30 @@ mod tests {
             recorded.fetch_add(1, Ordering::SeqCst);
             Ok(Response::new(Vec::new()))
         }));
-        let bounded = original.with_deadline(Instant::now()).with_deadline(Instant::now() + Duration::from_secs(60));
-        let request = |transport| DefaultRequestBuilder::new(Method::POST, "http://localhost/transaction".parse().unwrap())
-            .with_transport(transport).body(vec![1, 2, 3]).build().unwrap();
-        let error = request(bounded).send_blocking().expect_err("expired POST must never dispatch");
-        assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), ErrorKind::TimedOut);
+        let bounded = original
+            .with_deadline(Instant::now())
+            .with_deadline(Instant::now() + Duration::from_secs(60));
+        let request = |transport| {
+            DefaultRequestBuilder::new(
+                Method::POST,
+                "http://localhost/transaction".parse().unwrap(),
+            )
+            .with_transport(transport)
+            .body(vec![1, 2, 3])
+            .build()
+            .unwrap()
+        };
+        let error = request(bounded)
+            .send_blocking()
+            .expect_err("expired POST must never dispatch");
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            ErrorKind::TimedOut
+        );
         assert_eq!(count.load(Ordering::SeqCst), 0);
-        request(original).send_blocking().expect("source transport remains unbounded");
+        request(original)
+            .send_blocking()
+            .expect("source transport remains unbounded");
         assert_eq!(count.load(Ordering::SeqCst), 1);
     }
 
@@ -837,11 +883,19 @@ mod tests {
         }
         let transport = DefaultHttpTransport::from_shared(Arc::new(NeverCompletes))
             .with_deadline(Instant::now() + Duration::from_millis(30));
-        let request = DefaultRequestBuilder::new(Method::GET, "http://localhost/status".parse().unwrap())
-            .with_transport(transport).build().unwrap();
-        let result = tokio::time::timeout(Duration::from_secs(2), request.send()).await.expect("absolute deadline cancels custom transport");
+        let request =
+            DefaultRequestBuilder::new(Method::GET, "http://localhost/status".parse().unwrap())
+                .with_transport(transport)
+                .build()
+                .unwrap();
+        let result = tokio::time::timeout(Duration::from_secs(2), request.send())
+            .await
+            .expect("absolute deadline cancels custom transport");
         let error = result.expect_err("pending transport cannot outlive deadline");
-        assert_eq!(error.downcast_ref::<std::io::Error>().unwrap().kind(), ErrorKind::TimedOut);
+        assert_eq!(
+            error.downcast_ref::<std::io::Error>().unwrap().kind(),
+            ErrorKind::TimedOut
+        );
     }
 
     #[test]

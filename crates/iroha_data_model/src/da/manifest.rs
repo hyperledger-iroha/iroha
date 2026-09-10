@@ -148,6 +148,7 @@ impl ChunkCommitment {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct DaManifestV1 {
     /// Manifest format version. Currently always 1.
     pub version: u16,

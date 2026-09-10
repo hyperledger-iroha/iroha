@@ -25,7 +25,7 @@ use iroha::{
         parameter::{Parameter, TransactionParameter},
         permission::Permission,
         prelude::{
-            AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Name, Quantity,
+            AssetDefinitionId, AssetId, DomainId, FindAssets, Identifiable, Quantity,
             QueryBuilderExt,
         },
         privacy::{
@@ -58,6 +58,7 @@ use iroha_core::{
     },
 };
 use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_model_base::name::Name;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::{

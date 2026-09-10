@@ -28,7 +28,7 @@ async fn ephemeral_sorted_query_respects_offset_and_limit() {
         },
     };
     let selector = SelectorTuple::<Domain>::default();
-    let (output, _processed_items) = apply_query_postprocessing_ephemeral_with_budget(
+    let (output, stats) = apply_query_postprocessing_ephemeral_with_budget(
         vec![d4, d3.clone(), d1, d2.clone()].into_iter(),
         selector,
         &params,
@@ -36,6 +36,7 @@ async fn ephemeral_sorted_query_respects_offset_and_limit() {
         None,
     )
     .expect("postprocess");
+    assert_eq!(stats.processed_items(), 4);
     let (batch, remaining, cursor) = output.into_parts();
     assert!(cursor.is_none());
     assert_eq!(remaining, 0);

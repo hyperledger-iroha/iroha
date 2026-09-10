@@ -4,6 +4,7 @@
 pub use self::model::*;
 use super::*;
 use crate::prelude::*;
+use iroha_model_base::name::Name;
 
 use iroha_crypto::HashOf;
 use iroha_data_model_derive::model;

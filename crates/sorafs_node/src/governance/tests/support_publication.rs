@@ -1783,23 +1783,20 @@ fn qualification_history_rejects_tamper_fork_duplicate_rollback_and_bad_bytes() 
         )
         .is_err()
     );
-    let bytes = norito::to_bytes(&history).expect("encode canonical history");
+    // Qualification history is a field of the authenticated state frame.
+    let bytes = norito::codec::encode_adaptive(&history);
+    let restored: RuntimeDagQualificationHistoryV1 =
+        norito::codec::decode_adaptive(&bytes).expect("complete qualification history payload");
+    assert_eq!(norito::codec::encode_adaptive(&restored), bytes);
     assert!(
-        decode_canonical_runtime_dag::<RuntimeDagQualificationHistoryV1>(
+        norito::codec::decode_adaptive::<RuntimeDagQualificationHistoryV1>(
             &bytes[..bytes.len() - 1],
-            "truncated qualification history",
         )
         .is_err()
     );
     let mut trailing = bytes;
     trailing.push(0);
-    assert!(
-        decode_canonical_runtime_dag::<RuntimeDagQualificationHistoryV1>(
-            &trailing,
-            "qualification history with trailing bytes",
-        )
-        .is_err()
-    );
+    assert!(norito::codec::decode_adaptive::<RuntimeDagQualificationHistoryV1>(&trailing).is_err());
 }
 #[test]
 fn filesystem_publisher_recovers_typed_stage_after_ambiguous_intent_cas() {

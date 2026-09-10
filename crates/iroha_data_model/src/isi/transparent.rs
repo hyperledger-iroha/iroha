@@ -2,6 +2,7 @@ use super::*;
 use crate::asset::id::AssetId;
 use core::num::NonZeroU16;
 use iroha_crypto::PublicKey;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 
 use norito::json::{FastJsonWrite, JsonSerialize};

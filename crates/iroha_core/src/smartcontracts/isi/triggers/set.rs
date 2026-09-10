@@ -95,32 +95,19 @@ pub(crate) fn data_trigger_action_matches(
         && !action.repeats.is_depleted()
         && action.filter.matches(event)
 }
-struct BorrowedEnumVariant<'a, T> {
+struct BorrowedEnumVariant<'a> {
     discriminant: u32,
     value: &'a dyn norito::core::SerializePayload,
-    marker: core::marker::PhantomData<T>,
 }
-impl<'a, T> BorrowedEnumVariant<'a, T> {
+impl<'a> BorrowedEnumVariant<'a> {
     fn new(discriminant: u32, value: &'a dyn norito::core::SerializePayload) -> Self {
         Self {
             discriminant,
             value,
-            marker: core::marker::PhantomData,
         }
     }
 }
-impl<T: norito::NoritoSchema> norito::NoritoSchema for BorrowedEnumVariant<'_, T> {
-    fn nominal_name() -> String {
-        norito::schema::identity::generic_name(
-            "iroha_core::smartcontracts::isi::triggers::set::BorrowedEnumVariant",
-            &["'_".to_owned(), T::nominal_name()],
-        )
-    }
-    fn frame_name() -> String {
-        T::frame_name()
-    }
-}
-impl<T> norito::core::SerializePayload for BorrowedEnumVariant<'_, T> {
+impl norito::core::SerializePayload for BorrowedEnumVariant<'_> {
     fn serialize(
         &self,
         writer: &mut norito::core::Encoder<'_>,
@@ -136,6 +123,7 @@ impl<T> norito::core::SerializePayload for BorrowedEnumVariant<'_, T> {
             .checked_add(value)
     }
 }
+
 /// [`IvmBytecode`]s keyed by contract hash.
 /// Stored together with usage counts so triggers sharing the same blob can be deduplicated.
 type TriggerContractStore = Storage<HashOf<IvmBytecode>, IvmBytecodeEntry>;
@@ -988,7 +976,7 @@ mod merge_write_set_tests {
             .expect("SetBlock declaration must remain discoverable");
         let struct_tail = &source[struct_start..];
         let struct_end = struct_tail
-            .find("\n}\n\nfn append_delta_component")
+            .find("\n}")
             .expect("SetBlock declaration terminator must remain discoverable");
         let struct_body = &struct_tail[..struct_end];
         let encoder_start = source
@@ -1429,20 +1417,18 @@ pub trait SetReadOnly {
                 }
                 ExecutableRef::Batch(items) => (4, items),
             };
-        let executable =
-            BorrowedEnumVariant::<Executable>::new(executable_discriminant, executable);
+        let executable = BorrowedEnumVariant::new(executable_discriminant, executable);
         let filter_discriminant = match event_type {
             TriggeringEventType::Pipeline => 0,
             TriggeringEventType::Data => 1,
             TriggeringEventType::Time => 2,
             TriggeringEventType::ExecuteTrigger => 3,
         };
-        let filter =
-            BorrowedEnumVariant::<EventFilterBox>::new(filter_discriminant, &action.filter);
+        let filter = BorrowedEnumVariant::new(filter_discriminant, &action.filter);
         let retry_policy = crate::smartcontracts::isi::query::BorrowedSingularOption::new(
             action.retry_policy.as_ref(),
         );
-        let action = crate::smartcontracts::isi::query::BorrowedSingularStruct::<Action, 6>::new([
+        let action = crate::smartcontracts::isi::query::BorrowedSingularStruct::<6>::new([
             &executable,
             &action.repeats,
             &action.authority,
@@ -2719,14 +2705,12 @@ mod tests {
             Value(u64),
         }
         let value = 31_u64;
-        let borrowed = BorrowedEnumVariant::<Projection>::new(0, &value);
+        let borrowed = BorrowedEnumVariant::new(0, &value);
         assert_eq!(
-            norito::encode_canonical(&borrowed).unwrap(),
+            crate::smartcontracts::isi::query::encode_singular_query_source_for_test::<_, Projection>(
+                &borrowed
+            ),
             norito::encode_canonical(&Projection::Value(value)).unwrap(),
-        );
-        assert_ne!(
-            <BorrowedEnumVariant<'_, Projection> as norito::NoritoSchema>::nominal_name(),
-            <Projection as norito::NoritoSchema>::nominal_name(),
         );
     }
     #[test]
@@ -2874,14 +2858,27 @@ mod tests {
         }
     }
     #[test]
-    fn executable_ref_dto_decode_from_slice_roundtrip() {
+    fn executable_ref_dto_payload_roundtrip() {
         let instruction = InstructionBox::from(Log::new(Level::INFO, "dto-roundtrip".to_owned()));
         let dto =
             ExecutableRefDto::Instructions(ConstVec::from(vec![instruction.clone(), instruction]));
-        let bytes =
-            norito::to_bytes(&dto).expect("serialize ExecutableRefDto::Instructions variant");
-        let decoded: ExecutableRefDto = norito::decode_from_bytes(&bytes).expect("decode dto");
-        assert_eq!(decoded, dto);
+        // This DTO is a nested field of SetDto, not an independent typed frame.
+        for flags in [0, norito::core::header_flags::COMPACT_LEN] {
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            let mut bytes = Vec::new();
+            norito::SerializePayload::serialize(&dto, &mut norito::core::Encoder::new(&mut bytes))
+                .expect("serialize executable field payload");
+            let (decoded, used) = norito::core::decode_field_canonical::<ExecutableRefDto>(&bytes)
+                .expect("decode executable field payload");
+            assert_eq!(decoded, dto);
+            assert_eq!(used, bytes.len());
+            assert!(
+                norito::core::decode_field_canonical::<ExecutableRefDto>(&bytes[..bytes.len() - 1])
+                    .is_err()
+            );
+            bytes.push(0);
+            assert!(norito::core::decode_field_canonical::<ExecutableRefDto>(&bytes).is_err());
+        }
     }
     #[test]
     fn replace_account_id_updates_trigger_authority_and_filter() {
@@ -3457,9 +3454,8 @@ impl From<ModRepeatsError> for InstructionExecutionError {
 // --- Norito DTO for Set (Phase 1 scaffolding) ---
 /// Norito-encoded Data Transfer Object for serializing/deserializing the `Set` of triggers and
 /// associated entries. Used in scaffolding paths where a compact binary representation is required.
-#[derive(norito::NoritoSchema)]
+#[derive(Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::smartcontracts::isi::triggers::set::SetDto")]
-#[derive(Encode, Decode)]
 pub struct SetDto {
     data: Vec<(TriggerId, LoadedActionDto<DataEventFilter>)>,
     pipeline: Vec<(TriggerId, LoadedActionDto<PipelineEventFilterBox>)>,
@@ -3468,6 +3464,10 @@ pub struct SetDto {
     ids: Vec<(TriggerId, TriggeringEventType)>,
     contracts: Vec<(HashOf<IvmBytecode>, IvmBytecodeEntryDto)>,
 }
+#[cfg(test)]
+#[path = "set_frame_identity_tests.rs"]
+mod frame_identity_tests;
+
 impl SetDto {
     /// Encode this DTO into Norito bytes.
     ///
@@ -3824,7 +3824,7 @@ mod dto_tests {
                 status: Some(BlockStatus::Committed),
             };
             let pipe_filter: dm::PipelineEventFilterBox = block_filter.into();
-            let key: dm::Name = "k1".parse().unwrap();
+            let key: iroha_model_base::name::Name = "k1".parse().unwrap();
             let val = dm::Json::new("v1");
             let set_kv = SetKeyValue::account(authority.clone(), key, val);
             let log = Log::new(dm::Level::INFO, "pipeline".to_string());

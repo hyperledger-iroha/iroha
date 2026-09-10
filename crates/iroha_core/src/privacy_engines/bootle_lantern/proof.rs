@@ -2534,7 +2534,7 @@ mod tests {
                 })
                 .expect("active native issuer policy");
             let context = statement_context();
-            let genesis_hash = [0x32; 32];
+            let genesis_hash = *statement_context().network_id.as_bytes();
             let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
             let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
@@ -2646,7 +2646,7 @@ mod tests {
                 })
                 .expect("active sealed-fixture issuer policy");
             let context = sealed_statement_context();
-            let genesis_hash = [0x32; 32];
+            let genesis_hash = *statement_context().network_id.as_bytes();
             let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
             let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
             let authorization = issuer_authorize_blind_issuance_with_rng_v1(
@@ -2713,7 +2713,7 @@ mod tests {
         let issued = issued_fixture();
         let policy = issued.policy.clone();
         let statement = issued.statement.clone();
-        let genesis_hash = [0x32; 32];
+        let genesis_hash = *statement_context().network_id.as_bytes();
         let relation =
             compile_application_relation_v1(&statement, &policy, matrix_seed(), genesis_hash)
                 .expect("compiled application relation");
@@ -2863,7 +2863,7 @@ mod tests {
                 policy,
                 statement,
                 &sealed_issued_fixture().witness,
-                [0x32; 32],
+                *statement_context().network_id.as_bytes(),
                 foreign.private_key(),
                 &mut PanicRng,
             ),
@@ -2885,7 +2885,7 @@ mod tests {
                 revoked_policy,
                 statement,
                 &sealed_issued_fixture().witness,
-                [0x32; 32],
+                *statement_context().network_id.as_bytes(),
                 &mut PanicRng,
             ),
             Err(BootleLanternPresentationPrivacyActionBuildErrorV1::Intent(
@@ -2907,7 +2907,7 @@ mod tests {
                 policy,
                 statement,
                 &sealed_issued_fixture().witness,
-                [0x32; 32],
+                *statement_context().network_id.as_bytes(),
                 &mut PanicRng,
             ),
             Err(BootleLanternPresentationPrivacyActionBuildErrorV1::Native(
@@ -2926,7 +2926,7 @@ mod tests {
             policy,
             statement,
             &sealed_issued_fixture().witness,
-            [0x32; 32],
+            *statement_context().network_id.as_bytes(),
             &mut TestRng::healthy(0x510e_527f_ade6_82d1),
         )
         .expect("prepare sealed Bootle/Lantern presentation action");
@@ -3063,7 +3063,7 @@ mod tests {
         let presentation = PresentationTranscriptV1::new(
             PresentationChallengeBindingV1 {
                 parameter_digest: [0x31; 32],
-                genesis_hash: [0x32; 32],
+                genesis_hash: *statement_context().network_id.as_bytes(),
                 statement_digest: [0x33; 32],
                 issuer_policy_record_digest: [0x34; 32],
                 transaction_intent_digest: [0x35; 32],
@@ -3075,7 +3075,7 @@ mod tests {
         let blind_issuance = BlindIssuanceRequestTranscriptV1::new(
             BlindIssuanceRequestChallengeBindingV1 {
                 parameter_digest: [0x31; 32],
-                genesis_hash: [0x32; 32],
+                genesis_hash: *statement_context().network_id.as_bytes(),
                 issuer_profile_digest: [0x33; 32],
                 credential_scope_digest: [0x36; 32],
                 issuer_policy_record_digest: [0x34; 32],
@@ -3733,7 +3733,7 @@ mod tests {
         assert_eq!(encoded.len(), PROOF_BYTES_V1);
         assert_eq!(
             hex::encode(Sha3_256::digest(&encoded)),
-            "fde02a3ec20bb584f9fc6aa440ccf370f6862304e2ee74056ea88a01e4d38f81"
+            "9e2e054d0eaa242ba0ca7b9e704737282d55013e4f3f006b5e4a8cdd4c001de1"
         );
         let decoded = BootleLanternPresentationProofV1::decode_exact(
             &encoded,
@@ -3909,7 +3909,9 @@ mod tests {
         ));
         assert!(matches!(
             verify_bound_presentation_v1(&fixture.statement, &fixture.policy, [0x33; 32], &proof,),
-            Err(BoundPresentationErrorV1::Proof(_))
+            Err(BoundPresentationErrorV1::Relation(
+                super::super::relation::RelationErrorV1::InvalidCredentialScope
+            ))
         ));
         let mut changed_intent = fixture.statement.clone();
         changed_intent.context.transaction_intent_digest =

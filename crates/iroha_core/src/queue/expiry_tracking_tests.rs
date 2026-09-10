@@ -92,6 +92,7 @@ async fn custom_expired_transaction_is_rejected() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = Arc::new(State::new(world_with_test_domains(), kura, query_handle));
+    register_test_authority(&state, &alice_id);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();
@@ -271,12 +272,13 @@ fn block_selection_culls_expired_inflight_entry_while_fifo_has_live_work() {
         .pop_from_queue(&state.view(), &mut expired_on_pop)
         .expect("old transaction is in flight before expiry");
     assert!(expired_on_pop.is_empty());
-    time_handle.advance(Duration::from_millis(6));
+    time_handle.advance(Duration::from_millis(4));
     let live_tx = accepted_tx_by_someone(&time_source);
     let live_hash = live_tx.as_ref().hash_as_entrypoint();
     queue
         .push(live_tx, state.view())
         .expect("live transaction push succeeds");
+    time_handle.advance(Duration::from_millis(2));
     assert_eq!(queue.active_len(), 2);
     let mut selected = Vec::new();
     queue.get_transactions_for_block_with_state(state.as_ref(), nonzero!(1_usize), &mut selected);

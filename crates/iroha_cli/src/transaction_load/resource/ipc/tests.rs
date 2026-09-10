@@ -1,6 +1,7 @@
 //! Real-file capture authentication and bounded frame controls; no child process runs.
 
 use super::*;
+use std::fs::OpenOptions;
 use std::os::unix::{
     fs::{OpenOptionsExt, PermissionsExt, symlink},
     net::UnixListener,

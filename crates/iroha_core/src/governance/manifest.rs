@@ -22,9 +22,9 @@ use iroha_data_model::{
         LaneVisibility,
     },
     peer::PeerId,
-    prelude::Name,
 };
 use iroha_logger::{debug, info, warn};
+use iroha_model_base::name::Name;
 use norito::{
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Value as JsonValue},
@@ -2552,8 +2552,8 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         nexus::{LaneCatalog, LaneConfig},
-        prelude::Name,
     };
+    use iroha_model_base::name::Name;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use std::{path::PathBuf, str::FromStr};

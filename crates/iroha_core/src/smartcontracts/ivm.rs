@@ -362,12 +362,12 @@ mod tests {
     use super::*;
     use iroha_data_model::{
         metadata::Metadata,
-        name::Name,
         runtime::{
             RuntimeUpgradeId, RuntimeUpgradeManifest, RuntimeUpgradeRecord, RuntimeUpgradeStatus,
         },
         smart_contract::manifest::ContractManifest,
     };
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     fn manifest_with_hashes(code_hash: Option<Hash>, abi_hash: Option<Hash>) -> ContractManifest {
         ContractManifest {

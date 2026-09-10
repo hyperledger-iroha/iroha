@@ -851,6 +851,16 @@ class HttpClientTransportTest {
                 val bootstrap = mutableObj(operationVectors, "bootstrap_key")
                 mutableObj(bootstrap, "zero_refresh_components")["coefficient_count"] = 63L
             },
+            "rejected bootstrap refresh input digest drift" to { operationVectors ->
+                val rejected = mutableListOfMaps(operationVectors, "bootstrap_refresh_vectors")
+                    .first { it.containsKey("expected_error") }
+                rejected["expected_input_ciphertext_sha256"] = "0".repeat(64)
+            },
+            "rejected bootstrap refresh input slot drift" to { operationVectors ->
+                val rejected = mutableListOfMaps(operationVectors, "bootstrap_refresh_vectors")
+                    .first { it.containsKey("expected_error") }
+                rejected["input_plaintext_slots"] = listOf(-1L)
+            },
             "rotation key count drift" to { operationVectors ->
                 mutableObj(operationVectors, "evaluation_key_bundle")["rotation_key_count"] = 99L
             },
@@ -5653,13 +5663,19 @@ class HttpClientTransportTest {
             assertEquals(string(bootstrap, "key_id"), string(vector, "key_id"), "bootstrap refresh vector $name key id")
             val refreshRounds = long(vector, "refresh_rounds")
             assert(refreshRounds > 0) { "bootstrap refresh vector $name rounds must be positive" }
-            assert(refreshRounds <= long(bootstrap, "max_refresh_rounds")) { "bootstrap refresh vector $name exceeds key rounds" }
             val plaintextSlots = longList(vector, "input_plaintext_slots")
             assert(plaintextSlots.isNotEmpty()) { "bootstrap refresh vector $name plaintext slots must not be empty" }
             assert(plaintextSlots.all { it >= 0 }) { "bootstrap refresh vector $name plaintext slots must be non-negative" }
             assert(long(vector, "expected_input_ciphertext_bytes") > 0) { "bootstrap refresh vector $name input bytes must be positive" }
-            assert(long(vector, "expected_output_ciphertext_bytes") > 0) { "bootstrap refresh vector $name output bytes must be positive" }
             assertBfvUpperSha256("bootstrap refresh vector $name input", string(vector, "expected_input_ciphertext_sha256"))
+            if (vector.containsKey("expected_error")) {
+                assert(refreshRounds > long(bootstrap, "max_refresh_rounds"))
+                assertEquals("invalid BFV parameters: BFV bootstrap refresh rounds 2 exceeds bootstrap key max_refresh_rounds 1", string(vector, "expected_error"))
+                assert(!vector.containsKey("expected_output_ciphertext_sha256"))
+                continue
+            }
+            assert(refreshRounds <= long(bootstrap, "max_refresh_rounds")) { "bootstrap refresh vector $name exceeds key rounds" }
+            assert(long(vector, "expected_output_ciphertext_bytes") > 0) { "bootstrap refresh vector $name output bytes must be positive" }
             assertBfvUpperSha256("bootstrap refresh vector $name output", string(vector, "expected_output_ciphertext_sha256"))
             assertBfvUpperSha256("bootstrap refresh vector $name plaintext", string(vector, "expected_plaintext_sha256"))
             val components = obj(vector, "output_components")

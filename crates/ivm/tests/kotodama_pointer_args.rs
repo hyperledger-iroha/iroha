@@ -1,6 +1,7 @@
 //! Runtime tests for canonical pointer values in durable Kotodama state.
 use iroha_crypto::Hash as IrohaHash;
 use iroha_data_model::prelude::*;
+use iroha_model_base::name::Name;
 use ivm::{
     IVM, PointerType,
     kotodama::compiler::Compiler,

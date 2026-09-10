@@ -30,10 +30,10 @@ use iroha_data_model::{
     block::{BlockHeader, consensus_v2::SnapshotV2BootstrapRecord},
     bridge::SccpRegistryV1,
     nexus::{LaneCatalog, LaneId},
-    state_path::StatePath,
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_logger::prelude::*;
+use iroha_model_base::state_path::StatePath;
 use mv::{
     cell::Cell,
     storage::{Storage, StorageReadOnly},

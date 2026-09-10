@@ -15,7 +15,7 @@ Example:
         --external-signer /opt/iroha/bin/authenticated-external-software-ed25519-sign \\
         --signing-public-key /run/iroha-release/ed25519-public.raw \\
         --trusted-signing-fingerprint <reviewed-lowercase-sha256> \\
-        --release-manifest-verifier /opt/iroha/bin/sorafs-validate \\
+        --release-manifest-verifier /opt/iroha/bin/iroha \\
         --trusted-release-manifest-verifier-sha256 <reviewed-lowercase-sha256> \\
         --publish-target iroha3=sorafs://releases/iroha3/v<release-version>
 """
@@ -43,12 +43,12 @@ _SCRIPT_DIRECTORY = Path(os.path.abspath(__file__)).parent
 _MAX_BOOTSTRAP_MODULE_BYTES = 2 * 1024 * 1024
 _BOOTSTRAP_RELEASE_MODULE_SHA256 = {
     "release_artifact_contract": "ad4a5bd832f95a55ef2d4bee8a451ef3f5af14d244a1a14a232ec5cc4d59e253",
-    "release_manifest_signing": "743c89d7264ac24d504ee7ea4098bb9c604896bf2eeb401d29e90d47f1ab3638",
-    "publish_plan": "02eb639a4aeb1fa03f7d1c52b6a012775684d9c8fe848b3c91375692ad34c180",
+    "release_manifest_signing": "c7dbbbd6f3b21e05cff934f2a9db47d331988c4fc3141e7ad7b2e2edfe7cab4a",
+    "publish_plan": "a9d15abb6eaea794f4c8fa27283667b5d75165fee60cd081a1373dab00257d70",
     # This source owns the reviewed surface seal. Its one literal digest is
     # normalized before hashing so resealing does not create a hash cycle with
     # this pipeline's bootstrap trust anchor.
-    "check_release_feature_graph": "dd6477d7378f4a30524ef093375036410bc8e1d751028e1e18b51cd035404a93",
+    "check_release_feature_graph": "cc8d44842b79afedb7f5b29f2ae6763904ccc0ee47c14cf1149315d722e174f3",
 }
 
 
@@ -816,7 +816,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--release-manifest-verifier",
-        help="Direct path to the reviewed sorafs-validate native verifier.",
+        help="Direct path to the reviewed iroha native verifier.",
     )
     parser.add_argument(
         "--trusted-release-manifest-verifier-sha256",

@@ -2098,3 +2098,129 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod explicit_schema_identity_tests {
+    use super::*;
+
+    macro_rules! identity {
+        ($root:ty, $nominal:literal, $frame:literal) => {
+            assert_eq!(<$root as norito::NoritoSchema>::nominal_name(), $nominal);
+            assert_eq!(<$root as norito::NoritoSchema>::frame_name(), $frame);
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$root>(),
+                norito::core::schema_hash_for_name($frame)
+            );
+            assert_eq!(
+                <Vec<$root> as norito::NoritoSchema>::nominal_name(),
+                format!("alloc::vec::Vec<{}>", $nominal)
+            );
+        };
+    }
+
+    fn roundtrip<T>(value: &T) -> Vec<u8>
+    where
+        T: norito::NoritoSerialize,
+        for<'de> T: norito::NoritoDeserialize<'de>,
+    {
+        let frame = norito::encode_canonical(value).expect("canonical fixture frame");
+        let header = norito::core::Header::read(frame.as_slice()).expect("typed frame header");
+        assert_eq!(header.schema, norito::schema::identity::frame_hash::<T>());
+        let decoded: T = norito::decode_canonical(&frame).expect("same root canonical replay");
+        assert_eq!(norito::encode_canonical(&decoded).unwrap(), frame);
+        assert!(matches!(
+            norito::decode_canonical::<Vec<T>>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut trailing = frame.clone();
+        trailing.push(0);
+        assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        frame
+    }
+
+    #[test]
+    fn framed_roots_keep_nominal_and_protocol_identities() {
+        identity!(
+            SenderPublicInputsV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderPublicInputsV1",
+            "iroha.kagemusha.device.v1.sender-public-inputs"
+        );
+        identity!(
+            SenderPublicInputPreimageV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderPublicInputPreimageV1",
+            "iroha.kagemusha.device.v1.sender-public-input-preimage"
+        );
+        identity!(
+            SenderHardwareAuthorizationPreimageV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderHardwareAuthorizationPreimageV1",
+            "iroha.kagemusha.device.v1.sender-hardware-authorization-preimage"
+        );
+        identity!(
+            SenderHardwareAuthorizationV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderHardwareAuthorizationV1",
+            "iroha.kagemusha.device.v1.sender-hardware-authorization"
+        );
+        identity!(
+            SenderCommandV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderCommandV1",
+            "iroha.kagemusha.device.v1.sender-command"
+        );
+        identity!(
+            SenderReplyV1,
+            "connect_norito_bridge::kagemusha_device_bridge_v1::sender_payload::SenderReplyV1",
+            "iroha.kagemusha.device.v1.sender-reply"
+        );
+
+        let bytes = canonical_command_body_for_tests(5).unwrap();
+        let command = SenderCommandV1::decode_canonical_exact(5, [7; 32], &bytes).unwrap();
+        assert_eq!(roundtrip(&command), bytes);
+        let SenderCommandBodyV1::Prepare { inputs } = command.body else {
+            panic!("prepare fixture")
+        };
+        let inputs_frame = roundtrip(&inputs);
+        let core_inputs: iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1 =
+            norito::decode_canonical(&inputs_frame).expect("same canonical Core input projection");
+        assert_eq!(
+            norito::encode_canonical(&core_inputs).unwrap(),
+            inputs_frame
+        );
+        assert_ne!(
+            <SenderPublicInputsV1 as norito::NoritoSchema>::nominal_name(),
+            <iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputsV1 as norito::NoritoSchema>::nominal_name(),
+        );
+        let preimage = SenderPublicInputPreimageV1 {
+            version: VERSION,
+            operation_id: command.operation_id,
+            context: command.context,
+            inputs,
+        };
+        let frame = roundtrip(&preimage);
+        let core: iroha_core::zk::kagemusha_v1_state::KagemushaOutgoingPublicInputPreimageV1 =
+            norito::decode_canonical(&frame).unwrap();
+        assert_eq!(norito::encode_canonical(&core).unwrap(), frame);
+        assert_eq!(
+            core.canonical_digest().unwrap(),
+            preimage.canonical_digest().unwrap()
+        );
+        let commit = SenderCommandV1::decode_canonical_exact(
+            7,
+            [7; 32],
+            &canonical_command_body_for_tests(7).unwrap(),
+        )
+        .unwrap();
+        let SenderCommandBodyV1::Commit {
+            hardware_authorization,
+            ..
+        } = commit.body
+        else {
+            panic!("commit fixture")
+        };
+        let authorization =
+            SenderHardwareAuthorizationV1::decode_canonical_exact(&hardware_authorization).unwrap();
+        assert_eq!(roundtrip(&authorization), hardware_authorization);
+        assert_eq!(
+            authorization.expected_authorization_id().unwrap(),
+            authorization.authorization_id
+        );
+    }
+}

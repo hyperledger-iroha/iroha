@@ -5,8 +5,8 @@ use iroha_data_model::{
     domain::DomainId,
     isi::{InstructionBox, kaigi::JoinKaigi},
     kaigi::{KaigiId, KaigiParticipantCommitment},
-    name::Name,
 };
+use iroha_model_base::name::Name;
 use norito::core::DeserializePayload;
 use std::str::FromStr;
 #[test]

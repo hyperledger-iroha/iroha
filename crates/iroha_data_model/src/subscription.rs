@@ -1,9 +1,10 @@
 //! Subscription metadata schemas for trigger-based billing.
 use crate::{
-    AssetDefinitionId, DeriveJsonDeserialize, DeriveJsonSerialize, account::AccountId, name::Name,
-    nft::NftId, trigger::TriggerId,
+    AssetDefinitionId, DeriveJsonDeserialize, DeriveJsonSerialize, account::AccountId, nft::NftId,
+    trigger::TriggerId,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

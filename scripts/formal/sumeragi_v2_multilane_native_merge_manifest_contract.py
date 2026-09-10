@@ -31,7 +31,9 @@ NATIVE_PARTICIPANT_APPLICATION_ROLE_BINDINGS = (
         (
             "let prepare = &leg.prepare_qc.body;",
             "let commit = &leg.commit_qc.body;",
-            "compute_settlement_hash(&leg.participant_settlement)",
+            ".participant_settlement",
+            ".computed_hash()",
+            'map_err(|_| "Native AMX participant settlement cannot be hashed")?',
             "settlement_hash != leg.participant_settlement_hash",
             "Native AMX participant leg identity is internally inconsistent",
             "Native AMX same-route leg differs from the coordinator identity",
@@ -112,12 +114,12 @@ NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS = tuple(
         (
             "participant_application_role_rejects_settlement_identity_and_content_tampering",
             (
-                "leg.participant_settlement.lane_id =",
-                "leg.participant_settlement.dataspace_id =",
-                "leg.participant_settlement.lane_incarnation =",
-                "leg.participant_settlement.block_height += 1",
-                "leg.participant_settlement.receipts[0].source_id =",
-                "leg.participant_settlement.receipts[0].timestamp_ms += 1",
+                "fields.lane_id =",
+                "fields.dataspace_id =",
+                "fields.lane_incarnation =",
+                "fields.participant_lane_block_height += 1",
+                "fields.source_ids[0] =",
+                "fields.authority_context_height += 1",
                 "leg.participant_settlement_hash =",
                 "for index in 0..receipt.legs.len()",
                 "mutate(&mut altered.legs[index])",
@@ -166,10 +168,11 @@ NATIVE_PARTICIPANT_APPLICATION_IDENTITY_COMPARISONS = (
     "leg.participant_proposal.proposal_hash != prepare.participant_proposal_hash",
     "leg.participant_proposal.proposal_hash != commit.participant_proposal_hash",
     "settlement_hash != leg.participant_settlement_hash",
-    "leg.participant_settlement.lane_id != descriptor.lane_id",
-    "leg.participant_settlement.dataspace_id != descriptor.dataspace_id",
-    "leg.participant_settlement.lane_incarnation != descriptor.lane_incarnation",
-    "leg.participant_settlement.block_height != descriptor.lane_block_height",
+    "leg.participant_settlement.lane_id() != descriptor.lane_id",
+    "leg.participant_settlement.dataspace_id() != descriptor.dataspace_id",
+    "leg.participant_settlement.lane_incarnation() != descriptor.lane_incarnation",
+    "leg.participant_settlement.participant_lane_block_height() != descriptor.lane_block_height",
+    "leg.participant_settlement.authority_context_height() != descriptor.proposal_height",
     "Hash::from(settlement_hash) != prepare.participant_settlement_commitment",
     "Hash::from(settlement_hash) != commit.participant_settlement_commitment",
     "prepare.coordinator_lane_id != receipt.lane_id",
@@ -188,7 +191,422 @@ NATIVE_PARTICIPANT_APPLICATION_IDENTITY_COMPARISONS = (
     "commit.coordinator_proposal_hash != receipt.coordinator_proposal_hash",
 )
 
+NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS = (('crates/iroha_data_model/src/block/consensus.rs',
+  'struct',
+  'NativeAmxParticipantSettlement',
+  ('lane_id: LaneId',
+   'dataspace_id: DataSpaceId',
+   'lane_incarnation: Hash',
+   'participant_lane_block_height: u64',
+   'authority_context_height: u64',
+   'previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>',
+   'source_ids: Vec<[u8; Hash::LENGTH]>')),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::lane_id',
+  ('self.lane_id',)),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::dataspace_id',
+  ('self.dataspace_id',)),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::lane_incarnation',
+  ('self.lane_incarnation',)),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::participant_lane_block_height',
+  ('self.participant_lane_block_height',)),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::authority_context_height',
+  ('self.authority_context_height',)),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::previous_native_settlement_hash',
+  ('self.previous_native_settlement_hash',)),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::source_ids',
+  ('self.source_ids',)),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::computed_hash',
+  ('b"iroha:native-amx:participant-settlement:v1"',
+   'let bytes = norito::encode_canonical(self)?;',
+   'u64::try_from(DOMAIN.len())',
+   '.to_le_bytes();',
+   '&domain_len,',
+   'DOMAIN,',
+   '&bytes,')),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::try_new',
+  ('participant_lane_block_height == 0',
+   'authority_context_height == 0',
+   'participant_lane_block_height == 1 && previous_native_settlement_hash.is_some()',
+   'source_ids.is_empty() || source_ids.len() > NATIVE_AMX_GROUP_SOURCES_MAX',
+   '!native_amx_nonzero(source)',
+   'collect::<std::collections::BTreeSet<_>>()',
+   '!= source_ids.len()')),
+ ('crates/iroha_core/src/native_amx/participant_application_role_tests.rs',
+  'fn',
+  'mutate_participant_settlement',
+  ('mutate(&mut fields);',
+   'leg.participant_settlement = NativeAmxParticipantSettlement::try_new(',
+   'fields.participant_lane_block_height,',
+   'fields.authority_context_height,',
+   'settlement.previous_native_settlement_hash(),',
+   'fields.source_ids,')),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options',
+  ('Self::new_with_options_and_retention(',
+   'include_lane_payload,',
+   'include_projection_policies,',
+   'include_lane_lifecycle,',
+   'include_native_lane,',
+   'iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,')),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention',
+  ('(1_u8..=4)',
+   'Algorithm::BlsNormal',
+   'if include_lane_lifecycle {',
+   'locked_lane_work_test_kura(blocks_in_memory)',
+   'State::new_with_chain_and_network_id_for_testing(',
+   'context.network_id,',
+   'install_fixture_validator_authority(&state, &context, &validator_set_pops);',
+   'if include_native_lane {',
+   'install_fixture_native_lane(&mut state, &mut context);')),
+ ('crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs',
+  'struct',
+  'NativeAmxParticipantReceiptLatestIndexV2',
+  ('version: u8',
+   'lane_id: LaneId',
+   'dataspace_id: DataSpaceId',
+   'lane_incarnation: Hash',
+   'lane_block_height: u64',
+   'participant_proposal_hash: Hash',
+   'participant_settlement_hash:\n'
+   '        HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>',
+   'application_block_height: u64',
+   'application_block_hash: HashOf<BlockHeader>',
+   'executed_block_wire_hash: Hash',
+   'finality_artifact_hash: HashOf<V2FinalityArtifact>',
+   'manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>')))
+
+NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS = (('crates/iroha_data_model/src/block/consensus.rs',
+  'struct',
+  'NativeAmxParticipantSettlement',
+  'pub struct NativeAmxParticipantSettlement {\n'
+  '    lane_id: LaneId,\n'
+  '    dataspace_id: DataSpaceId,\n'
+  '    lane_incarnation: Hash,\n'
+  '    participant_lane_block_height: u64,\n'
+  '    authority_context_height: u64,\n'
+  '    previous_native_settlement_hash: Option<HashOf<NativeAmxParticipantSettlement>>,\n'
+  '    source_ids: Vec<[u8; Hash::LENGTH]>,\n'
+  '}'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::lane_id',
+  '    pub const fn lane_id(&self) -> LaneId {\n        self.lane_id\n    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::dataspace_id',
+  '    pub const fn dataspace_id(&self) -> DataSpaceId {\n        self.dataspace_id\n    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::lane_incarnation',
+  '    pub const fn lane_incarnation(&self) -> Hash {\n        self.lane_incarnation\n    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::participant_lane_block_height',
+  '    pub const fn participant_lane_block_height(&self) -> u64 {\n'
+  '        self.participant_lane_block_height\n'
+  '    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::authority_context_height',
+  '    pub const fn authority_context_height(&self) -> u64 {\n'
+  '        self.authority_context_height\n'
+  '    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::previous_native_settlement_hash',
+  '    pub const fn previous_native_settlement_hash(&self) -> Option<HashOf<Self>> {\n'
+  '        self.previous_native_settlement_hash\n'
+  '    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::source_ids',
+  '    pub fn source_ids(&self) -> &[[u8; Hash::LENGTH]] {\n        &self.source_ids\n    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::computed_hash',
+  '    pub fn computed_hash(&self) -> Result<HashOf<Self>, norito::Error> {\n'
+  '        const DOMAIN: &[u8] = b"iroha:native-amx:participant-settlement:v1";\n'
+  '        let bytes = norito::encode_canonical(self)?;\n'
+  '        let domain_len = u64::try_from(DOMAIN.len())\n'
+  '            .expect("protocol-defined hash domain length fits u64")\n'
+  '            .to_le_bytes();\n'
+  '        Ok(HashOf::from_untyped_unchecked(Hash::new_from_chunks(&[\n'
+  '            &domain_len,\n'
+  '            DOMAIN,\n'
+  '            &bytes,\n'
+  '        ])))\n'
+  '    }'),
+ ('crates/iroha_data_model/src/block/consensus.rs',
+  'method',
+  'NativeAmxParticipantSettlement::try_new',
+  '    pub fn try_new(\n'
+  '        lane_id: LaneId,\n'
+  '        dataspace_id: DataSpaceId,\n'
+  '        lane_incarnation: Hash,\n'
+  '        participant_lane_block_height: u64,\n'
+  '        authority_context_height: u64,\n'
+  '        previous_native_settlement_hash: Option<HashOf<Self>>,\n'
+  '        source_ids: Vec<[u8; Hash::LENGTH]>,\n'
+  "    ) -> Result<Self, &'static str> {\n"
+  '        if lane_incarnation == Hash::prehashed([0; Hash::LENGTH])\n'
+  '            || participant_lane_block_height == 0\n'
+  '            || authority_context_height == 0\n'
+  '        {\n'
+  '            return Err("Native AMX participant settlement authority must be nonzero");\n'
+  '        }\n'
+  '        if (participant_lane_block_height == 1 && '
+  'previous_native_settlement_hash.is_some())\n'
+  '            || previous_native_settlement_hash\n'
+  '                .is_some_and(|hash| Hash::from(hash) == Hash::prehashed([0; '
+  'Hash::LENGTH]))\n'
+  '        {\n'
+  '            return Err("Native AMX previous settlement link is invalid");\n'
+  '        }\n'
+  '        if source_ids.is_empty() || source_ids.len() > NATIVE_AMX_GROUP_SOURCES_MAX {\n'
+  '            return Err("Native AMX participant source group is out of bounds");\n'
+  '        }\n'
+  '        if source_ids.iter().any(|source| !native_amx_nonzero(source)) {\n'
+  '            return Err("Native AMX participant sources must be nonzero");\n'
+  '        }\n'
+  '        if source_ids\n'
+  '            .iter()\n'
+  '            .copied()\n'
+  '            .collect::<std::collections::BTreeSet<_>>()\n'
+  '            .len()\n'
+  '            != source_ids.len()\n'
+  '        {\n'
+  '            return Err("Native AMX participant source group must be unique");\n'
+  '        }\n'
+  '        Ok(Self {\n'
+  '            lane_id,\n'
+  '            dataspace_id,\n'
+  '            lane_incarnation,\n'
+  '            participant_lane_block_height,\n'
+  '            authority_context_height,\n'
+  '            previous_native_settlement_hash,\n'
+  '            source_ids,\n'
+  '        })\n'
+  '    }'),
+ ('crates/iroha_core/src/native_amx/participant_application_role_tests.rs',
+  'fn',
+  'participant_application_role_rejects_settlement_identity_and_content_tampering',
+  '    let mutations: &[Mutation] = &[\n'
+  '        ("lane", |leg| {\n'
+  '            mutate_participant_settlement(leg, |fields| fields.lane_id = LaneId::new(90))\n'
+  '        }),\n'
+  '        ("dataspace", |leg| {\n'
+  '            mutate_participant_settlement(leg, |fields| fields.dataspace_id = '
+  'DataSpaceId::new(90))\n'
+  '        }),\n'
+  '        ("incarnation", |leg| {\n'
+  '            mutate_participant_settlement(leg, |fields| {\n'
+  '                fields.lane_incarnation = Hash::new(b"settlement-incarnation-drift")\n'
+  '            })\n'
+  '        }),\n'
+  '        ("height", |leg| {\n'
+  '            mutate_participant_settlement(leg, |fields| '
+  'fields.participant_lane_block_height += 1)\n'
+  '        }),\n'
+  '        ("source", |leg| {\n'
+  '            mutate_participant_settlement(leg, |fields| fields.source_ids[0] = [0x11; '
+  'Hash::LENGTH])\n'
+  '        }),\n'
+  '        ("authority height", |leg| {\n'
+  '            mutate_participant_settlement(leg, |fields| fields.authority_context_height += '
+  '1)\n'
+  '        }),\n'
+  '        ("advertised hash", |leg| {\n'
+  '            leg.participant_settlement_hash =\n'
+  '                HashOf::from_untyped_unchecked(Hash::new(b"settlement-hash-drift"))\n'
+  '        }),\n'
+  '    ];\n'),
+ ('crates/iroha_core/src/native_amx/participant_application_role_tests.rs',
+  'fn',
+  'mutate_participant_settlement',
+  'fn mutate_participant_settlement(\n'
+  '    leg: &mut NativeAmxLegRecordV2,\n'
+  '    mutate: impl FnOnce(&mut ParticipantSettlementFields),\n'
+  ') {\n'
+  '    let settlement = &leg.participant_settlement;\n'
+  '    let mut fields = ParticipantSettlementFields {\n'
+  '        lane_id: settlement.lane_id(),\n'
+  '        dataspace_id: settlement.dataspace_id(),\n'
+  '        lane_incarnation: settlement.lane_incarnation(),\n'
+  '        participant_lane_block_height: settlement.participant_lane_block_height(),\n'
+  '        authority_context_height: settlement.authority_context_height(),\n'
+  '        source_ids: settlement.source_ids().to_vec(),\n'
+  '    };\n'
+  '    mutate(&mut fields);\n'
+  '    leg.participant_settlement = NativeAmxParticipantSettlement::try_new(\n'
+  '        fields.lane_id,\n'
+  '        fields.dataspace_id,\n'
+  '        fields.lane_incarnation,\n'
+  '        fields.participant_lane_block_height,\n'
+  '        fields.authority_context_height,\n'
+  '        settlement.previous_native_settlement_hash(),\n'
+  '        fields.source_ids,\n'
+  '    )\n'
+  '    .expect("tampered control still satisfies intrinsic constructor invariants");\n'
+  '}'),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options',
+  '    fn new_with_options(\n'
+  '        include_lane_payload: bool,\n'
+  '        include_projection_policies: bool,\n'
+  '        include_lane_lifecycle: bool,\n'
+  '        include_native_lane: bool,\n'
+  '    ) -> Self {\n'
+  '        Self::new_with_options_and_retention(\n'
+  '            include_lane_payload,\n'
+  '            include_projection_policies,\n'
+  '            include_lane_lifecycle,\n'
+  '            include_native_lane,\n'
+  '            iroha_config::parameters::defaults::kura::BLOCKS_IN_MEMORY,\n'
+  '        )\n'
+  '    }'),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention',
+  'let kura = if include_lane_lifecycle { '
+  'crate::sumeragi::v2_lane_work::tests::locked_lane_work_test_kura(blocks_in_memory) } else { '
+  'Kura::blank_kura_for_testing_with_blocks_in_memory(blocks_in_memory) };'),
+ ('crates/iroha_core/src/sumeragi/tests/v2_apply_unsealed_00.rs',
+  'method',
+  'ApplyFixture::new_with_options_and_retention',
+  'install_fixture_validator_authority(&state, &context, &validator_set_pops); if '
+  'include_native_lane { install_fixture_native_lane(&mut state, &mut context); }'),
+ ('crates/iroha_core/src/kura/native_amx_participant_application_artifacts.rs',
+  'struct',
+  'NativeAmxParticipantReceiptLatestIndexV2',
+  'struct NativeAmxParticipantReceiptLatestIndexV2 {\n'
+  '    version: u8,\n'
+  '    lane_id: LaneId,\n'
+  '    dataspace_id: DataSpaceId,\n'
+  '    lane_incarnation: Hash,\n'
+  '    lane_block_height: u64,\n'
+  '    participant_proposal_hash: Hash,\n'
+  '    participant_settlement_hash:\n'
+  '        HashOf<iroha_data_model::block::consensus::NativeAmxParticipantSettlement>,\n'
+  '    application_block_height: u64,\n'
+  '    application_block_hash: HashOf<BlockHeader>,\n'
+  '    executed_block_wire_hash: Hash,\n'
+  '    finality_artifact_hash: HashOf<V2FinalityArtifact>,\n'
+  '    manifest_artifact_hash: HashOf<NativeAmxParticipantApplicationManifestArtifactV1>,\n'
+  '}'),
+ ('crates/iroha_core/src/sumeragi/exec.rs',
+  'fn',
+  'from_result_bearing_block_and_merge_entry',
+  '                if descriptor.proposal_height != authority_context_height\n'
+  '                    || (!source.finality_bound_merge\n'
+  '                        && authority_context_height != application_block_height)\n'
+  '                    || (source.finality_bound_merge\n'
+  '                        && authority_context_height > application_block_height)\n'
+  '                    || prepare.source_id != source.receipt.source_id\n'
+  '                    || commit.source_id != source.receipt.source_id\n'
+  '                    || prepare.tx_entrypoint_hash != source.entrypoint_hash\n'
+  '                    || commit.tx_entrypoint_hash != source.entrypoint_hash\n'
+  '                    || prepare.participant_proposal_hash != '
+  'leg.participant_proposal.proposal_hash\n'
+  '                    || commit.participant_proposal_hash != '
+  'leg.participant_proposal.proposal_hash\n'
+  '                    || prepare.participant_settlement_commitment\n'
+  '                        != Hash::from(leg.participant_settlement_hash)\n'
+  '                    || commit.participant_settlement_commitment\n'
+  '                        != Hash::from(leg.participant_settlement_hash)\n'
+  '                {\n'
+  '                    return Err(\n'
+  '                        "Native AMX participant QCs do not bind the canonical '
+  'source/entrypoint"\n'
+  '                            .to_owned(),\n'
+  '                    );\n'
+  '                }\n'
+  '                let computed_settlement_hash =\n'
+  '                    leg.participant_settlement.computed_hash().map_err(|_| {\n'
+  '                        "Native AMX participant control settlement cannot be '
+  'hashed".to_owned()\n'
+  '                    })?;\n'
+  '                if computed_settlement_hash != leg.participant_settlement_hash {\n'
+  '                    return Err(\n'
+  '                        "Native AMX participant control settlement hash '
+  'mismatch".to_owned()\n'
+  '                    );\n'
+  '                }\n'
+  '                let settlement = &leg.participant_settlement;\n'
+  '                if settlement.lane_id() != descriptor.lane_id\n'
+  '                    || settlement.dataspace_id() != descriptor.dataspace_id\n'
+  '                    || settlement.lane_incarnation() != descriptor.lane_incarnation\n'
+  '                    || settlement.participant_lane_block_height() != '
+  'descriptor.lane_block_height\n'
+  '                    || settlement.authority_context_height() != authority_context_height\n'
+  '                {\n'
+  '                    return Err(\n'
+  '                        "Native AMX participant settlement differs from its application '
+  'context"\n'
+  '                            .to_owned(),\n'
+  '                    );\n'
+  '                }\n'),
+ ('crates/iroha_core/src/sumeragi/exec.rs',
+  'fn',
+  'from_result_bearing_block_and_merge_entry',
+  '                if group.participant_proposal != leg.participant_proposal\n'
+  '                    || group.participant_settlement != *settlement\n'
+  '                    || group.participant_settlement_hash != '
+  'leg.participant_settlement_hash\n'
+  '                {\n'
+  '                    return Err(\n'
+  '                        "Native AMX participant route carries conflicting proposal/control '
+  'claims"\n'
+  '                            .to_owned(),\n'
+  '                    );\n'
+  '                }\n'
+  '                if group\n'
+  '                    .members\n'
+  '                    .iter()\n'
+  '                    .any(|member| member.source_id == source.receipt.source_id)\n'
+  '                {\n'
+  '                    return Err(\n'
+  '                        "Native AMX participant control repeats a source '
+  'transaction".to_owned(),\n'
+  '                    );\n'
+  '                }\n'),
+ ('crates/iroha_core/src/sumeragi/exec.rs',
+  'fn',
+  'from_result_bearing_block_and_merge_entry',
+  '            if source_ids != group.settlement_source_ids\n'
+  '                || source_ids.iter().copied().collect::<BTreeSet<_>>().len() != '
+  'source_ids.len()\n'
+  '            {\n'
+  '                return Err(\n'
+  '                    "Native AMX grouped participant settlement does not exactly cover block '
+  'sources"\n'
+  '                        .to_owned(),\n'
+  '                );\n'
+  '            }\n'))
+
 NATIVE_MERGE_SOURCE_BINDINGS = (
+    *NATIVE_TYPED_SETTLEMENT_SOURCE_BINDINGS,
     *NATIVE_PARTICIPANT_APPLICATION_ROLE_BINDINGS,
     *NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_BINDINGS,
     (
@@ -267,11 +685,15 @@ NATIVE_APPLICATION_MANIFEST_BINDING = (
         "commit.source_id != source.receipt.source_id",
         "prepare.tx_entrypoint_hash != source.entrypoint_hash",
         "commit.tx_entrypoint_hash != source.entrypoint_hash",
-        "settlement.tx_count",
-        "settlement.receipts.len()",
-        "receipt.timestamp_ms != authority_context_height",
-        "settlement.nexus_fee_receipts.is_empty()",
-        "settlement.native_amx_receipts.is_empty()",
+        "leg.participant_settlement.computed_hash().map_err(|_|",
+        "computed_settlement_hash != leg.participant_settlement_hash",
+        "settlement.lane_id() != descriptor.lane_id",
+        "settlement.dataspace_id() != descriptor.dataspace_id",
+        "settlement.lane_incarnation() != descriptor.lane_incarnation",
+        "settlement.participant_lane_block_height() != descriptor.lane_block_height",
+        "settlement.authority_context_height() != authority_context_height",
+        "let settlement_source_ids = settlement.source_ids().to_vec();",
+        "source_ids.iter().copied().collect::<BTreeSet<_>>().len() != source_ids.len()",
         "BTreeMap::<(LaneId, DataSpaceId, Hash), u64>",
         "BTreeMap::<(LaneId, DataSpaceId, Hash, u64)",
         "route_heights",
@@ -436,14 +858,14 @@ NATIVE_MERGE_MANIFEST_CALLER_BINDINGS = (
 )
 
 NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
+    *NATIVE_TYPED_SETTLEMENT_NORMALIZED_RELATIONS,
     (
         NATIVE_PARTICIPANT_APPLICATION_ROLE_RELATIVE,
         "fn",
         "native_amx_participant_application_role",
         "let descriptor = &leg.participant_proposal.descriptor; "
         "let prepare = &leg.prepare_qc.body; let commit = &leg.commit_qc.body; "
-        "let settlement_hash = iroha_data_model::nexus::"
-        "compute_settlement_hash(&leg.participant_settlement) "
+        "let settlement_hash = leg.participant_settlement.computed_hash() "
         '.map_err(|_| "Native AMX participant settlement cannot be hashed")?; '
         "if " + " || ".join(NATIVE_PARTICIPANT_APPLICATION_IDENTITY_COMPARISONS)
         + ' { return Err("Native AMX participant leg identity is internally inconsistent"); } '
@@ -515,7 +937,7 @@ NATIVE_MERGE_MANIFEST_NORMALIZED_RELATIONS = (
         NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE.as_posix(),
         "method",
         "ApplyFixture::new_for_production_recovered_decision_apply_with_native_lane_lifecycle",
-        "Self::new_with_options_and_network(false, false, true, true, true)",
+        "Self::new_with_options(false, false, true, true)",
     ),
     (
         "crates/iroha_core/src/sumeragi/exec.rs",
@@ -789,6 +1211,7 @@ NATIVE_MERGE_MANIFEST_RAW_TEST_CHECKS = (
 NATIVE_MERGE_MANIFEST_SOURCE_RELATIVES = (
     NATIVE_MERGE_MANIFEST_CONTRACT_RELATIVE,
     NATIVE_MERGE_MANIFEST_TEST_RELATIVE,
+    Path("pytests/scripts/sumeragi_v2_multilane_native_settlement_test.py"),
     NATIVE_MERGE_MANIFEST_CORRIDOR_RELATIVE,
     NATIVE_MERGE_MANIFEST_FIXTURE_RELATIVE,
     Path(NATIVE_PARTICIPANT_APPLICATION_ROLE_TEST_RELATIVE),

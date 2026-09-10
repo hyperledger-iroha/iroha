@@ -4,10 +4,12 @@
       "agreement": {
         "cash": {
           "asset": "4eaant86faGEgeH21U4qTTfpvwSb",
-          "quantity": "1000"
+          "quantity": "1000",
+          "source": "4eaant86faGEgeH21U4qTTfpvwSb#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
         },
         "collateral": {
           "asset": "7cgpbDVabB1g8uax9JkhGckEHwfe",
+          "custody_asset": "7cgpbDVabB1g8uax9JkhGckEHwfe#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
           "quantity": "1100"
         },
         "counterparty": "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
@@ -18,8 +20,10 @@
         "initiator": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         "last_margin_offset_ms": 0,
         "margin_frequency_secs": 86400,
-        "maturity_offset_ms": 0,
-        "rate_bps": 250
+        "maturity_offset_ms": 172800000,
+        "rate_bps": 250,
+        "settlement_offset_ms": null,
+        "status": "active"
       },
       "assets": [
         {
@@ -49,10 +53,12 @@
       "agreement": {
         "cash": {
           "asset": "4eaant86faGEgeH21U4qTTfpvwSb",
-          "quantity": "1000"
+          "quantity": "1000",
+          "source": "4eaant86faGEgeH21U4qTTfpvwSb#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
         },
         "collateral": {
           "asset": "7cgpbDVabB1g8uax9JkhGckEHwfe",
+          "custody_asset": "7cgpbDVabB1g8uax9JkhGckEHwfe#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
           "quantity": "1100"
         },
         "counterparty": "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
@@ -63,8 +69,10 @@
         "initiator": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
         "last_margin_offset_ms": 86400000,
         "margin_frequency_secs": 86400,
-        "maturity_offset_ms": 0,
-        "rate_bps": 250
+        "maturity_offset_ms": 172800000,
+        "rate_bps": 250,
+        "settlement_offset_ms": null,
+        "status": "active"
       },
       "assets": [
         {
@@ -92,8 +100,28 @@
     },
     {
       "agreement": {
+        "cash": {
+          "asset": "4eaant86faGEgeH21U4qTTfpvwSb",
+          "quantity": "1000",
+          "source": "4eaant86faGEgeH21U4qTTfpvwSb#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76"
+        },
+        "collateral": {
+          "asset": "7cgpbDVabB1g8uax9JkhGckEHwfe",
+          "custody_asset": "7cgpbDVabB1g8uax9JkhGckEHwfe#sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+          "quantity": "1100"
+        },
+        "counterparty": "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
+        "custodian": null,
+        "haircut_bps": 1500,
         "id": "daily_repo",
-        "status": "cleared"
+        "initiated_offset_ms": 0,
+        "initiator": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+        "last_margin_offset_ms": 86400000,
+        "margin_frequency_secs": 86400,
+        "maturity_offset_ms": 172800000,
+        "rate_bps": 250,
+        "settlement_offset_ms": 172800000,
+        "status": "settled"
       },
       "assets": [
         {
@@ -114,10 +142,10 @@
         {
           "id": "7cgpbDVabB1g8uax9JkhGckEHwfe#sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
           "present": true,
-          "quantity": "1575"
+          "quantity": "1500"
         }
       ],
-      "stage": "unwound_with_substitution"
+      "stage": "settled_at_maturity"
     }
   ],
   "scenario": "repo_lifecycle_deterministic"

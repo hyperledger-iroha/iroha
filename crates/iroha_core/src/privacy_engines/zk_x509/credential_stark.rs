@@ -5,6 +5,8 @@
 //! proof. Public statement material is repeated in the fixed header so decode cannot silently pair
 //! a proof with another statement, root, or root-SPKI channel. The cryptographic verifier must
 //! still derive and compare that material from its trusted statement.
+#[cfg(test)]
+use super::profile::ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1;
 use super::{
     accumulator_stark::{
         ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1,
@@ -13,7 +15,7 @@ use super::{
         ZkX509CaAccumulatorSubproofBindingV1,
     },
     merkle::hash_frame_v1,
-    profile::{ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, ZK_X509_PROOF_VERSION_V1},
+    profile::{ZK_X509_MAX_PROOF_BYTES_V1, ZK_X509_PROOF_VERSION_V1},
     sha_call_bus_stark::{
         ZK_X509_SHA_CA_LEAF_CALL_V1, ZK_X509_SHA_CA_NODE_CALL_START_V1, ZK_X509_SHA_CALL_COUNT_V1,
         ZkX509ShaCallRoleV1, ZkX509ShaCallTerminalV1,
@@ -43,16 +45,16 @@ pub(crate) const ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1: usize =
 ///
 /// The full credential ceiling is partitioned rather than shared dynamically: a caller cannot steal
 /// the compact-CA verifier's budget for an oversized main proof, or vice versa.
-pub(crate) const ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1: usize =
-    ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
-        - ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1
-        - ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1;
+pub(crate) const ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1: usize = ZK_X509_MAX_PROOF_BYTES_V1
+    as usize
+    - ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1
+    - ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1;
 const MINIMUM_ENCODED_BYTES_V1: usize = ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1 + 2 * 4;
 const _: () = assert!(
     ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1
         + ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1
         + ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1
-        == ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
+        == ZK_X509_MAX_PROOF_BYTES_V1 as usize
 );
 /// Compute the exact encoded outer-envelope length without allocation.
 #[cfg(any(test, feature = "privacy-release-evidence"))]
@@ -267,7 +269,7 @@ pub(crate) fn encode_zk_x509_credential_envelope_v1(
     let encoded_length =
         zk_x509_credential_envelope_encoded_len_v1(main_aggregate.len(), ca_subproof.len())
             .ok_or(ZkX509CredentialProofErrorV1::ProofTooLarge)?;
-    if encoded_length > ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize {
+    if encoded_length > ZK_X509_MAX_PROOF_BYTES_V1 as usize {
         return Err(ZkX509CredentialProofErrorV1::ProofTooLarge);
     }
     let mut encoded = Vec::new();
@@ -297,7 +299,7 @@ pub(crate) fn encode_zk_x509_credential_envelope_v1(
 pub(crate) fn decode_zk_x509_credential_envelope_v1(
     encoded: &[u8],
 ) -> Result<ZkX509CredentialEnvelopeV1<'_>, ZkX509CredentialProofErrorV1> {
-    if encoded.len() > ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize {
+    if encoded.len() > ZK_X509_MAX_PROOF_BYTES_V1 as usize {
         return Err(ZkX509CredentialProofErrorV1::ProofTooLarge);
     }
     if encoded.len() < MINIMUM_ENCODED_BYTES_V1
@@ -1053,11 +1055,11 @@ mod tests {
     #[test]
     fn exact_maximum_envelope_includes_the_single_authoritative_outer_frame() {
         assert_eq!(ZK_X509_CREDENTIAL_ENVELOPE_FRAMING_BYTES_V1, 92);
-        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 8_212_538);
-        assert_eq!(ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, 7_174_152);
+        assert_eq!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1, 19_156_074);
+        assert_eq!(ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1, 6_740_870);
         assert_eq!(
-            ZK_X509_MAX_PROOF_BYTES_V1 - ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1,
-            1_224_646
+            ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 - ZK_X509_MAX_PROOF_BYTES_V1,
+            9_718_890
         );
         let maximum_inner = ZK_X509_MAIN_PRE_DEEP_MAXIMUM_BYTES_V1
             + ZK_X509_CA_PRE_DEEP_MAXIMUM_BYTES_V1
@@ -1075,11 +1077,11 @@ mod tests {
             ),
             Some(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize)
         );
-        assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 < ZK_X509_MAX_PROOF_BYTES_V1);
+        assert!(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 > ZK_X509_MAX_PROOF_BYTES_V1);
         let main_bytes = ZK_X509_MAIN_AGGREGATE_MAX_PROOF_BYTES_V1;
-        assert_eq!(
-            main_bytes,
-            maximum_inner as usize - ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1
+        assert!(
+            main_bytes < maximum_inner as usize - ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1,
+            "the full opening schedule must remain unavailable within the consensus budget"
         );
         let mut main = vec![0_u8; main_bytes];
         let mut ca = vec![0_u8; ZK_X509_CA_ACCUMULATOR_MAX_PROOF_BYTES_V1];
@@ -1087,10 +1089,7 @@ mod tests {
         ca[..4].copy_from_slice(&CA_SUBPROOF_MAGIC_V1);
         let encoded = encode_zk_x509_credential_envelope_v1(public(3), &main, &ca)
             .expect("exact maximum outer envelope");
-        assert_eq!(
-            encoded.len(),
-            ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize
-        );
+        assert_eq!(encoded.len(), ZK_X509_MAX_PROOF_BYTES_V1 as usize);
         drop(encoded);
         main.push(0);
         assert_eq!(

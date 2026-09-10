@@ -91,6 +91,18 @@ fn assert_independent_viewer_checkpoint(
     );
     let envelope: EvidenceViewerCheckpointEnvelopeV1 =
         norito::decode_canonical(&record.checkpoint_bytes).expect("canonical persisted envelope");
+    assert_viewer_frame(
+        &record,
+        "sorafs_node::evidence_viewer::EvidenceViewerCheckpointStoreRecordV1",
+    );
+    assert_viewer_frame(
+        &envelope,
+        "sorafs_node::evidence_viewer::EvidenceViewerCheckpointEnvelopeV1",
+    );
+    assert_viewer_frame(
+        &envelope.checkpoint,
+        "sorafs_node::evidence_viewer::EvidenceViewerCheckpointV1",
+    );
     assert_eq!(
         record.checkpoint_bytes,
         norito::encode_canonical(&envelope).unwrap()
@@ -105,6 +117,14 @@ fn assert_independent_viewer_checkpoint(
         "exercise signed receipt frames"
     );
     for receipt in &envelope.checkpoint.receipts {
+        assert_viewer_frame(
+            receipt,
+            "sorafs_node::evidence_viewer::EvidenceViewerSignedReceiptV1",
+        );
+        assert_viewer_frame(
+            &receipt.body,
+            "sorafs_node::evidence_viewer::EvidenceViewerReceiptBodyV1",
+        );
         let mut bytes = RECEIPT_BODY_DOMAIN_V1.to_vec();
         bytes.extend_from_slice(&norito::encode_canonical(&receipt.body).unwrap());
         let digest = *blake3::hash(&bytes).as_bytes();
@@ -119,6 +139,14 @@ fn assert_independent_viewer_checkpoint(
     let projection = service
         .transparency_projection(record.checkpoint_digest, None, 16)
         .expect("exact signed projection");
+    crate::frame_test_support::assert_current_frame(
+        &projection,
+        "sorafs_node::evidence_viewer::EvidenceViewerTransparencyProjectionV1",
+    );
+    assert_viewer_frame(
+        &projection.checkpoint_anchor,
+        "sorafs_node::evidence_viewer::EvidenceViewerSignedCheckpointAnchorV1",
+    );
     assert_eq!(
         projection.projection_digest,
         independent_viewer_projection_digest(&projection)
@@ -178,6 +206,18 @@ fn canonical_viewer_persistence_archive_and_signed_identities_ignore_caller_layo
         let artifact = verify_compaction_archive_artifact(&fixture.config, &artifact_bytes)
             .expect("actual canonical signed archive");
         assert_eq!(artifact_bytes, norito::encode_canonical(&artifact).unwrap());
+        assert_viewer_frame(
+            &artifact,
+            "sorafs_node::evidence_viewer::EvidenceViewerCompactionArchiveArtifactV1",
+        );
+        assert_viewer_frame(
+            &artifact.payload,
+            "sorafs_node::evidence_viewer::EvidenceViewerCompactionArchivePayloadV1",
+        );
+        assert_viewer_frame(
+            &head,
+            "sorafs_node::evidence_viewer::EvidenceViewerSignedCompactionArchiveHeadV1",
+        );
         let mut payload = COMPACTION_ARCHIVE_PAYLOAD_DOMAIN_V1.to_vec();
         independent_viewer_frame(&mut payload, &artifact.payload);
         assert_eq!(
@@ -333,11 +373,8 @@ fn compaction_archive_decode_rejects_a_maximal_nested_length_prefix() {
     fixture.config.compaction_max_records = 7;
     let sequence_limit = compaction_archive_sequence_limit(&fixture.config);
     assert_eq!(sequence_limit, 7);
-    let framed = norito::core::frame_bare_with_header_flags::<Vec<ChallengeRecordV1>>(
-        &u64::MAX.to_le_bytes(),
-        0,
-    )
-    .expect("frame malicious nested sequence prefix");
+    // Challenge records are nested archive fields, so enforce their payload boundary directly.
+    let _flags = norito::core::DecodeFlagsGuard::enter(0);
     let maximum_bytes =
         usize::try_from(compaction_archive_max_bytes(&fixture.config)).expect("byte limit");
     let limits = norito::DecodeLimits::new(
@@ -347,8 +384,16 @@ fn compaction_archive_decode_rejects_a_maximal_nested_length_prefix() {
         maximum_bytes.saturating_mul(4),
         64,
     );
-    let error = norito::decode_from_bytes_with_limits::<Vec<ChallengeRecordV1>>(&framed, limits)
-        .expect_err("maximal declared record count must fail before allocation");
+    let (empty, used) = norito::with_decode_limits(limits, || {
+        norito::core::decode_field_canonical::<Vec<ChallengeRecordV1>>(&0_u64.to_le_bytes())
+    })
+    .expect("empty nested collection control");
+    assert!(empty.is_empty());
+    assert_eq!(used, 8);
+    let error = norito::with_decode_limits(limits, || {
+        norito::core::decode_field_canonical::<Vec<ChallengeRecordV1>>(&u64::MAX.to_le_bytes())
+    })
+    .expect_err("maximal declared record count must fail before allocation");
     assert!(matches!(
         error,
         norito::core::Error::SequenceLengthExceeded {
@@ -356,4 +401,30 @@ fn compaction_archive_decode_rejects_a_maximal_nested_length_prefix() {
             limit: 7
         }
     ));
+}
+
+fn assert_viewer_frame<T>(value: &T, name: &str)
+where
+    T: norito::NoritoSerialize
+        + for<'de> norito::NoritoDeserialize<'de>
+        + PartialEq
+        + std::fmt::Debug,
+{
+    assert_eq!(T::nominal_name(), name);
+    assert_eq!(T::frame_name(), name);
+    let bytes = norito::encode_canonical(value).expect("canonical viewer frame");
+    assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+    let decoded: T = norito::decode_canonical(&bytes).expect("exact viewer frame roundtrip");
+    assert_eq!(&decoded, value);
+    assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+    let mut wrong_owner = bytes.clone();
+    wrong_owner[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<T>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+    let mut trailing = bytes;
+    trailing.push(0);
+    assert!(norito::decode_canonical::<T>(&trailing).is_err());
 }

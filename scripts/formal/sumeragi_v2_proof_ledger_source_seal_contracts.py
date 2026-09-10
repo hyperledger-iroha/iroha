@@ -578,6 +578,7 @@ Ok(retained)
 
 _KURA_PRODUCTION_COMPONENT_FILES = (
     "kura/startup_finality_support.rs",
+    "kura/read_only_evidence.rs",
     "kura/bound_progress_and_retained_support.rs",
     "kura/autonomous_reservation_bounds.rs",
     "kura/certified_bundle_capacity_reservation_types.rs",
@@ -742,6 +743,7 @@ _REVIEWED_RUST_INCLUDE_MANIFESTS = {
         'kura/tests/15_remaining_physical_writer_tests.rs',
         'kura/tests/15a_merge_recovery_resource_failure_tests.rs',
         'kura/tests/16_resource_file_admission_tests.rs',
+        'kura/tests/17_read_only_evidence_tests.rs',
     ),
     'crates/iroha_core/src/kura/autonomous_application_evidence.rs': (
         'passive_diagnostic_reads.rs',

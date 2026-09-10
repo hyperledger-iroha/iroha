@@ -264,9 +264,8 @@ pub struct StreamingSnapshotEntry {
     /// Snapshot exported from [`StreamingSession::snapshot_state`].
     pub snapshot: StreamingSessionSnapshot,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::streaming::StreamingSnapshotFile")]
-#[derive(Debug, NoritoSerialize, NoritoDeserialize, PartialEq, Eq)]
 struct StreamingSnapshotFile {
     version: u8,
     entries: Vec<StreamingSnapshotEntry>,
@@ -2984,6 +2983,32 @@ mod tests {
                 kyber_local_fingerprint: None,
             },
         }
+    }
+    #[test]
+    fn streaming_snapshot_frame_uses_its_owner_at_the_plaintext_boundary() {
+        let file = StreamingSnapshotFile {
+            version: SNAPSHOT_VERSION,
+            entries: vec![sample_snapshot_entry(16123)],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &file,
+            "iroha_core::streaming::StreamingSnapshotFile",
+        );
+        let frame = norito::encode_canonical(&file).expect("canonical streaming snapshot frame");
+        assert_eq!(
+            decode_snapshot_plaintext(&frame).expect("bounded production plaintext decoder"),
+            file
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<CryptoHash>());
+        assert!(matches!(
+            decode_snapshot_plaintext(&wrong_owner),
+            Err(StreamingSnapshotError::Codec(NoritoError::SchemaMismatch))
+        ));
+        assert!(decode_snapshot_plaintext(&frame[..frame.len() - 1]).is_err());
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(decode_snapshot_plaintext(&trailing).is_err());
     }
     fn sample_manifest() -> ManifestV1 {
         ManifestV1 {

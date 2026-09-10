@@ -163,13 +163,15 @@ def test_exact_quantity_string_policy_matches_v1_bounds() -> None:
 
 
 def write_fake_validator(path: Path, reject_negative: bool) -> Path:
-    """Write a fake sorafs-validate executable for checker tests."""
+    """Write a fake iroha executable for checker tests."""
 
     path.write_text(
         "\n".join(
             [
                 "#!/usr/bin/env python3",
                 "import sys",
+                "if sys.argv[1:6] != ['app', 'sorafs', 'toolkit', 'validate', 'hedging']:",
+                "    raise SystemExit(4)",
                 "joined = ' '.join(sys.argv[1:])",
                 f"if {reject_negative!r} and '/negative/' in joined:",
                 "    raise SystemExit(2)",
@@ -429,9 +431,18 @@ def test_manifest_read_error_writes_blocked_summary_without_traceback(
     summary = tmp_path / "summary.json"
     original_open = os.open
 
+    parent_stat = manifest.parent.stat()
+    denied_reads: list[str] = []
+
     def open_path(path: Path, flags: int, *args, **kwargs):
-        if path == manifest:
-            raise OSError("manifest read denied")
+        parent_fd = kwargs.get("dir_fd")
+        if os.fspath(path) == manifest.name and parent_fd is not None:
+            opened_parent = os.fstat(parent_fd)
+            if (opened_parent.st_dev, opened_parent.st_ino) == (
+                parent_stat.st_dev, parent_stat.st_ino
+            ):
+                denied_reads.append(os.fspath(path))
+                raise OSError("manifest read denied")
         return original_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(os, "open", open_path)
@@ -447,6 +458,7 @@ def test_manifest_read_error_writes_blocked_summary_without_traceback(
     )
 
     assert rc == 1
+    assert denied_reads == [manifest.name]
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["status"] == "blocked"
     assert result["manifest_sha256"] is None
@@ -521,15 +533,24 @@ def test_full_mode_rejects_unreadable_generated_fixture_without_traceback(
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
     target = repo_root / payload["fixtures"][0]["norito_path"]
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     original_open = os.open
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
 
+    parent_stat = target.parent.stat()
+    denied_reads: list[str] = []
+
     def open_path(path: Path, flags: int, *args, **kwargs):
-        if path == target:
-            raise OSError("generated fixture read denied")
+        parent_fd = kwargs.get("dir_fd")
+        if os.fspath(path) == target.name and parent_fd is not None:
+            opened_parent = os.fstat(parent_fd)
+            if (opened_parent.st_dev, opened_parent.st_ino) == (
+                parent_stat.st_dev, parent_stat.st_ino
+            ):
+                denied_reads.append(os.fspath(path))
+                raise OSError("generated fixture read denied")
         return original_open(path, flags, *args, **kwargs)
 
     monkeypatch.setattr(os, "open", open_path)
@@ -546,6 +567,7 @@ def test_full_mode_rejects_unreadable_generated_fixture_without_traceback(
     )
 
     assert rc == 1
+    assert denied_reads == [target.name]
     result = json.loads(summary.read_text(encoding="utf-8"))
     assert result["status"] == "blocked"
     assert any(
@@ -627,7 +649,7 @@ def test_generated_json_sidecar_sanitizes_noncanonical_path_decode_error(
 def test_manifest_only_rejects_drifted_validation_command(tmp_path: Path) -> None:
     payload = base_manifest()
     payload["fixtures"][0]["validation_command"] = (
-        "sorafs-validate hedging --kind billing-statement --input wrong.to"
+        "iroha app sorafs toolkit validate hedging --kind billing-statement --input wrong.to"
     )
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
@@ -655,7 +677,7 @@ def test_validation_command_tokenize_error_is_sanitized(monkeypatch) -> None:
         "kind": "billing-statement",
         "expected_status": "accepted",
         "validation_command": (
-            "sorafs-validate hedging --kind billing-statement --input 'unterminated"
+            "iroha app sorafs toolkit validate hedging --kind billing-statement --input 'unterminated"
         ),
     }
 
@@ -667,7 +689,7 @@ def test_validation_command_tokenize_error_is_sanitized(monkeypatch) -> None:
     MODULE.validate_expected_status(
         entry,
         Path("fixtures/sorafs_manifest/hedging/statement.to"),
-        "sorafs-validate",
+        "iroha",
         1,
         {},
         errors,
@@ -686,7 +708,7 @@ def test_validation_command_token_mismatch_is_sanitized() -> None:
         "kind": "billing-statement",
         "expected_status": "accepted",
         "validation_command": (
-            "sorafs-validate hedging --kind billing-statement --input "
+            "iroha app sorafs toolkit validate hedging --kind billing-statement --input "
             "fixtures/sorafs_manifest/hedging/statement.to "
             "--private-key runtime-secret"
         ),
@@ -695,7 +717,7 @@ def test_validation_command_token_mismatch_is_sanitized() -> None:
     MODULE.validate_expected_status(
         entry,
         Path("fixtures/sorafs_manifest/hedging/statement.to"),
-        "sorafs-validate",
+        "iroha",
         1,
         {},
         errors,
@@ -756,7 +778,7 @@ def test_manifest_only_rejects_rejected_fixtures_outside_negative_dir(
         "fixtures/sorafs_manifest/hedging/stale_reference_price_decision_v1.json"
     )
     fixture["validation_command"] = (
-        "sorafs-validate hedging --kind reference-price-decision --input "
+        "iroha app sorafs toolkit validate hedging --kind reference-price-decision --input "
         "fixtures/sorafs_manifest/hedging/stale_reference_price_decision_v1.to"
     )
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
@@ -881,7 +903,7 @@ def test_full_mode_enforces_expected_validator_statuses(
     payload = base_manifest()
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -914,7 +936,7 @@ def test_full_mode_rejects_validator_status_mismatch(
     payload = base_manifest()
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=False)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=False)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -946,7 +968,7 @@ def test_full_mode_resolves_repo_relative_validator_binary(
     payload = base_manifest()
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
-    validator = repo_root / "target" / "debug" / "sorafs-validate"
+    validator = repo_root / "target" / "debug" / "iroha"
     validator.parent.mkdir(parents=True, exist_ok=True)
     write_fake_validator(validator, reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
@@ -958,7 +980,7 @@ def test_full_mode_resolves_repo_relative_validator_binary(
             "--manifest",
             str(manifest),
             "--validator-bin",
-            "target/debug/sorafs-validate",
+            "target/debug/iroha",
             "--summary-out",
             str(summary),
         ]
@@ -1009,13 +1031,13 @@ def test_full_mode_sanitizes_missing_secret_validator_binary(
 def test_validator_execution_error_is_sanitized(monkeypatch, tmp_path: Path) -> None:
     errors: list[str] = []
     result: dict = {}
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     entry = {
         "name": "bad_exec",
         "kind": "billing-statement",
         "expected_status": "accepted",
         "validation_command": (
-            "sorafs-validate hedging --kind billing-statement --input "
+            "iroha app sorafs toolkit validate hedging --kind billing-statement --input "
             "fixtures/sorafs_manifest/hedging/statement.to"
         ),
     }
@@ -1046,7 +1068,7 @@ def test_full_mode_rejects_command_injection_before_validator_exec(
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
     sentinel = tmp_path / "validator-executed.txt"
-    validator = write_sentinel_validator(tmp_path / "sorafs-validate", sentinel)
+    validator = write_sentinel_validator(tmp_path / "iroha", sentinel)
     payload["fixtures"][0]["validation_command"] += " ; touch /tmp/sorafs-owned"
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
@@ -1080,7 +1102,7 @@ def test_full_mode_rejects_secret_validation_command_drift_without_echo(
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
     sentinel = tmp_path / "validator-executed.txt"
-    validator = write_sentinel_validator(tmp_path / "sorafs-validate", sentinel)
+    validator = write_sentinel_validator(tmp_path / "iroha", sentinel)
     payload["fixtures"][0]["validation_command"] += " --private-key runtime-secret"
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
@@ -1117,7 +1139,7 @@ def test_full_mode_rejects_unmanifested_generated_fixtures(
     write_generated_pairs(repo_root, payload)
     extra = repo_root / "fixtures" / "sorafs_manifest" / "hedging" / "orphan.to"
     extra.write_bytes(b"orphan")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1158,7 +1180,7 @@ def test_full_mode_rejects_secret_unmanifested_generated_fixture_without_echo(
         / "private%26%2395%3Bkey.to"
     )
     extra.write_bytes(b"orphan")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1203,7 +1225,7 @@ def test_full_mode_rejects_fixture_inventory_scan_errors_without_traceback(
     payload = base_manifest()
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     fixture_root = repo_root / MODULE.HEDGING_FIXTURE_ROOT
@@ -1252,7 +1274,7 @@ def test_full_mode_rejects_symlinked_generated_fixture_root(
         target_repo / MODULE.HEDGING_FIXTURE_ROOT,
         target_is_directory=True,
     )
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1286,7 +1308,7 @@ def test_full_mode_rejects_generated_fixture_root_parent_symlink(
     write_generated_pairs(target_repo, payload)
     repo_root = tmp_path / "repo-link"
     repo_root.symlink_to(target_repo, target_is_directory=True)
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1322,7 +1344,7 @@ def test_full_mode_rejects_symlinked_generated_fixture_inventory_entry(
     target.write_bytes(b"external")
     symlink = repo_root / MODULE.HEDGING_FIXTURE_ROOT / "symlinked.to"
     symlink.symlink_to(target)
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1364,7 +1386,7 @@ def test_full_mode_rejects_secret_symlinked_generated_fixture_without_echo(
         / "private%26%2395%3Bkey.to"
     )
     symlink.symlink_to(target)
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1406,7 +1428,7 @@ def test_full_mode_rejects_malformed_json_sidecar(
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     del sidecar["version"]
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1442,7 +1464,7 @@ def test_full_mode_rejects_sensitive_extra_json_sidecar_key_without_echo(
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     sidecar["private&#95;key"] = "runtime-secret"
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1500,7 +1522,7 @@ def test_full_mode_rejects_noncanonical_extra_json_sidecar_key_without_echo(
         sidecar[key] = "runtime-secret"
         sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
         validator = write_fake_validator(
-            tmp_path / f"sorafs-validate-{index}",
+            tmp_path / f"iroha-{index}",
             reject_negative=True,
         )
         manifest = write_manifest(tmp_path / f"fixture_manifest-{index}.json", payload)
@@ -1541,7 +1563,7 @@ def test_full_mode_rejects_non_object_json_sidecar_with_shared_loader(
     write_generated_pairs(repo_root, payload)
     sidecar_path = repo_root / payload["fixtures"][0]["json_path"]
     sidecar_path.write_text("[]", encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1573,7 +1595,7 @@ def test_full_mode_rejects_oversized_norito_with_shared_byte_reader(
     payload = base_manifest()
     repo_root = tmp_path / "repo"
     write_generated_pairs(repo_root, payload)
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1610,7 +1632,7 @@ def test_full_mode_rejects_odd_length_norito_hex_without_traceback(
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     sidecar["norito_bytes_hex"] = "abc"
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1649,7 +1671,7 @@ def test_full_mode_rejects_malformed_nested_json_sidecar(
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     del sidecar["lines"][0]["direction"]
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1689,7 +1711,7 @@ def test_full_mode_rejects_sensitive_nested_json_sidecar_key_without_echo(
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     sidecar["reference_price"]["private%5Fkey"] = "runtime-secret"
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1730,7 +1752,7 @@ def test_full_mode_rejects_json_sidecar_version_drift(
     sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
     sidecar["version"] = 2
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1768,7 +1790,7 @@ def test_full_mode_rejects_sensitive_duplicate_nested_id_without_echo(
     duplicate = dict(sidecar["lines"][0])
     sidecar["lines"].append(duplicate)
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1809,7 +1831,7 @@ def test_full_mode_rejects_statement_sidecar_value_invariants(
     sidecar["due_at_unix"] = sidecar["period_end_unix"] - 1
     sidecar["lines"].append(dict(sidecar["lines"][0]))
     sidecar_path.write_text(json.dumps(sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)
@@ -1856,7 +1878,7 @@ def test_full_mode_rejects_sidecar_numeric_policy_bounds(
     line_sidecar["usd_amount"] = f"{(1 << 511)}"
     line_sidecar["quantity_units"] = "01"
     line_path.write_text(json.dumps(line_sidecar), encoding="utf-8")
-    validator = write_fake_validator(tmp_path / "sorafs-validate", reject_negative=True)
+    validator = write_fake_validator(tmp_path / "iroha", reject_negative=True)
     manifest = write_manifest(tmp_path / "fixture_manifest.json", payload)
     summary = tmp_path / "summary.json"
     monkeypatch.setattr(MODULE, "REPO_ROOT", repo_root)

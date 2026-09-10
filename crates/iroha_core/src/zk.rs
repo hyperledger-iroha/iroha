@@ -116,10 +116,9 @@ const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_CIRCUIT_FAMILY_BYTES: usize =
     iroha_data_model::zk::OPEN_VERIFY_DEFAULT_MAX_CIRCUIT_ID_BYTES;
 #[cfg(feature = "zk-halo2-ipa")]
 const HALO2_IPA_PROVING_KEY_ARCHIVE_MAX_NESTING_DEPTH: usize = 16;
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::Halo2IpaProvingKeyArchive")]
 #[cfg(feature = "zk-halo2-ipa")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::zk::Halo2IpaProvingKeyArchive")]
 struct Halo2IpaProvingKeyArchive {
     version: u16,
     circuit_family: String,
@@ -385,7 +384,7 @@ fn build_halo2_ipa_ivm_execution_vk_box() -> Result<VerifyingKeyBox, halo2_backe
 #[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
 pub(crate) fn relabelled_halo2_ipa_demo_vk_box_for_test() -> Result<VerifyingKeyBox, String> {
     let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
-    let vk = halo2_backend::keygen_vk(&params, &pasta_tiny::Add)
+    let vk = halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows)
         .map_err(|err| format!("failed to generate relabelled demo key: {err}"))?;
     let mut bytes = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut bytes, IVM_EXECUTION_V1_IPA_K);
@@ -2815,14 +2814,6 @@ struct VkCacheKey {
 type CachedVk = Arc<halo2_backend::VerifyingKey>;
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
 static VK_CACHE: OnceLock<Mutex<BTreeMap<VkCacheKey, CachedVk>>> = OnceLock::new();
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-#[derive(Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
-struct BuiltinVkCacheKey {
-    backend: String,
-    params_fingerprint: [u8; 32],
-}
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-static BUILTIN_VK_CACHE: OnceLock<Mutex<BTreeMap<BuiltinVkCacheKey, CachedVk>>> = OnceLock::new();
 #[cfg(feature = "telemetry")]
 fn record_vk_cache_event(cache: &'static str, event: &'static str) {
     if let Some(metrics) = iroha_telemetry::metrics::global() {
@@ -3086,37 +3077,6 @@ macro_rules! cached_vk_for {
         let _ = ($params, $backend, $vk_box, $circuit);
         false
     }};
-}
-#[cfg(all(test, any(feature = "zk-halo2", feature = "zk-halo2-ipa")))]
-fn keygen_vk_cached<C>(
-    backend: &str,
-    params: &PastaParams,
-    circuit: &C,
-) -> Result<CachedVk, halo2_backend::Error>
-where
-    C: halo2_proofs::plonk::Circuit<halo2_backend::Scalar>,
-{
-    let cache = BUILTIN_VK_CACHE.get_or_init(|| Mutex::new(BTreeMap::new()));
-    let key = BuiltinVkCacheKey {
-        backend: backend.to_owned(),
-        params_fingerprint: params_fingerprint(params),
-    };
-    {
-        let guard = lock_cache(cache)?;
-        if let Some(existing) = guard.get(&key).cloned() {
-            record_vk_cache_event("builtin", "hit");
-            return Ok(existing);
-        }
-    }
-    record_vk_cache_event("builtin", "miss");
-    let vk = halo2_backend::keygen_vk(params, circuit)?;
-    let arc = Arc::new(vk);
-    let mut guard = lock_cache(cache)?;
-    let entry = match guard.entry(key) {
-        Entry::Occupied(existing) => existing.get().clone(),
-        Entry::Vacant(slot) => Arc::clone(slot.insert(Arc::clone(&arc))),
-    };
-    Ok(entry)
 }
 // Parsed verifying keys are cached above and keyed by backend, parameter fingerprint, and
 // verifying-key hash so repeated proofs avoid repeated strict parsing.
@@ -5447,17 +5407,26 @@ mod debug_backend_tests {
             norito::decode_canonical(&proof.bytes).expect("fixture envelope");
         let params = pasta_params_new(IVM_EXECUTION_V1_IPA_K);
         let demo_vk =
-            halo2_backend::keygen_vk(&params, &pasta_tiny::Add).expect("demo verifier key");
+            halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows).expect("demo verifier key");
+        // Two enabled selector rows make this key distinct from the one-row
+        // IVM fixture even though processed VK bytes omit gate expressions.
+        let canonical_vk =
+            halo2_backend::keygen_vk(&params, &pasta_tiny::IvmExecutionBindV1::default())
+                .expect("canonical IVM verifier key");
+        assert_ne!(
+            halo2_backend::verifying_key_to_processed_bytes(&demo_vk),
+            halo2_backend::verifying_key_to_processed_bytes(&canonical_vk),
+        );
         let mut demo_vk_bytes = zk1::wrap_start();
         zk1::wrap_append_ipa_k(&mut demo_vk_bytes, IVM_EXECUTION_V1_IPA_K);
         zk1::wrap_append_vk_pasta(&mut demo_vk_bytes, &demo_vk);
         let relabelled_vk = VerifyingKeyBox::new(ZK_BACKEND_HALO2_IPA.to_owned(), demo_vk_bytes);
         assert!(
-            resolve_vk_cached_for_type::<pasta_tiny::Add, _>(
+            resolve_vk_cached_for_type::<pasta_tiny::AddTwoRows, _>(
                 ZK_BACKEND_HALO2_IPA,
                 &params,
                 &relabelled_vk,
-                || halo2_backend::keygen_vk(&params, &pasta_tiny::Add),
+                || halo2_backend::keygen_vk(&params, &pasta_tiny::AddTwoRows),
             )
             .is_ok(),
             "the demo key must populate only its own circuit-typed cache entry"
@@ -8511,6 +8480,26 @@ mod halo2_ipa_proving_key_archive_tests {
         let archive =
             encode_halo2_ipa_proving_key_archive("proof-family-a", vk_commitment, vec![1, 2])
                 .expect("encode proving key archive");
+        let record = Halo2IpaProvingKeyArchive {
+            version: HALO2_IPA_PROVING_KEY_ARCHIVE_VERSION,
+            circuit_family: "proof-family-a".to_owned(),
+            vk_commitment,
+            proving_key: vec![1, 2],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &record,
+            "iroha_core::zk::Halo2IpaProvingKeyArchive",
+        );
+        assert_eq!(
+            archive,
+            norito::encode_canonical(&record).expect("archive owner frame")
+        );
+        let mut wrong_owner = archive.clone();
+        wrong_owner[6] ^= 1;
+        assert!(
+            decode_halo2_ipa_proving_key_archive(&wrong_owner, "proof-family-a", vk_commitment)
+                .is_err()
+        );
         assert_eq!(
             decode_halo2_ipa_proving_key_archive(&archive, "proof-family-a", vk_commitment)
                 .expect("decode matching archive"),
@@ -10677,10 +10666,13 @@ fn verify_halo2(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox>) -
         #[cfg(test)]
         "halo2/pasta/tiny-vote-bool" => {
             let circuit = pasta_tiny::VoteBool;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
-                Ok(v) => v,
-                Err(_) => return false,
-            };
+            let vk_h2 =
+                match resolve_vk_cached(normalized.as_str(), &params, vk_box, &circuit, || {
+                    halo2_backend::keygen_vk(&params, &circuit)
+                }) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
             verify_halo2_ipa_payload_no_instances(&params, vk_h2.as_ref(), proof_payload.as_slice())
         }
         _ => false,
@@ -10781,7 +10773,9 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
     macro_rules! verify_test_circuit {
         ($circuit:expr, $mode:ident $(, $reject:expr)?) => {{
             let circuit = $circuit;
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &circuit) {
+            let vk_h2 = match resolve_vk_cached(normalized.as_str(), &params, vk_box, &circuit, || {
+                halo2_backend::keygen_vk(&params, &circuit)
+            }) {
                 Ok(v) => v,
                 Err(_) => return false,
             };
@@ -10791,7 +10785,9 @@ fn verify_halo2_ipa(backend: &str, proof: &ProofBox, vk: Option<&VerifyingKeyBox
             verify_test_circuit!(@verify $mode, vk_h2.as_ref())
         }};
         (using $circuit:ident, $mode:ident $(, $reject:expr)?) => {{
-            let vk_h2 = match keygen_vk_cached(normalized.as_str(), &params, &$circuit) {
+            let vk_h2 = match resolve_vk_cached(normalized.as_str(), &params, vk_box, &$circuit, || {
+                halo2_backend::keygen_vk(&params, &$circuit)
+            }) {
                 Ok(v) => v,
                 Err(_) => return false,
             };

@@ -4371,19 +4371,37 @@ fn wait_for_recovered_prepare_registration(
     ))
 }
 
-fn ensure_fault_prepare_lock_planes_full_v1(
+/// Test-only readiness decision for one bundle registered from an empty lock baseline.
+/// The expected map is pinned to peer zero after that sponsor reports the exact
+/// registration transaction Applied; it is never replaced by a later replica map.
+/// Local Prepare locks may cover only the three successful voters per committee.
+fn fault_replicated_prepare_registration_ready_v1(
     before: &FaultStateSnapshotV1,
     prepared: &FaultStateSnapshotV1,
     participants: usize,
-) -> Result<()> {
+    registered_commitment: &str,
+) -> Result<bool> {
     let expected_peers = participants
         .checked_add(1)
         .and_then(|lanes| lanes.checked_mul(VALIDATORS_PER_LANE))
         .ok_or_else(|| eyre!("Prepare-lock validator count overflow"))?;
     ensure!(
-        before.validators.len() == expected_peers && prepared.validators.len() == expected_peers,
+        participants > 0
+            && before.validators.len() == expected_peers
+            && prepared.validators.len() == expected_peers,
         "Prepare-lock snapshots omit validators"
     );
+    for (peer_index, (baseline, observation)) in before
+        .validators
+        .iter()
+        .zip(&prepared.validators)
+        .enumerate()
+    {
+        ensure!(
+            baseline.peer_index == peer_index && observation.peer_index == peer_index,
+            "Prepare-lock snapshots changed validator inventory"
+        );
+    }
     ensure_fault_state_converged(before)?;
     let baseline = &before.validators[0];
     for field in [
@@ -4398,27 +4416,108 @@ fn ensure_fault_prepare_lock_planes_full_v1(
             "Prepare-lock baseline is not empty"
         );
     }
-    let baseline_ledger = fault_ledger_identity(baseline)?;
+    ensure_fault_ledger_unchanged_before_finality(before, prepared)?;
     let expected_replicated = u64::try_from(participants)?
         .checked_mul(9)
         .and_then(|count| count.checked_add(1))
         .ok_or_else(|| eyre!("replicated Prepare-lock count overflow"))?;
-    let replicated_commitment = &prepared.validators[0].replicated_staged_lock_commitment;
     ensure!(
-        replicated_commitment != &baseline.replicated_staged_lock_commitment,
+        registered_commitment != baseline.replicated_staged_lock_commitment,
         "replicated Prepare-lock commitment remained empty"
     );
-    let mut committee_commitments = BTreeMap::<usize, String>::new();
+    // Network::client() addresses the first global validator, also all_peers()[0].
+    // Its exact Applied registration establishes the single-bundle map anchor.
+    let sponsor = &prepared.validators[0];
+    ensure!(
+        fault_count(&sponsor.counts, "replicated_staged_locks")? == expected_replicated
+            && sponsor.replicated_staged_lock_commitment == registered_commitment,
+        "Applied sponsor registration does not match the pinned replicated Prepare lock"
+    );
+    let mut ready = true;
     for observation in &prepared.validators {
         validate_fault_lock_shape_v1(observation, participants)?;
-        ensure!(
-            fault_ledger_identity(observation)? == baseline_ledger
-                && fault_count(&observation.counts, "replicated_staged_locks")?
-                    == expected_replicated
-                && &observation.replicated_staged_lock_commitment == replicated_commitment,
-            "validator #{} did not observe one complete replicated Prepare lock",
-            observation.peer_index
-        );
+        if fault_count(&observation.counts, "replicated_staged_locks")? == 0 {
+            ensure!(
+                observation.replicated_staged_lock_commitment
+                    == baseline.replicated_staged_lock_commitment,
+                "validator #{} changed the empty replicated Prepare map",
+                observation.peer_index
+            );
+            ready = false;
+        } else {
+            ensure!(
+                observation.replicated_staged_lock_commitment == registered_commitment,
+                "validator #{} observed a different replicated Prepare map",
+                observation.peer_index
+            );
+        }
+    }
+    Ok(ready)
+}
+
+/// Wait after the smoke sponsor's exact Applied registration, without requiring
+/// a fourth local Prepare vote or lock from any participant committee.
+fn wait_for_smoke_prepare_registration(
+    network: &Network,
+    before: &FaultStateSnapshotV1,
+    participants: usize,
+) -> Result<FaultStateSnapshotV1> {
+    let started = Instant::now();
+    let mut registered_commitment = None;
+    let mut last = None;
+    while started.elapsed() <= FINALITY_TIMEOUT {
+        match capture_fault_state_snapshot(network, "smoke-registered") {
+            Ok(snapshot) => {
+                let sponsor = snapshot
+                    .validators
+                    .first()
+                    .ok_or_else(|| eyre!("Prepare registration snapshot has no sponsor"))?;
+                let expected = registered_commitment
+                    .get_or_insert_with(|| sponsor.replicated_staged_lock_commitment.clone());
+                if fault_replicated_prepare_registration_ready_v1(
+                    before,
+                    &snapshot,
+                    participants,
+                    expected,
+                )? {
+                    return Ok(snapshot);
+                }
+                last = Some(
+                    "replicated Prepare registration has not reached every validator".to_owned(),
+                );
+            }
+            Err(error) => last = Some(error.to_string()),
+        }
+        thread::sleep(POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "timed out waiting for smoke replicated Prepare registration: {}",
+        last.unwrap_or_else(|| "no state response".to_owned())
+    ))
+}
+
+fn ensure_fault_prepare_lock_planes_full_v1(
+    before: &FaultStateSnapshotV1,
+    prepared: &FaultStateSnapshotV1,
+    participants: usize,
+) -> Result<()> {
+    let registered_commitment = &prepared
+        .validators
+        .first()
+        .ok_or_else(|| eyre!("Prepare-lock snapshots omit validators"))?
+        .replicated_staged_lock_commitment;
+    ensure!(
+        fault_replicated_prepare_registration_ready_v1(
+            before,
+            prepared,
+            participants,
+            registered_commitment,
+        )?,
+        "validators did not observe one complete replicated Prepare lock"
+    );
+    let baseline = &before.validators[0];
+    let mut committee_commitments = BTreeMap::<usize, String>::new();
+    for observation in &prepared.validators {
         if observation.peer_index < VALIDATORS_PER_LANE {
             ensure!(
                 fault_count(&observation.counts, "staged_pool_heads")? == 0
@@ -9377,6 +9476,261 @@ fn fault_observation_fixture(
             "replicated_staged_locks": 0,
             "staged_locks": 0,
         }),
+    }
+}
+
+/// A single N=3 registration; every participant has a valid three-of-four local
+/// Prepare shape, while the replicated map is complete on all sixteen peers.
+fn smoke_registration_snapshot_fixture() -> (FaultStateSnapshotV1, FaultStateSnapshotV1) {
+    assert_eq!(VALIDATORS_PER_LANE, 4);
+    let before = FaultStateSnapshotV1 {
+        label: "smoke-before-fixture".to_owned(),
+        validators: (0..16)
+            .map(|peer_index| {
+                let mut observation = fault_observation_fixture(peer_index, 'a', 0);
+                set_smoke_registration_count(&mut observation, "pools", 3);
+                observation
+            })
+            .collect(),
+    };
+    let mut registered = before.clone();
+    registered.label = "smoke-registered-fixture".to_owned();
+    for observation in &mut registered.validators {
+        set_smoke_registration_count(observation, "replicated_staged_locks", 28);
+        observation.replicated_staged_lock_commitment = "8".repeat(64);
+        if observation.peer_index >= 4 && observation.peer_index % 4 != 3 {
+            set_smoke_registration_local_leg(observation);
+        }
+    }
+    (before, registered)
+}
+
+fn set_smoke_registration_count(
+    observation: &mut FaultStateObservationV1,
+    field: &str,
+    count: u64,
+) {
+    observation
+        .counts
+        .as_object_mut()
+        .expect("fixture counts are an object")
+        .insert(field.to_owned(), HarnessJsonValue::from(count));
+}
+
+fn set_smoke_registration_local_leg(observation: &mut FaultStateObservationV1) {
+    for (field, count) in [
+        ("staged_pool_heads", 1),
+        ("staged_nullifiers", 2),
+        ("staged_output_commitments", 3),
+        ("staged_locks", 6),
+    ] {
+        set_smoke_registration_count(observation, field, count);
+    }
+    let committee = (observation.peer_index - 4) / 4;
+    observation.staged_lock_commitment = (committee + 5).to_string().repeat(64);
+}
+
+#[test]
+fn smoke_prepare_registration_waits_for_exact_replicated_map() {
+    let (before, registered) = smoke_registration_snapshot_fixture();
+    let expected = registered.validators[0]
+        .replicated_staged_lock_commitment
+        .clone();
+    let mut lagging = registered.clone();
+    for peer_index in [4, 8, 12] {
+        let observation = &mut lagging.validators[peer_index];
+        set_smoke_registration_count(observation, "replicated_staged_locks", 0);
+        observation.replicated_staged_lock_commitment = before.validators[peer_index]
+            .replicated_staged_lock_commitment
+            .clone();
+    }
+    assert!(
+        !fault_replicated_prepare_registration_ready_v1(&before, &lagging, 3, &expected).unwrap()
+    );
+    for peer_index in [4, 8] {
+        lagging.validators[peer_index] = registered.validators[peer_index].clone();
+        assert!(
+            !fault_replicated_prepare_registration_ready_v1(&before, &lagging, 3, &expected)
+                .unwrap()
+        );
+    }
+    lagging.validators[12] = registered.validators[12].clone();
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &lagging, 3, &expected).unwrap()
+    );
+}
+
+#[test]
+fn smoke_prepare_registration_rejects_partial_missing_or_different_maps() {
+    let (before, registered) = smoke_registration_snapshot_fixture();
+    let expected = registered.validators[0]
+        .replicated_staged_lock_commitment
+        .clone();
+    for invalid_count in [1, 27, 29] {
+        let mut invalid = registered.clone();
+        set_smoke_registration_count(
+            &mut invalid.validators[15],
+            "replicated_staged_locks",
+            invalid_count,
+        );
+        assert!(
+            fault_replicated_prepare_registration_ready_v1(&before, &invalid, 3, &expected)
+                .is_err()
+        );
+    }
+    let mut missing = registered.clone();
+    missing.validators[15]
+        .counts
+        .as_object_mut()
+        .unwrap()
+        .remove("replicated_staged_locks");
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &missing, 3, &expected).is_err()
+    );
+    let mut different = registered.clone();
+    different.validators[15].replicated_staged_lock_commitment = "9".repeat(64);
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &different, 3, &expected).is_err()
+    );
+    // The sponsor anchor cannot be silently replaced even if all replicas agree.
+    for observation in &mut different.validators {
+        observation.replicated_staged_lock_commitment = "9".repeat(64);
+    }
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &different, 3, &expected).is_err()
+    );
+    let mut inconsistent_empty = registered.clone();
+    set_smoke_registration_count(
+        &mut inconsistent_empty.validators[15],
+        "replicated_staged_locks",
+        0,
+    );
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &inconsistent_empty, 3, &expected)
+            .is_err()
+    );
+    let mut inconsistent_full = registered.clone();
+    inconsistent_full.validators[15].replicated_staged_lock_commitment = before.validators[15]
+        .replicated_staged_lock_commitment
+        .clone();
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &inconsistent_full, 3, &expected)
+            .is_err()
+    );
+    let mut sponsor_missing = registered.clone();
+    sponsor_missing.validators[0] = before.validators[0].clone();
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &sponsor_missing, 3, &expected)
+            .is_err()
+    );
+}
+
+#[test]
+fn smoke_prepare_registration_rejects_financial_mutation_while_replica_lags() {
+    let (before, mut registered) = smoke_registration_snapshot_fixture();
+    let expected = registered.validators[0]
+        .replicated_staged_lock_commitment
+        .clone();
+    registered.validators[4] = before.validators[4].clone();
+    for field in [
+        "roots",
+        "nullifiers",
+        "commitments",
+        "encrypted_outputs",
+        "replay_markers",
+        "receipts",
+        "abort_markers",
+        "governance",
+        "pools",
+    ] {
+        let mut mutated = registered.clone();
+        let original = fault_count(&mutated.validators[15].counts, field).unwrap();
+        set_smoke_registration_count(&mut mutated.validators[15], field, original + 1);
+        assert!(
+            fault_replicated_prepare_registration_ready_v1(&before, &mutated, 3, &expected)
+                .is_err()
+        );
+    }
+    registered.validators[15].ledger_commitment = "b".repeat(64);
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &registered, 3, &expected).is_err()
+    );
+}
+
+#[test]
+fn smoke_prepare_registration_preserves_three_of_four_local_prepare() {
+    let (before, mut registered) = smoke_registration_snapshot_fixture();
+    let expected = registered.validators[0]
+        .replicated_staged_lock_commitment
+        .clone();
+    for committee in 0..3 {
+        assert_eq!(
+            registered.validators[4 + committee * 4..8 + committee * 4]
+                .iter()
+                .filter(
+                    |observation| fault_count(&observation.counts, "staged_pool_heads").unwrap()
+                        == 1
+                )
+                .count(),
+            3
+        );
+    }
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&before, &registered, 3, &expected).unwrap()
+    );
+    // Recovery's existing all-four local-plane predicate must stay stronger.
+    assert!(ensure_fault_prepare_lock_planes_full_v1(&before, &registered, 3).is_err());
+    for peer_index in [7, 11, 15] {
+        set_smoke_registration_local_leg(&mut registered.validators[peer_index]);
+    }
+    ensure_fault_prepare_lock_planes_full_v1(&before, &registered, 3).unwrap();
+    let mut different_local = registered.clone();
+    different_local.validators[7].staged_lock_commitment = "9".repeat(64);
+    assert!(ensure_fault_prepare_lock_planes_full_v1(&before, &different_local, 3).is_err());
+    let mut global_local = registered;
+    global_local.validators[0].staged_lock_commitment = "9".repeat(64);
+    assert!(ensure_fault_prepare_lock_planes_full_v1(&before, &global_local, 3).is_err());
+}
+
+#[test]
+fn smoke_prepare_registration_requires_empty_baseline_and_exact_inventory() {
+    let (before, registered) = smoke_registration_snapshot_fixture();
+    let expected = registered.validators[0]
+        .replicated_staged_lock_commitment
+        .clone();
+    let mut nonempty = before.clone();
+    for observation in &mut nonempty.validators {
+        set_smoke_registration_count(observation, "replicated_staged_locks", 28);
+        observation.replicated_staged_lock_commitment = "7".repeat(64);
+    }
+    assert!(
+        fault_replicated_prepare_registration_ready_v1(&nonempty, &registered, 3, &expected)
+            .is_err()
+    );
+    for invalid_baseline in [false, true] {
+        let mut baseline = before.clone();
+        let mut snapshot = registered.clone();
+        let invalid = if invalid_baseline {
+            &mut baseline
+        } else {
+            &mut snapshot
+        };
+        invalid.validators[15].peer_index = 14;
+        assert!(
+            fault_replicated_prepare_registration_ready_v1(&baseline, &snapshot, 3, &expected)
+                .is_err()
+        );
+        let mut baseline = before.clone();
+        let mut snapshot = registered.clone();
+        if invalid_baseline {
+            baseline.validators.pop();
+        } else {
+            snapshot.validators.pop();
+        }
+        assert!(
+            fault_replicated_prepare_registration_ready_v1(&baseline, &snapshot, 3, &expected)
+                .is_err()
+        );
     }
 }
 

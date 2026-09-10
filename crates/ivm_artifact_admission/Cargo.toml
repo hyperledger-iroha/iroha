@@ -11,6 +11,7 @@ repository.workspace = true
 crate-type = ["rlib"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 hex = { workspace = true, features = ["alloc"] }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["json"] }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "governance"] }

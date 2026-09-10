@@ -37,6 +37,7 @@ use iroha_executor_data_model::permission::{
     asset::CanMintAssetWithDefinition, nexus::CanPublishSpaceDirectoryManifest,
 };
 use iroha_genesis::GenesisBlock;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};

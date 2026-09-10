@@ -1353,7 +1353,7 @@ mod tests {
             crate::zk::hash_vk(transfer_key),
             crate::zk::hash_vk(&wrong_cid_key)
         );
-        let wrong_cid_proof = super::build_confidential_transfer_proof_v2(
+        let wrong_cid_error = super::build_confidential_transfer_proof_v2(
             &network_id,
             asset_definition_id,
             &spend_key,
@@ -1373,11 +1373,12 @@ mod tests {
             &transfer_vk.circuit_id,
             &wrong_cid_key,
         )
-        .expect("transfer proof with wrong-CID verifier key");
+        .expect_err("proof builder must reject a verifier key for another circuit");
+        assert!(wrong_cid_error.contains("CID1"), "{wrong_cid_error}");
         assert!(
             !crate::zk::verify_backend(
                 crate::zk::ZK_BACKEND_HALO2_IPA,
-                &wrong_cid_proof.proof,
+                &proof.proof,
                 Some(&wrong_cid_key),
             ),
             "verifier must reject a cryptographically valid proof whose VK CID1 names another circuit"

@@ -4,6 +4,7 @@
 #[derive(
     Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+
 struct ToriiAppFanoutNoritoTestDto {
     nested: Vec<Vec<Vec<u8>>>,
 }

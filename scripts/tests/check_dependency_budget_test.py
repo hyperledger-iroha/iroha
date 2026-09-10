@@ -558,6 +558,37 @@ def test_boundary_root_dev_opt_in_preserves_shipping_command() -> None:
     assert "--prune" not in actual
 
 
+def test_foundation_model_selections_reject_upper_layer_dependencies() -> None:
+    path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
+    policy = MODULE.validate_boundary_policy(json.loads(path.read_text()))
+    selections = {
+        name: selection for name, selection in policy["configurations"].items()
+        if selection["package"] == "iroha_model_base"
+    }
+    assert {tuple(row["features"]) for row in selections.values()} == {
+        (), ("ffi_export",), ("transparent_api",), ("ffi_export", "transparent_api"),
+    }
+    forbidden = {
+        "iroha_data_model", "iroha_privacy_model", "iroha_service_model",
+        "iroha_core", "iroha_torii", "irohad", "ivm", "ivm_abi",
+        "iroha_config", "iroha_telemetry", "iroha_zkp_halo2", "fastpq_prover",
+        "zk_ace_prover", "sorafs_manifest", "sorafs_car", "sorafs_orchestrator",
+        "iroha_musubi_service", "iroha_storage_client", "iroha",
+        "reqwest", "axum", "tungstenite",
+    }
+    baseline = "0|iroha_model_base v1.0.0|\n1|norito v1.0.0|\n"
+    for selection in selections.values():
+        assert selection["target"] == "all"
+        command = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+        assert command[command.index("--edges") + 1] == "normal,build"
+        assert MODULE.evaluate_boundary_tree(policy, selection, baseline)["within_boundary"]
+        for package in forbidden:
+            result = MODULE.evaluate_boundary_tree(
+                policy, selection, baseline + f"2|{package} v1.0.0|\n",
+            )
+            assert not result["within_boundary"], package
+
+
 def test_aggregate_model_test_boundary_retains_protocol_ownership_and_denials() -> None:
     path = Path(__file__).resolve().parents[2] / "ci" / "dependency_budget.json"
     policy = MODULE.validate_boundary_policy(json.loads(path.read_text()))

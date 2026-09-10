@@ -23,7 +23,6 @@ use crate::{
     domain::{Domain, DomainId},
     merge::MergeLedgerEntry,
     metadata::Metadata,
-    name::Name,
     nft::{Nft, NftId},
     parameter::{Parameter, Parameters},
     peer::PeerId,
@@ -40,6 +39,7 @@ use iroha_crypto::{
 };
 use iroha_data_model_derive::model;
 use iroha_macro::FromVariant;
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Numeric};
 use iroha_schema::IntoSchema;
 use iroha_version::Version;

@@ -21,9 +21,9 @@ use iroha_data_model::{
         MusubiSemanticReleaseManifestV1, MusubiVerificationLockV1,
         validate_musubi_portable_path_set_v1,
     },
-    name::Name,
     sorafs::pin_registry::{ChunkerProfileHandle, ManifestRootCid},
 };
+use iroha_model_base::name::Name;
 use ivm::{SyscallPolicy, syscalls::compute_abi_hash};
 #[cfg(all(test, unix))]
 use norito::codec::Decode;
@@ -1122,7 +1122,7 @@ pub fn publication_claim(
     }
     Ok(publication)
 }
-fn bundle_parse_error(error: iroha_data_model::ParseError) -> PackageError {
+fn bundle_parse_error(error: iroha_model_base::error::ParseError) -> PackageError {
     PackageError::InvalidBundleBinding(error.to_string())
 }
 fn insert_optional_string(table: &mut toml::Table, key: &str, value: Option<&str>) {
@@ -1624,7 +1624,8 @@ fn normalize_nfc(component: &str) -> Result<String, ()> {
         if segment.is_empty() {
             return Ok(());
         }
-        let normalized = Name::from_str(segment).map_err(|_| ())?;
+        let canonical = Name::normalize(segment).map_err(|_| ())?;
+        let normalized = Name::from_str(&canonical).map_err(|_| ())?;
         output.push_str(normalized.as_ref());
         segment.clear();
         Ok(())
@@ -2574,7 +2575,7 @@ exports = []
         let manifest = crate::manifest::parse_manifest(&rendered).expect("strict clean manifest");
         assert!(manifest.workspace.is_none());
         assert!(manifest.dev_dependencies.is_empty());
-        let dependency_alias: iroha_data_model::name::Name =
+        let dependency_alias: iroha_model_base::name::Name =
             "dep".parse().expect("dependency alias");
         assert!(matches!(
             &manifest.dependencies[&dependency_alias],

@@ -1790,7 +1790,10 @@ fn read_limited_rejects_oversized_output() {
     );
 }
 fn encode_sanitizer_response(response: &super::SanitizerResponse) -> Vec<u8> {
-    norito::encode_canonical(response).expect("encode canonical sanitizer response")
+    crate::frame_test_support::assert_current_frame(
+        response,
+        "iroha_torii::zk_attachments::SanitizerResponse",
+    )
 }
 fn canonical_sanitizer_request() -> super::SanitizerRequest {
     super::SanitizerRequest {
@@ -1805,7 +1808,10 @@ fn canonical_sanitizer_request() -> super::SanitizerRequest {
 #[test]
 fn decode_sanitizer_request_bytes_accepts_exact_canonical_frame() {
     let expected = canonical_sanitizer_request();
-    let bytes = norito::encode_canonical(&expected).expect("encode canonical request");
+    let bytes = crate::frame_test_support::assert_current_frame(
+        &expected,
+        "iroha_torii::zk_attachments::SanitizerRequest",
+    );
     let decoded = super::decode_sanitizer_request_bytes(&bytes).expect("decode request");
     assert_eq!(decoded.declared_type, expected.declared_type);
     assert_eq!(decoded.body, expected.body);

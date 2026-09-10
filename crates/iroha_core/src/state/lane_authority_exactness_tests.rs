@@ -113,8 +113,7 @@ fn exact_stake_authority_fixture(
 }
 
 fn install_malformed_beacon_cursor(state: &State) {
-    // A non-empty cursor disables the unit-fixture entropy fallback, while the
-    // absent backing pulse makes any attempted seed resolution fail closed.
+    // A cursor without its backing pulse must fail verified seed resolution.
     let mut world = state.world.block();
     world.global_beacon_latest_pulse.insert(
         GLOBAL_THRESHOLD_BEACON_SINGLETON_KEY,
@@ -126,6 +125,16 @@ fn install_malformed_beacon_cursor(state: &State) {
         },
     );
     world.commit();
+}
+
+fn resolve_universal_committee_at(
+    state: &State,
+    height: u64,
+) -> Result<LaneAuthorityCommittee, LaneAuthorityError> {
+    state.resolve_lane_committee_at_height(
+        LaneAuthorityRoute::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        height,
+    )
 }
 
 fn resolve_universal_committee(
@@ -336,8 +345,9 @@ fn exact_lane_committee_accepts_four_and_stably_samples_larger_f1_pool() {
     );
 
     let (larger_state, larger_keys) = exact_manifest_authority_fixture(1, 9);
-    let first = resolve_universal_committee(&larger_state).expect("sample larger pool");
-    let second = resolve_universal_committee(&larger_state).expect("repeat larger-pool sample");
+    let height = seed_lane_committee_beacon_for_test(&larger_state);
+    let first = resolve_universal_committee_at(&larger_state, height).expect("sample larger pool");
+    let second = resolve_universal_committee_at(&larger_state, height).expect("repeat larger-pool sample");
     assert_eq!(first, second);
     assert_eq!(first.validators().len(), 4);
     assert!(first.validators().windows(2).all(|pair| pair[0] < pair[1]));
@@ -362,7 +372,7 @@ fn exact_lane_committee_accepts_four_and_stably_samples_larger_f1_pool() {
         &[(LaneId::SINGLE, DataSpaceId::UNIVERSAL, reversed_validators)],
     );
     assert_eq!(
-        resolve_universal_committee(&larger_state).expect("order-independent sample"),
+        resolve_universal_committee_at(&larger_state, height).expect("order-independent sample"),
         first,
         "manifest declaration order must not influence seeded committee membership"
     );
@@ -403,7 +413,8 @@ fn exact_stake_elected_committee_does_not_require_sampling_entropy() {
 #[test]
 fn exact_lane_committee_selects_seven_for_f2() {
     let (state, _) = exact_manifest_authority_fixture(2, 11);
-    let committee = resolve_universal_committee(&state).expect("f=2 committee");
+    let height = seed_lane_committee_beacon_for_test(&state);
+    let committee = resolve_universal_committee_at(&state, height).expect("f=2 committee");
     assert_eq!(committee.fault_tolerance(), 2);
     assert_eq!(committee.validators().len(), 7);
     assert!(
@@ -474,6 +485,7 @@ fn exact_lane_committee_rejects_manifest_dataspace_mismatch() {
 #[test]
 fn exact_stake_committee_reselects_then_fails_closed_across_peer_churn() {
     let state = blank_test_state();
+    let height = seed_lane_committee_beacon_for_test(&state);
     let keypairs = (0x31_u8..=0x35)
         .map(|seed| {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -490,15 +502,15 @@ fn exact_stake_committee_reselects_then_fails_closed_across_peer_churn() {
             1_000_000_u64.saturating_sub(u64::try_from(index).expect("small index")),
         );
     }
-    let first = resolve_universal_committee(&state).expect("initial stake committee");
+    let first = resolve_universal_committee_at(&state, height).expect("initial stake committee");
     assert_eq!(first.validators().len(), 4);
     remove_world_peer_for_test(&state, &first.validators()[0]);
-    let replacement = resolve_universal_committee(&state).expect("replacement stake committee");
+    let replacement = resolve_universal_committee_at(&state, height).expect("replacement stake committee");
     assert_eq!(replacement.validators().len(), 4);
     assert_ne!(replacement.validators(), first.validators());
     remove_world_peer_for_test(&state, &replacement.validators()[0]);
     assert!(matches!(
-        resolve_universal_committee(&state),
+        resolve_universal_committee_at(&state, height),
         Err(LaneAuthorityError::UndersizedPool {
             required: 4,
             actual: 3,

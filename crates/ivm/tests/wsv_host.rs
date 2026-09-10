@@ -1,11 +1,12 @@
 use iroha_crypto::{Hash, PublicKey};
 use iroha_data_model::nexus::DataSpaceId;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_primitives::{numeric::Quantity, numeric_abi::QuantityValueV1};
 use ivm::{
     IVM, PointerType, VMError,
     mock_wsv::{
-        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, Name, PermissionToken, WsvHost,
+        AccountId, AssetDefinitionId, DomainId, MockWorldStateView, PermissionToken, WsvHost,
     },
     syscalls,
 };

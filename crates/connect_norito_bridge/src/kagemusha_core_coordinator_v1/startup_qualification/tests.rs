@@ -1701,3 +1701,67 @@ fn reopen_requires_fresh_qualification_and_preserves_the_original_owner_on_confl
     assert_eq!(active.current.as_ref(), Some(&selected));
     assert_eq!(active.last_credential, Some(selected.credential));
 }
+
+#[cfg(test)]
+mod explicit_schema_identity_tests {
+    use super::*;
+
+    macro_rules! identity {
+        ($root:ty, $nominal:literal, $frame:literal) => {
+            assert_eq!(<$root as norito::NoritoSchema>::nominal_name(), $nominal);
+            assert_eq!(<$root as norito::NoritoSchema>::frame_name(), $frame);
+            assert_eq!(
+                norito::schema::identity::frame_hash::<$root>(),
+                norito::core::schema_hash_for_name($frame)
+            );
+            assert_eq!(
+                <Vec<$root> as norito::NoritoSchema>::nominal_name(),
+                format!("alloc::vec::Vec<{}>", $nominal)
+            );
+        };
+    }
+
+    #[test]
+    fn framed_roots_keep_nominal_and_protocol_identities() {
+        identity!(
+            QualificationReply,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::QualificationReply",
+            "iroha.kagemusha.device.v1.active-hardware-credential-reply"
+        );
+        identity!(
+            SnapshotReply,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::SnapshotReply",
+            "iroha.kagemusha.device.v1.wallet-recovery-snapshot-reply"
+        );
+        identity!(
+            WatermarkReply,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkReply",
+            "iroha.kagemusha.device.v1.pending-credit-watermark-reply"
+        );
+        identity!(
+            WatermarkCommand,
+            "connect_norito_bridge::kagemusha_core_coordinator_v1::startup_qualification::tests::WatermarkCommand",
+            "iroha.kagemusha.device.v1.read-pending-credit-watermark-command"
+        );
+
+        let qualification = qualification(1);
+        let bytes = reply(&qualification);
+        let header = norito::core::Header::read(bytes.as_slice()).unwrap();
+        assert_eq!(
+            header.schema,
+            norito::schema::identity::frame_hash::<QualificationReply>()
+        );
+        let canonical: iroha_data_model::kagemusha::KagemushaDeviceQualificationReplyV1 =
+            norito::decode_canonical(&bytes).expect("fixture decodes as the actual device reply");
+        assert_eq!(canonical.credential, qualification.credential);
+        assert_eq!(norito::encode_canonical(&canonical).unwrap(), bytes);
+        assert_ne!(
+            <QualificationReply as norito::NoritoSchema>::nominal_name(),
+            <iroha_data_model::kagemusha::KagemushaDeviceQualificationReplyV1 as norito::NoritoSchema>::nominal_name(),
+        );
+        assert!(matches!(
+            norito::decode_canonical::<u32>(&bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+}

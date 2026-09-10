@@ -29,9 +29,8 @@ pub struct QueryIndexStatus {
     #[norito(skip_serializing_if = "Option::is_none")]
     pub indexed_block_hash: Option<HashOf<BlockHeader>>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::query::index_status::PersistedQueryIndexStatus")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedQueryIndexStatus {
     version: u32,
     status: QueryIndexStatus,
@@ -428,6 +427,18 @@ mod tests {
         let mut journal = QueryIndexJournal::new(path.clone());
         journal.set_latest(42, Some(sample_hash(0xAB)));
         journal.persist().expect("persist journal");
+        let persisted = PersistedQueryIndexStatus {
+            version: QueryIndexJournal::JOURNAL_VERSION,
+            status: journal.snapshot(),
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &persisted,
+            "iroha_core::query::index_status::PersistedQueryIndexStatus",
+        );
+        assert_eq!(
+            std::fs::read(&path).expect("actual persisted bytes"),
+            norito::encode_canonical(&persisted).expect("declared journal owner frame")
+        );
         let loaded = QueryIndexJournal::load(path).expect("reload journal");
         assert_eq!(loaded.snapshot(), journal.snapshot());
     }

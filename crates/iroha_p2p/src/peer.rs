@@ -8367,8 +8367,11 @@ mod run {
         assert_captured_p2p_message("message_u32", "scalar", 0x12345678_u32);
         assert_captured_p2p_message("message_u64", "scalar", 0x0123456789abcdef_u64);
     }
+    #[cfg(test)]
+    mod payload_codec_tests;
     /// Either message or ping
     #[derive(Encode, Decode, Clone, Debug)]
+    #[norito(decode_from_slice)]
     enum Message<T> {
         Data(T),
         Ping,
@@ -8449,27 +8452,6 @@ mod run {
                 "iroha_p2p::peer::run::Message",
                 &[T::nominal_name()],
             )
-        }
-    }
-    impl<'a, T> ncore::DecodeFromSlice<'a> for Message<T>
-    where
-        T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
-    {
-        fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-            use std::borrow::Cow;
-            let min_size = ncore::archived_payload_size::<Self>();
-            let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
-                let mut padded = Vec::with_capacity(min_size);
-                padded.extend_from_slice(bytes);
-                padded.resize(min_size, 0);
-                Cow::Owned(padded)
-            } else {
-                Cow::Borrowed(bytes)
-            };
-            let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
-            let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-            let value = <Self as ncore::DeserializePayload>::try_deserialize(archived.archived())?;
-            Ok((value, bytes.len()))
         }
     }
     fn norito_frame_prefix_len<T>() -> Option<usize> {

@@ -263,7 +263,7 @@ mod tests {
     fn kat_scope() -> BootleLanternCredentialScopeV1 {
         BootleLanternCredentialScopeV1 {
             network_id: network_id(raw(2)),
-            genesis_hash: raw(2),
+            genesis_hash: *network_id(raw(2)).as_bytes(),
             parameter_id: PrivacyParameterIdV1::new(raw(3)),
             parameter_digest: PrivacyParameterDigestV1::new(raw(4)),
             verifier_digest: PrivacyVerifierDigestV1::new(raw(5)),
@@ -371,20 +371,20 @@ mod tests {
         let scope = kat_scope();
         assert_eq!(
             scope.digest().expect("scope digest"),
-            hex::decode("31d0e4e8d38bdb1c70bfa20d832d694924023922026df83c92164e4b38d40709")
+            hex::decode("69cd7549da4aa553b739e2d69f87eb605b4b41f9f5ff529a11d6a3652aac2789")
                 .expect("hex")
                 .as_slice()
         );
         assert_eq!(
             &scope.application_term().expect("scope term")[0].coefficients()[..16],
             &[
-                3_936, 11_740, 11_923, 4_008, 8_590, 8_443, 9_761, 10_082, 1_401, 10_900, 11_799,
-                7_699, 4_506, 2_834, 4_670, 4_468,
+                4_914, 3_884, 3_786, 10_962, 10_564, 2_360, 11_956, 10_581, 6_746, 6_910, 5_403,
+                7_028, 10_311, 6_285, 4_462, 1_568,
             ]
         );
         assert_eq!(
             application_term_digest(&scope),
-            hex::decode("a95e7b11b0d368acfdc669610dce1b8d63530fac6dd9fb7c46215cfd0e108f50")
+            hex::decode("deefed8f8e1960f4029456f8ee3268ee6131983fc4821697b5e8b371a6d33cea")
                 .expect("hex")
         );
     }
@@ -443,13 +443,21 @@ mod tests {
     fn action_index_and_transaction_intent_are_presentation_only() {
         let policy = active_policy();
         let base_context = context();
-        let base =
-            BootleLanternCredentialScopeV1::new(&base_context, raw(20), &policy).expect("scope");
+        let base = BootleLanternCredentialScopeV1::new(
+            &base_context,
+            *context().network_id.as_bytes(),
+            &policy,
+        )
+        .expect("scope");
         let mut changed_context = base_context;
         changed_context.action_index = 4_000;
         changed_context.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(raw(21));
-        let changed =
-            BootleLanternCredentialScopeV1::new(&changed_context, raw(20), &policy).expect("scope");
+        let changed = BootleLanternCredentialScopeV1::new(
+            &changed_context,
+            *context().network_id.as_bytes(),
+            &policy,
+        )
+        .expect("scope");
         assert_eq!(changed, base);
         assert_eq!(changed.digest(), base.digest());
         assert_eq!(changed.application_term(), base.application_term());
@@ -467,13 +475,17 @@ mod tests {
         revoked.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0; 32]);
         revoked.record_digest = revoked.computed_record_digest().expect("revoked digest");
         assert!(matches!(
-            BootleLanternCredentialScopeV1::new(&context, raw(20), &revoked),
+            BootleLanternCredentialScopeV1::new(&context, *context.network_id.as_bytes(), &revoked),
             Err(CredentialScopeErrorV1::InvalidPolicy)
         ));
         let mut zero_issuer = policy.clone();
         zero_issuer.issuer_id = PrivacyIssuerIdV1::new([0; 32]);
         assert!(matches!(
-            BootleLanternCredentialScopeV1::new(&context, raw(20), &zero_issuer),
+            BootleLanternCredentialScopeV1::new(
+                &context,
+                *context.network_id.as_bytes(),
+                &zero_issuer
+            ),
             Err(CredentialScopeErrorV1::InvalidPolicy)
         ));
         let mut zero_contexts = Vec::new();
@@ -497,7 +509,11 @@ mod tests {
         );
         for zero_context in zero_contexts {
             assert!(matches!(
-                BootleLanternCredentialScopeV1::new(&zero_context, raw(20), &policy),
+                BootleLanternCredentialScopeV1::new(
+                    &zero_context,
+                    *context.network_id.as_bytes(),
+                    &policy
+                ),
                 Err(CredentialScopeErrorV1::ZeroBinding(_))
             ));
         }

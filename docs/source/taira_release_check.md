@@ -59,9 +59,12 @@ clients fail before operator-key admission or stage snapshots.
 
 Core checks cover the complete Soracloud and SoraFS instruction inventories at
 the Initial executor boundary. Dispatch and admission come from the same typed
-registry; unsupported operations remain explicitly closed. Before Cargo,
+registry; unavailable mailbox and direct provider-owner operations remain
+explicitly closed. Citizen-bond operations have no production instruction API,
+wire ID, or native handler. Before Cargo,
 `check_taira_initial_executor.py --repo . --self-test` compares every wire type
-with that registry and checks mutations which remove or alter reviewed entries. The selected cases
+with that registry and rejects mutations which remove or alter reviewed entries
+or restore removed citizen-bond operations. The selected cases
 exercise validator identity, role grants and revocation, pin fees and ownership,
 and rejection before state mutation. Exact transaction confirmation uses the
 dedicated details endpoint, with separate coverage for restricted history access

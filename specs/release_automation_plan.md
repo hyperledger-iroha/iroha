@@ -26,7 +26,7 @@ canonical SoraFS CLI release workflow.
   local smoke and bundle-inventory gates.
 - `.github/workflows/workspace_release.yml` is the workspace release gate.
 - `.github/workflows/sorafs-cli-release.yml` is the separate canonical SoraFS
-  CLI/reference-validator release workflow. It does not invoke the generic
+  tooling/canonical CLI release workflow. It does not invoke the generic
   Iroha 3 release pipeline.
 
 No checked-in workflow currently invokes `scripts/run_release_pipeline.py`.
@@ -52,7 +52,7 @@ accepts this complete aggregate-signing option set:
 It also requires the verifier contract:
 
 ```text
---release-manifest-verifier <reviewed-sorafs-validate-executable>
+--release-manifest-verifier <reviewed-iroha-executable>
 --trusted-release-manifest-verifier-sha256 <reviewed-lowercase-sha256>
 ```
 
@@ -67,7 +67,7 @@ the repository and artifact tree. `scripts/release_manifest_signing.py` writes
 malformed or noncanonical signatures, incompatible keys, unsafe permissions,
 symlinks, hard links, and untrusted fingerprints; snapshots the exact reviewed
 signer, manifest, and verifier; checks verifier SHA-256 and identity; invokes
-`sorafs-validate release-manifest`; and rechecks every input after native
+`iroha app sorafs toolkit release-manifest`; and rechecks every input after native
 execution. There is no OpenSSL, PEM, RSA, or in-process fallback. The
 publish-plan generator and validator reverify the aggregate signature and
 record its digest, `public_key_format=raw-ed25519-32`, fingerprint, verification
@@ -103,7 +103,7 @@ by this generic Iroha 3 release pipeline.
   backend, independently administered runtime-only credentials, and
   `software-key-qualified` verification receipt.
 - Out-of-band approval of the raw public-key fingerprint.
-- Packaged `sorafs-validate` candidate plus independent approval of its exact
+- Packaged `iroha` candidate plus independent approval of its exact
   executable path and lowercase SHA-256 digest.
 - OIDC/cosign identity and transparency-log availability for provenance.
 - Registry, bucket, or SoraFS publication authorization.

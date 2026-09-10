@@ -18,6 +18,9 @@ from typing import Any, Callable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts/nexus"))
+sys.path.insert(0, str(REPO_ROOT / "scripts/tests"))
+import scaling_main_component_fixture as COMPONENT
 VALIDATOR_PATH = REPO_ROOT / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py"
 SPEC = importlib.util.spec_from_file_location("multilane_scaling_validator", VALIDATOR_PATH)
 assert SPEC is not None and SPEC.loader is not None
@@ -38,6 +41,7 @@ class EvidenceBundle:
     """Build a synthetic, in-temporary-directory contract fixture."""
 
     def __init__(self, root: Path) -> None:
+        root = root.resolve(strict=True)
         self.root = root
         self.manifest_path = root / "scaling_evidence.json"
         self.workload = {
@@ -170,21 +174,26 @@ class EvidenceBundle:
             "runs": runs,
         }
         self.flush_manifest()
+        COMPONENT.initialize(self, VALIDATOR)
 
     def write_json(self, path: Path, payload: Any, *, allow_nan: bool = False) -> None:
         path.write_text(
             json.dumps(payload, indent=2, sort_keys=True, allow_nan=allow_nan) + "\n",
             encoding="utf-8",
         )
+        path.chmod(0o600)
 
     def ref(self, path: Path) -> dict[str, str]:
+        digest = digest_file(path)
+        COMPONENT.pin(self, path, digest)
         return {
             "path": path.relative_to(self.root).as_posix(),
-            "sha256": digest_file(path),
+            "sha256": digest,
         }
 
     def flush_manifest(self) -> None:
         self.write_json(self.manifest_path, self.manifest)
+        COMPONENT.pin(self, self.manifest_path)
 
     def entry(self, pair_index: int, variant: str) -> dict[str, Any]:
         return next(
@@ -244,18 +253,13 @@ class EvidenceBundle:
         committed: int,
         latency: float,
         offered: int = 400,
-        accepted: int | None = None,
     ) -> dict[str, Any]:
         intervals = 20
-        if accepted is None:
-            accepted = committed
-
         def distribute(total: int) -> list[int]:
             quotient, remainder = divmod(total, intervals)
             return [quotient + (1 if index < remainder else 0) for index in range(intervals)]
 
         offered_parts = distribute(offered)
-        accepted_parts = distribute(accepted)
         committed_parts = distribute(committed)
         samples = []
         for index in range(intervals):
@@ -266,7 +270,7 @@ class EvidenceBundle:
                     "start_offset_seconds": float(index),
                     "end_offset_seconds": float(index + 1),
                     "offered_count": offered_parts[index],
-                    "accepted_count": accepted_parts[index],
+                    "accepted_count": offered_parts[index],
                     "committed_count": interval_committed,
                     "commit_latencies_ms": [latency] * interval_committed,
                     "queue_depth": 10 + (index % 3),
@@ -309,7 +313,6 @@ class EvidenceBundle:
                 sequence = index + 1
                 scheduled = start + index * 50_000_000
                 offer = scheduled + 100_000
-                is_accepted = cohort == "warmup" or index % 20 < accepted_parts[index // 20]
                 tx_hash = digest_bytes(f"{pair_index}:{variant}:{cohort}:{sequence}".encode())[:-1] + "1"
                 transactions.append({
                     "cohort": cohort,
@@ -322,8 +325,8 @@ class EvidenceBundle:
                     "acknowledgment": {
                         "offset_ns": offer + 1_000_000,
                         "hash": tx_hash,
-                        "status": "Accepted" if is_accepted else "Rejected",
-                        "rejection": None if is_accepted else "synthetic explicit admission rejection",
+                        "status": "Accepted",
+                        "rejection": None,
                     },
                     "applied": {
                         "offset_ns": offer + round(latency * 1_000_000),
@@ -332,7 +335,7 @@ class EvidenceBundle:
                         "resolved_from": "state",
                         "status": "Applied",
                         "block_height": 1 + index // 20,
-                    } if is_accepted else None,
+                    },
                 })
         self.write_json(trace_path, {
             "schema": VALIDATOR.TRACE_SCHEMA,
@@ -357,7 +360,7 @@ class EvidenceBundle:
                 "commit_latencies_ms": [],
             })
             drain_samples.append(sample)
-        return {
+        raw = {
             "schema": VALIDATOR.RUN_SCHEMA,
             "pair_index": pair_index,
             "variant": variant,
@@ -370,7 +373,7 @@ class EvidenceBundle:
             "status": {"outcome": "passed", "skipped": False, "failure": None},
             "summary": {
                 "offered_count": offered,
-                "accepted_count": accepted,
+                "accepted_count": offered,
                 "committed_count": committed,
                 "queue_depth_max": 12,
                 "index_entries_max": 24,
@@ -398,6 +401,9 @@ class EvidenceBundle:
             },
         }
 
+        trace = json.loads(trace_path.read_text())
+        return COMPONENT.complete_outcomes(self, raw, trace, committed, latency)
+
     def replace_variant_runs(self, variant: str, *, committed: int, latency: float) -> None:
         for pair_index in range(1, 6):
             entry = self.entry(pair_index, variant)
@@ -413,6 +419,8 @@ class EvidenceBundle:
                     latency=latency,
                 ),
             )
+
+            COMPONENT.refresh_journal(self, pair_index, variant)
 
     def load_trace(self, pair_index: int, variant: str) -> dict[str, Any]:
         raw = self.load_raw(pair_index, variant)
@@ -454,20 +462,47 @@ class EvidenceBundle:
                 for name in ("offered_count", "accepted_count", "committed_count"):
                     phase["summary"][name] = sum(sample[name] for sample in phase["samples"])
         self.replace_raw(pair_index, variant, raw)
+        if recount:
+            COMPONENT.refresh_journal(self, pair_index, variant)
 
 
 class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.published_owner = tempfile.TemporaryDirectory()
+        cls.addClassCleanup(cls.published_owner.cleanup)
+        cls.published = EvidenceBundle(Path(cls.published_owner.name))
+
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.bundle = EvidenceBundle(Path(self.temporary.name))
+        self.bundle = COMPONENT.clone_fixture(self.published, Path(self.temporary.name))
 
     def assert_invalid(self, fragment: str) -> None:
-        with self.assertRaisesRegex(VALIDATOR.EvidenceError, fragment):
-            VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        with self.assertRaisesRegex(ValueError, fragment):
+            COMPONENT.validate_component(self.bundle.manifest_path)
+
+    def test_rehashed_full_bundle_rejects_journal_submission_lag_disagreement(self) -> None:
+        raw = self.bundle.load_raw(1, "one_lane")
+        path = self.bundle.root / raw["artifacts"]["collector_journal"]["path"]
+        original = path.read_bytes()
+        first, remaining = original.split(b"\n", 1)
+        plan = json.loads(first)
+        self.assertEqual(plan["submission_lag_bound_ns"], 10_000_000)
+        trace = self.bundle.load_trace(1, "one_lane")
+        self.assertGreater(min(row["submission_lag_ns"] for row in trace["transactions"]), 1)
+        for declared in (1, 20_000_000, True):
+            with self.subTest(declared=declared):
+                # Refresh all independently supplied digests so only semantic
+                # agreement with the workload/trace can reject this capture.
+                changed = dict(plan, submission_lag_bound_ns=declared)
+                path.write_bytes(COMPONENT.encode(changed) + b"\n" + remaining)
+                raw["artifacts"]["collector_journal"] = self.bundle.ref(path)
+                self.bundle.replace_raw(1, "one_lane", raw)
+                self.assert_invalid("collector journal disagrees with the exact trace or workload")
 
     def test_valid_bundle_recomputes_both_release_thresholds(self) -> None:
-        metrics = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        metrics = COMPONENT.validate_component(self.bundle.manifest_path)
         self.assertEqual(metrics["pair_count"], 5)
         self.assertEqual(metrics["run_count"], 10)
         self.assertAlmostEqual(metrics["four_to_one_median_throughput_ratio"], 1.6)
@@ -480,7 +515,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         trace = self.bundle.load_trace(1, "one_lane")
         measurement = [row for row in trace["transactions"] if row["cohort"] == "measurement"]
         # State observation can precede the admission response, even across bins.
-        measurement[0]["acknowledgment"]["offset_ns"] = 1_001_000_000
+        measurement[20]["acknowledgment"]["offset_ns"] = 2_001_000_000
         last = measurement[-1]
         last["acknowledgment"].update(status="Accepted", rejection=None, offset_ns=20_200_000_000)
         last["applied"] = {
@@ -489,24 +524,24 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         }
         self.bundle.replace_trace(1, "one_lane", trace, recount=True)
         raw = self.bundle.load_raw(1, "one_lane")
-        self.assertGreater(raw["samples"][0]["committed_count"], raw["samples"][0]["accepted_count"])
+        self.assertGreater(raw["samples"][1]["committed_count"], raw["samples"][1]["accepted_count"])
         self.assertEqual(raw["drain"]["summary"]["accepted_count"], 1)
-        self.assertEqual(raw["summary"]["accepted_count"], 100)
-        metrics = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        self.assertEqual(raw["summary"]["accepted_count"], 399)
+        metrics = COMPONENT.validate_component(self.bundle.manifest_path)
         pair = metrics["pairs"][0]
-        self.assertEqual(pair["one_lane_cohort_accepted_count"], 101)
-        self.assertEqual(pair["one_lane_latency_samples"], 101)
-        self.assertEqual(pair["one_lane_drain_committed_count"], 1)
+        self.assertEqual(pair["one_lane_cohort_accepted_count"], 400)
+        self.assertEqual(pair["one_lane_latency_samples"], 400)
+        self.assertEqual(pair["one_lane_drain_committed_count"], 300)
         self.assertEqual(pair["one_lane_committed_throughput_tps"], 5.0)
 
     def test_complete_cohort_p95_includes_tail_that_would_fail_only_after_drain(self) -> None:
         for pair_index in range(1, 6):
             trace = self.bundle.load_trace(pair_index, "four_lane")
-            tail = [row for row in trace["transactions"] if row["cohort"] == "measurement" and row["applied"] is None][-10:]
+            tail = [row for row in trace["transactions"] if row["cohort"] == "measurement"][:21]
             for row in tail:
                 row["acknowledgment"].update(status="Accepted", rejection=None, offset_ns=20_500_000_000)
                 row["applied"] = {
-                    "offset_ns": 21_000_000_000, "hash": row["hash"], "scope": "global",
+                    "offset_ns": 21_500_000_000, "hash": row["hash"], "scope": "global",
                     "resolved_from": "state", "status": "Applied", "block_height": 21,
                 }
             self.bundle.replace_trace(pair_index, "four_lane", trace, recount=True)
@@ -522,7 +557,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             "resolved_from": "state", "status": "Applied", "block_height": 22,
         }
         self.bundle.replace_trace(1, "one_lane", trace, recount=True)
-        metrics = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        metrics = COMPONENT.validate_component(self.bundle.manifest_path)
         self.assertEqual(metrics["pairs"][0]["one_lane_drain_accepted_count"], 1)
         self.assertEqual(metrics["pairs"][0]["one_lane_committed_count"], 100)
 
@@ -553,8 +588,8 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             ("ack before offer", lambda trace: trace["transactions"][100]["acknowledgment"].__setitem__("offset_ns", 0), "before offer"),
             ("Applied before offer", lambda trace: trace["transactions"][100]["applied"].__setitem__("offset_ns", 0), "before offer"),
             ("accepted rejection", lambda trace: trace["transactions"][100]["acknowledgment"].__setitem__("rejection", "rejected"), "null rejection"),
-            ("missing rejection", lambda trace: trace["transactions"][-1]["acknowledgment"].__setitem__("rejection", None), "single-line string"),
-            ("rejected yet Applied", lambda trace: trace["transactions"][-1].__setitem__("applied", copy.deepcopy(trace["transactions"][100]["applied"])), "cannot also claim StateApplied"),
+            ("missing rejection", lambda trace: (trace["transactions"][-1]["acknowledgment"].update(status="Rejected", rejection=None), trace["transactions"][-1].__setitem__("applied", None)), "single-line string"),
+            ("rejected yet Applied", lambda trace: (trace["transactions"][-1]["acknowledgment"].update(status="Rejected", rejection="explicit synthetic rejection"), trace["transactions"][-1].__setitem__("applied", copy.deepcopy(trace["transactions"][100]["applied"]))), "cannot also claim StateApplied"),
         )
         for name, mutation, expected in cases:
             with self.subTest(name=name):
@@ -608,13 +643,13 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
     def test_trace_reconciles_counts_and_unclipped_interval_latencies(self) -> None:
         baseline = self.bundle.load_trace(1, "one_lane")
         for event, value, expected in (
-            ("acknowledgment", 1_001_000_000, "accepted_count disagrees"),
-            ("applied", 1_001_000_000, "committed_count disagrees"),
-            ("applied", 11_100_000, "complete transaction trace latencies"),
+            ("acknowledgment", 2_001_000_000, "accepted_count disagrees"),
+            ("applied", 2_001_000_000, "committed_count disagrees"),
+            ("applied", 1_011_100_000, "complete transaction trace latencies"),
         ):
             with self.subTest(event=event, value=value):
                 trace = copy.deepcopy(baseline)
-                trace["transactions"][100][event]["offset_ns"] = value
+                trace["transactions"][120][event]["offset_ns"] = value
                 self.bundle.replace_trace(1, "one_lane", trace)
                 self.assert_invalid(expected)
 
@@ -651,21 +686,26 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             ("measurement_seconds", 0.0000000001, "exact bounded integer nanoseconds"),
             ("offered_load_tps", 1e12, "one quarter of an arrival period"),
             ("measurement_seconds", 1_000_000, "transaction trace row bound"),
-            ("offered_load_tps", 1 << 4096, "finite number"),
+            ("offered_load_tps", 1 << 4096, "JSON numeric token limit"),
         )
         for field, value, expected in cases:
             with self.subTest(field=field, value=value):
                 self.bundle.manifest["workload"] = dict(baseline, **{field: value})
                 self.bundle.flush_manifest()
                 self.assert_invalid(expected)
+        # The bounded decoder now rejects this token before the numeric owner.
+        # Retain the original finite-number guard directly as a second negative.
+        with self.assertRaisesRegex(VALIDATOR.EvidenceError, "finite number"):
+            VALIDATOR._require_number(1 << 4096, "workload.offered_load_tps")
         workload = dict(baseline, offered_load_tps=3, max_submission_lag_ms=0)
         period, warmup, measurement, drain, lag = VALIDATOR._schedule(workload)
         self.assertEqual(period.numerator, 1_000_000_000)
         self.assertEqual(period.denominator, 3)
         self.assertEqual((warmup, measurement, drain, lag), (5_000_000_000, 20_000_000_000, 2_000_000_000, 0))
 
-    def test_zero_warmup_has_no_phantom_requests_and_late_rejections_remain_visible(self) -> None:
+    def test_zero_warmup_has_no_phantom_requests_and_late_acknowledgments_remain_visible(self) -> None:
         self.bundle.workload["warmup_seconds"] = 0.0
+        COMPONENT.refresh_warmup_scope(self.bundle)
         for entry in self.bundle.manifest["runs"]:
             pair, variant = entry["pair_index"], entry["variant"]
             raw = self.bundle.load_raw(pair, variant)
@@ -675,17 +715,33 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             trace = self.bundle.load_trace(pair, variant)
             trace["transactions"] = [row for row in trace["transactions"] if row["cohort"] == "measurement"]
             trace["transactions"][-1]["acknowledgment"]["offset_ns"] = 21_000_000_000
-            self.bundle.replace_trace(pair, variant, trace)
-        result = VALIDATOR.validate_evidence(self.bundle.manifest_path)
-        self.assertEqual(result["pairs"][0]["one_lane_drain_rejected_count"], 1)
-        self.assertEqual(result["pairs"][0]["one_lane_cohort_accepted_count"], 100)
+            self.bundle.replace_trace(pair, variant, trace, recount=True)
+        result = COMPONENT.validate_component(self.bundle.manifest_path)
+        self.assertEqual(result["pairs"][0]["one_lane_drain_accepted_count"], 1)
+        self.assertEqual(result["pairs"][0]["one_lane_cohort_accepted_count"], 400)
+        # Retain late-rejection accounting as a negative: the production
+        # collector's completed cohort requires every request to be Applied.
+        trace = self.bundle.load_trace(1, "one_lane")
+        trace["transactions"][-1]["acknowledgment"].update(
+            status="Rejected", rejection="explicit synthetic admission rejection"
+        )
+        trace["transactions"][-1]["applied"] = None
+        self.bundle.replace_trace(1, "one_lane", trace)
+        raw = self.bundle.load_raw(1, "one_lane")
+        COMPONENT.recount(raw, trace)
+        self.bundle.replace_raw(1, "one_lane", raw)
+        self.assertEqual(raw["drain"]["summary"]["accepted_count"], 0)
+        self.assertEqual(raw["summary"]["accepted_count"], 399)
+        self.assert_invalid("collector journal disagrees with the exact trace or workload")
 
     def test_drain_resource_maximum_is_included_in_release_report(self) -> None:
         raw = self.bundle.load_raw(1, "one_lane")
-        raw["drain"]["samples"][0]["queue_depth"] = 90
+        for sample in raw["drain"]["samples"]:
+            sample["queue_depth"] = 90
         raw["drain"]["summary"]["queue_depth_max"] = 90
         self.bundle.replace_raw(1, "one_lane", raw)
-        result = VALIDATOR.validate_evidence(self.bundle.manifest_path)
+        COMPONENT.republish_drain_queue(self.bundle, 1, "one_lane", 90)
+        result = COMPONENT.validate_component(self.bundle.manifest_path)
         self.assertEqual(result["one_lane_resource_maxima"]["queue_depth_max"], 90)
 
     def test_trace_artifact_and_strict_first_release_fields_cannot_be_omitted_or_extended(self) -> None:
@@ -723,7 +779,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         validator_path = (
             self.bundle.root / self.bundle.manifest["validator"]["path"]
         )
-        metrics = VALIDATOR.validate_evidence(
+        metrics = COMPONENT.validate_component(
             self.bundle.manifest_path,
             expected_source_revision=self.bundle.identity["software"]["source_revision"],
             expected_workspace_source_sha256=(
@@ -751,7 +807,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         for arguments, message in expectations:
             with self.subTest(arguments=arguments):
                 with self.assertRaisesRegex(VALIDATOR.EvidenceError, message):
-                    VALIDATOR.validate_evidence(
+                    COMPONENT.validate_component(
                         self.bundle.manifest_path,
                         **arguments,
                     )
@@ -780,9 +836,8 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             "expected_iroha_cli_sha256": self.bundle.identity["software"][
                 "iroha_cli_sha256"
             ],
-            "expected_repository_root": retained_root,
         }
-        metrics = VALIDATOR.validate_evidence(
+        metrics = COMPONENT.validate_component(
             self.bundle.manifest_path,
             **expectations,
         )
@@ -798,44 +853,46 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             drifted[name] = "f" * 64
             with self.subTest(name=name):
                 with self.assertRaises(VALIDATOR.EvidenceError):
-                    VALIDATOR.validate_evidence(
+                    COMPONENT.validate_component(
                         self.bundle.manifest_path,
                         **drifted,
                     )
 
+        with self.assertRaisesRegex(VALIDATOR.EvidenceError, "repository path trust is retired"):
+            COMPONENT.validate_component(
+                self.bundle.manifest_path, expected_repository_root=retained_root
+            )
         first_tool = self.bundle.manifest["tooling"][0]
         retained_tool = retained_root.joinpath(
             *Path(first_tool["source_path"]).parts
         )
+        # Independently pinned archived bytes replace retired repository-path trust.
         retained_tool.write_bytes(b"retained tool drift\n")
+        archived_tool = self.bundle.root / first_tool["artifact"]["path"]
+        archived_bytes = archived_tool.read_bytes()
+        archived_tool.write_bytes(b"!" + archived_bytes[1:])
         with self.assertRaisesRegex(
-            VALIDATOR.EvidenceError,
-            "does not match retained repository tool",
+            COMPONENT.bundle.BundleError,
+            "control_digest_mismatch",
         ):
-            VALIDATOR.validate_evidence(
+            COMPONENT.validate_component(
                 self.bundle.manifest_path,
                 **expectations,
             )
 
-    def test_cli_writes_machine_readable_pass_report(self) -> None:
+    def test_component_report_is_machine_readable_and_public_cli_cannot_qualify(self) -> None:
+        metrics = COMPONENT.validate_component(self.bundle.manifest_path)
         report = self.bundle.root / "validation_report.json"
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(VALIDATOR_PATH),
-                str(self.bundle.manifest_path),
-                "--report",
-                str(report),
-                "--quiet",
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stderr)
+        result = subprocess.run([sys.executable, str(VALIDATOR_PATH), str(self.bundle.manifest_path),
+            "--report", str(report), "--quiet"], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertFalse(report.exists())
+        # Report-writer component coverage is explicit; it supplies no canonical proof.
+        VALIDATOR._write_report(report, {"schema": VALIDATOR.REPORT_SCHEMA, "result": "component_pass",
+            "errors": [], "metrics": metrics, "manifest_sha256": digest_file(self.bundle.manifest_path)})
         payload = json.loads(report.read_text(encoding="utf-8"))
         self.assertEqual(payload["schema"], VALIDATOR.REPORT_SCHEMA)
-        self.assertEqual(payload["result"], "pass")
+        self.assertEqual(payload["result"], "component_pass")
         self.assertEqual(payload["errors"], [])
         self.assertRegex(payload["manifest_sha256"], r"^[0-9a-f]{64}$")
 
@@ -1056,7 +1113,6 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             committed=160,
             latency=12.0,
             offered=398,
-            accepted=160,
         )
         self.bundle.replace_raw(2, "four_lane", replacement)
         self.assert_invalid("offered load is not matched")
@@ -1077,7 +1133,6 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
                     committed=committed,
                     latency=latency,
                     offered=398,
-                    accepted=committed,
                 ),
             )
         self.assert_invalid("offered count drifted across trials")
@@ -1086,7 +1141,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         self.bundle.mutate_raw(
             1,
             "one_lane",
-            lambda raw: raw["samples"][0]["commit_latencies_ms"].__setitem__(0, float("nan")),
+            lambda raw: next(sample["commit_latencies_ms"] for sample in raw["samples"] if sample["commit_latencies_ms"]).__setitem__(0, float("nan")),
             allow_nan=True,
         )
         self.assert_invalid("nonfinite JSON numeric literal")
@@ -1102,13 +1157,13 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             with self.subTest(sample_field=sample_field):
                 temporary = tempfile.TemporaryDirectory()
                 self.addCleanup(temporary.cleanup)
-                bundle = EvidenceBundle(Path(temporary.name))
+                bundle = COMPONENT.clone_fixture(self.published, Path(temporary.name))
                 raw = bundle.load_raw(1, "one_lane")
                 raw["samples"][0][sample_field] = bundle.budgets[budget_field] + 1
                 raw["summary"][budget_field] = bundle.budgets[budget_field] + 1
                 bundle.replace_raw(1, "one_lane", raw)
                 with self.assertRaisesRegex(VALIDATOR.EvidenceError, "exceeds .* budget"):
-                    VALIDATOR.validate_evidence(bundle.manifest_path)
+                    COMPONENT.validate_component(bundle.manifest_path)
 
     def test_rejects_skipped_and_failed_runs(self) -> None:
         cases = (
@@ -1120,11 +1175,11 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             with self.subTest(field=field):
                 temporary = tempfile.TemporaryDirectory()
                 self.addCleanup(temporary.cleanup)
-                bundle = EvidenceBundle(Path(temporary.name))
+                bundle = COMPONENT.clone_fixture(self.published, Path(temporary.name))
                 bundle.manifest["runs"][4][field] = value
                 bundle.flush_manifest()
                 with self.assertRaisesRegex(VALIDATOR.EvidenceError, fragment):
-                    VALIDATOR.validate_evidence(bundle.manifest_path)
+                    COMPONENT.validate_component(bundle.manifest_path)
 
     def test_rejects_weak_interval_sample_count(self) -> None:
         self.bundle.mutate_raw(
@@ -1167,7 +1222,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             with self.subTest(field=field):
                 temporary = tempfile.TemporaryDirectory()
                 self.addCleanup(temporary.cleanup)
-                bundle = EvidenceBundle(Path(temporary.name))
+                bundle = COMPONENT.clone_fixture(self.published, Path(temporary.name))
                 bundle.mutate_raw(
                     1,
                     "one_lane",
@@ -1176,7 +1231,7 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
                     ),
                 )
                 with self.assertRaisesRegex(VALIDATOR.EvidenceError, fragment):
-                    VALIDATOR.validate_evidence(bundle.manifest_path)
+                    COMPONENT.validate_component(bundle.manifest_path)
 
     def test_rejects_wrong_or_duplicate_active_execution_lanes(self) -> None:
         self.bundle.mutate_raw(
@@ -1208,6 +1263,10 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
 
     def test_enforces_pooled_p95_commit_latency_ratio(self) -> None:
         self.bundle.replace_variant_runs("four_lane", committed=160, latency=13.0)
+        rows = self.bundle.load_trace(1, "four_lane")["transactions"]
+        latencies = [(row["applied"]["offset_ns"] - row["offer_offset_ns"]) / 1_000_000
+                     for row in rows if row["cohort"] == "measurement"]
+        self.assertEqual(VALIDATOR._nearest_rank_p95(latencies), 20_800.0)
         self.assert_invalid("pooled p95 commit latency gate failed")
 
     def test_thresholds_and_sample_floors_cannot_be_weakened(self) -> None:
@@ -1221,33 +1280,33 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             with self.subTest(field=field):
                 temporary = tempfile.TemporaryDirectory()
                 self.addCleanup(temporary.cleanup)
-                bundle = EvidenceBundle(Path(temporary.name))
+                bundle = COMPONENT.clone_fixture(self.published, Path(temporary.name))
                 bundle.manifest[section][field] = value
                 bundle.flush_manifest()
                 with self.assertRaisesRegex(VALIDATOR.EvidenceError, fragment):
-                    VALIDATOR.validate_evidence(bundle.manifest_path)
+                    COMPONENT.validate_component(bundle.manifest_path)
 
     def test_rejects_tampered_or_out_of_bundle_raw_artifacts(self) -> None:
         raw_path = self.bundle.raw_path(1, "one_lane")
         raw_path.write_text("{}\n", encoding="utf-8")
-        self.assert_invalid("sha256 mismatch")
+        self.assert_invalid("control_digest_mismatch")
 
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        bundle = EvidenceBundle(Path(temporary.name))
+        bundle = COMPONENT.clone_fixture(self.published, Path(temporary.name))
         bundle.manifest["runs"][0]["raw_samples"]["path"] = "../outside.json"
         bundle.flush_manifest()
         with self.assertRaisesRegex(VALIDATOR.EvidenceError, "normalized relative"):
-            VALIDATOR.validate_evidence(bundle.manifest_path)
+            COMPONENT.validate_component(bundle.manifest_path)
 
     def test_rejects_unexpected_file_and_directory_inventory(self) -> None:
         unexpected = self.bundle.root / "unexpected.txt"
         unexpected.write_text("not referenced\n", encoding="utf-8")
-        self.assert_invalid("file inventory.*unexpected")
+        self.assert_invalid("directory_member_count_exceeded")
 
         unexpected.unlink()
         (self.bundle.root / "empty").mkdir()
-        self.assert_invalid("directory inventory.*unexpected")
+        self.assert_invalid("directory_member_count_exceeded")
 
     def test_rejects_bundle_symlinks(self) -> None:
         link = self.bundle.root / "linked-artifact"
@@ -1255,7 +1314,14 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             link.symlink_to(self.bundle.manifest_path)
         except (NotImplementedError, OSError) as error:
             self.skipTest(f"symlinks unavailable: {error}")
-        self.assert_invalid("contains a symlink")
+        self.assert_invalid("directory_member_count_exceeded")
+        # Preserve the new-entry control, then reach the actual no-follow file
+        # type guard without an earlier exact-directory-membership rejection.
+        link.unlink()
+        raw = self.bundle.raw_path(1, "one_lane")
+        raw.unlink()
+        raw.symlink_to(self.bundle.manifest_path)
+        self.assert_invalid("regular_single_link_file_required")
 
     def test_rejects_bundle_hardlink_aliases(self) -> None:
         alias = self.bundle.root / "manifest-alias"
@@ -1263,31 +1329,45 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
             os.link(self.bundle.manifest_path, alias)
         except OSError as error:
             self.skipTest(f"hard links unavailable: {error}")
-        self.assert_invalid("hard-link alias")
+        self.assert_invalid("directory_member_count_exceeded")
+        alias.unlink()
+        raw = self.bundle.raw_path(1, "one_lane")
+        raw.unlink()
+        os.link(self.bundle.manifest_path, raw)
+        self.assert_invalid("regular_single_link_file_required")
 
     def test_rejects_bundle_nonregular_entries(self) -> None:
         if not hasattr(os, "mkfifo"):
             self.skipTest("FIFOs unavailable")
         fifo = self.bundle.root / "unexpected-fifo"
         os.mkfifo(fifo)
-        self.assert_invalid("nonregular entry")
+        self.assert_invalid("directory_member_count_exceeded")
+        fifo.unlink()
+        raw = self.bundle.raw_path(1, "one_lane")
+        raw.unlink()
+        os.mkfifo(raw, 0o600)
+        self.assert_invalid("regular_single_link_file_required")
 
     def test_rejects_unsafe_bundle_path_components(self) -> None:
         unsafe = self.bundle.root / "unsafe\nname"
         unsafe.write_text("unsafe\n", encoding="utf-8")
-        self.assert_invalid("unsafe path component")
+        self.assert_invalid("entry_name_invalid")
 
     def test_rejects_oversize_files_before_hashing(self) -> None:
-        with mock.patch.object(VALIDATOR, "MAX_BUNDLE_FILE_BYTES", 1):
-            self.assert_invalid("file exceeds 1 bytes")
+        # Admission now owns the physical cap. Prove rejection precedes any
+        # raw read/hash, rather than changing a retired scanner constant.
+        with mock.patch.object(COMPONENT.bundle, "MAX_FILE_BYTES", 1), mock.patch.object(
+            COMPONENT.bundle.os, "pread", side_effect=AssertionError("oversize file was read")
+        ):
+            self.assert_invalid("file_allocation_exceeded")
 
     def test_rejects_excessive_file_count(self) -> None:
-        with mock.patch.object(VALIDATOR, "MAX_BUNDLE_FILE_COUNT", 1):
-            self.assert_invalid("file-count limit 1")
+        with mock.patch.object(COMPONENT.bundle, "MAX_CONTROL_FILES", 1):
+            self.assert_invalid("controls_invalid")
 
     def test_rejects_excessive_aggregate_size(self) -> None:
-        with mock.patch.object(VALIDATOR, "MAX_BUNDLE_TOTAL_BYTES", 1):
-            self.assert_invalid("aggregate size limit 1 bytes")
+        with mock.patch.object(COMPONENT.bundle, "MAX_TOTAL_BYTES", 1):
+            self.assert_invalid("total_allocation_exceeded")
 
     def test_rejects_duplicate_json_object_keys(self) -> None:
         path = self.bundle.raw_path(1, "one_lane")
@@ -1303,26 +1383,20 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         self.bundle.flush_manifest()
         self.assert_invalid("duplicate JSON object key")
 
-    def test_cli_failure_report_is_machine_readable(self) -> None:
+    def test_component_failure_report_is_machine_readable_and_cli_stays_closed(self) -> None:
         self.bundle.manifest["runs"][0]["skipped"] = True
         self.bundle.flush_manifest()
+        with self.assertRaisesRegex(VALIDATOR.EvidenceError, "skipped must be false") as failed:
+            COMPONENT.validate_component(self.bundle.manifest_path)
         report = self.bundle.root / "validation_report.json"
-        result = subprocess.run(
-            [
-                sys.executable,
-                str(VALIDATOR_PATH),
-                str(self.bundle.manifest_path),
-                "--report",
-                str(report),
-                "--quiet",
-            ],
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 1)
+        result = subprocess.run([sys.executable, str(VALIDATOR_PATH), str(self.bundle.manifest_path),
+            "--report", str(report), "--quiet"], text=True, capture_output=True, check=False)
+        self.assertEqual(result.returncode, 2)
+        self.assertFalse(report.exists())
+        VALIDATOR._write_report(report, {"schema": VALIDATOR.REPORT_SCHEMA,
+            "result": "component_fail", "metrics": None, "errors": [str(failed.exception)]})
         payload = json.loads(report.read_text(encoding="utf-8"))
-        self.assertEqual(payload["result"], "fail")
+        self.assertEqual(payload["result"], "component_fail")
         self.assertIsNone(payload["metrics"])
         self.assertIn("skipped must be false", payload["errors"][0])
 

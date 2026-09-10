@@ -74,9 +74,9 @@ use iroha_data_model::{
     },
     merge::{LaneDrainFrontierV1, MergeLedgerEntry},
     nexus::{DataSpaceId, LaneId},
-    state_path::StatePath,
     transaction::signed::TransactionEntrypoint,
 };
+use iroha_model_base::state_path::StatePath;
 use norito::codec::{Decode, DecodeAll, Encode};
 #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
 use rustix::fs::{
@@ -11870,7 +11870,7 @@ impl Kura {
         }
         Ok(())
     }
-    /// Install the exact active lane marker required by an isolated test fixture.
+    /// Provision paired block and merge storage with the exact marker for a test fixture.
     pub(crate) fn install_lane_incarnation_marker_for_test(
         &self,
         entry: &LaneConfigEntry,
@@ -11884,9 +11884,10 @@ impl Kura {
             blocks_path: self.relative_geometry_path(&entry.blocks_dir(&self.store_root))?,
             merge_path: self.relative_geometry_path(&entry.merge_log_path(&self.store_root))?,
         };
-        self.write_lane_marker(&binding)
+        self.write_lane_marker(&binding)?;
+        self.provision_geometry_binding(&binding)
     }
-    /// Install a marker for a blank test store without rewriting existing geometry.
+    /// Install paired storage for a blank test store without rewriting existing geometry.
     pub(crate) fn install_lane_incarnation_marker_if_missing_for_test(
         &self,
         entry: &LaneConfigEntry,

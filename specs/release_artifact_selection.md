@@ -57,7 +57,7 @@ native verifier before trusting its artifact paths or generating a production
 publish plan:
 
 ```bash
-RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/sorafs-validate
+RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/iroha
 TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256=<reviewed-lowercase-sha256>
 
 python3 scripts/release_manifest_signing.py verify \
@@ -71,7 +71,7 @@ python3 scripts/release_manifest_signing.py verify \
 ```
 
 The wrapper checks and snapshots the exact verifier executable, invokes
-`sorafs-validate release-manifest`, and rechecks the manifest, raw key,
+`iroha app sorafs toolkit release-manifest`, and rechecks the manifest, raw key,
 signature, verifier digest, and file identities after native execution.
 `scripts/publish_plan.py generate` also requires the signed-manifest paths,
 independently reviewed signing fingerprint, native-verifier path, and reviewed
@@ -143,7 +143,7 @@ signing uses the `authenticated_external_signer` provider through
 public key through `--signing-public-key`, and its independently approved
 lowercase SHA-256 fingerprint through
 `--trusted-signing-fingerprint`. Signing and publish-plan validation also
-require the packaged `sorafs-validate` candidate and its independently approved
+require the packaged `iroha` candidate and its independently approved
 exact executable SHA-256. A verified V1 release is `software-key-qualified`.
 OIDC/cosign provenance, hosted scan results, publication receipts, and
 rollback/yank evidence remain external promotion inputs. Iroha exposes no

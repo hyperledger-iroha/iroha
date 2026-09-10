@@ -1116,10 +1116,15 @@ pub enum StreamTokenExcludedKindV1 {
     InvalidSignature,
     /// A decoded token named an unsupported signing-key version.
     UnsupportedKeyVersion,
+    /// Fresh signer custody authority could not authorize this admission; provider reputation is excluded.
+    SignerAuthorityUnavailable,
 }
 impl StreamTokenExcludedKindV1 {
     const fn carries_decoded_body(self) -> bool {
-        matches!(self, Self::InvalidSignature | Self::UnsupportedKeyVersion)
+        matches!(
+            self,
+            Self::InvalidSignature | Self::UnsupportedKeyVersion | Self::SignerAuthorityUnavailable
+        )
     }
 }
 /// Typed terminal result of one stream-token validation attempt.
@@ -1145,7 +1150,7 @@ pub enum StreamTokenValidationStatusV1 {
     Accepted,
     /// A validated provider-bound token violated signed policy.
     ProviderViolation(StreamTokenViolationKindV1),
-    /// Validation failed before safe provider attribution.
+    /// Validation or signer authority failed without a provider-attributable violation.
     Excluded(StreamTokenExcludedKindV1),
 }
 impl StreamTokenValidationStatusV1 {
@@ -4646,3 +4651,7 @@ mod tests {
 
 #[cfg(test)]
 mod captured_reputation_schema_tests;
+
+#[cfg(test)]
+#[path = "reputation/stream_token_authority_tests.rs"]
+mod stream_token_authority_tests;

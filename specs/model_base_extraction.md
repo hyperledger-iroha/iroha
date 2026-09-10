@@ -1,8 +1,10 @@
 # Foundational model extraction inventory
 
-This 2026-09-06 source review identifies the first dependency-closed move into
-`iroha_model_base`. It is implementation guidance, not completed extraction or
-build-memory evidence. The [redesign](first_release_architecture_redesign.md)
+The 2026-09-10 implementation moves `Name`, `StatePath` and `ParseError`, with
+their validation, normalization, schema, FFI and storage-key implementations,
+into `iroha_model_base`. The 35 moved owner tests pass; aggregate/consumer and
+feature qualification is in progress. This is not completed model extraction
+or build-memory evidence. The [redesign](first_release_architecture_redesign.md)
 and [canonical identity contract](norito_schema_identity.md) govern acceptance.
 
 ## Captured evidence
@@ -62,8 +64,9 @@ validated owner without sorting or normalizing external components. Their
 private `PolicyFields`/`MemberFields` carriers are JSON-only and need no binary
 identity or archived cast across the new boundary. Preserve these validators,
 strict JSON handling and explicit canonical slice adapters during the move.
-This prerequisite does not complete the atomic identity cutover, physical
-extraction, feature qualification or measured build-memory comparison.
+The atomic declared-identity framing cutover is implemented. The remaining
+physical owners, feature qualification and measured build-memory comparison
+are still outstanding.
 
 Keep accounts and their registration/recovery/rekey records, domain and asset
 definitions, aliases, lane catalogs, governance, instructions, queries,
@@ -105,9 +108,9 @@ dependencies and every shipping feature selection.
    and schema output. Include `Option`, `Vec`, `BTreeMap<Name, Json>`, typed
    hashes/signatures and mixed envelopes. Delegated payloads must retain their
    distinct nominal frame identity.
-3. Qualify explicit declarations and complete the atomic framing cutover.
-   Declarations alone cannot preserve current generic parent headers after a
-   physical move because active codecs still derive names from source paths.
+3. Qualify explicit declarations and the implemented atomic framing cutover.
+   Active framed codecs use declared nominal identities, including generic
+   parents. Preserve the captured headers when moving their source owners.
 4. Move definitions and migrate consumers atomically. Remove retired root,
    prelude, transparent/non-transparent and module import paths; add no shims.
    Migrate registries, FFI, query projections, wildcard users and examples.

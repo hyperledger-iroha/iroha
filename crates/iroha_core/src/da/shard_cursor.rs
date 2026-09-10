@@ -347,11 +347,10 @@ pub struct LaneShardCursor {
     pub last_block_height: u64,
 }
 /// Persisted representation of shard cursors.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::da::shard_cursor::PersistedShardCursors")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct PersistedShardCursors {
-    /// Journal version for forward compatibility.
+    /// Exact supported journal payload version.
     version: u32,
     /// Per-lane reset watermarks. Records at or before the watermark belong to
     /// an earlier lane incarnation and must not rehydrate active DA indexes.
@@ -1660,6 +1659,43 @@ mod tests {
         assert_eq!((lane1.epoch, lane1.sequence), (4, 9));
     }
     #[test]
+    fn shard_cursor_frame_owner_roundtrips_through_durable_reader() {
+        let dir = tempdir().expect("tempdir");
+        let path = DaShardCursorJournal::journal_path(dir.path());
+        let payload = PersistedShardCursors {
+            version: DaShardCursorJournal::JOURNAL_VERSION,
+            canonical_reset_heights: BTreeMap::from([(LaneId::new(0), 4)]),
+            entries: vec![journal_entry(0, 0, 2, 3, 5)],
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &payload,
+            "iroha_core::da::shard_cursor::PersistedShardCursors",
+        );
+        let bytes = norito::encode_canonical(&payload).expect("cursor frame");
+        fs::write(&path, &bytes).expect("write journal");
+        assert_eq!(
+            DaShardCursorJournal::read_persisted(&path).expect("durable read"),
+            Some(payload)
+        );
+        let mut wrong_owner = bytes;
+        wrong_owner[6] ^= 1;
+        fs::write(&path, wrong_owner).expect("write substituted owner");
+        assert!(matches!(
+            DaShardCursorJournal::read_persisted(&path),
+            Err(ShardCursorJournalError::Decode {
+                source: norito::Error::SchemaMismatch,
+                ..
+            })
+        ));
+    }
+    fn frame_cursor_test_payload<T: norito::SerializePayload>(value: &T) -> Vec<u8> {
+        let _canonical =
+            norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let (payload, flags) = norito::codec::encode_with_header_flags(value);
+        norito::core::frame_bare_with_header_flags::<PersistedShardCursors>(&payload, flags)
+            .expect("frame test payload under the actual cursor owner")
+    }
+    #[test]
     fn journal_persists_and_recovers_cursors() {
         let dir = tempdir().expect("tempdir");
         let catalog = LaneCatalog::new(
@@ -2414,11 +2450,27 @@ mod tests {
                 sequence: 2,
             }],
         };
-        fs::write(
-            &path,
-            to_bytes(&payload).expect("encode pre-release journal"),
-        )
-        .expect("write pre-release journal");
+        let current = PersistedShardCursors {
+            version: DaShardCursorJournal::JOURNAL_VERSION,
+            canonical_reset_heights: BTreeMap::new(),
+            entries: vec![journal_entry(0, 0, 1, 2, 3)],
+        };
+        let current_frame = frame_cursor_test_payload(&current);
+        assert_eq!(
+            current_frame,
+            norito::encode_canonical(&current).expect("canonical control")
+        );
+        assert_eq!(
+            norito::decode_canonical::<PersistedShardCursors>(&current_frame)
+                .expect("same framing method accepts current payload"),
+            current
+        );
+        let malformed = frame_cursor_test_payload(&payload);
+        norito::core::from_bytes_view(&malformed).expect("valid envelope and checksum");
+        let error = norito::decode_canonical::<PersistedShardCursors>(&malformed)
+            .expect_err("missing fields must reach payload validation");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
+        fs::write(&path, malformed).expect("write malformed current-owner frame");
         assert!(
             matches!(
                 DaShardCursorJournal::load(&config, path),
@@ -2436,11 +2488,27 @@ mod tests {
             version: DaShardCursorJournal::JOURNAL_VERSION,
             entries: vec![journal_entry(0, 0, 1, 2, 3)],
         };
-        fs::write(
-            &path,
-            to_bytes(&payload).expect("encode pre-release journal"),
-        )
-        .expect("write pre-release journal");
+        let current = PersistedShardCursors {
+            version: DaShardCursorJournal::JOURNAL_VERSION,
+            canonical_reset_heights: BTreeMap::new(),
+            entries: vec![journal_entry(0, 0, 1, 2, 3)],
+        };
+        let current_frame = frame_cursor_test_payload(&current);
+        assert_eq!(
+            current_frame,
+            norito::encode_canonical(&current).expect("canonical control")
+        );
+        assert_eq!(
+            norito::decode_canonical::<PersistedShardCursors>(&current_frame)
+                .expect("same framing method accepts current payload"),
+            current
+        );
+        let malformed = frame_cursor_test_payload(&payload);
+        norito::core::from_bytes_view(&malformed).expect("valid envelope and checksum");
+        let error = norito::decode_canonical::<PersistedShardCursors>(&malformed)
+            .expect_err("missing fields must reach payload validation");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
+        fs::write(&path, malformed).expect("write malformed current-owner frame");
         assert!(
             matches!(
                 DaShardCursorJournal::load(&config, path),

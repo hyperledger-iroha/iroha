@@ -886,7 +886,7 @@ fn mutate_hosted_http_deployment(
     app: &mut SharedAppState,
     mutate: impl FnOnce(&mut iroha_data_model::soracloud::SoraServiceDeploymentStateV1),
 ) {
-    let service_name: iroha_data_model::name::Name = "web_portal".parse().expect("service name");
+    let service_name: iroha_model_base::name::Name = "web_portal".parse().expect("service name");
     let app = Arc::get_mut(app).expect("unique app state");
     let state = Arc::get_mut(&mut app.state).expect("unique state");
     let deployments = state.world.soracloud_service_deployments_mut_for_testing();

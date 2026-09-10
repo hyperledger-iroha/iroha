@@ -649,6 +649,7 @@ fn runtime_dag_decode_allocation_floor_admits_stack_state_but_rejects_owned_comp
         runtime_dag_decode_allocation_limit(bytes.len()),
         DAG_DECODE_MIN_BYTES_V1
     );
+    assert_declared_governance_frame(&state, "sorafs_node::governance::FencedPrivacyStateV1");
     let decoded: FencedPrivacyStateV1 =
         decode_canonical_runtime_dag(&bytes, "empty fenced privacy state")
             .expect("decode production empty fenced privacy state");
@@ -2118,4 +2119,31 @@ fn seed_complete_uncommitted_publication_fixture(
         })
         .collect();
     (entry, snapshots)
+}
+
+fn assert_declared_governance_frame<T>(value: &T, name: &str) -> Vec<u8>
+where
+    T: norito::NoritoSerialize
+        + for<'de> norito::NoritoDeserialize<'de>
+        + PartialEq
+        + std::fmt::Debug,
+{
+    assert_eq!(T::nominal_name(), name);
+    assert_eq!(T::frame_name(), name);
+    let bytes = norito::encode_canonical(value).expect("canonical governance frame");
+    assert_eq!(bytes[6..22], norito::schema::identity::frame_hash::<T>());
+    let decoded: T = norito::decode_canonical(&bytes).expect("exact governance frame roundtrip");
+    assert_eq!(&decoded, value);
+    assert_eq!(norito::encode_canonical(&decoded).unwrap(), bytes);
+    let mut wrong_owner = bytes.clone();
+    wrong_owner[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<T>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(norito::decode_canonical::<T>(&bytes[..bytes.len() - 1]).is_err());
+    let mut trailing = bytes.clone();
+    trailing.push(0);
+    assert!(norito::decode_canonical::<T>(&trailing).is_err());
+    bytes
 }

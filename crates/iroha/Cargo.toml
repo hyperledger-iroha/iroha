@@ -64,6 +64,7 @@ tls-rustls-webpki-roots = [
 ]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 iroha_service_model = { workspace = true }
 bytes = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }

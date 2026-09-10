@@ -791,6 +791,7 @@ struct VrfProviderSequenceV1 {
 #[norito_schema(name = "iroha_torii::sorafs::por::VrfStateSnapshotV1")]
 #[cfg(feature = "app_api")]
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize)]
+
 struct VrfStateSnapshotV1 {
     version: u8,
     network_id: NetworkId,
@@ -2467,6 +2468,10 @@ mod tests {
             .expect("persisted high-water bytes");
         let persisted: DrandHighWaterStateV1 =
             decode_from_bytes(&persisted).expect("decode persisted high-water state");
+        crate::frame_test_support::assert_current_frame(
+            &persisted,
+            "iroha_torii::sorafs::por::DrandHighWaterStateV1",
+        );
         assert_eq!(persisted.round, 11);
         assert_eq!(persisted.randomness, [0x20; 32]);
     }
@@ -3230,6 +3235,16 @@ mod tests {
                 PorStatusPageCursor::First,
             )
             .expect("first indexed page");
+        crate::frame_test_support::assert_current_frame(
+            &first,
+            "iroha_torii::sorafs::por::PorStatusPageV1",
+        );
+        let response = norito::to_bytes(&first).expect("encode status handler response");
+        assert_eq!(
+            norito::decode_from_bytes::<PorStatusPageV1>(&response)
+                .expect("decode status handler response"),
+            first
+        );
         assert_eq!(first.statuses.len(), 1);
         assert!(first.has_more);
         assert!(first.next_cursor.is_some());
@@ -3582,6 +3597,20 @@ mod tests {
                 PorStatusPageCursor::First,
             )
             .expect("bounded export page");
+        let frame = crate::frame_test_support::assert_current_frame(
+            &export,
+            "iroha_torii::sorafs::por::PorStatusExportPageV1",
+        );
+        assert!(matches!(
+            norito::decode_canonical::<PorStatusPageV1>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let response = norito::to_bytes(&export).expect("encode export handler response");
+        assert_eq!(
+            norito::decode_from_bytes::<PorStatusExportPageV1>(&response)
+                .expect("decode export handler response"),
+            export
+        );
         assert_eq!(export.page.statuses.len(), 1);
         assert!(export.page.canonical_bytes <= export.page.canonical_byte_limit);
         assert_eq!(export.start_epoch, Some(challenge.epoch_id));
@@ -4335,6 +4364,40 @@ mod tests {
         }
         let dir = tempdir().expect("temp dir");
         let root = canonical_temp_root(&dir);
+        let current_path = root.join("current-generation.to");
+        let current = PorCoordinatorSnapshot {
+            version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
+            status_generation: 1,
+            records: Vec::new(),
+            forced: Vec::new(),
+            prepared_weekly_report: None,
+        };
+        let expected = crate::frame_test_support::assert_current_frame(
+            &current,
+            "iroha_torii::sorafs::por::PorCoordinatorSnapshot",
+        );
+        let (current_payload, flags) = {
+            let _guard =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::codec::encode_with_header_flags(&current)
+        };
+        let current_bytes = norito::core::frame_bare_with_header_flags::<PorCoordinatorSnapshot>(
+            &current_payload,
+            flags,
+        )
+        .expect("frame current payload under its real owner");
+        assert_eq!(current_bytes, expected);
+        secure_atomic_write(
+            &current_path,
+            &current_bytes,
+            MAX_POR_COORDINATOR_SNAPSHOT_BYTES,
+            true,
+        )
+        .expect("write valid current snapshot control");
+        drop(
+            PorCoordinator::with_persistence(&current_path)
+                .expect("current shape reopens through production persistence"),
+        );
         let zero_path = root.join("zero-generation.to");
         let zero_snapshot = PorCoordinatorSnapshot {
             version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
@@ -4357,13 +4420,32 @@ mod tests {
                 if message.contains("status generation must be non-zero")
         ));
         let missing_path = root.join("missing-generation.to");
-        let missing_bytes = to_bytes(&SnapshotWithoutStatusGeneration {
+        let missing = SnapshotWithoutStatusGeneration {
             version: POR_COORDINATOR_SNAPSHOT_VERSION_V1,
             records: Vec::new(),
             forced: Vec::new(),
             prepared_weekly_report: None,
-        })
-        .expect("encode snapshot without required generation");
+        };
+        let (missing_payload, missing_flags) = {
+            let _guard =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            norito::codec::encode_with_header_flags(&missing)
+        };
+        let missing_bytes = norito::core::frame_bare_with_header_flags::<PorCoordinatorSnapshot>(
+            &missing_payload,
+            missing_flags,
+        )
+        .expect("frame unsupported payload under current snapshot owner");
+        let view =
+            norito::core::from_bytes_view(&missing_bytes).expect("well-formed hostile envelope");
+        assert_eq!(
+            view.schema(),
+            norito::schema::identity::frame_hash::<PorCoordinatorSnapshot>()
+        );
+        assert_eq!(view.as_bytes(), missing_payload.as_slice());
+        let error = norito::decode_canonical::<PorCoordinatorSnapshot>(&missing_bytes)
+            .expect_err("missing generation reaches actual snapshot payload decoder");
+        assert!(!matches!(error, norito::Error::SchemaMismatch));
         secure_atomic_write(
             &missing_path,
             &missing_bytes,

@@ -9,7 +9,7 @@ use crate::{
 };
 use iroha_crypto::HashOf;
 
-// The legacy transport cases share this independently defined five-entry source
+// The transport cases share this independently defined five-entry source
 // projection. Dedicated entry-binding tests call the public APIs with altered
 // expectations directly; these helpers never derive expectations from input bytes.
 fn expected_entries() -> Vec<FastpqSourceExecutionEntryV1> {
@@ -17,6 +17,7 @@ fn expected_entries() -> Vec<FastpqSourceExecutionEntryV1> {
         .map(|index| FastpqSourceExecutionEntryV1 {
             entry_hash: match index {
                 0 => Hash::new(b"first"),
+                2 => Hash::new(b"second"),
                 4 => Hash::new(b"third"),
                 _ => Hash::new(index.to_le_bytes()),
             },
@@ -73,10 +74,17 @@ fn fixture(count: u32) -> FastpqOrdinarySourceStatementArchiveV1 {
         .map(|index| FastpqOrdinarySourceStatementLeafV1 {
             source: source(),
             statement_index: index,
-            entry_index: if index < 2 { 0 } else { 4 },
-            transcript_index: if index < 2 { index } else { 0 },
-            entry_transcript_count: if index < 2 { count.min(2) } else { 1 },
-            entry_hash: Hash::new(if index < 2 { b"first" } else { b"third" }),
+            entry_index: index * 2,
+            entry_transcript_count: match index {
+                0 => 2,
+                1 => 4,
+                _ => 1,
+            },
+            entry_hash: match index {
+                0 => Hash::new(b"first"),
+                1 => Hash::new(b"second"),
+                _ => Hash::new(b"third"),
+            },
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Unrouted,
             dataspace_id: DataSpaceId::new(4),
@@ -140,6 +148,15 @@ fn complete_empty_and_ragged_archives_roundtrip_at_exact_caps() {
         let root = expected_root(&archive);
         let bytes = norito::encode_canonical(&archive).unwrap();
         assert!(verify_archive(&archive, source(), root, 5, count));
+        if count > 0 {
+            assert!(
+                archive
+                    .leaves
+                    .iter()
+                    .any(|leaf| leaf.entry_transcript_count > count),
+                "transcript cardinality must remain independent of the leaf cap"
+            );
+        }
         assert_eq!(
             decode_archive(&bytes, source(), root, limits(bytes.len(), count)).unwrap(),
             archive
@@ -170,7 +187,7 @@ fn complete_empty_and_ragged_archives_roundtrip_at_exact_caps() {
 fn archive_verification_binds_complete_contents_source_root_and_version() {
     let original = fixture(3);
     let root = expected_root(&original);
-    for mutation in 0..10 {
+    for mutation in 0..13 {
         let mut changed = original.clone();
         match mutation {
             0 => changed.version = 0,
@@ -185,6 +202,17 @@ fn archive_verification_binds_complete_contents_source_root_and_version() {
             7 => changed.manifest.statement_root = Hash::new(b"substituted root"),
             8 => changed.manifest_siblings[128] = Hash::new(b"substituted sibling"),
             9 => changed.manifest.executed_entry_count = 4,
+            10 => {
+                changed.leaves[1] = changed.leaves[0];
+                changed.leaves[1].statement_index = 1;
+            }
+            11 => changed.leaves[1].entry_transcript_count = 0,
+            12 => {
+                changed.leaves.remove(0);
+                for (index, leaf) in changed.leaves.iter_mut().enumerate() {
+                    leaf.statement_index = index as u32;
+                }
+            }
             _ => unreachable!(),
         }
         assert!(
@@ -530,9 +558,11 @@ fn routed_and_native_purpose_archives_roundtrip_and_bind_exact_route_identity() 
                 leaf.dataspace_id = DataSpaceId::new(u64::MAX);
             }
             let mut entries = expected_entries();
-            entries[0].execution_kind = kind;
-            entries[0].route = route;
-            entries[0].dataspace_id = DataSpaceId::new(u64::MAX);
+            for entry_index in [0, 2] {
+                entries[entry_index].execution_kind = kind;
+                entries[entry_index].route = route;
+                entries[entry_index].dataspace_id = DataSpaceId::new(u64::MAX);
+            }
             archive.manifest = build_fastpq_ordinary_source_statement_manifest_v1(
                 source(),
                 &entries,
@@ -581,9 +611,12 @@ fn routed_and_native_purpose_archives_roundtrip_and_bind_exact_route_identity() 
                 // Keep each entry structurally consistent and rebuild its leaf
                 // root; the separately expected ordinary root must still reject it.
                 let mut changed_entries = entries.clone();
-                changed_entries[0].execution_kind = changed.leaves[0].execution_kind;
-                changed_entries[0].route = changed.leaves[0].route;
-                changed_entries[0].dataspace_id = changed.leaves[0].dataspace_id;
+                for leaf in &changed.leaves {
+                    let entry = &mut changed_entries[usize::try_from(leaf.entry_index).unwrap()];
+                    entry.execution_kind = leaf.execution_kind;
+                    entry.route = leaf.route;
+                    entry.dataspace_id = leaf.dataspace_id;
+                }
                 changed.manifest = build_fastpq_ordinary_source_statement_manifest_v1(
                     source(),
                     &changed_entries,
@@ -592,8 +625,26 @@ fn routed_and_native_purpose_archives_roundtrip_and_bind_exact_route_identity() 
                     2,
                 )
                 .unwrap();
+                assert!(!verify_fastpq_ordinary_source_statement_archive_v1(
+                    &changed,
+                    source(),
+                    &changed_entries,
+                    root,
+                    5,
+                    2,
+                ));
                 assert!(!verify_archive(&changed, source(), root, 5, 2));
                 let frame = norito::encode_canonical(&changed).unwrap();
+                assert!(
+                    decode_fastpq_ordinary_source_statement_archive_v1(
+                        &frame,
+                        source(),
+                        &changed_entries,
+                        root,
+                        limits(frame.len(), 2),
+                    )
+                    .is_err()
+                );
                 assert!(decode_archive(&frame, source(), root, limits(frame.len(), 2)).is_err());
             }
         }

@@ -1,6 +1,6 @@
 //! Checked and explicitly wrapping Kotodama `int` arithmetic regressions.
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::Name;
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,

@@ -81,7 +81,6 @@ use iroha_data_model::{
         error::{InstructionExecutionError, InvalidParameterError},
         soracloud as isi,
     },
-    name::Name,
     proof::ProofAttachment,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -206,6 +205,7 @@ use iroha_data_model::{
     sorafs::pin_registry::{PinStatus, StorageClass},
     zk::{BackendTag, OpenVerifyEnvelope, OpenVerifyEnvelopeBounds, StarkFriOpenProofV1},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity, RoundingMode},
@@ -487,7 +487,7 @@ fn verify_app_infra_provenance(
 }
 fn verify_rollback_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     target_version: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -509,7 +509,7 @@ fn service_config_value_hash(value_json: &Json) -> Result<Hash, InstructionExecu
 }
 fn verify_service_config_set_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     config_name: &str,
     value_json: &Json,
     provenance: &ManifestProvenance,
@@ -534,7 +534,7 @@ fn verify_service_config_set_provenance(
 }
 fn verify_service_config_delete_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     config_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -557,7 +557,7 @@ fn verify_service_config_delete_provenance(
 }
 fn verify_service_secret_set_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     secret_name: &str,
     secret: &SecretEnvelopeV1,
     provenance: &ManifestProvenance,
@@ -579,7 +579,7 @@ fn verify_service_secret_set_provenance(
 }
 fn verify_service_secret_delete_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     secret_name: &str,
     provenance: &ManifestProvenance,
 ) -> Result<(), InstructionExecutionError> {
@@ -602,7 +602,7 @@ fn verify_service_secret_delete_provenance(
 }
 fn verify_rollout_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     rollout_handle: &str,
     healthy: bool,
     promote_to_percent: Option<u8>,
@@ -628,8 +628,8 @@ fn verify_rollout_provenance(
 }
 fn verify_state_mutation_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     state_key: &str,
     operation: SoraStateMutationOperationV1,
     value_size_bytes: Option<u64>,
@@ -4018,8 +4018,8 @@ fn verify_soracloud_fhe_input_admission_proof(
 }
 fn verify_fhe_job_run_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     job: FheJobSpecV1,
     policy_reference: SoracloudFhePolicyReferenceV1,
     public_key_proof: Option<SoracloudFhePublicKeyProofV1>,
@@ -4113,7 +4113,7 @@ fn verify_fhe_policy_revoke_provenance(
 }
 fn verify_decryption_request_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     policy: DecryptionAuthorityPolicyV1,
     request: DecryptionRequestV1,
     provenance: &ManifestProvenance,
@@ -4135,7 +4135,7 @@ fn verify_decryption_request_provenance(
 }
 fn verify_training_job_start_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     job_id: &str,
     worker_group_size: u16,
@@ -4174,7 +4174,7 @@ fn verify_training_job_start_provenance(
 }
 fn verify_training_job_checkpoint_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     completed_step: u32,
     checkpoint_size_bytes: u64,
@@ -4205,7 +4205,7 @@ fn verify_training_job_checkpoint_provenance(
 }
 fn verify_training_job_retry_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     job_id: &str,
     reason: &str,
     provenance: &ManifestProvenance,
@@ -4228,7 +4228,7 @@ fn verify_training_job_retry_provenance(
 #[allow(clippy::too_many_arguments)]
 fn verify_model_artifact_register_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     training_job_id: &str,
     weight_artifact_hash: Hash,
@@ -4264,7 +4264,7 @@ fn verify_model_artifact_register_provenance(
 #[allow(clippy::too_many_arguments)]
 fn verify_model_weight_register_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     training_job_id: &str,
@@ -4301,7 +4301,7 @@ fn verify_model_weight_register_provenance(
 }
 fn verify_model_weight_promote_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     weight_version: &str,
     gate_approved: bool,
@@ -4332,7 +4332,7 @@ fn verify_model_weight_promote_provenance(
 }
 fn verify_model_weight_rollback_provenance(
     authority: &AccountId,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     model_name: &str,
     target_version: &str,
     reason: &str,
@@ -4482,7 +4482,7 @@ fn parse_training_model_name(model_name: &str) -> Result<String, InstructionExec
             "model_name must not contain surrounding whitespace",
         ));
     }
-    let parsed: iroha_data_model::name::Name = model_name
+    let parsed: iroha_model_base::name::Name = model_name
         .parse()
         .map_err(|err| invalid_parameter(format!("invalid model_name: {err}")))?;
     if parsed.as_ref() != model_name {
@@ -4976,7 +4976,7 @@ fn rollout_handle(service_name: &str, sequence: u64) -> String {
 #[cfg(test)]
 fn latest_service_audit_event(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
 ) -> Option<SoraServiceAuditEventV1> {
     state_transaction
         .world
@@ -4988,7 +4988,7 @@ fn latest_service_audit_event(
 }
 fn load_admitted_bundle(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     service_version: &str,
 ) -> Result<SoraDeploymentBundleV1, InstructionExecutionError> {
     state_transaction
@@ -5005,7 +5005,7 @@ fn load_admitted_bundle(
 }
 pub(crate) fn load_active_bundle(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
 ) -> Result<(SoraServiceDeploymentStateV1, SoraDeploymentBundleV1), InstructionExecutionError> {
     let deployment = state_transaction
         .world
@@ -5998,8 +5998,8 @@ pub(crate) fn write_soracloud_runtime_receipt(
 /// write-back remains reconstructible from authoritative records without adding a parallel store.
 pub(crate) fn apply_soracloud_state_mutation(
     state_transaction: &mut StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     state_key: &str,
     operation: SoraStateMutationOperationV1,
     payload: Option<Vec<u8>>,
@@ -8098,8 +8098,8 @@ fn record_agent_apartment_audit_event(
 }
 fn binding_state_totals(
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
 ) -> (u64, u32) {
     let total_bytes = state_transaction
         .world
@@ -8241,8 +8241,8 @@ struct LoadedSoracloudFheInput {
 fn load_soracloud_fhe_inputs(
     params: &BfvParameters,
     state_transaction: &StateTransaction<'_, '_>,
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     job: &FheJobSpecV1,
     public_key: &BfvPublicKey,
     public_key_digest: Hash,
@@ -11641,7 +11641,6 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         source_record.repo_id = repo_id.clone();
         source_record.resolved_revision = resolved_revision.clone();
         source_record.updated_at_ms = now_ms;
-        record_hf_source(state_transaction, source_record.clone())?;
 
         let member_key = (pool_id.to_string(), authority.to_string());
         let mut pool_record = state_transaction
@@ -11652,6 +11651,21 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         if let Some(pool) = pool_record.as_ref() {
             ensure_hf_shared_lease_settlement_asset_matches(pool, &lease_asset_definition_id)?;
         }
+        let reconciles_queued_window = pool_record.as_ref().is_some_and(|pool| {
+            pool.window_expires_at_ms <= now_ms
+                && matches!(
+                    pool.status,
+                    SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+                )
+                && pool.queued_next_window.is_some()
+        });
+        // A queued-window transition emits one event before the join's own event.
+        // Reserve the complete sequence range before publishing a source or moving funds.
+        ensure_soracloud_audit_sequence_capacity(
+            state_transaction,
+            1 + usize::from(reconciles_queued_window),
+        )?;
+        record_hf_source(state_transaction, source_record.clone())?;
         if let Some(pool) = pool_record.as_mut()
             && pool.window_expires_at_ms <= now_ms
             && matches!(

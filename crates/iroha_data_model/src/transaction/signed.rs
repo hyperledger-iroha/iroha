@@ -11,7 +11,6 @@ use crate::{
     events::data::prelude::AssetBatchTransferOutcome,
     isi::{CustomInstruction, ExecuteTrigger, InstructionBox, privacy::SubmitPrivacyProofV1},
     metadata::Metadata,
-    name::Name,
     nexus::FeeSponsorProgramId,
     privacy::{
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
@@ -24,6 +23,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use derive_more::{Deref, Display, From, TryInto};
 use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, Signature, SignatureOf};
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_primitives::{const_vec::ConstVec, json::Json, time::TimeSource};
 use iroha_schema::IntoSchema;

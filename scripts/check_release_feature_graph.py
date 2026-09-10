@@ -128,7 +128,7 @@ AUTOLOADED_BUILD_CONTROL_PATHSPECS = (
     ":(top,icase)csharp/NuGet.Config",
 )
 TRUSTED_RELEASE_SURFACE_SHA256 = (
-    "5fbd7f84c13ebfe7f71b155c9f2e359e6862164cbc64a878ae3219eb6a559dae"
+    "803b6cb43a720c0834a5855df38bcda9b48f0b16df616cdb8ad3747407db3eec"
 )
 HOSTILE_CARGO_ENVIRONMENT = frozenset(
     {
@@ -226,7 +226,6 @@ SHIPPING_ROOT_FEATURE_ALLOWLIST = {
     ),
     "ivm": frozenset(),
     "sorafs_car": frozenset({"cli", "default", "manifest"}),
-    "sorafs_manifest": frozenset({"default", "pqc"}),
     "sorafs_orchestrator": frozenset({"cli-orchestrator", "default"}),
 }
 REQUIRED_FEATURES = {

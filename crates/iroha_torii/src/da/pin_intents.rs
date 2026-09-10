@@ -61,6 +61,7 @@ pub struct DaPinIntentListCursor {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct DaPinIntentListRequest {
     /// Maximum raw index rows to inspect; values above 1,000 are rejected.
     #[norito(default)]
@@ -81,6 +82,7 @@ pub struct DaPinIntentListRequest {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct DaPinIntentQueryRequest {
     #[norito(default)]
     pub manifest_hash: Option<ManifestDigest>,
@@ -1125,6 +1127,22 @@ mod tests {
     }
     #[tokio::test]
     async fn pin_intent_post_routes_reject_oversized_bodies() {
+        crate::frame_test_support::assert_current_frame(
+            &DaPinIntentListRequest {
+                limit: std::num::NonZeroU64::new(7),
+                ..Default::default()
+            },
+            "iroha_torii::da::pin_intents::DaPinIntentListRequest",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &DaPinIntentQueryRequest {
+                lane_id: Some(3),
+                epoch: Some(7),
+                sequence: Some(11),
+                ..Default::default()
+            },
+            "iroha_torii::da::pin_intents::DaPinIntentQueryRequest",
+        );
         use axum::{
             Router,
             body::Body,

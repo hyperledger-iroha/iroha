@@ -128,11 +128,12 @@ fn guard_return_keeps_capacity_reserved_against_concurrent_admission() {
 fn guard_return_committed_disposition_clears_accounting_and_durable_metadata() {
     let dir = tempfile::tempdir().expect("tempdir");
     let journal_path = dir.path().join("committed_guard_return_journal.norito");
-    let state = State::new(
+    let mut state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    install_single_validator_topology_for_queue_test(&mut state, 0x63);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     queue
@@ -329,11 +330,12 @@ fn guard_return_is_idempotent_across_committed_and_already_queued_races() {
 fn guard_return_expires_inflight_transaction_with_explicit_event() {
     let dir = tempfile::tempdir().expect("tempdir");
     let journal_path = dir.path().join("expired_guard_return_journal.norito");
-    let state = State::new(
+    let mut state = State::new(
         world_with_test_domains(),
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    install_single_validator_topology_for_queue_test(&mut state, 0x63);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let mut cfg = config_factory();
     cfg.transaction_time_to_live = Duration::from_millis(10);

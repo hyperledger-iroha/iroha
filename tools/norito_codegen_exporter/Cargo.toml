@@ -22,6 +22,7 @@ path = "src/bin/norito_schema_inventory.rs"
 required-features = ["dev-tools"]
 
 [dependencies]
+iroha_model_base = { workspace = true }
 anyhow = "1.0.100"
 base64 = { workspace = true, features = ["alloc"] }
 blake2 = { workspace = true }

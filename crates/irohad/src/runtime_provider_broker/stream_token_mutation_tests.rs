@@ -38,6 +38,7 @@ mod stream_token_mutation_tests {
         let metadata_digest = observation(&binding).metadata_digest;
         let signer = StreamTokenHardwareBrokerClient {
             session: Arc::new(BrokerSession {
+                decode_pool: new_test_process_pool(),
                 connection: Mutex::new(BrokerConnection {
                     stream,
                     session_id: TEST_SESSION_ID,
@@ -156,7 +157,10 @@ mod stream_token_mutation_tests {
                 connection.next_request_id, next_id,
                 "every admitted qualification and Sign ID is retired"
             );
-            assert_eq!(connection.poison_reason, Some(BrokerError::Ambiguous));
+            assert_eq!(
+                connection.poison_reason,
+                Some(BrokerConnectionFailure::Permanent(BrokerError::Ambiguous))
+            );
             assert_eq!(connection.session_id, TEST_SESSION_ID);
         }
         assert!(matches!(
@@ -178,7 +182,10 @@ mod stream_token_mutation_tests {
             connection.next_request_id, next_id,
             "failed retries allocate no new request ID"
         );
-        assert_eq!(connection.poison_reason, Some(BrokerError::Ambiguous));
+        assert_eq!(
+            connection.poison_reason,
+            Some(BrokerConnectionFailure::Permanent(BrokerError::Ambiguous))
+        );
     }
 
     #[derive(Clone, Copy, Debug)]
@@ -462,7 +469,10 @@ mod stream_token_mutation_tests {
                     .lock()
                     .expect("terminal denial state");
                 assert_eq!(connection.next_request_id, 4);
-                assert_eq!(connection.poison_reason, Some(reason));
+                assert_eq!(
+                    connection.poison_reason,
+                    Some(BrokerConnectionFailure::Permanent(reason))
+                );
             }
             assert_eq!(
                 signer.sign(&expected(), &token_body()).err(),
@@ -483,7 +493,10 @@ mod stream_token_mutation_tests {
                 .lock()
                 .expect("unchanged terminal denial");
             assert_eq!(connection.next_request_id, 4);
-            assert_eq!(connection.poison_reason, Some(reason));
+            assert_eq!(
+                connection.poison_reason,
+                Some(BrokerConnectionFailure::Permanent(reason))
+            );
         }
     }
 
@@ -511,7 +524,10 @@ mod stream_token_mutation_tests {
                 .lock()
                 .expect("prequalification failure state");
             assert_eq!(connection.next_request_id, 2);
-            assert_eq!(connection.poison_reason, Some(BrokerError::Unavailable));
+            assert_eq!(
+                connection.poison_reason,
+                Some(BrokerConnectionFailure::Unavailable)
+            );
         }
         assert_no_request_bytes(&mut peer);
 
@@ -575,5 +591,46 @@ mod stream_token_mutation_tests {
         drop(connection);
         assert_no_request_bytes(&mut replacement);
     }
+    #[test]
+    fn authenticated_read_session_preserves_process_decode_pool_and_sign_connection() {
+        let mut fixture = fixture();
+        let original = fixture.signer.clone();
+        let connecting = thread::spawn(move || {
+            stream_token_read_session(
+                &original.session,
+                &original.binding,
+                original.metadata_digest,
+                BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1).expect("read session deadline"),
+            )
+        });
+        let mut peer = accept_read_session(&fixture);
+        let read_session = connecting
+            .join()
+            .expect("authenticated read connection terminates")
+            .expect("exact binding and metadata on read connection");
+        assert!(Arc::ptr_eq(
+            &read_session.decode_pool,
+            &fixture.signer.session.decode_pool,
+        ));
+        assert!(!Arc::ptr_eq(&read_session, &fixture.signer.session));
+        let original = fixture
+            .signer
+            .session
+            .connection
+            .lock()
+            .expect("original Sign connection");
+        assert_eq!(original.session_id, TEST_SESSION_ID);
+        assert_eq!(original.next_request_id, 1);
+        assert_eq!(original.poison_reason, None);
+        drop(original);
+        let read = read_session.connection.lock().expect("read connection");
+        assert_eq!(read.session_id, [0xb8; 32]);
+        assert_eq!(read.next_request_id, 1);
+        assert_eq!(read.poison_reason, None);
+        drop(read);
+        assert_no_request_bytes(&mut fixture.peer);
+        assert_no_request_bytes(&mut peer);
+    }
+
     include!("stream_token_recovery_tests.rs");
 }

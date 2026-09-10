@@ -19,6 +19,8 @@ pub use response_evidence_archive::{
     KagemushaResponseEvidenceArchiveErrorV1, KagemushaResponseEvidenceArchiveV1,
 };
 mod candidate_lifecycle;
+mod commitments;
+use commitments::*;
 #[cfg(unix)]
 mod coordinator_operation_store;
 #[cfg(unix)]
@@ -86,6 +88,8 @@ pub use redemption_release::{
     VerifiedKagemushaRedemptionReleaseV1,
 };
 
+#[cfg(test)]
+mod state_frame_identity_tests;
 #[cfg(test)]
 mod tests;
 
@@ -616,9 +620,8 @@ impl KagemushaStateContextV1 {
 }
 
 /// Private aggregate balance state for one device lane and asset.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaStateV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStateV1 {
     /// State-machine version.
     pub version: u16,
@@ -811,9 +814,8 @@ impl KagemushaStateV1 {
 }
 
 /// Closed set of aggregate balance transitions.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaTransitionKindV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
 pub enum KagemushaTransitionKindV1 {
     /// Fold a finalized on-chain mint credit into the aggregate.
     MintFold,
@@ -828,9 +830,8 @@ pub enum KagemushaTransitionKindV1 {
 }
 
 /// Public recursive-proof statement derived by Core for one transition.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::TransitionProofStatementV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct TransitionProofStatementV1 {
     /// State-machine version.
     pub version: u16,
@@ -1492,9 +1493,8 @@ impl KagemushaGuardBundleVerifierV1 for RejectAllKagemushaGuardBundleVerifierV1 
 }
 
 /// Exact device bootstrap statement.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapStatementV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct BootstrapStatementV1 {
     /// State-machine version.
     pub version: u16,
@@ -1558,9 +1558,8 @@ pub struct BootstrapAuthorizationV1 {
 }
 
 /// One hardware-sealed recovery statement.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::DurabilityAnchorStatementV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct DurabilityAnchorStatementV1 {
     /// Stable-wallet metadata revision; never resets on hardware epoch rotation.
     pub metadata_revision: u128,
@@ -1598,9 +1597,8 @@ pub struct DurabilityAnchorV1 {
 }
 
 /// Canonical crash-recovery projection for one aggregate lane.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::KagemushaStateSnapshotV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub struct KagemushaStateSnapshotV1 {
     /// Required credential floor and complete recovery-journal checkpoint metadata.
     pub recovery_metadata: KagemushaRecoveryMetadataV1,
@@ -1639,9 +1637,8 @@ pub struct KagemushaStateSnapshotV1 {
     pub snapshot_commitment: DigestV1,
 }
 
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::SnapshotCommitmentPreimageV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
 struct SnapshotCommitmentPreimageV1 {
     recovery_metadata: KagemushaRecoveryMetadataV1,
     version: u16,
@@ -1701,7 +1698,7 @@ fn receiver_snapshot_capacity_usage_v1(
     })
 }
 
-fn receiver_sequence_entry_bytes<T: norito::NoritoSerialize>(
+fn receiver_sequence_entry_bytes<T: norito::core::SerializePayload>(
     value: &T,
 ) -> Result<u64, KagemushaStateErrorV1> {
     let flags = norito::core::default_encode_flags();
@@ -1949,11 +1946,10 @@ pub(crate) fn disk_history_lane_binding(
     context: KagemushaStateContextV1,
     lane: &KagemushaLaneIdV1,
 ) -> Result<DigestV1, KagemushaStateErrorV1> {
-    #[derive(norito::NoritoSchema)]
+    #[derive(Encode, norito::NoritoSchema)]
     #[norito_schema(
         name = "iroha_core::zk::kagemusha_v1_state::disk_history_lane_binding::LaneBinding"
     )]
-    #[derive(Encode)]
     struct LaneBinding {
         version: u16,
         context: KagemushaStateContextV1,
@@ -1961,6 +1957,11 @@ pub(crate) fn disk_history_lane_binding(
     }
     context.validate()?;
     lane.validate()?;
+    #[cfg(test)]
+    assert_eq!(
+        <LaneBinding as norito::NoritoSchema>::nominal_name(),
+        std::any::type_name::<LaneBinding>()
+    );
     let encoded = norito::encode_canonical(&LaneBinding {
         version: KAGEMUSHA_STATE_VERSION_V1,
         context,
@@ -4664,242 +4665,6 @@ fn required_pending_credit_prefix(
     Err(KagemushaStateErrorV1::InsufficientBalance)
 }
 
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::MintFoldEffectV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
-struct MintFoldEffectV1 {
-    credit_id: CreditIdV1,
-    envelope_digest: DigestV1,
-    amount: u128,
-    issuance_digest: DigestV1,
-    mint_finality_semantic_digest: DigestV1,
-    mint_finality_proof_binding_digest: DigestV1,
-}
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::RotateEffectV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
-struct RotateEffectV1 {
-    predecessor_epoch: HardwareEpochV1,
-    successor_epoch: HardwareEpochV1,
-    predecessor_device_policy_binding: DevicePolicyBindingV1,
-    successor_device_policy_binding: DevicePolicyBindingV1,
-    predecessor_state_nonce_commitment: DigestV1,
-    successor_state_nonce_commitment: DigestV1,
-    carried_balance: u128,
-    carried_consumed_credit_root: KagemushaPastaStateCommitmentV1,
-}
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::TransitionIntentPreimageV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
-struct TransitionIntentPreimageV1 {
-    release_id: DigestV1,
-    liability_pool_id: DigestV1,
-    trusted_commit_time_ms: u64,
-    statement: TransitionProofStatementV1,
-}
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::RecoveryRecordPreimageV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-struct RecoveryRecordPreimageV1 {
-    transition_intent_digest: DigestV1,
-    state_transition_digest: DigestV1,
-    successor_state_commitment: DigestV1,
-    journal_revision_after: u128,
-}
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::DurableEffectPreimageV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-struct DurableEffectPreimageV1 {
-    kind: KagemushaTransitionKindV1,
-    transition_effect_digest: DigestV1,
-    predecessor_state_commitment: DigestV1,
-    successor_state_commitment: DigestV1,
-    journal_revision_after: u128,
-}
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::LocalTransitionTransportStatementV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-struct LocalTransitionTransportStatementV1 {
-    version: u16,
-    kind: KagemushaTransitionKindV1,
-    release_id: DigestV1,
-    liability_pool_id: DigestV1,
-    transition_effect_digest: DigestV1,
-    predecessor_state_commitment: DigestV1,
-    successor_state_commitment: DigestV1,
-    normalized_guard_statement_digest: DigestV1,
-}
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapIntentPreimageV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Encode)]
-struct BootstrapIntentPreimageV1 {
-    trusted_commit_time_ms: u64,
-    statement: BootstrapStatementV1,
-}
-
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::zk::kagemusha_v1_state::BootstrapRecoveryPreimageV1")]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode)]
-struct BootstrapRecoveryPreimageV1 {
-    transition_intent_digest: DigestV1,
-    bootstrap_statement_digest: DigestV1,
-    successor_state_commitment: DigestV1,
-}
-
-fn derive_liability_pool_id(
-    lane: &KagemushaLaneIdV1,
-    asset_incarnation: AxtAssetIncarnationV1,
-) -> Result<DigestV1, KagemushaStateErrorV1> {
-    kagemusha_liability_pool_id_v1(&lane.network_id, &lane.asset, asset_incarnation)
-        .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)
-}
-
-fn local_transition_transport_digest(
-    kind: KagemushaTransitionKindV1,
-    release_id: DigestV1,
-    liability_pool_id: DigestV1,
-    transition_effect_digest: DigestV1,
-    predecessor_state_commitment: DigestV1,
-    successor_state_commitment: DigestV1,
-    normalized_guard_statement_digest: DigestV1,
-) -> Result<DigestV1, KagemushaStateErrorV1> {
-    canonical_sha256_digest(
-        TRANSPORT_STATEMENT_DOMAIN,
-        &LocalTransitionTransportStatementV1 {
-            version: KAGEMUSHA_STATE_VERSION_V1,
-            kind,
-            release_id,
-            liability_pool_id,
-            transition_effect_digest,
-            predecessor_state_commitment,
-            successor_state_commitment,
-            normalized_guard_statement_digest,
-        },
-    )
-}
-
-fn bootstrap_guard_context(
-    artifacts: KagemushaRecursionArtifactsV1,
-    statement: &BootstrapStatementV1,
-    trusted_commit_time_ms: u64,
-) -> Result<KagemushaGuardContextV1, KagemushaStateErrorV1> {
-    let transition_effect_digest = canonical_sha256_digest(TRANSITION_EFFECT_DOMAIN, statement)?;
-    let transition_intent_digest = canonical_sha256_digest(
-        TRANSITION_INTENT_DOMAIN,
-        &BootstrapIntentPreimageV1 {
-            trusted_commit_time_ms,
-            statement: statement.clone(),
-        },
-    )?;
-    let recovery_record_digest = canonical_sha256_digest(
-        RECOVERY_RECORD_DOMAIN,
-        &BootstrapRecoveryPreimageV1 {
-            transition_intent_digest,
-            bootstrap_statement_digest: statement.proof_statement_digest()?,
-            successor_state_commitment: statement.state_commitment,
-        },
-    )?;
-    Ok(KagemushaGuardContextV1 {
-        release_id: artifacts.release_id,
-        liability_pool_id: statement.liability_pool_id,
-        lifecycle_binding_digest: canonical_sha256_digest(TRANSITION_LIFECYCLE_DOMAIN, statement)?,
-        prepared_transition_binding_digest: [0; 32],
-        receive_credit_binding_digest: [0; 32],
-        terminal_commit_binding_digest: [0; 32],
-        sender_one_time_authorization_digest: [0; 32],
-        transition_intent_digest,
-        transition_effect_digest,
-        recovery_record_digest,
-        durable_inbox_effect_digest: artifacts.canonical_empty_effect_digest,
-        durable_outbox_effect_digest: artifacts.canonical_empty_effect_digest,
-        canonical_empty_effect_digest: artifacts.canonical_empty_effect_digest,
-    })
-}
-
-fn transition_guard_context(
-    artifacts: KagemushaRecursionArtifactsV1,
-    statement: &TransitionProofStatementV1,
-    trusted_commit_time_ms: u64,
-) -> Result<KagemushaGuardContextV1, KagemushaStateErrorV1> {
-    let transition_intent_digest = canonical_sha256_digest(
-        TRANSITION_INTENT_DOMAIN,
-        &TransitionIntentPreimageV1 {
-            release_id: artifacts.release_id,
-            liability_pool_id: derive_liability_pool_id(
-                &statement.lane,
-                statement.asset_incarnation,
-            )?,
-            trusted_commit_time_ms,
-            statement: statement.clone(),
-        },
-    )?;
-    let state_transition_digest = transition_statement_digest(statement)?;
-    let recovery_record_digest = canonical_sha256_digest(
-        RECOVERY_RECORD_DOMAIN,
-        &RecoveryRecordPreimageV1 {
-            transition_intent_digest,
-            state_transition_digest,
-            successor_state_commitment: statement.successor_commitment,
-            journal_revision_after: statement.journal_revision_after,
-        },
-    )?;
-    let durable_effect = DurableEffectPreimageV1 {
-        kind: statement.kind,
-        transition_effect_digest: statement.effect_digest,
-        predecessor_state_commitment: statement.predecessor_commitment,
-        successor_state_commitment: statement.successor_commitment,
-        journal_revision_after: statement.journal_revision_after,
-    };
-    let empty = artifacts.canonical_empty_effect_digest;
-    let (durable_inbox_effect_digest, durable_outbox_effect_digest) = match statement.kind {
-        KagemushaTransitionKindV1::MintFold | KagemushaTransitionKindV1::ReceiveFold => (
-            canonical_sha256_digest(DURABLE_INBOX_EFFECT_DOMAIN, &durable_effect)?,
-            empty,
-        ),
-        KagemushaTransitionKindV1::SendSplit | KagemushaTransitionKindV1::RedeemSplit => (
-            empty,
-            canonical_sha256_digest(DURABLE_OUTBOX_EFFECT_DOMAIN, &durable_effect)?,
-        ),
-        KagemushaTransitionKindV1::Rotate => (empty, empty),
-    };
-    Ok(KagemushaGuardContextV1 {
-        release_id: artifacts.release_id,
-        liability_pool_id: derive_liability_pool_id(&statement.lane, statement.asset_incarnation)?,
-        lifecycle_binding_digest: statement.lifecycle_binding_digest,
-        prepared_transition_binding_digest: statement.prepared_transition_binding_digest,
-        receive_credit_binding_digest: statement.receive_credit_binding_digest,
-        terminal_commit_binding_digest: [0; 32],
-        sender_one_time_authorization_digest: [0; 32],
-        transition_intent_digest,
-        transition_effect_digest: statement.effect_digest,
-        recovery_record_digest,
-        durable_inbox_effect_digest,
-        durable_outbox_effect_digest,
-        canonical_empty_effect_digest: empty,
-    })
-}
-
-fn transition_statement_digest(
-    statement: &TransitionProofStatementV1,
-) -> Result<DigestV1, KagemushaStateErrorV1> {
-    canonical_sha256_digest(TRANSITION_STATEMENT_DOMAIN, statement)
-}
-
-fn transport_semantic_digest(
-    normalized_guard_statement_digest: DigestV1,
-) -> Result<DigestV1, KagemushaStateErrorV1> {
-    canonical_sha256_digest(
-        TRANSPORT_STATEMENT_DOMAIN,
-        &normalized_guard_statement_digest,
-    )
-}
-
 fn bootstrap_state_public_inputs(
     artifacts: KagemushaRecursionArtifactsV1,
     preview: &BootstrapPreviewV1,
@@ -5082,55 +4847,6 @@ fn validate_peer_payment_against_context<R: KagemushaRecursiveVerifierV1>(
         .map_err(KagemushaStateErrorV1::ProofRejected)
 }
 
-fn canonical_sha256_digest<T: norito::NoritoSerialize>(
-    domain: &[u8],
-    value: &T,
-) -> Result<DigestV1, KagemushaStateErrorV1> {
-    let encoded =
-        norito::encode_canonical(value).map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
-    let mut hasher = Sha256::new();
-    hasher.update(
-        u64::try_from(domain.len())
-            .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?
-            .to_be_bytes(),
-    );
-    hasher.update(domain);
-    hasher.update(
-        u64::try_from(encoded.len())
-            .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?
-            .to_be_bytes(),
-    );
-    hasher.update(encoded);
-    Ok(hasher.finalize().into())
-}
-
-fn canonical_poseidon_digest<T: norito::NoritoSerialize>(
-    domain: &[u8],
-    value: &T,
-) -> Result<DigestV1, KagemushaStateErrorV1> {
-    let encoded =
-        norito::encode_canonical(value).map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?;
-    let mut framed = Vec::with_capacity(
-        domain
-            .len()
-            .saturating_add(encoded.len())
-            .saturating_add(16),
-    );
-    framed.extend_from_slice(
-        &u64::try_from(domain.len())
-            .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?
-            .to_be_bytes(),
-    );
-    framed.extend_from_slice(domain);
-    framed.extend_from_slice(
-        &u64::try_from(encoded.len())
-            .map_err(|_| KagemushaStateErrorV1::CanonicalEncoding)?
-            .to_be_bytes(),
-    );
-    framed.extend_from_slice(&encoded);
-    Ok(poseidon::hash_bytes(&framed))
-}
-
 fn validate_paired_proof(
     proof: &KagemushaPairedProofV1,
     semantic_digest: DigestV1,
@@ -5145,4 +4861,30 @@ fn validate_guard_bytes(bytes: &[u8]) -> Result<(), KagemushaStateErrorV1> {
         return Err(KagemushaStateErrorV1::InvalidGuardBundle);
     }
     Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<KagemushaStateV1>(
+        "iroha_core::zk::kagemusha_v1_state::KagemushaStateV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<KagemushaTransitionKindV1>(
+        "iroha_core::zk::kagemusha_v1_state::KagemushaTransitionKindV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<TransitionProofStatementV1>(
+        "iroha_core::zk::kagemusha_v1_state::TransitionProofStatementV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<BootstrapStatementV1>(
+        "iroha_core::zk::kagemusha_v1_state::BootstrapStatementV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        DurabilityAnchorStatementV1,
+    >("iroha_core::zk::kagemusha_v1_state::DurabilityAnchorStatementV1");
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<KagemushaStateSnapshotV1>(
+        "iroha_core::zk::kagemusha_v1_state::KagemushaStateSnapshotV1",
+    );
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<
+        SnapshotCommitmentPreimageV1,
+    >("iroha_core::zk::kagemusha_v1_state::SnapshotCommitmentPreimageV1");
 }

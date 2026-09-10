@@ -80,10 +80,18 @@ pub trait GlobalBeaconPartialSignerBrokerBackendV1: Send + Sync {
     /// Return the production runtime handle.
     fn handle(&self) -> &str;
     /// Return the live public qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the qualification request.
     fn qualification(
         &self,
     ) -> Result<ConsensusSignerProviderQualificationV1, GlobalBeaconPartialSignerBrokerBackendErrorV1>;
     /// Sign one exact broker-validated canonical pulse payload.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the validated request.
     fn sign_partial(
         &self,
         session: &iroha_core::beacon::ValidatedGlobalThresholdBeaconSessionV1,
@@ -103,6 +111,10 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
     /// Return the production runtime handle.
     fn handle(&self) -> &str;
     /// Return the live public qualification.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the qualification request.
     fn qualification(
         &self,
     ) -> Result<
@@ -110,6 +122,10 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
     /// Attest live custody for one exact validated public session and seat.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the validated request.
     fn attest_partial_release_capability(
         &self,
         session: &iroha_core::tle_release::ValidatedTleKeySessionV1,
@@ -119,6 +135,10 @@ pub trait ParliamentTlePartialReleaseSignerBrokerBackendV1: Send + Sync {
         ParliamentTlePartialReleaseSignerBrokerBackendErrorV1,
     >;
     /// Sign one exact broker-validated public release projection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the provider is unavailable or rejects the validated request.
     fn sign_projected_partial_release(
         &self,
         projection: &iroha_core::tle_release::ValidatedTleReleaseProjectionV1,

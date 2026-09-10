@@ -24,7 +24,7 @@ validator. Digest preimages include their canonical Norito byte length. The
 generated positive and adversarial fixture set was regenerated against these
 rules and passes the full fixture validator.
 The reference validator also accepts those payloads through
-`validate_hedging_payload_bytes`, and `sorafs-validate hedging`/`billing` can
+`validate_hedging_payload_bytes`, and `iroha app sorafs toolkit validate hedging` can
 validate feed, decision, line-item, and statement files with deterministic
 operator outcomes.
 The source bridge surface also exposes the same reference validator through
@@ -326,7 +326,7 @@ lowercase hexadecimal. Statement lookup collapses absent, unpublished, and
 wrong-owner cases to the same response. The family exposes no feed-ingestion,
 automatic-execution, or local-authority mutation route.
 
-Implemented local validator CLI: `sorafs-validate hedging` validates Norito
+Implemented local validator CLI: `iroha app sorafs toolkit validate hedging` validates Norito
 feed, reference-price decision, billing-line, and statement payloads. The
 standard signed-client CLI also mirrors every shipped runtime route:
 `sorafs billing status`, `statements`, `statement`, `acknowledge`, and
@@ -406,7 +406,7 @@ Required before rollout:
   `scripts/check_sorafs_hedging_fixture_manifest.py` validates the manifest in
   pre-generation mode, including accepted/rejected path and reviewed
   `negative_case` contracts, or fails closed on missing/mismatched generated
-  bytes in full mode. Full mode also runs the pinned `sorafs-validate hedging`
+  bytes in full mode. Full mode also runs the pinned `iroha app sorafs toolkit validate hedging`
   command contract without shell execution and compares each generated payload
   against the manifest's accepted or rejected outcome, verifies the
   kind-specific top-level and nested JSON sidecar field set, checks V1
@@ -474,7 +474,7 @@ Required before rollout:
 - Done: target requirements are documented; adjacent reserve, DA rent telemetry,
   and generic billing/oracle foundations exist; local SoraFS hedging/feed,
   reference-price decision, billing-line, and billing-statement Norito payloads
-  plus deterministic math/tests and reference-validator/CLI coverage are
+  plus deterministic math/tests and iroha-cli/CLI coverage are
   shipped; source-level Rust C FFI, Connect C/JNI, Kotlin/JVM, Java Android,
   and Swift bridge wrappers are shipped; the SFM-5 rollout evidence gate and
   collection planner with dry-run evidence-contract export plus operator

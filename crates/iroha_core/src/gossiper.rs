@@ -37,7 +37,7 @@ use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_p2p::{Broadcast, Post, Priority};
 use iroha_primitives::time::TimeSource;
 use norito::{
-    DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload,
+    DeserializePayload, NoritoSerialize, SerializePayload,
     codec::{Decode, Encode},
     core as ncore,
 };
@@ -3014,7 +3014,7 @@ fn len_prefixed_field_payload(bytes: &[u8], offset: usize) -> Result<(&[u8], usi
 }
 fn decode_len_prefixed_field<T>(bytes: &[u8], offset: usize) -> Result<(T, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (value, used) = ncore::decode_field_canonical::<T>(payload)?;
@@ -3028,7 +3028,7 @@ fn decode_bounded_len_prefixed_sequence<T>(
     offset: usize,
 ) -> Result<(Vec<T>, usize), ncore::Error>
 where
-    T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
+    T: SerializePayload + for<'de> DeserializePayload<'de>,
 {
     let (payload, payload_end) = len_prefixed_field_payload(bytes, offset)?;
     let (sequence_len, _) = ncore::inspect_seq_len_slice(payload)?;
@@ -3624,7 +3624,7 @@ fn gossip_vec_payload_len_exact<'a>(
 }
 fn gossip_encoded_vec_payload_len_exact<'a, T>(items: impl Iterator<Item = &'a T>) -> Option<usize>
 where
-    T: NoritoSerialize + 'a,
+    T: SerializePayload + 'a,
 {
     let mut count = 0usize;
     let mut total = 0usize;
@@ -3777,6 +3777,8 @@ fn partition_gossip_batch(
         encoded_len: exact_len,
     }
 }
+#[cfg(test)]
+mod payload_codec_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4719,7 +4721,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -5453,7 +5455,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),
@@ -5462,7 +5464,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         let now = Instant::now();
         let gossiper = TransactionGossiper {
             gossip_period: Duration::from_millis(50),
-            gossip_size: NonZeroU32::new(1).expect("nonzero size"),
+            gossip_size: NonZeroU32::new(2).expect("nonzero size"),
             gossip_resend_ticks: defaults::network::TRANSACTION_GOSSIP_RESEND_TICKS,
             gossip_tick: 0,
             gossip_deferred: vec![
@@ -6184,7 +6186,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             Kura::open_test_kura_with_configured_lane_config(&kura_cfg, &LaneGeometry::default())
                 .expect("init kura");
         let live_query = LiveQueryStore::start_test();
-        let state = Arc::new(State::new_for_testing(World::new(), kura, live_query));
+        let state = Arc::new(State::new_for_testing(world_with_alice(), kura, live_query));
         install_active_single_lane_nexus(state.as_ref());
         let queue = Arc::new(Queue::test(
             QueueConfig::default(),

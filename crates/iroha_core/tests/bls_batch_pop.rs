@@ -1,10 +1,11 @@
 //! Integration checks for BLS batching + `PoP` gating on transaction admission.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
+#[path = "common/lane_authority_fixture.rs"]
+mod lane_authority_fixture;
 use core::time::Duration;
 use iroha_core::{
     block::{BlockValidationError, ValidBlock},
     da::proof_policy_bundle,
-    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     prelude::*,
     query::store::LiveQueryStore,
@@ -13,7 +14,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
-    ChainId, Metadata, NetworkId, PeerId, Registrable,
+    ChainId, Metadata, NetworkId, Registrable,
     block::{
         BlockExecutionContextBundle, ExternalExecutionContext, builder::BlockBuilder,
         consensus::SumeragiLanePayloadOwnership,
@@ -45,14 +46,12 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     let account_id = AccountId::of(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
-    let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+    let mut world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
+    lane_authority_fixture::seed_world(&mut world);
     let mut state =
         State::new_with_chain_for_testing(world, kura, query_handle, ChainId::from("chain"));
     let network_id = *state.network_id_ref();
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
+    lane_authority_fixture::install_manifest(&state);
     let mut pipeline = state.view().pipeline().clone();
     pipeline.signature_batch_max_bls = 4;
     state.set_pipeline(pipeline);
@@ -65,24 +64,25 @@ fn mk_state_with_bls_batch() -> (State, NetworkId, AccountId, KeyPair) {
     state.set_crypto(crypto_cfg);
     (state, network_id, account_id, kp)
 }
-fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair, PeerId) {
-    let kp = checked_random_bls_batch_keypair();
-    let peer = PeerId::from(kp.public_key().clone());
+fn seed_genesis(state: &State) -> (HashOf<BlockHeader>, KeyPair) {
+    let kp = lane_authority_fixture::leader();
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut builder = BlockBuilder::new(header);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
-    let block = builder.build_with_signature(0, kp.private_key());
+    let block = builder
+        .build_with_signature(0, kp.private_key())
+        .canonical_resultless_proposal();
     let mut state_block = state.block(block.header());
     let valid = ValidBlock::validate_unchecked(block, &mut state_block).unpack(|_| {});
     let committed = valid.commit_unchecked().unpack(|_| {});
-    let _ = state_block.apply_without_execution(&committed, vec![peer.clone()]);
+    let _ = state_block.apply_without_execution(&committed, lane_authority_fixture::peers());
     state_block
         .kura()
         .store_block(Arc::new(committed.clone().into()))
         .expect("store genesis");
     state_block.commit().expect("genesis commit");
-    (committed.as_ref().hash(), kp, peer)
+    (committed.as_ref().hash(), kp)
 }
 fn make_tx(
     network_id: &NetworkId,
@@ -114,7 +114,6 @@ fn push_single_tx_with_context(
     tx: SignedTransaction,
     state: &State,
     height: std::num::NonZeroU64,
-    leader: &KeyPair,
 ) {
     let execution_context = BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
         tx.hash_as_entrypoint(),
@@ -140,9 +139,9 @@ fn push_single_tx_with_context(
         previous_lane_block_height: 0,
         previous_lane_block_descriptor_hash: None,
         lane_block_descriptor_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
-        lane_block_descriptor_validator_set: vec![PeerId::from(leader.public_key().clone())],
-        lane_block_descriptor_validator_count: 1,
-        lane_block_descriptor_min_quorum: 1,
+        lane_block_descriptor_validator_set: lane_authority_fixture::peers(),
+        lane_block_descriptor_validator_count: 4,
+        lane_block_descriptor_min_quorum: 3,
         payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
         rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
     };
@@ -161,17 +160,19 @@ fn push_single_tx_with_context(
 #[test]
 fn bls_batch_block_validates_with_pop() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
-    let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
+    let (genesis_hash, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
     let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    push_single_tx_with_context(&mut builder, tx, &state, height, &peer_kp);
+    push_single_tx_with_context(&mut builder, tx, &state, height);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
-    let block = builder.build_with_signature(0, peer_kp.private_key());
+    let block = builder
+        .build_with_signature(0, peer_kp.private_key())
+        .canonical_resultless_proposal();
     let mut state_block = state.block(block.header());
-    let topology = Topology::new(vec![peer]);
+    let topology = Topology::new(lane_authority_fixture::peers());
     ValidBlock::validate_sumeragi_v2_fixture(
         block,
         &topology,
@@ -185,17 +186,19 @@ fn bls_batch_block_validates_with_pop() {
 #[test]
 fn bls_batch_block_validates_without_pop_fallback() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
-    let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
+    let (genesis_hash, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, false);
     let height = nonzero!(2_u64);
     let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    push_single_tx_with_context(&mut builder, tx, &state, height, &peer_kp);
+    push_single_tx_with_context(&mut builder, tx, &state, height);
     let proof_policies = proof_policy_bundle(&state.view().nexus().lane_config);
     builder.set_da_proof_policies(Some(proof_policies));
-    let block = builder.build_with_signature(0, peer_kp.private_key());
+    let block = builder
+        .build_with_signature(0, peer_kp.private_key())
+        .canonical_resultless_proposal();
     let mut state_block = state.block(block.header());
-    let topology = Topology::new(vec![peer]);
+    let topology = Topology::new(lane_authority_fixture::peers());
     // Should still validate via per-signature path when PoP is absent.
     ValidBlock::validate_sumeragi_v2_fixture(
         block,
@@ -208,17 +211,19 @@ fn bls_batch_block_validates_without_pop_fallback() {
     .expect("block validation must succeed without PoP (per-signature fallback)");
 }
 #[test]
-fn bls_batch_block_rejects_missing_proof_policy_hash() {
+fn bls_batch_block_rejects_missing_proof_policies() {
     let (state, network_id, account, kp) = mk_state_with_bls_batch();
-    let (genesis_hash, peer_kp, peer) = seed_genesis(&state);
+    let (genesis_hash, peer_kp) = seed_genesis(&state);
     let tx = make_tx(&network_id, &account, &kp, true);
     let height = nonzero!(2_u64);
     let header = BlockHeader::new(height, Some(genesis_hash), None, None, 1, 0);
     let mut builder = BlockBuilder::new(header);
-    push_single_tx_with_context(&mut builder, tx, &state, height, &peer_kp);
-    let block = builder.build_with_signature(0, peer_kp.private_key());
+    push_single_tx_with_context(&mut builder, tx, &state, height);
+    let block = builder
+        .build_with_signature(0, peer_kp.private_key())
+        .canonical_resultless_proposal();
     let mut state_block = state.block(block.header());
-    let topology = Topology::new(vec![peer]);
+    let topology = Topology::new(lane_authority_fixture::peers());
     let err = ValidBlock::validate_sumeragi_v2_fixture(
         block,
         &topology,
@@ -227,9 +232,16 @@ fn bls_batch_block_rejects_missing_proof_policy_hash() {
         &mut state_block,
     )
     .unpack(|_| {})
-    .expect_err("block validation must reject missing DA proof policy hash");
-    assert!(matches!(
-        *err.1,
-        BlockValidationError::ProofPolicyHashMismatch { .. }
-    ));
+    .expect_err("block validation must reject missing mandatory DA proof policies");
+    assert!(
+        matches!(
+            *err.1,
+            BlockValidationError::DaProofPolicySidecarHashMismatch {
+                expected: None,
+                actual: None,
+            }
+        ),
+        "missing mandatory DA proof policies must reject before signature batching: {:?}",
+        err.1
+    );
 }

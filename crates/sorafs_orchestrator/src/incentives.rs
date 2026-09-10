@@ -8,13 +8,13 @@ use hex::encode as hex_encode;
 use iroha_data_model::{
     account::AccountId,
     metadata::Metadata,
-    name::Name,
     soranet::{
         RelayId,
         incentives::RelayRewardInstructionV1,
         prelude::{Digest32, RelayBondLedgerEntryV1, RelayBondPolicyV1, RelayEpochMetricsV1},
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use soranet_incentives::{
     RelayIncentiveError, RelayRewardCalculator, RewardConfig as CoreRewardConfig, RewardDecision,
@@ -436,9 +436,10 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        asset::AssetDefinitionId, domain::DomainId, metadata::Metadata, name::Name,
+        asset::AssetDefinitionId, domain::DomainId, metadata::Metadata,
         soranet::incentives::RelayComplianceStatusV1,
     };
+    use iroha_model_base::name::Name;
     use std::convert::TryFrom;
     use tempfile::tempdir;
     fn quantity(value: u32) -> Quantity {
@@ -635,6 +636,55 @@ mod tests {
         assert_eq!(instruction.payout_amount, Quantity::zero());
     }
     #[test]
+    fn metrics_log_bounds_each_canonical_record_and_rejects_partial_tail() {
+        let dir = tempdir().expect("temp dir");
+        let path = dir.path().join("metrics.log");
+        let log = MetricsLog::open(path.clone()).expect("open log");
+        let entry = metrics(1_000, 1_000);
+        let canonical = norito::encode_canonical(&entry).expect("canonical entry");
+        let mut count = 0;
+        for flags in (0..=norito::core::supported_header_flags())
+            .filter(|flags| norito::core::validate_header_flags(*flags).is_ok())
+        {
+            let _flags = norito::core::DecodeFlagsGuard::enter(flags);
+            log.append(&entry).expect("append under caller layout");
+            count += 1;
+        }
+        drop(log);
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes, canonical.repeat(count));
+        assert_eq!(
+            read_metrics_log(&path, log_test_limits()).unwrap(),
+            vec![entry; count]
+        );
+        for length in [
+            1,
+            norito::core::Header::SIZE - 1,
+            canonical.len() - 1,
+            bytes.len() - 1,
+        ] {
+            std::fs::write(&path, &bytes[..length]).unwrap();
+            assert!(
+                read_metrics_log(&path, log_test_limits()).is_err(),
+                "partial log at {length} accepted"
+            );
+        }
+        let mut header = canonical[..norito::core::Header::SIZE].to_vec();
+        // Header layout: magic/version/owner/compression precede the u64 length.
+        header[23..31].copy_from_slice(&u64::MAX.to_le_bytes());
+        assert_eq!(
+            norito::core::Header::read(header.as_slice())
+                .unwrap()
+                .length,
+            u64::MAX
+        );
+        std::fs::write(&path, header).unwrap();
+        assert!(
+            read_metrics_log(&path, log_test_limits()).is_err(),
+            "unbacked declared size accepted"
+        );
+    }
+    #[test]
     fn metrics_log_records_entries() {
         let dir = tempdir().expect("temp dir");
         let log_path = dir.path().join("relay_metrics.log");
@@ -666,6 +716,24 @@ mod tests {
         );
         let records = read_metrics_log(&log_path, log_test_limits()).expect("read metrics log");
         assert_eq!(records.len(), 2);
+        let recorded_bytes = std::fs::read(&log_path).expect("read actual producer bytes");
+        assert_eq!(
+            recorded_bytes[6..22],
+            norito::schema::identity::frame_hash::<RelayEpochMetricsV1>()
+        );
+        let mut wrong_owner = recorded_bytes;
+        wrong_owner[6..22].copy_from_slice(&norito::schema::identity::frame_hash::<
+            iroha_data_model::soranet::incentives::RelayBandwidthProofPayloadV1,
+        >());
+        let corrupt_path = dir.path().join("wrong-owner.log");
+        std::fs::write(&corrupt_path, wrong_owner).expect("write owner substitution");
+        assert!(matches!(
+            read_metrics_log(&corrupt_path, log_test_limits()),
+            Err(MetricsLogError::Decode {
+                source: norito::Error::SchemaMismatch,
+                ..
+            })
+        ));
         let decision_key = Name::from_str("reward_decision").expect("name");
         assert_eq!(
             records[0].metadata.get(&decision_key),

@@ -2990,6 +2990,7 @@ pub mod account {
         use super::*;
         use crate::prelude;
         use core::num::NonZeroU64;
+        use iroha_model_base::name::Name;
 
         #[derive(Debug)]
         struct TestExecutor {
@@ -3966,7 +3967,6 @@ pub mod asset {
                     repo::{RepoInstructionBox, RepoIsi},
                 },
                 metadata::Metadata,
-                name::Name,
                 nexus::LaneId,
                 peer::PeerId,
                 prelude::{Json, Quantity},
@@ -3976,6 +3976,7 @@ pub mod asset {
         };
         use core::num::NonZeroU64;
         use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_model_base::name::Name;
         fn fixture_key_pair(seed: u8) -> KeyPair {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
                 .expect("fixture seed must derive a valid keypair")

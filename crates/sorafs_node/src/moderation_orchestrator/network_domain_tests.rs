@@ -3,14 +3,15 @@
 fn source_attestation_and_archive_head_roundtrip_with_exact_network_id() {
     let fixture = moderation_panel_notification_archive_broker_fixture_v1()
         .expect("build canonical moderation archive fixture");
-    let statement_bytes =
-        norito::to_bytes(&fixture.source_attestation).expect("encode source attestation");
+    // Roundtrip the source statement fields as payload; the signed archive head owns the frame.
+    let statement_bytes = norito::codec::encode_adaptive(&fixture.source_attestation);
     let decoded_statement: ModerationPanelNotificationSourceAttestationV1 =
-        norito::decode_from_bytes(&statement_bytes).expect("decode source attestation");
+        norito::codec::decode_adaptive(&statement_bytes)
+            .expect("decode source attestation payload");
     assert_eq!(decoded_statement, fixture.source_attestation);
     assert_eq!(decoded_statement.network_id, fixture.network_id);
     assert_eq!(
-        norito::to_bytes(&decoded_statement).expect("re-encode source attestation"),
+        norito::codec::encode_adaptive(&decoded_statement),
         statement_bytes
     );
     let decoded_head: ModerationPanelNotificationArchiveHeadV1 =
@@ -48,9 +49,13 @@ fn handoff_and_notification_roundtrip_retain_exact_network_identity() {
         source_occurred_at_unix_ms: 700,
     };
     notification.notification_id = notification.canonical_id();
-    let bytes = norito::to_bytes(&notification).expect("encode exact-network notification");
+    crate::frame_test_support::assert_current_frame(
+        &notification,
+        "sorafs_node::moderation_orchestrator::ModerationPanelNotificationV1",
+    );
+    let bytes = norito::codec::encode_adaptive(&notification);
     let decoded: ModerationPanelNotificationV1 =
-        norito::decode_from_bytes(&bytes).expect("decode exact-network notification");
+        norito::codec::decode_adaptive(&bytes).expect("decode exact-network notification payload");
     assert_eq!(decoded, notification);
     assert!(decoded.is_bound_to_network(&network_id));
     assert!(!decoded.is_bound_to_network(&foreign_network));
@@ -78,9 +83,13 @@ fn handoff_and_notification_roundtrip_retain_exact_network_identity() {
         },
     };
     handoff.handoff_id = handoff.canonical_id();
-    let bytes = norito::to_bytes(&handoff).expect("encode exact-network handoff");
+    crate::frame_test_support::assert_current_frame(
+        &handoff,
+        "sorafs_node::moderation_orchestrator::ModerationTerminalHandoffV1",
+    );
+    let bytes = norito::codec::encode_adaptive(&handoff);
     let decoded: ModerationTerminalHandoffV1 =
-        norito::decode_from_bytes(&bytes).expect("decode exact-network handoff");
+        norito::codec::decode_adaptive(&bytes).expect("decode exact-network handoff payload");
     assert_eq!(decoded, handoff);
     assert!(decoded.is_bound_to_network(&network_id));
     assert!(!decoded.is_bound_to_network(&foreign_network));

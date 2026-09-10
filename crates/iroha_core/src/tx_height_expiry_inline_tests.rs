@@ -19,7 +19,7 @@ fn transaction_height_expiry_is_exclusive_when_ttl_is_optional() {
         let mut block = state.block(header);
         let mut metadata = Metadata::default();
         metadata.insert(
-            iroha_data_model::name::Name::from_str("expires_at_height").unwrap(),
+            iroha_model_base::name::Name::from_str("expires_at_height").unwrap(),
             Json::from(expires_at_height),
         );
         let tx = TransactionBuilder::new(

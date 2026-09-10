@@ -1547,6 +1547,20 @@ unchanged, while `SourceRetained` or a service error returns the same move-only
 pending owner for a later attempt. This is the implementation cut for the
 formal retained-control action: repeated packets preserve one logical wire
 identity without resurrecting lifecycle state.
+A periodic CommitQC Broadcast can receive its durable lifecycle ordinal after
+its already-Ready live Decision Apply, even though both effects retain the
+same earlier periodic runtime owner. Delayed admission may therefore retain
+one exact paired Apply suffix. The executor verifies the complete pending
+output census, effect binding and adjacent periodic ownership before allowing
+Apply dispatch; an unrelated, extra or substituted effect remains blocking.
+If runtime commands are already queued, only the finite FIFO whose complete
+ownership precedes Apply may drain, one bounded turn at a time, while the
+Broadcast stays deferred and the paired Apply remains retained or explicitly
+parked. Delayed output without that suffix cannot authorize this drain, and
+any queue owner at or after Apply blocks it. The runner tries this attested
+predecessor drain before yielding for Completion. Once the FIFO is empty,
+worker publication consumes the exact retained suffix under the queue lock
+and installs its successor-output attestation before waking the worker.
 An authenticated control packet that is older than an already-fsynced
 monotone view or Decision cut likewise settles as a WAL-obsolete stutter;
 current-view slot and identity conflicts remain fail-closed.

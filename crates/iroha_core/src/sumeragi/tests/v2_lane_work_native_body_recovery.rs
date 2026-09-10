@@ -1053,7 +1053,7 @@ fn native_ordinary_native_chain_applies_real_effects_impl() {
     let mut first_native_hash = None;
     let mut shared_predecessor = None;
     let mut expected_effects = Vec::new();
-    let effect_key: iroha_data_model::name::Name =
+    let effect_key: iroha_model_base::name::Name =
         "native_apply_effect".parse().expect("effect metadata key");
     let mut first_native_receipt = None;
     let mut historical_ordinary_session = None;
@@ -2873,9 +2873,11 @@ fn native_applied_first_slot_cannot_be_reused_at_lane_signing_or_progress() {
     assert!(!adapter.output_guard.restart_required());
 }
 
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::sumeragi::v2_lane_work::tests::IndependentlyEncodedSharedLaneFrontierForTest", frame = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
-#[derive(Clone, norito::Encode, norito::Decode)]
+#[derive(Clone, norito::Encode, norito::Decode, norito::NoritoSchema)]
+#[norito_schema(
+    name = "iroha_core::sumeragi::v2_lane_work::tests::IndependentlyEncodedSharedLaneFrontierForTest",
+    frame = "iroha_core::state::AppliedMergeLaneFrontierMarker"
+)]
 struct IndependentlyEncodedSharedLaneFrontierForTest {
     version: u8,
     lane_id: LaneId,
@@ -2887,13 +2889,23 @@ struct IndependentlyEncodedSharedLaneFrontierForTest {
 
 #[test]
 fn native_application_rejects_valid_but_contradictory_shared_frontier() {
+    // This independent adversarial fixture writes the current production frame; it does not
+    // create an alternate accepted marker format or weaken the semantic conflict check below.
+    assert_eq!(
+        <IndependentlyEncodedSharedLaneFrontierForTest as norito::NoritoSchema>::frame_name(),
+        "iroha_core::state::AppliedMergeLaneFrontierMarker",
+    );
+    assert_ne!(
+        <IndependentlyEncodedSharedLaneFrontierForTest as norito::NoritoSchema>::nominal_name(),
+        <IndependentlyEncodedSharedLaneFrontierForTest as norito::NoritoSchema>::frame_name(),
+    );
     for fault in ["different descriptor", "missing shared marker"] {
         let (mut adapter, _, lane_id, dataspace_id, previous) =
             native_coordinator_after_applied_participant_fixture(None);
         let request =
             native_coordinator_successor_request(&adapter, lane_id, dataspace_id, &previous);
         let native = &previous.request.participant_proposal.descriptor;
-        let key: iroha_data_model::state_path::StatePath = format!(
+        let key: iroha_model_base::state_path::StatePath = format!(
             "merge_lane_frontier_v1_{}_{}_{}",
             lane_id.as_u32(),
             dataspace_id.as_u64(),

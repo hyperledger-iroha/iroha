@@ -17,7 +17,7 @@ use tokio::time::{Instant, sleep, timeout_at};
 mod multiroute;
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()> {
+async fn four_peer_multiroute_public_transaction_sequence_reaches_applied() -> Result<()> {
     init_instruction_registry();
     for variable in ["TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA"] {
         let binary = std::env::var_os(variable)
@@ -33,7 +33,7 @@ async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()>
         tokio::task::spawn_blocking(|| {
             multiroute::network_builder()
                 .with_base_seed_if_unset(stringify!(
-                    four_peer_multiroute_public_transaction_reaches_applied
+                    four_peer_multiroute_public_transaction_sequence_reaches_applied
                 ))
                 .build()
         }),
@@ -65,11 +65,15 @@ async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()>
         builder.torii_request_timeout = iroha::config::DEFAULT_TORII_REQUEST_TIMEOUT;
         let client = builder.build()?;
         let account = client.account_client()?;
+        let mut preceding_applied_height = 1;
+        // Exercise admission, autonomous execution and height rollover repeatedly.
+        // A successful first transaction alone does not qualify continued progress.
+        for sequence in 1..=3 {
         // Public Torii ingress requires signature-bound QueuePlanSynced admission.
         // Internal Ordinary work has separate Core candidate-provider regressions.
         let mut payload = account.prepare_transaction(
             AccountTransactionDraft::new(
-                vec![InstructionBox::from(Log::new(Level::INFO, "strict Taira public first transaction".to_owned()))],
+                vec![InstructionBox::from(Log::new(Level::INFO, format!("strict Taira public transaction {sequence}")))],
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
             ).with_admission_intent(TransactionAdmissionIntent::QueuePlanSynced),
@@ -128,15 +132,19 @@ async fn four_peer_multiroute_public_transaction_reaches_applied() -> Result<()>
                 let applied_height = observations[0].1.as_ref().unwrap().status.block_height;
                 ensure!(observations.iter().all(|(_, global, local)| global.as_ref().unwrap().status.block_height == applied_height && local.as_ref().unwrap().status.block_height == applied_height), "peers disagree on the exact transaction's applied height");
                 eprintln!("Taira four-peer public transaction Applied in local and global state: hash={expected_hex}, height={applied_height:?}, peer_heights={:?}", observations.iter().map(|(height, _, _)| *height).collect::<Vec<_>>());
-                return Ok(());
+                return Ok(applied_height.expect("all observations have an Applied height"));
             }
             eprintln!("waiting for all four peers to apply exact public transaction {expected_hex}: {observations:?}");
             sleep(Duration::from_millis(200)).await;
         }
     }).await;
-        result.map_err(|_| {
+        let applied_height = result.map_err(|_| {
             eyre!("four-peer public transaction observation exceeded its fixed 90-second deadline")
-        })?
+        })??;
+        ensure!(applied_height > preceding_applied_height, "each sequential transaction must reach a later committed height");
+        preceding_applied_height = applied_height;
+        }
+        Ok(())
     }
     .await;
     network.shutdown().await;

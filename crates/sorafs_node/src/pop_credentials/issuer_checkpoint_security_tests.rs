@@ -197,6 +197,10 @@ fn retry_exhaustion_is_durable_and_payload_free() {
             issuer_policy_digest: policy.issuer_policy_digest,
         })
         .expect("operation envelope");
+    assert_pop_frame(
+        &operation,
+        "sorafs_node::pop_credentials::PopRegistryOperationV1",
+    );
     let digest = operation.operation_digest;
     service
         .transact(|state| {

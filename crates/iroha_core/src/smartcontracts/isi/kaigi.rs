@@ -35,9 +35,10 @@ use iroha_data_model::{
         KaigiStatus, kaigi_metadata_key, kaigi_relay_allowlist_key, kaigi_relay_feedback_key,
         kaigi_relay_metadata_key,
     },
-    prelude::{AccountId, Domain, DomainId, Json, Name},
+    prelude::{AccountId, Domain, DomainId, Json},
     query::error::FindError,
 };
+use iroha_model_base::name::Name;
 use kaigi_zk::authorization_v1::KaigiAuthorizationActionV1;
 use mv::storage::StorageReadOnly;
 use privacy::PrivacyArtifacts;

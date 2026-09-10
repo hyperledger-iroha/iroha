@@ -95,6 +95,7 @@ fn enforce_lane_teu_limits_with_routing_plans_preserves_guard_ownership() {
     let mut state = State::new(world_with_test_domains(), kura, query_handle);
     let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let (account_id, key_pair) = gen_account_in("wonderland");
+    register_test_authority(&state, &account_id);
     let first_tx = accepted_tx_with(
         account_id.clone(),
         &key_pair,
@@ -411,6 +412,8 @@ fn enforce_lane_teu_limits_is_deterministic_across_guard_order() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new(world_with_test_domains(), kura, query_handle);
+        register_test_authority(&state, first_tx.as_ref().authority());
+        register_test_authority(&state, second_tx.as_ref().authority());
         install_test_nexus_routes(&mut state, &[(test_lane, test_dataspace)]);
         let state = Arc::new(state);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());

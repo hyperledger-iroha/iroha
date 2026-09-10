@@ -7,11 +7,12 @@ use crate::{
     DeriveJsonSerialize as DeriveJsonSer,
 };
 use crate::{
-    HasMetadata, Identifiable, Name, Registered, Registrable, error::ParseError,
-    metadata::Metadata, name, prelude::*, sorafs_uri::SorafsUri,
+    HasMetadata, Identifiable, Registered, Registrable, metadata::Metadata, prelude::*,
+    sorafs_uri::SorafsUri,
 };
 use derive_more::Display;
 use iroha_data_model_derive::{IdEqOrdHash, model};
+use iroha_model_base::{error::ParseError, name, name::Name};
 use iroha_schema::IntoSchema;
 use norito::{
     codec::{Decode, Encode},

@@ -89,15 +89,22 @@ embedded route incarnation and validator roster resolves identically at both
 the source and current proposal heights. This closes the height-only race in
 which one authority advances after another has durably accepted the same exact
 request, while authority or incarnation churn remains fail-closed. An exact
-already-owned durable claim remains idempotently reusable. A previously
-assembled quorum certificate is carrier-eligible under the same complete
-history and current-source checks. These rules are enforced independently at
-request admission, certificate persistence, and carrier validation. An
+already-owned durable claim remains idempotently reusable. Before initial
+certificate persistence or carrier inclusion, validators independently
+authenticate the quorum, retained canonical predecessor, active incarnation,
+and exact current authority source. Ingress additionally checks the
+source-height authority projection before first-time historical admission.
+These checks do not reconstruct an immutable historical committee snapshot. An
 ahead-of-frontier request whose authority source matches locally returns
 retryable `queue_plan_admission_context_future` without mutating queue
 ownership. A noncanonical predecessor, self-declared or currently different
 roster, retired incarnation, or inactive routing plan fails closed as
 `queue_plan_admission_context_mismatch`.
+
+QueuePlan journal records, reservation identities, certificate bindings,
+signing material, and routing plans declare their concrete typed-frame
+identities through `NoritoSchema`; field-only payload helpers do not gain an
+independent framed API.
 
 The ingress collector admits at most four simultaneous authority attempts,
 independent of roster size. A first attempt receives the existing bounded
@@ -122,10 +129,11 @@ quorum returns without waiting for silent peers. The focused liveness tests
 exercise four bounded attempts and a 128-authority roster with a 42-peer silent
 prefix; real-network and full release qualification remain separate gates.
 
-The delayed-certificate argument assumes the protocol's static bound of at
-most `f` Byzantine identities in each `3f+1` authority: an `f+1` durable quorum
-that exactly matches the current roster includes at least one current honest
-signer who signed while the context was current. It does not prove continuous
+The argument assumes a static bound of at most `f` Byzantine identities in each
+`3f+1` authority. An `f+1` durable quorum whose embedded roster equals the exact
+current roster contains at least one current honest signer. That signer durably
+admitted the exact request either at its current frontier or after the
+historical-admission checks passed. The certificate does not prove continuous
 roster equality across intervening heights and does not claim safety under a
 mobile-adversary/key-accumulation model exceeding `f`; deployments requiring
 that model need immutable historical authority records or proactive key

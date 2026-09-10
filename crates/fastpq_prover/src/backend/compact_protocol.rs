@@ -1613,13 +1613,29 @@ mod tests {
             },
         )
         .unwrap();
-        binding
-            .verify_tree(&plan, role, sole.root(), &[leaf], &[leaf])
+        // The ordinary path above contains the duplicated leaf. The minimal
+        // multiproof frontier omits it: the plan duplicates its sole input.
+        assert!(plan.sibling_positions().is_empty());
+        let work = binding
+            .verify_tree(&plan, role, sole.root(), &[leaf], &[])
             .unwrap();
-        assert!(
-            binding
-                .verify_tree(&plan, MerkleTreeRoleV1::Lde, sole.root(), &[leaf], &[leaf])
-                .is_err()
+        assert_eq!(
+            work,
+            crate::backend::merkle_multiproof::MultiproofWork {
+                queried_leaves: 1,
+                siblings: 0,
+                parent_hashes: 1,
+                max_frontier_width: 1,
+            }
         );
+        assert!(matches!(
+            binding.verify_tree(&plan, role, sole.root(), &[leaf], &[leaf]),
+            Err(Error::InvalidTraceShape { details })
+                if details == "multiproof leaf or sibling count mismatch"
+        ));
+        assert!(matches!(
+            binding.verify_tree(&plan, MerkleTreeRoleV1::Lde, sole.root(), &[leaf], &[]),
+            Err(Error::QueryMerklePathMismatch { index: 0 })
+        ));
     }
 }

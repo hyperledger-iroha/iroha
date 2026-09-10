@@ -411,9 +411,9 @@ mod tests {
     }
     use crate::{
         domain::DomainId,
-        name::Name,
         proof::{ProofAttachment, ProofBox, VerifyingKeyId},
     };
+    use iroha_model_base::name::Name;
     fn asset_definition_id() -> AssetDefinitionId {
         AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").expect("domain"),

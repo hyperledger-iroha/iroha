@@ -181,13 +181,13 @@ class NoritoBridgeSourceSealTests(unittest.TestCase):
 
     def test_apple_fingerprint_authenticates_archive_normalizer_logic(self) -> None:
         inputs = self.inputs("apple")
-        original = seal.fingerprint(self.root, inputs)
+        original = seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock")
         normalizer = self.root / "scripts/normalize_pqcrypto_archive.py"
         normalizer.write_text(
             normalizer.read_text(encoding="utf-8") + "# changed normalization logic\n",
             encoding="utf-8",
         )
-        self.assertNotEqual(original, seal.fingerprint(self.root, inputs))
+        self.assertNotEqual(original, seal.fingerprint(self.root, inputs, lockfile_path=self.root / "Cargo.lock"))
 
     def test_selected_lock_is_root_lock_in_metadata_and_fingerprint(self) -> None:
         root_lock = self.root / "Cargo.lock"

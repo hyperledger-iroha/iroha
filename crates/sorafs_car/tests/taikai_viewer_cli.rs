@@ -1,10 +1,8 @@
 #![cfg(feature = "cli")]
-use iroha_data_model::{
-    name::Name,
-    taikai::{
-        CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiStreamId,
-    },
+use iroha_data_model::taikai::{
+    CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiStreamId,
 };
+use iroha_model_base::name::Name;
 use norito::json;
 use std::{
     env,

@@ -41,19 +41,18 @@ use iroha_data_model::{
         },
     },
     metadata::Metadata,
-    name::Name,
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
     proof::VerifyingKeyId,
     smart_contract::ContractAddress,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
-    state_path::StatePath,
     transaction::{Executable, SignedTransaction, executable::ContractInvocation},
     zk::{
         BackendTag as ZkBackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
         OpenVerifyEnvelopeBounds as ZkOpenVerifyEnvelopeBounds, StarkFriOpenProofV1,
     },
 };
+use iroha_model_base::{name::Name, state_path::StatePath};
 use ivm::host::IVMHost;
 use ivm::{VMError as IvmError, analysis::ProgramAnalysisError};
 use mv::storage::StorageReadOnly;
@@ -6165,7 +6164,7 @@ seiyaku GuardedOverlayRebound {
         );
         md.insert(
             iroha_data_model::smart_contract::manifest::MANIFEST_METADATA_KEY
-                .parse::<iroha_data_model::name::Name>()
+                .parse::<iroha_model_base::name::Name>()
                 .unwrap(),
             Json::new(manifest.clone()),
         );
@@ -10144,11 +10143,16 @@ fn sha256_to_hash(bytes: &[u8]) -> Hash {
     arr.copy_from_slice(&digest);
     Hash::prehashed(arr)
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::pipeline::overlay::IvmTraceBundleV1")]
 #[derive(
-    Debug, Clone, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::NoritoSchema,
 )]
+#[norito_schema(name = "iroha_core::pipeline::overlay::IvmTraceBundleV1")]
 struct IvmTraceBundleV1 {
     register_trace: Vec<IvmRegisterStateV1>,
     constraints: Vec<IvmConstraintV1>,
@@ -11221,4 +11225,40 @@ where
         events_commitment,
         gas_policy_commitment,
     })
+}
+
+#[cfg(test)]
+mod trace_frame_identity_tests {
+    use super::*;
+
+    #[test]
+    fn ivm_trace_frame_owner_binds_trace_hash_and_rejects_substitution() {
+        let mut trace = IvmTraceBundleV1 {
+            register_trace: vec![IvmRegisterStateV1 {
+                pc: 4,
+                gpr: vec![0, 7],
+                tags: vec![0, 0],
+            }],
+            constraints: vec![IvmConstraintV1::Range {
+                reg: 1,
+                bits: 8,
+                cycle: 1,
+            }],
+            memory_log: Vec::new(),
+            register_log: Vec::new(),
+            step_log: Vec::new(),
+        };
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &trace,
+            "iroha_core::pipeline::overlay::IvmTraceBundleV1",
+        );
+        let frame = norito::encode_canonical(&trace).expect("trace frame");
+        let digest = expected_ivm_trace_hash(&trace).expect("production trace commitment");
+        assert_eq!(digest, sha256_to_hash(&frame));
+        trace.register_trace[0].gpr[1] += 1;
+        assert_ne!(
+            expected_ivm_trace_hash(&trace).expect("changed trace commitment"),
+            digest
+        );
+    }
 }

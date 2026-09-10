@@ -388,6 +388,19 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_co
     state_block
         .fastpq_transcripts
         .insert(inner_call_hash, vec![transcript]);
+    let before = state_block.fastpq_transcripts.clone();
+    assert!(matches!(
+        state_block.take_merge_lane_fastpq_transcripts(core::slice::from_ref(&sealed_entrypoint)),
+        Err(MergeLedgerCommitError::ExecutionDivergence(reason))
+            if reason.contains("has no applied source capture")
+    ));
+    assert_eq!(state_block.fastpq_transcripts, before);
+    let captured = state_block
+        .fastpq_source_context
+        .as_ref()
+        .expect("frozen source context")
+        .capture_transcript(Some(inner_call_hash), inner_call_hash, None, None, 0);
+    state_block.fastpq_source_captures.record(captured);
     let bundles = state_block
         .take_merge_lane_fastpq_transcripts(core::slice::from_ref(&sealed_entrypoint))
         .expect("sealed reveal maps its inner call evidence to its outer lane identity");
@@ -395,6 +408,12 @@ fn sealed_reveal_fastpq_transcripts_bind_inner_call_to_outer_lane_identity_on_co
     assert_eq!(bundles[0].entry_hash, outer_entrypoint_hash);
     assert_eq!(bundles[0].transcripts[0].batch_hash, inner_call_hash);
     assert!(state_block.fastpq_transcripts.is_empty());
+    assert!(
+        state_block
+            .captured_fastpq_transcript_sources()
+            .expect("healthy remaining captures")
+            .is_empty()
+    );
     state_block
         .validate_merge_execution_commit_surface(MergeExecutionCommitSurface::Pristine)
         .expect("sealed-reveal evidence extraction leaves no unbound side effect");

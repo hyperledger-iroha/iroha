@@ -281,6 +281,22 @@ mod tests {
     }
     #[test]
     fn autonomous_reservation_slot_is_canonical_and_transaction_independent() {
+        fn check_preimage<T: norito::NoritoSerialize>(value: &T, name: &str) -> Vec<u8> {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+            let frame = norito::to_bytes(value).expect("encode reservation preimage");
+            let view = norito::core::from_bytes_view(&frame).expect("complete preimage frame");
+            assert_eq!(view.schema(), norito::schema::identity::frame_hash::<T>());
+            assert!(matches!(
+                norito::decode_from_bytes::<Hash>(&frame),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::core::from_bytes_view(&frame[..frame.len() - 1]).is_err());
+            let mut trailing = frame.clone();
+            trailing.push(0);
+            assert!(norito::core::from_bytes_view(&trailing).is_err());
+            frame
+        }
         let lane_id = LaneId::new(3);
         let dataspace_id = DataSpaceId::new(33);
         let lane_incarnation = Hash::new(b"autonomous reservation active incarnation");
@@ -347,6 +363,60 @@ mod tests {
                 reservation_owner_hash: plan.reservation_owner_hash,
                 proposal_identity_hash: plan.proposal_identity_hash,
             }
+        );
+        let slot_identity = AutonomousLaneReservationSlotIdentityV1 {
+            identity_version: AUTONOMOUS_LANE_RESERVATION_SLOT_IDENTITY_VERSION_V1,
+            network_id: context.network_id,
+            height_context_id: context.id(),
+            epoch: context.epoch,
+            proposal_height: plan.proposal_height,
+            lane_id: plan.lane_id,
+            dataspace_id: plan.dataspace_id,
+            lane_incarnation: plan.lane_incarnation,
+            previous_lane_block_height: plan.previous_lane_block_height,
+            previous_lane_block_descriptor_hash: plan.previous_lane_block_descriptor_hash,
+            lane_block_height: plan.lane_block_height,
+            lane_block_view: plan.lane_block_view,
+            validator_set_hash: plan.validator_set_hash,
+            validator_count: u32::try_from(plan.validator_set.len()).expect("validator count"),
+            min_quorum: plan.quorum.min_quorum,
+            qc_mode_tag: plan.qc_mode_tag.clone(),
+        };
+        let slot_frame = check_preimage(
+            &slot_identity,
+            "iroha_core::sumeragi::lane_planner::AutonomousLaneReservationSlotIdentityV1",
+        );
+        assert_eq!(Hash::new(&slot_frame), plan.proposal_identity_hash);
+        let mut owner_identity = AutonomousLaneReservationOwnerIdentityV1 {
+            identity_version: AUTONOMOUS_LANE_RESERVATION_OWNER_IDENTITY_VERSION_V1,
+            proposal_identity_hash: plan.proposal_identity_hash,
+            author: plan.author.clone(),
+        };
+        let owner_frame = check_preimage(
+            &owner_identity,
+            "iroha_core::sumeragi::lane_planner::AutonomousLaneReservationOwnerIdentityV1",
+        );
+        assert_eq!(Hash::new(&owner_frame), plan.reservation_owner_hash);
+        let slot_view = norito::core::from_bytes_view(&slot_frame).expect("slot frame");
+        let substituted = norito::core::frame_bare_with_header_flags::<
+            AutonomousLaneReservationOwnerIdentityV1,
+        >(slot_view.as_bytes(), slot_view.flags())
+        .expect("same slot payload framed under different owner");
+        assert_ne!(Hash::new(&substituted), plan.proposal_identity_hash);
+        owner_identity.author = plan
+            .validator_set
+            .iter()
+            .find(|peer| *peer != &plan.author)
+            .expect("another validator")
+            .clone();
+        assert_ne!(
+            Hash::new(norito::to_bytes(&owner_identity).expect("changed author frame")),
+            plan.reservation_owner_hash,
+        );
+        assert_eq!(
+            encode_autonomous_lane_reservation_identity_hashes(slot_identity, &plan.author)
+                .expect("production hash preimages"),
+            (plan.reservation_owner_hash, plan.proposal_identity_hash),
         );
         let mut other_context = context.clone();
         other_context.leader_seed[0] ^= 1;

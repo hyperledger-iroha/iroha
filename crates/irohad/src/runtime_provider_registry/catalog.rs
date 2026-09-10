@@ -54,9 +54,8 @@ impl fmt::Display for IrohaRuntimeProviderCatalogErrorV1 {
     }
 }
 impl std::error::Error for IrohaRuntimeProviderCatalogErrorV1 {}
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::runtime_provider_registry::catalog::RuntimeProviderCatalogWireV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 struct RuntimeProviderCatalogWireV1 {
     magic: [u8; 8],
     version: u16,
@@ -1845,6 +1844,13 @@ mod tests {
         let first = catalog
             .export_canonical_v1()
             .expect("export canonical catalog");
+        let wire: RuntimeProviderCatalogWireV1 =
+            norito::decode_canonical(&first).expect("catalog wire");
+        crate::frame_test_support::assert_current_frame(
+            &wire,
+            "irohad::runtime_provider_registry::catalog::RuntimeProviderCatalogWireV1",
+            "irohad::runtime_provider_registry::catalog::RuntimeProviderCatalogWireV1",
+        );
         let second = catalog
             .export_canonical_v1()
             .expect("repeat canonical export");
@@ -2365,7 +2371,22 @@ mod tests {
     }
     #[test]
     fn loader_rejects_retired_optional_network_catalog_schema() {
+        fn current_catalog_frame<T: norito::SerializePayload>(value: &T) -> Vec<u8> {
+            let _layout =
+                norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+            let (payload, flags) = norito::codec::encode_with_header_flags(value);
+            norito::core::frame_bare_with_header_flags::<RuntimeProviderCatalogWireV1>(
+                &payload, flags,
+            )
+            .expect("frame payload under the current catalog owner")
+        }
         let wire = canonical_wire();
+        let healthy = current_catalog_frame(&wire);
+        assert_eq!(
+            healthy,
+            norito::encode_canonical(&wire).expect("canonical current catalog")
+        );
+        IrohaRuntimeProviderBindingsV1::load_canonical_v1(&healthy).expect("valid current catalog");
         for network_id in [None, Some(wire.network_id)] {
             let retired = RetiredRuntimeProviderCatalogWireV1 {
                 magic: wire.magic,
@@ -2374,7 +2395,12 @@ mod tests {
                 network_id,
                 bindings: wire.bindings.clone(),
             };
-            let bytes = norito::encode_canonical(&retired).expect("encode retired catalog fixture");
+            // The unsupported optional field remains payload-only. A genuine current
+            // header ensures rejection checks its body rather than a different owner.
+            let bytes = current_catalog_frame(&retired);
+            let error = norito::decode_canonical::<RuntimeProviderCatalogWireV1>(&bytes)
+                .expect_err("optional-network payload must fail under the current owner");
+            assert!(!matches!(error, norito::Error::SchemaMismatch));
             assert_eq!(
                 IrohaRuntimeProviderBindingsV1::load_canonical_v1(&bytes),
                 Err(IrohaRuntimeProviderCatalogErrorV1::NonCanonicalEncoding),

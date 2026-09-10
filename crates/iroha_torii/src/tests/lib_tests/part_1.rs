@@ -27,7 +27,6 @@ use iroha_data_model::{
     identifier::{IdentifierNormalization, IdentifierPolicy, IdentifierPolicyId},
     isi::identifier::{ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy},
     isi::ram_lfe::{ActivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy},
-    name::Name,
     nexus::{
         AxtPolicySnapshot, AxtRejectContext, AxtRejectReason, DataSpaceId, LaneId,
         UniversalAccountId,
@@ -47,6 +46,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
+use iroha_model_base::name::Name;
 use iroha_test_samples::ALICE_ID;
 #[cfg(feature = "app_api")]
 use jsonwebtoken::EncodingKey;

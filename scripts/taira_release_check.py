@@ -45,6 +45,16 @@ STAGES = (
         "taira_public_reset::executor_model::tests::submitted_child_failures_preserve_parent_intent_until_read_only_recovery",
         "taira_public_reset::executor_model::tests::authenticated_submitted_child_rejection_remains_terminal",
         "taira_public_reset::host::tests::submitted_child_process_failures_require_read_only_recovery",
+        "taira_public_reset::host::tests::interrupted_onboarding_proof_recovers_from_its_authenticated_prepared_envelope",
+        "taira_public_reset::host::tests::retained_proof_required_pending_report_accepts_only_live_state_classes",
+    )),
+    ("complete prepared canary transport lifecycle", (
+        "taira::tests::final_canary_submit_uses_original_deadline_after_initial_read_and_post",
+        "taira::tests::final_canary_submit_verifies_exact_proof_without_replaying_post",
+        "taira::tests::faucet_preparation_deadline_stops_http_and_cpu_work_before_dispatch",
+        "taira::tests::core_pending_reason_codec_is_closed_and_round_trips_every_variant",
+        "taira_public_reset::host::tests::every_core_pending_report_variant_reaches_the_exact_host_consumer",
+        "taira_public_reset::host::tests::core_terminal_reports_map_to_exact_executor_recovery_classes",
     )),
     ("explicit core testnet qualification", (
         "taira_public_reset::executor_model::tests::qualification_scope_is_required_and_canonical_in_all_authority_documents",
@@ -317,6 +327,8 @@ P2P_STAGES += (("immutable reply identity and exact dynamic history", (
 )),)
 
 CORE_STAGES = (("consensus scheduling and multi-route progress", (
+    "sumeragi::v2_runner::tests::runner_closed_sidecar_flush_reconnect_retries_same_chunk_then_advances_once",
+    "sumeragi::v2_lifecycle_coordinator::work_registry::tests::registered_deferred_validate_passes_ordinary_completion_without_releasing_wait",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_canonical_wire_seals_only_complete_classified_messages",
     "sumeragi::authoritative_runtime_gate_tests::fair_v2_ingress_exact_ownership_carrier_tracks_route_actions_and_cursors",
     "sumeragi::v2::tests::adapter_hot_context_projections_retain_the_verified_registry_identity",
@@ -503,7 +515,6 @@ CORE_STAGES += (("native storage and workload Initial executor admission", (
     "smartcontracts::isi::soracloud::tests::initial_executor_soracloud_roles_preserve_exact_permission_payloads_and_delegation",
     "smartcontracts::isi::soracloud::tests::initial_executor_soracloud_lease_usage_and_runtime_preserve_exact_assignment",
     "smartcontracts::isi::soracloud::tests::service_runtime_mutations_require_exact_validator_placement",
-    "smartcontracts::isi::sorafs::sorafs_tests::initial_executor_sorafs_unimplemented_citizen_bonds_are_closed_at_both_dispatch_boundaries",
     "smartcontracts::isi::sorafs::sorafs_tests::initial_executor_sorafs_direct_provider_owner_instructions_remain_closed",
     "smartcontracts::isi::sorafs::sorafs_tests::initial_executor_sorafs_role_grant_use_and_revoke_are_exact",
     "smartcontracts::isi::sorafs::sorafs_tests::initial_executor_sorafs_rejects_malformed_unit_and_foreign_role_permissions",
@@ -561,7 +572,7 @@ TEST_NETWORK_STAGES = (("isolated validator fixture configuration", (
 )),)
 
 NETWORK_STAGES = (("four-validator multi-route transaction commit", (
-    "four_peer_multiroute_public_transaction_reaches_applied",
+    "four_peer_multiroute_public_transaction_sequence_reaches_applied",
 )),)
 
 # Four peers use the shared test-network 1 GiB/node cap. Keep another 4 GiB

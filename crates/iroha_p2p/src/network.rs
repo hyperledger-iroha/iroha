@@ -587,6 +587,7 @@ enum RelayTarget {
     Direct(PeerId),
 }
 #[derive(Clone, Debug, Encode, Decode)]
+#[norito(decode_from_slice)]
 struct RelayMessage<T> {
     origin: PeerId,
     target: RelayTarget,
@@ -600,27 +601,6 @@ impl<T: norito::NoritoSchema> norito::NoritoSchema for RelayMessage<T> {
             "iroha_p2p::network::RelayMessage",
             &[T::nominal_name()],
         )
-    }
-}
-impl<'a, T> ncore::DecodeFromSlice<'a> for RelayMessage<T>
-where
-    T: ncore::NoritoSerialize + for<'de> ncore::NoritoDeserialize<'de>,
-{
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-        use std::borrow::Cow;
-        let min_size = ncore::archived_payload_size::<Self>();
-        let decode_bytes: Cow<'a, [u8]> = if min_size > 0 && bytes.len() < min_size {
-            let mut padded = Vec::with_capacity(min_size);
-            padded.extend_from_slice(bytes);
-            padded.resize(min_size, 0);
-            Cow::Owned(padded)
-        } else {
-            Cow::Borrowed(bytes)
-        };
-        let archived = ncore::archived_from_slice::<Self>(decode_bytes.as_ref())?;
-        let _guard = ncore::PayloadCtxGuard::enter_with_len(archived.bytes(), bytes.len());
-        let value = <Self as ncore::DeserializePayload>::try_deserialize(archived.archived())?;
-        Ok((value, bytes.len()))
     }
 }
 impl<T: Encode> RelayMessage<T> {
@@ -10670,6 +10650,11 @@ mod accept_stream_tests {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        assert_eq!(
+            connection.max_datagram_size(),
+            None,
+            "the listener must not negotiate DATAGRAM support"
+        );
         let error = connection
             .send_datagram(bytes::Bytes::from_static(b"probe"))
             .expect_err("the dormant listener must advertise no DATAGRAM receive support");
@@ -10966,6 +10951,11 @@ where
     if quic_datagrams_enabled {
         transport.datagram_receive_buffer_size(Some(quic_datagram_receive_buffer_bytes));
         transport.datagram_send_buffer_size(quic_datagram_send_buffer_bytes);
+    } else {
+        // Quinn enables DATAGRAM buffers by default. Match the disabled
+        // application policy and the endpoint's zero-DATAGRAM byte budget.
+        transport.datagram_receive_buffer_size(None);
+        transport.datagram_send_buffer_size(0);
     }
     crate::transport::quic::configure_flow_control(&mut transport, flow_control).map_err(
         |error| {

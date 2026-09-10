@@ -237,6 +237,8 @@ pub(crate) struct SignedFixture {
     rows: Mutex<BTreeMap<[u8; 32], Stored>>,
     audit: Mutex<SignerOperationAuditHeadV1>,
     pub faults: Mutex<BTreeMap<usize, ObserverFault>>,
+    pub observer_return_clock: Mutex<BTreeMap<usize, u64>>,
+    pub observer_return_tip: Mutex<BTreeMap<usize, u64>>,
     pub requests: Mutex<Vec<SignerStreamTokenObservationRequestV1>>,
     pub signing_payloads: Mutex<Vec<Vec<u8>>>,
     pub calls: AtomicUsize,
@@ -432,6 +434,15 @@ impl SignedFixture {
                 .as_millis(),
         )
         .unwrap();
+        Self::for_api_at(provider, revision, mode, now)
+    }
+
+    pub(crate) fn for_api_at(
+        provider: [u8; 32],
+        revision: u64,
+        mode: TestSignerMode,
+        now: u64,
+    ) -> Arc<Self> {
         let mut storage = storage_config(3);
         storage.provider_id = Some(ProviderId(provider));
         let hardware = storage.stream_tokens.hardware.as_mut().unwrap();
@@ -539,6 +550,8 @@ impl SignedFixture {
                 digest: [0; 32],
             }),
             faults: Mutex::new(BTreeMap::new()),
+            observer_return_clock: Mutex::new(BTreeMap::new()),
+            observer_return_tip: Mutex::new(BTreeMap::new()),
             requests: Mutex::new(Vec::new()),
             signing_payloads: Mutex::new(Vec::new()),
             calls: AtomicUsize::new(0),
@@ -892,6 +905,12 @@ impl StreamTokenStateObserverClientV1 for SignedObserver {
                 .unwrap(),
         };
         let bytes = norito::encode_canonical(&state).unwrap();
+        if let Some(now) = fixture.observer_return_clock.lock().unwrap().get(&index) {
+            fixture.clock.now.store(*now, Ordering::SeqCst);
+        }
+        if let Some(tip) = fixture.observer_return_tip.lock().unwrap().get(&index) {
+            fixture.finality.tip.store(*tip, Ordering::SeqCst);
+        }
         if matches!(
             request.subject,
             SignerStreamTokenObservationRequestSubjectV1::CurrentCustody { .. }

@@ -16,11 +16,10 @@ const KEY_ENVELOPE_AAD_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.a
 const KEY_ENVELOPE_KEK_DOMAIN_V1: &[u8] = b"iroha.external-signer.key-envelope.kek.v1";
 const KEY_ENVELOPE_MAX_CIPHERTEXT_BYTES_V1: usize = SIGNER_MAX_PRIVATE_KEY_BYTES_V1 + 1024;
 /// Public, authenticated metadata for one encrypted signer key generation.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeAadV1"
 )]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
 pub(super) struct SoftwareSignerKeyEnvelopeAadV1 {
     pub backend: super::protocol::ExternalSignerBackendV1,
     pub handle: String,
@@ -75,9 +74,8 @@ impl SoftwareSignerKeyEnvelopeAadV1 {
     }
 }
 /// Versioned ChaCha20-Poly1305 envelope for one software signing key.
-#[derive(norito::NoritoSchema)]
+#[derive(Clone, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeV1")]
-#[derive(Clone, PartialEq, Eq, Decode, Encode)]
 pub struct SoftwareSignerKeyEnvelopeV1 {
     /// Exact key-envelope marker.
     pub magic: [u8; 8],
@@ -231,11 +229,10 @@ impl SoftwareSignerKeyEnvelopeV1 {
         &self.aad
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Decode, Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "irohad::external_software_signer::envelope::SoftwareSignerPrivateKeyPlaintextV1"
 )]
-#[derive(Decode, Encode)]
 struct SoftwareSignerPrivateKeyPlaintextV1 {
     magic: [u8; 8],
     version: u16,
@@ -346,6 +343,26 @@ mod tests {
         let (keypair, aad) = fixture();
         let envelope = SoftwareSignerKeyEnvelopeV1::create(aad, &keypair, &wrapping(0x43))
             .expect("create fixture envelope");
+        crate::frame_test_support::assert_current_frame(
+            &envelope.aad,
+            "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeAadV1",
+            "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeAadV1",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &envelope,
+            "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeV1",
+            "irohad::external_software_signer::envelope::SoftwareSignerKeyEnvelopeV1",
+        );
+        crate::frame_test_support::assert_current_frame(
+            &SoftwareSignerPrivateKeyPlaintextV1 {
+                magic: SIGNER_KEY_MAGIC_V1,
+                version: SIGNER_PROTOCOL_VERSION_V1,
+                algorithm: SignerKeyAlgorithmV1::Ed25519,
+                private_payload: vec![0x41; 32],
+            },
+            "irohad::external_software_signer::envelope::SoftwareSignerPrivateKeyPlaintextV1",
+            "irohad::external_software_signer::envelope::SoftwareSignerPrivateKeyPlaintextV1",
+        );
         assert!(matches!(
             envelope.open(&wrapping(0x44)),
             Err(SoftwareSignerEnvelopeErrorV1::AuthenticationFailed)

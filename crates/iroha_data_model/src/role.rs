@@ -1,11 +1,12 @@
 //! Structures, traits and impls related to `Role`s.
 pub use self::model::*;
 use crate::{
-    Identifiable, Name, Registered, Registrable,
+    Identifiable, Registered, Registrable,
     account::AccountId,
     permission::{Permission, Permissions},
 };
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use std::{collections::BTreeMap, format, string::String, vec::Vec};
 #[model]
 mod model {

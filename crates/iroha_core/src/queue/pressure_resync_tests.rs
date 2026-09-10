@@ -520,8 +520,9 @@ async fn push_tx_already_in_blockchain() {
 async fn push_requeued_with_routing_plan_accepts_pending_transaction() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let state = State::new(world_with_test_domains(), kura, query_handle);
+    let mut state = State::new(world_with_test_domains(), kura, query_handle);
     install_active_single_lane_nexus(&state);
+    install_single_validator_topology_for_queue_test(&mut state, 0x64);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Arc::new(Queue::test(config_factory(), &time_source));
     let tx = accepted_tx_by_someone(&time_source);
@@ -639,6 +640,7 @@ async fn push_expired_tx_already_in_blockchain() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let state = State::new(world_with_test_domains(), kura, query_handle);
+    register_test_authority(&state, &alice_id);
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();

@@ -1,9 +1,10 @@
 //! Generic asset escrow records and identifiers.
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{account::AccountId, asset::AssetDefinitionId, name::Name};
+use crate::{account::AccountId, asset::AssetDefinitionId};
 use core::num::{NonZeroU32, NonZeroU64};
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};

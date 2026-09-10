@@ -616,7 +616,11 @@ fn invalid_replica_advert_runtime_geometry_fails_before_store_creation() {
     assert_rejected(
         invalid_floor,
         &floor_root,
-        "eviction replica floor 129 exceeds the protocol validator limit 128",
+        &format!(
+            "eviction replica floor {} exceeds the protocol validator limit {}",
+            iroha_config::parameters::actual::KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT + 1,
+            iroha_config::parameters::actual::KURA_REPLICA_ADVERT_KEEPERS_PER_KEY_LIMIT,
+        ),
     );
     let capacity_root = parent.path().join("invalid-capacity");
     let mut invalid_capacity = kura_config_for_path(&capacity_root, BLOCKS_IN_MEMORY);
@@ -1343,7 +1347,7 @@ fn evicted_body_without_hash_metadata_is_missing_even_with_adverts() {
             .truncate_hashes_to_count(1)
             .expect("remove hash metadata for evicted body");
     }
-    advertise_required_replicas(&kura, height);
+    // The exact keeper adverts remain installed from before hash metadata was lost.
     assert_eq!(
         kura.block_body_status_by_hash(block_hash),
         Some(BlockBodyStatus::Missing),

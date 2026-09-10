@@ -1,6 +1,7 @@
 //! Durable DA receipt journal and duplicate-admission tests.
 
 use super::*;
+use iroha_data_model::da::ingest::StoredDaReceipt;
 
 pub(super) fn test_receipt(
     signer: &KeyPair,
@@ -51,7 +52,7 @@ fn receipt_spool_file_name(
     )
 }
 fn encoded_stored_receipt(receipt: &DaIngestReceipt, sequence: u64, version: u16) -> Vec<u8> {
-    to_bytes(&persistence::StoredDaReceipt {
+    to_bytes(&StoredDaReceipt {
         version,
         sequence,
         receipt: receipt.clone(),
@@ -115,15 +116,32 @@ fn persist_da_receipt_writes_and_is_idempotent() {
         .expect("persist receipt");
     let first_path = first_path.expect("receipt path");
     let bytes = fs::read(&first_path).expect("read receipt file");
-    let decoded =
-        decode_from_bytes::<persistence::StoredDaReceipt>(&bytes).expect("decode stored receipt");
-    assert_eq!(decoded.version, persistence::STORED_RECEIPT_VERSION);
+    let decoded = decode_from_bytes::<StoredDaReceipt>(&bytes).expect("decode stored receipt");
+    assert_eq!(
+        bytes,
+        norito::encode_canonical(&StoredDaReceipt {
+            version: StoredDaReceipt::VERSION,
+            sequence: 7,
+            receipt: receipt.clone(),
+        })
+        .expect("shared model reproduces every byte written by the actual Torii producer")
+    );
+    assert_eq!(decoded.version, StoredDaReceipt::VERSION);
     assert_eq!(decoded.sequence, 7);
     assert_eq!(decoded.receipt.manifest_hash, receipt.manifest_hash);
     let loaded = persistence::load_da_receipts(manifest_dir).expect("load receipts");
     assert_eq!(loaded.len(), 1);
     assert_eq!(loaded[0].sequence, 7);
     assert_eq!(loaded[0].receipt.manifest_hash, receipt.manifest_hash);
+    let core_entries = iroha_core::da::receipts::load_receipt_entries(manifest_dir)
+        .expect("Core reads the actual Torii durable receipt frame");
+    assert_eq!(core_entries.len(), 1);
+    assert_eq!(core_entries[0].sequence, 7);
+    assert_eq!(core_entries[0].receipt, receipt);
+    assert_eq!(
+        bytes[6..22],
+        norito::schema::identity::frame_hash::<StoredDaReceipt>()
+    );
     let second_path = persistence::persist_da_receipt(manifest_dir, &receipt, 7, &fingerprint)
         .expect("persist again");
     let second_path = second_path.expect("receipt path");
@@ -222,7 +240,7 @@ fn load_da_receipts_rejects_unsupported_versions() {
     let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAB);
-    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION + 1);
+    let bytes = encoded_stored_receipt(&receipt, 7, StoredDaReceipt::VERSION + 1);
     let path = canonical_receipt_spool_path(manifest_dir, &receipt, 7);
     fs::write(&path, bytes).expect("write receipt");
     let err = persistence::load_da_receipts(manifest_dir)
@@ -236,7 +254,7 @@ fn load_da_receipts_rejects_filename_body_mismatch() {
     let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAC);
-    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION);
+    let bytes = encoded_stored_receipt(&receipt, 7, StoredDaReceipt::VERSION);
     let path = canonical_receipt_spool_path(manifest_dir, &receipt, 8);
     fs::write(&path, bytes).expect("write receipt");
     let err = persistence::load_da_receipts(manifest_dir)
@@ -250,7 +268,7 @@ fn load_da_receipts_rejects_filename_ticket_mismatch() {
     let signer = checked_random_keypair();
     let lane_id = LaneId::new(3);
     let receipt = test_receipt(&signer, lane_id, 5, 7, 0xAD);
-    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION);
+    let bytes = encoded_stored_receipt(&receipt, 7, StoredDaReceipt::VERSION);
     let mut filename_receipt = receipt;
     filename_receipt.storage_ticket = StorageTicketId::new([0x99; 32]);
     let path = canonical_receipt_spool_path(manifest_dir, &filename_receipt, 7);
@@ -335,7 +353,7 @@ fn load_da_receipts_rejects_same_manifest_duplicate_with_different_receipt() {
     let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 7).expect("unsigned bytes");
     conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
     for receipt in [&receipt, &conflicting] {
-        let bytes = encoded_stored_receipt(receipt, 7, persistence::STORED_RECEIPT_VERSION);
+        let bytes = encoded_stored_receipt(receipt, 7, StoredDaReceipt::VERSION);
         let path = canonical_receipt_spool_path(manifest_dir, receipt, 7);
         fs::write(path, bytes).expect("write duplicate receipt");
     }
@@ -353,7 +371,7 @@ fn load_da_receipts_rejects_filename_fingerprint_mismatch() {
     let manifest_dir = temp_dir.path();
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, LaneId::new(3), 5, 7, 0xB1);
-    let bytes = encoded_stored_receipt(&receipt, 7, persistence::STORED_RECEIPT_VERSION);
+    let bytes = encoded_stored_receipt(&receipt, 7, StoredDaReceipt::VERSION);
     for fingerprint in [[0xC2; 32], [0xC3; 32]] {
         let path = receipt_spool_path(manifest_dir, &receipt, 7, fingerprint);
         fs::write(path, &bytes).expect("write duplicate receipt");
@@ -383,7 +401,7 @@ fn da_receipt_log_open_rejects_spool_dir_symlink() {
     };
     assert!(
         format!("{err:?}").contains("DA spool path")
-            && format!("{err:?}").contains("not a directory"),
+            && format!("{err:?}").contains("not a direct directory"),
         "unexpected receipt log open error: {err:?}"
     );
     assert!(
@@ -538,36 +556,44 @@ fn da_receipt_log_enforces_ordering_and_dedupe() {
 }
 #[test]
 fn da_receipt_log_recovery_rejects_filename_fingerprint_mismatch_in_canonical_path_order() {
-    let temp_dir = tempdir().expect("temp dir");
-    let lane_epoch = LaneEpoch::new(LaneId::new(4), 29);
-    let cursor_store = Arc::new(ReplayCursorStore::in_memory());
-    let signer = checked_fixture_ed25519_keypair(0x63);
-    let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE1);
-    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
-    let higher_path = receipt_spool_path(temp_dir.path(), &receipt, 2, [0xE3; 32]);
-    let lower_path = receipt_spool_path(temp_dir.path(), &receipt, 1, [0xE2; 32]);
-    fs::write(&higher_path, &bytes).expect("write higher-fingerprint receipt");
-    fs::write(&lower_path, &bytes).expect("write lower-fingerprint receipt");
-    let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
-        Ok(_) => panic!("filename fingerprint mismatch must reject durable recovery"),
-        Err(err) => err,
-    };
-    let message = format!("{err:?}");
-    assert!(
-        message.contains("mismatches body storage ticket"),
-        "unexpected recovery error: {message}"
-    );
-    message
-        .find(&lower_path.display().to_string())
-        .expect("recovery error should include the lower canonical path");
-    assert!(
-        !message.contains(&higher_path.display().to_string()),
-        "recovery should stop at the first canonical mismatched path: {message}"
-    );
-    assert!(
-        cursor_store.highest_sequences().is_empty(),
-        "failed recovery must not seed receipt cursors"
-    );
+    for reverse_creation_order in [false, true] {
+        let temp_dir = tempdir().expect("temp dir");
+        let lane_epoch = LaneEpoch::new(LaneId::new(4), 29);
+        let cursor_store = Arc::new(ReplayCursorStore::in_memory());
+        let signer = checked_fixture_ed25519_keypair(0x63);
+        let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0xE1);
+        let bytes = encoded_stored_receipt(&receipt, 1, StoredDaReceipt::VERSION);
+        let higher_path = receipt_spool_path(temp_dir.path(), &receipt, 2, [0xE3; 32]);
+        let lower_path = receipt_spool_path(temp_dir.path(), &receipt, 1, [0xE2; 32]);
+        let paths = if reverse_creation_order {
+            [&higher_path, &lower_path]
+        } else {
+            [&lower_path, &higher_path]
+        };
+        for path in paths {
+            fs::write(path, &bytes).expect("write mismatched receipt");
+        }
+        let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
+            Ok(_) => panic!("filename fingerprint mismatch must reject durable recovery"),
+            Err(err) => err,
+        };
+        let message = format!("{err:?}");
+        assert!(
+            message.contains("mismatches body storage ticket"),
+            "unexpected recovery error: {message}"
+        );
+        message
+            .find(&lower_path.display().to_string())
+            .expect("recovery error should include the lower canonical path");
+        assert!(
+            !message.contains(&higher_path.display().to_string()),
+            "recovery should stop at the first canonical mismatched path: {message}"
+        );
+        assert!(
+            cursor_store.highest_sequences().is_empty(),
+            "failed recovery must not seed receipt cursors"
+        );
+    }
 }
 #[test]
 fn da_receipt_log_rejected_append_does_not_advance_replay_cursor() {
@@ -638,7 +664,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
         "receipt file is durable even when cursor persistence fails"
     );
     assert!(
-        log.receipts_for(lane_epoch).is_empty(),
+        log.indexed_sequence_for(lane_epoch).is_none(),
         "failed append must not update the in-memory receipt index"
     );
     assert_replay_cursor_sequences(&cursor_store, &[]);
@@ -656,6 +682,7 @@ fn da_receipt_log_recovers_after_cursor_failure_post_file_write() {
         "retry should adopt the existing receipt file without duplicating it"
     );
     assert_eq!(log.receipts_for(lane_epoch).len(), 1);
+    assert_eq!(log.indexed_sequence_for(lane_epoch), Some(0));
     assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
     adopt_recovered_da_receipt_in_replay_cache(replay_cache.as_ref(), lane_epoch, 0, fingerprint)
         .expect("retry adopts the repaired receipt into the same-process replay cache");
@@ -741,7 +768,7 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     );
     assert_eq!(receipt_file_count(receipt_dir.path()), 1);
     assert!(
-        log.receipts_for(lane_epoch).is_empty(),
+        log.indexed_sequence_for(lane_epoch).is_none(),
         "failed append must not update the in-memory receipt index"
     );
     assert_replay_cursor_sequences(&cursor_store, &[]);
@@ -754,6 +781,7 @@ fn da_receipt_log_rejects_conflicting_preexisting_receipt_without_cursor_advance
     ));
     assert_eq!(receipt_file_count(receipt_dir.path()), 1);
     assert_eq!(log.receipts_for(lane_epoch).len(), 1);
+    assert_eq!(log.indexed_sequence_for(lane_epoch), Some(0));
     assert_replay_cursor_sequences(&cursor_store, &[(lane_epoch, 0)]);
 }
 #[test]
@@ -771,7 +799,7 @@ fn da_receipt_log_in_memory_append_fails_closed() {
         "unexpected in-memory append error: {err:?}"
     );
     assert!(
-        log.receipts_for(lane_epoch).is_empty(),
+        log.indexed_sequence_for(lane_epoch).is_none(),
         "failed in-memory append must not update receipt-log memory"
     );
     assert!(
@@ -816,7 +844,7 @@ fn da_receipt_log_duplicate_reload_rejects_receipt_symlink_replacement() {
         .receipt_for_duplicate(lane_epoch, 0, fingerprint)
         .expect_err("symlinked durable receipt must fail duplicate reload");
     assert!(
-        format!("{err:?}").contains("not a regular file"),
+        format!("{err:?}").contains("not a direct regular file"),
         "unexpected duplicate receipt reload error: {err:?}"
     );
     assert!(
@@ -1005,6 +1033,18 @@ fn duplicate_retry_finalizes_only_after_exact_pin_scope_signature() {
     )
     .expect("build pending receipt fixture");
     let lane_epoch = LaneEpoch::new(request.lane_id, request.epoch);
+    // Readiness requires the envelope to have been staged by the earlier ingest phase.
+    taikai_ingest::persist_envelope(
+        temp_dir.path(),
+        request.lane_id,
+        request.epoch,
+        request.sequence,
+        &manifest.storage_ticket,
+        &manifest.fingerprint,
+        b"envelope",
+    )
+    .expect("stage envelope fixture")
+    .expect("envelope path");
     let artifacts = DuplicateDaArtifacts {
         receipt_path: temp_dir.path().join("receipt.norito"),
         receipt,
@@ -1446,11 +1486,7 @@ fn da_receipt_log_rejects_receipt_hash_mismatch_against_ticket_manifest_on_open(
         receipt_spool_path(spool_dir, &receipt, request.sequence, correct_fingerprint);
     fs::write(
         &receipt_path,
-        encoded_stored_receipt(
-            &receipt,
-            request.sequence,
-            persistence::STORED_RECEIPT_VERSION,
-        ),
+        encoded_stored_receipt(&receipt, request.sequence, StoredDaReceipt::VERSION),
     )
     .expect("write receipt");
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
@@ -1582,7 +1618,7 @@ fn da_receipt_log_rejects_sequence_gap_on_open() {
             sequence,
             seed,
         );
-        let bytes = encoded_stored_receipt(&receipt, sequence, persistence::STORED_RECEIPT_VERSION);
+        let bytes = encoded_stored_receipt(&receipt, sequence, StoredDaReceipt::VERSION);
         let path = canonical_receipt_spool_path(temp_dir.path(), &receipt, sequence);
         fs::write(path, bytes).expect("write receipt");
     }
@@ -1611,7 +1647,7 @@ fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open
     let unsigned = persistence::unsigned_receipt_bytes(&conflicting, 1).expect("unsigned bytes");
     conflicting.operator_signature = checked_signature(signer.private_key(), &unsigned);
     for receipt in [&receipt, &conflicting] {
-        let bytes = encoded_stored_receipt(receipt, 1, persistence::STORED_RECEIPT_VERSION);
+        let bytes = encoded_stored_receipt(receipt, 1, StoredDaReceipt::VERSION);
         let path = canonical_receipt_spool_path(temp_dir.path(), receipt, 1);
         fs::write(path, bytes).expect("write duplicate receipt");
     }
@@ -1621,7 +1657,7 @@ fn da_receipt_log_rejects_same_manifest_duplicate_with_different_receipt_on_open
         Err(err) => err,
     };
     assert!(
-        format!("{err:?}").contains("conflicting duplicate receipt"),
+        format!("{err:?}").contains("conflicting duplicate DA receipt for sequence 1"),
         "unexpected receipt-log recovery error: {err:?}"
     );
     assert!(
@@ -1635,7 +1671,7 @@ fn da_receipt_log_rejects_same_receipt_under_wrong_fingerprint_on_open() {
     let lane_epoch = LaneEpoch::new(LaneId::new(6), 17);
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x93);
-    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
+    let bytes = encoded_stored_receipt(&receipt, 1, StoredDaReceipt::VERSION);
     for fingerprint in [receipt_fingerprint_bytes(&receipt), [0xA4; 32]] {
         let path = receipt_spool_path(temp_dir.path(), &receipt, 1, fingerprint);
         fs::write(path, &bytes).expect("write duplicate receipt");
@@ -1663,7 +1699,7 @@ fn da_receipt_log_rejects_sequence_rebound_signature_on_open() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 9);
-    let bytes = encoded_stored_receipt(&receipt, 2, persistence::STORED_RECEIPT_VERSION);
+    let bytes = encoded_stored_receipt(&receipt, 2, StoredDaReceipt::VERSION);
     let path = canonical_receipt_spool_path(temp_dir.path(), &receipt, 2);
     fs::write(&path, bytes).expect("write rebound receipt");
     let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
@@ -1724,7 +1760,7 @@ fn da_receipt_log_rejects_filename_body_mismatch_on_open() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 8);
-    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
+    let bytes = encoded_stored_receipt(&receipt, 1, StoredDaReceipt::VERSION);
     let mismatched_path = canonical_receipt_spool_path(temp_dir.path(), &receipt, 2);
     fs::write(&mismatched_path, bytes).expect("write mismatched receipt");
     let err = match open_receipt_log(temp_dir.path(), &cursor_store, &signer) {
@@ -1744,7 +1780,7 @@ fn da_receipt_log_rejects_filename_ticket_mismatch_on_open() {
     let cursor_store = Arc::new(ReplayCursorStore::in_memory());
     let signer = checked_random_keypair();
     let receipt = test_receipt(&signer, lane_epoch.lane_id, lane_epoch.epoch, 1, 0x8A);
-    let bytes = encoded_stored_receipt(&receipt, 1, persistence::STORED_RECEIPT_VERSION);
+    let bytes = encoded_stored_receipt(&receipt, 1, StoredDaReceipt::VERSION);
     let mut filename_receipt = receipt;
     filename_receipt.storage_ticket = StorageTicketId::new([0x99; 32]);
     let mismatched_path = canonical_receipt_spool_path(temp_dir.path(), &filename_receipt, 1);
@@ -1780,7 +1816,9 @@ fn da_receipt_log_rejects_replay_cursor_seed_failures_on_open() {
         Err(err) => err,
     };
     assert!(
-        format!("{err:?}").contains("failed to seed receipt cursor from disk"),
+        format!("{err:?}").contains(
+            "durable DA receipt log and replay cursor contain more than 1 lane/epoch windows"
+        ),
         "unexpected cursor seed error: {err:?}"
     );
     assert!(

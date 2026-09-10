@@ -12,6 +12,7 @@ boundaries and where to make changes.
 | --- | --- |
 | [`norito`](../crates/norito), `norito_derive` | Canonical binary/JSON codecs and generated codec implementations. Wire layouts are specified in [Norito](../norito.md). |
 | `iroha_schema`, `iroha_derive`, `iroha_primitives`, `iroha_crypto` | Schema contracts, derive support, value primitives, identities, hashes, and cryptographic algorithms. Runtime callers depend on these owners. |
+| [`iroha_model_base`](../crates/iroha_model_base) | Canonical names, state paths, parsing errors and their complete validation/codec implementations. Consumers import these owners directly; aggregate, transport and runtime dependencies are forbidden. Further identity/value extraction remains outstanding. |
 | [`iroha_service_model`](../crates/iroha_service_model) | State-independent SoraNet policy records and SoraFS defaults. No aggregate ledger, node, SDK, or runtime dependency is allowed. |
 | [`iroha_data_model`](../crates/iroha_data_model) | Ledger transactions, blocks, aggregate instructions/events/queries, and built-in model composition. Privacy and most service records still await extraction. |
 | [`iroha_torii_shared`](../crates/iroha_torii_shared) | HTTP contracts, canonical route descriptions, configuration projections, and status records. Node-owned code converts runtime state into these records. |
@@ -35,8 +36,8 @@ boundaries and where to make changes.
 | [`mochi`](../mochi) | Local sandbox application using account-bound SDK streams. The supervisor coordinates generation and peer lifecycles; [genesis artifacts](../mochi/mochi-core/src/supervisor/genesis_material.rs) and [snapshot transactions/recovery](../mochi/mochi-core/src/supervisor/snapshot_restore.rs) have distinct runtime owners. Node orchestration dependencies stay with the application. |
 | [`xtask`](../xtask), [`tools`](../tools) | Repository automation, fixture generation, and deployment/service tools. Their manifests declare their actual runtime dependencies. |
 
-The approved `iroha_model_base` and `iroha_privacy_model` physical extractions
-remain pending and are tracked in
+The remaining foundational owners and the `iroha_privacy_model` extraction
+are tracked in
 [the redesign record](../specs/first_release_architecture_redesign.md).
 `iroha_storage_client` and `iroha_musubi_service` are implemented boundaries;
 `iroha_service_model` still owns only the state-independent policies described

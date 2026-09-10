@@ -15,11 +15,11 @@ use iroha::{
             verifying_keys,
         },
         metadata::Metadata,
-        name::Name,
         proof::VerifyingKeyId,
         transaction::{Executable, FeePaymentIntent, SignedTransaction},
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_sccp::{
     SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpPayloadV1, TransferPayloadV1,

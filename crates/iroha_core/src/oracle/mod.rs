@@ -326,12 +326,12 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature};
     use iroha_data_model::{
         account::AccountId,
-        name::Name,
         oracle::{
             AggregationRule, FeedConfigVersion, ObservationBody, ObservationOutcome,
             ObservationValue, OutlierPolicy, RiskClass,
         },
     };
+    use iroha_model_base::name::Name;
     use std::{num::NonZeroU64, str::FromStr};
     fn feed_id(name: &str) -> iroha_data_model::oracle::FeedId {
         iroha_data_model::oracle::FeedId(Name::from_str(name).expect("feed name"))

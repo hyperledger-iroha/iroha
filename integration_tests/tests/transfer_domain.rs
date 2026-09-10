@@ -12,6 +12,7 @@ use iroha_executor_data_model::permission::{
     nft::{CanRegisterNft, CanUnregisterNft},
     trigger::{CanExecuteTrigger, CanUnregisterTrigger},
 };
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
 use std::time::{Duration, Instant};

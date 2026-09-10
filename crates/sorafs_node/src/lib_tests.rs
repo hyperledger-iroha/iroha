@@ -15,7 +15,6 @@ use iroha_data_model::{
     block::BlockHeader,
     isi::{InstructionBox, sorafs::CompleteReplicationOrder},
     metadata::Metadata,
-    name::Name,
     sorafs::{
         capacity::{CapacityDeclarationRecord, ProviderId},
         moderation::{
@@ -42,6 +41,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, TransactionBuilder},
 };
+use iroha_model_base::name::Name;
 use iroha_telemetry::metrics::global_or_default;
 use norito::to_bytes;
 use sorafs_car::{CarBuildPlan, CarWriter, compute_chunk_plan_digest_sha3};
@@ -2934,6 +2934,41 @@ fn auxiliary_runtime_checkpoint_restores_privacy_source_state() {
         .expect("persist privacy source event");
     let path = auxiliary_runtime_checkpoint_path(cfg.data_dir());
     assert!(path.exists());
+    assert_eq!(
+        <AuxiliaryRuntimeCheckpointV5 as norito::NoritoSchema>::nominal_name(),
+        "sorafs_node::AuxiliaryRuntimeCheckpointV5"
+    );
+    let stored = fs::read(&path).expect("actual durable checkpoint frame");
+    assert_eq!(
+        stored[6..22],
+        norito::schema::identity::frame_hash::<AuxiliaryRuntimeCheckpointV5>()
+    );
+    let checkpoint = source
+        .export_auxiliary_runtime_checkpoint()
+        .expect("current runtime checkpoint");
+    assert_eq!(
+        stored,
+        norito::encode_canonical(&checkpoint).expect("current owner bytes")
+    );
+    let decoded: AuxiliaryRuntimeCheckpointV5 =
+        norito::decode_canonical(&stored).expect("checkpoint owner roundtrip");
+    assert_eq!(
+        norito::codec::encode_adaptive(&decoded),
+        norito::codec::encode_adaptive(&checkpoint)
+    );
+    let mut wrong_owner = stored.clone();
+    wrong_owner[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<AuxiliaryRuntimeCheckpointV5>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(
+        norito::decode_canonical::<AuxiliaryRuntimeCheckpointV5>(&stored[..stored.len() - 1])
+            .is_err()
+    );
+    let mut trailing = stored;
+    trailing.push(0);
+    assert!(norito::decode_canonical::<AuxiliaryRuntimeCheckpointV5>(&trailing).is_err());
     drop(source);
     let restored = NodeHandle::new(cfg);
     assert_eq!(restored.privacy_aggregate_source_event_count(), 1);
@@ -3213,6 +3248,34 @@ fn moderation_screening_authority_loads_from_digest_pinned_config_and_rejects_ro
     let bundle =
         moderation_screening_authority_bundle_fixture(now_unix, policy_issued_at_unix, 0xE1);
     let (path, digest) = write_moderation_screening_authority_bundle(temp_dir.path(), &bundle);
+    let frame = crate::frame_test_support::assert_current_frame(
+        &bundle,
+        "sorafs_node::moderation::ModerationScreeningAuthorityBundleV1",
+    );
+    assert_eq!(fs::read(&path).unwrap(), frame);
+    load_moderation_screening_authority_bundle(&path, digest, now_unix)
+        .expect("positive canonical authority-file boundary");
+    let mut wrong_owner = frame.clone();
+    wrong_owner[6] ^= 1;
+    for (file_name, malformed) in [
+        ("authority-wrong-owner.to", wrong_owner),
+        ("authority-truncated.to", frame[..frame.len() - 1].to_vec()),
+    ] {
+        let malformed_path = path.with_file_name(file_name);
+        fs::write(&malformed_path, &malformed).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&malformed_path, fs::Permissions::from_mode(0o600)).unwrap();
+        // Pin the malformed bytes themselves so rejection reaches the typed decoder.
+        assert!(matches!(
+            load_moderation_screening_authority_bundle(
+                &malformed_path,
+                *blake3::hash(&malformed).as_bytes(),
+                now_unix,
+            ),
+            Err(NodeInitError::ModerationScreeningAuthorityBundle { .. })
+        ));
+    }
+
     let storage_dir = path
         .parent()
         .expect("authority fixture must have a parent")
@@ -8767,6 +8830,22 @@ fn gc_eviction_transaction_discards_pre_domain_crash_intent() {
                 GC_AUDIT_REASON_RETENTION_EXPIRED_PROVIDER_MISSING_V1,
             )
             .expect("persist GC eviction intent");
+        for identity in [&intent.storage_before, &intent.storage_after] {
+            crate::frame_test_support::assert_current_frame(
+                identity,
+                "sorafs_node::GcStorageIdentityV1",
+            );
+        }
+        assert_eq!(
+            gc_eviction_intent_binding_digest(&intent).unwrap(),
+            intent.binding_digest
+        );
+        let mut changed = intent.clone();
+        changed.storage_after.chunk_refcounts_digest[0] ^= 1;
+        assert_ne!(
+            gc_eviction_intent_binding_digest(&changed).unwrap(),
+            intent.binding_digest
+        );
         assert_eq!(intent.reserved_outbox_slots, 1);
     }
     assert_eq!(

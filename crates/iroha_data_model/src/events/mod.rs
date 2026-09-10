@@ -95,9 +95,9 @@ mod tests {
         domain::DomainId,
         events::data::prelude::{DataEvent, DomainEvent, MetadataChanged},
         events::execute_trigger::ExecuteTriggerEventFilter,
-        name::Name,
     };
     use iroha_crypto::Hash;
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use std::{str::FromStr, sync::Arc};
 

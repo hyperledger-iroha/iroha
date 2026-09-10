@@ -154,10 +154,9 @@ struct BoundSidecarIndexSnapshot {
 /// This is the first-release V1 layout; pre-release development markers that
 /// omitted the relative identity intentionally fail closed instead of using a
 /// legacy decoding fallback.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::BoundProgressAppendIntentV1")]
-#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_core::kura::BoundProgressAppendIntentV1")]
 struct BoundProgressAppendIntentV1 {
     version: u16,
     namespace_components: Vec<String>,

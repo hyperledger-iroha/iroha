@@ -176,7 +176,14 @@ impl Kura {
                 .is_some_and(|claim| claim.active_for_payload(payload))
             {
                 if let Some(pending) = pending {
-                    if self.autonomous_lane_claim_target_may_be_durable_locked(&pending)
+                    if self
+                        .autonomous_lane_claim_target_is_durable_locked(&pending)
+                        .ok_or_else(|| {
+                            Self::invalid_lane_artifact_error(
+                                temp_path.clone(),
+                                "autonomous entrypoint temp claim awaits exact lane payload recovery",
+                            )
+                        })?
                         && !pending.active_for_payload(payload)
                     {
                         return Err(Self::invalid_lane_artifact_error(
@@ -219,7 +226,15 @@ impl Kura {
                 ));
             }
             if let Some(pending) = pending {
-                if self.autonomous_lane_claim_target_may_be_durable_locked(&pending) {
+                if self
+                    .autonomous_lane_claim_target_is_durable_locked(&pending)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            temp_path.clone(),
+                            "autonomous entrypoint temp claim awaits exact lane payload recovery",
+                        )
+                    })?
+                {
                     if !pending.active_for_payload(payload) {
                         return Err(Self::invalid_lane_artifact_error(
                             path,

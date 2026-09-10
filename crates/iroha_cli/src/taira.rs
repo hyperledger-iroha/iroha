@@ -19,12 +19,12 @@ use iroha::{
         isi::{InstructionBox, Log},
         level::Level as LogLevel,
         metadata::Metadata,
-        name::Name,
         prelude::{SignedTransaction, TransactionEntrypoint},
         transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json as IrohaJson;
 use iroha_primitives::numeric::Quantity;
 use iroha_torii_shared::{FeeQuoteResponse, PipelineTransactionStatusResponse, mcp as mcp_wire};
@@ -3997,7 +3997,66 @@ impl ValidatedPreparedOperation {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+macro_rules! prepared_write_pending_reasons {
+    ($($reason:ident),+ $(,)?) => {
+        /// Closed nonterminal reasons shared by the core write producer and host consumer.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub(super) enum PreparedWritePendingReason {
+            $($reason),+
+        }
+
+        impl PreparedWritePendingReason {
+            pub(super) const ALL: &'static [Self] = &[$(Self::$reason),+];
+
+            pub(super) const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$reason => stringify!($reason)),+
+                }
+            }
+
+            pub(super) fn parse(value: &str) -> Result<Self> {
+                Self::ALL
+                    .iter()
+                    .copied()
+                    .find(|reason| reason.as_str() == value)
+                    .ok_or_else(|| eyre!("unsupported core write Pending evidence"))
+            }
+        }
+    };
+}
+
+prepared_write_pending_reasons! {
+    Absent,
+    AcceptedNotVisible,
+    AppliedEvidencePending,
+    ObservationUnavailable,
+    OnboardingAliasConflict,
+    OnboardingStateAbsent,
+    Queued,
+    Approved,
+    Committed,
+    Applied,
+    Rejected,
+    Expired,
+}
+
+#[cfg(test)]
+pub(crate) fn core_pending_report_cases_for_test(
+    reason: PreparedWritePendingReason,
+) -> Result<Vec<(String, Vec<u8>, Value)>> {
+    tests::core_report_cases(PreparedRecoveryClassification::Pending { reason })
+}
+
+#[cfg(test)]
+pub(crate) fn core_rejected_report_cases_for_test(
+    evidence: &str,
+) -> Result<Vec<(String, Vec<u8>, Value)>> {
+    tests::core_report_cases(PreparedRecoveryClassification::Rejected {
+        terminal_kind: evidence.to_owned(),
+    })
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum PreparedRecoveryClassification {
     Absent,
     Applied {
@@ -4005,7 +4064,7 @@ enum PreparedRecoveryClassification {
         evidence: String,
     },
     Pending {
-        terminal_kind: String,
+        reason: PreparedWritePendingReason,
     },
     Rejected {
         terminal_kind: String,
@@ -4100,7 +4159,7 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 Ok(classification) => classification,
                 Err(error) if Instant::now() >= deadline && prepared_request_timed_out(&error) => {
                     PreparedRecoveryClassification::Pending {
-                        terminal_kind: "ObservationUnavailable".to_owned(),
+                        reason: PreparedWritePendingReason::ObservationUnavailable,
                     }
                 }
                 Err(error) => return Err(error),
@@ -4926,7 +4985,7 @@ fn classify_exact_prepared_operation(
                     // Global status may resolve at a peer ahead of this exact local
                     // lookup. Keep polling the same hash until its proof is visible.
                     return Ok(PreparedRecoveryClassification::Pending {
-                        terminal_kind: "AppliedEvidencePending".to_owned(),
+                        reason: PreparedWritePendingReason::AppliedEvidencePending,
                     });
                 }
                 Err(error) => return Err(error),
@@ -4943,7 +5002,7 @@ fn classify_exact_prepared_operation(
         }
         "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired" => {
             Ok(PreparedRecoveryClassification::Pending {
-                terminal_kind: status.status.kind,
+                reason: PreparedWritePendingReason::parse(&status.status.kind)?,
             })
         }
         other => Err(eyre!(
@@ -5043,12 +5102,12 @@ fn classify_proof_required_current_state(
         }
         AccountOnboardingCurrentStateV1::AliasConflict { .. } => {
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "OnboardingAliasConflict".to_owned(),
+                reason: PreparedWritePendingReason::OnboardingAliasConflict,
             }
         }
         AccountOnboardingCurrentStateV1::AliasAbsent { .. } => {
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "OnboardingStateAbsent".to_owned(),
+                reason: PreparedWritePendingReason::OnboardingStateAbsent,
             }
         }
     }
@@ -5131,7 +5190,7 @@ fn report_prepared_classification(
             &validated.envelope_bytes,
             "Pending",
             None,
-            Some("Absent".to_owned()),
+            Some(PreparedWritePendingReason::Absent.as_str().to_owned()),
         ),
         PreparedRecoveryClassification::Applied {
             block_height,
@@ -5145,14 +5204,14 @@ fn report_prepared_classification(
             block_height,
             Some(evidence),
         ),
-        PreparedRecoveryClassification::Pending { terminal_kind } => prepared_operation_report(
+        PreparedRecoveryClassification::Pending { reason } => prepared_operation_report(
             public_root,
             args,
             &validated.envelope,
             &validated.envelope_bytes,
             "Pending",
             None,
-            Some(terminal_kind),
+            Some(reason.as_str().to_owned()),
         ),
         PreparedRecoveryClassification::Rejected { terminal_kind } => prepared_operation_report(
             public_root,
@@ -5454,7 +5513,7 @@ fn submit_exact_prepared_operation(
                 Ok(reconciled) => reconciled,
                 Err(error) if Instant::now() >= deadline && prepared_request_timed_out(&error) => {
                     return Ok(PreparedRecoveryClassification::Pending {
-                        terminal_kind: "ObservationUnavailable".to_owned(),
+                        reason: PreparedWritePendingReason::ObservationUnavailable,
                     });
                 }
                 Err(error) => return Err(error),
@@ -5481,7 +5540,7 @@ fn submit_exact_prepared_operation(
                 &client,
                 validated,
                 PreparedRecoveryClassification::Pending {
-                    terminal_kind: "AcceptedNotVisible".to_owned(),
+                    reason: PreparedWritePendingReason::AcceptedNotVisible,
                 },
                 deadline,
                 Duration::from_millis(500),
@@ -5526,7 +5585,7 @@ fn await_exact_prepared_operation(
         }
         if classification == PreparedRecoveryClassification::Absent {
             classification = PreparedRecoveryClassification::Pending {
-                terminal_kind: "AcceptedNotVisible".to_owned(),
+                reason: PreparedWritePendingReason::AcceptedNotVisible,
             };
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -8173,7 +8232,7 @@ mod tests {
             assert_eq!(
                 classify_proof_required_current_state(&"ab".repeat(32), state),
                 PreparedRecoveryClassification::Pending {
-                    terminal_kind: expected_kind.to_owned(),
+                    reason: PreparedWritePendingReason::parse(expected_kind).unwrap()
                 }
             );
         }
@@ -8382,7 +8441,7 @@ mod tests {
         };
         let query_bytes = norito::to_bytes(&details).unwrap();
         let polls = AtomicUsize::new(0);
-        let server = spawn_mock_http(7, move |request| match path_only(&request.path) {
+        let server = spawn_mock_http(6, move |request| match path_only(&request.path) {
             "/v1/pipeline/transactions/status" => {
                 assert!(request.path.contains("scope=global"));
                 if polls.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -8451,7 +8510,15 @@ mod tests {
         )
         .expect_err("an exact details response must not authorize substituted retained bytes");
         let requests = finish_mock(server);
-        assert_eq!(requests.len(), 7);
+        assert_eq!(requests.len(), 6);
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| path_only(&request.path) == "/v1/node/capabilities")
+                .count(),
+            1,
+            "deadline-bounded clones must reuse the client's capability cache"
+        );
         assert_eq!(
             requests
                 .iter()
@@ -8631,7 +8698,7 @@ mod tests {
         assert_eq!(
             outcome,
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "AppliedEvidencePending".to_owned(),
+                reason: PreparedWritePendingReason::AppliedEvidencePending
             }
         );
         assert_eq!(finish_mock(server).len(), 3);
@@ -8713,7 +8780,7 @@ mod tests {
             );
             assert_eq!(finish_mock(server).len(), 1);
             let pending = PreparedRecoveryClassification::Pending {
-                terminal_kind: "Queued".to_owned(),
+                reason: PreparedWritePendingReason::Queued,
             };
             assert_eq!(
                 await_exact_prepared_operation(
@@ -8725,7 +8792,7 @@ mod tests {
                 )
                 .unwrap(),
                 PreparedRecoveryClassification::Pending {
-                    terminal_kind: "Queued".to_owned(),
+                    reason: PreparedWritePendingReason::Queued
                 },
                 "an elapsed deadline must retain the last observation without another request"
             );
@@ -8754,7 +8821,7 @@ mod tests {
         assert_eq!(
             outcome,
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "Expired".to_owned(),
+                reason: PreparedWritePendingReason::Expired
             },
             "cache expiry cannot become a definitive failure at the wait deadline"
         );
@@ -8784,7 +8851,7 @@ mod tests {
                 &client,
                 &validated,
                 PreparedRecoveryClassification::Pending {
-                    terminal_kind: "Queued".to_owned(),
+                    reason: PreparedWritePendingReason::Queued,
                 },
                 Instant::now() + wait_budget,
                 Duration::from_millis(1),
@@ -8817,7 +8884,7 @@ mod tests {
             &client,
             &validated,
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "Queued".to_owned(),
+                reason: PreparedWritePendingReason::Queued,
             },
             Instant::now() + Duration::from_secs(5),
             Duration::from_millis(1),
@@ -8852,7 +8919,7 @@ mod tests {
             &client,
             &validated,
             PreparedRecoveryClassification::Pending {
-                terminal_kind: "Queued".to_owned(),
+                reason: PreparedWritePendingReason::Queued,
             },
             Instant::now() + wait_budget,
             Duration::from_millis(1),
@@ -8910,7 +8977,7 @@ mod tests {
                     .expect("valid Taira fixture context"),
                 &validated,
                 PreparedRecoveryClassification::Pending {
-                    terminal_kind: "Queued".to_owned()
+                    reason: PreparedWritePendingReason::Queued
                 },
                 Instant::now() + Duration::from_secs(5),
                 Duration::from_millis(1),
@@ -8946,6 +9013,100 @@ mod tests {
             let error = json::from_slice::<PreparedMutationEnvelopeV1>(&bytes)
                 .expect_err("zero/multi operation envelopes must fail closed");
             assert!(!error.to_string().is_empty());
+        }
+    }
+
+    pub(super) fn core_report_cases(
+        classification: PreparedRecoveryClassification,
+    ) -> Result<Vec<(String, Vec<u8>, Value)>> {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let fixture: Value = json::from_str(include_str!(
+            "../../../fixtures/prepared_transactions/prepared_transaction_signature_v1.json"
+        ))?;
+        let vectors = fixture.get("vectors").and_then(Value::as_array).unwrap();
+        let response = |name: &str| {
+            vectors
+                .iter()
+                .find(|vector| vector.get("name").and_then(Value::as_str) == Some(name))
+                .unwrap()
+                .get("response")
+                .unwrap()
+                .clone()
+        };
+        let onboarding: AccountOnboardingPreparedTransactionV1 =
+            json::from_value(response("onboarding_prepared"))?;
+        let proof = PreparedOnboardingProofRequiredV1 {
+            schema: PREPARED_ONBOARDING_PROOF_REQUIRED_SCHEMA_V1.to_owned(),
+            receipt: onboarding.receipt.clone(),
+            result: json::from_value(response("onboarding_proof_required"))?,
+        };
+        let faucet = json::from_value(response("faucet_prepared"))?;
+        let mut cases = Vec::new();
+        for (operation, prepared) in [
+            (
+                WriteCanaryOperation::Onboarding,
+                PreparedTransactionOperationV1::OnboardingPrepared(onboarding),
+            ),
+            (
+                WriteCanaryOperation::Onboarding,
+                PreparedTransactionOperationV1::OnboardingProofRequired(proof),
+            ),
+            (
+                WriteCanaryOperation::Faucet,
+                PreparedTransactionOperationV1::FaucetPrepared(faucet),
+            ),
+            (
+                WriteCanaryOperation::FinalCanary,
+                final_canary_envelope_fixture().operation,
+            ),
+        ] {
+            let args = fixture_write_canary_args(operation);
+            let mut envelope = final_canary_envelope_fixture();
+            envelope.binding = args.binding()?;
+            envelope.operation = prepared;
+            if let PreparedTransactionOperationV1::FinalCanary(operation) = &mut envelope.operation
+            {
+                operation.binding = envelope.binding.clone();
+            }
+            let envelope_bytes = canonical_prepared_envelope_bytes(&envelope)?;
+            let validated = ValidatedPreparedOperation {
+                envelope,
+                transaction: None,
+                wire: None,
+                envelope_bytes: envelope_bytes.clone(),
+            };
+            let report = report_prepared_classification(
+                &args.public_root,
+                &args,
+                &validated,
+                classification.clone(),
+            )?;
+            cases.push((operation.mutation_kind().to_owned(), envelope_bytes, report));
+        }
+        Ok(cases)
+    }
+
+    #[test]
+    fn core_pending_reason_codec_is_closed_and_round_trips_every_variant() {
+        let mut labels = std::collections::BTreeSet::new();
+        for reason in PreparedWritePendingReason::ALL.iter().copied() {
+            assert_eq!(
+                PreparedWritePendingReason::parse(reason.as_str()).unwrap(),
+                reason
+            );
+            assert!(labels.insert(reason.as_str()));
+        }
+        assert_eq!(labels.len(), 12);
+        for unknown in [
+            "",
+            "queued",
+            "Queued ",
+            "ObservationDeadlineReached",
+            "SubmissionOutcomeUnknown",
+            "Unknown",
+            "Rejected\n",
+        ] {
+            assert!(PreparedWritePendingReason::parse(unknown).is_err());
         }
     }
 

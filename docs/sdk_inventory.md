@@ -28,6 +28,30 @@ migration against this inventory, then check that each supported operation has
 one authority-appropriate API and that no stale public wrappers remain. This
 inventory alone does not establish SDK coverage or qualify node features.
 
+## Musubi query coverage
+
+All twelve `musubi.v1.query.*` operations are concrete asynchronous methods on
+`AccountClient::musubi()`: `exact_package`, `exact_release`,
+`provider_bundle_attestation`, `resolver_index`, `versions`, `maintainers`,
+`archive_locations`, `archive_retention`, `alias`, `alias_history`,
+`ordered_prefix`, and `search`. Each method fixes its request and response types
+from the canonical model. The generic route enum and synchronous free function
+are removed. The registry reader uses the account's reusable blocking facade.
+
+Queries validate their typed inputs before dispatch, sign the exact network,
+POST path and JSON body, and use the immutable
+context's HTTP deadline and 32-MiB response ceiling. Successful responses require
+one JSON content type; missing records and expired finalized cursors remain
+distinct typed outcomes. Model invariants, exact request bindings and any network
+identity carried by the response are checked before returning a found record.
+Provider attestations also retain signature verification. Alias reads validate
+structure and identity; tariff validation requires a separately trusted pricing
+policy. The registry delegates these checks to the SDK and preserves permanent
+binding errors. Other failures use the SDK error family. Encoding and
+decoding bind the context's address discriminant in synchronous scopes that end
+before network waits; concurrent contexts do not change the process default.
+No query triggers a compatibility probe, redirect, retry or cursor restart.
+
 
 ## Subscription capability coverage
 

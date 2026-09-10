@@ -81,11 +81,10 @@ impl EvidenceViewerTransparencyProducerConfigV1 {
     }
 }
 /// Exact payload-free body installed under one monotonic public head.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(
     name = "sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerTransparencyHeadBodyV1"
 )]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct EvidenceViewerTransparencyHeadBodyV1 {
     /// Public-head schema version.
     pub version: u16,
@@ -180,6 +179,26 @@ impl EvidenceViewerSignedTransparencyHeadV1 {
             || !source_cursor_is_consistent(body)
             || body.operation_id != transparency_operation_id(body)?
         {
+            return Err(EvidenceViewerTransparencyProducerErrorV1::InvalidPublishedHead);
+        }
+        self.verify_publisher_signature(config.publisher_public_key)
+    }
+
+    /// Verify the canonical publisher signature and head digest against a trusted key.
+    ///
+    /// This authenticates a readback before an adapter permits another publication.
+    /// It does not replace [`Self::verify`], which also enforces configured source
+    /// identities, source signatures, policy, lineage and the operation identity.
+    ///
+    /// # Errors
+    ///
+    /// Rejects a substituted publisher key, malformed signature or mismatched digest.
+    pub fn verify_publisher_signature(
+        &self,
+        expected_public_key: [u8; 32],
+    ) -> Result<(), EvidenceViewerTransparencyProducerErrorV1> {
+        let body = &self.body;
+        if is_zero_digest(expected_public_key) || body.publisher_public_key != expected_public_key {
             return Err(EvidenceViewerTransparencyProducerErrorV1::InvalidPublishedHead);
         }
         let key = PublicKey::from_bytes(Algorithm::Ed25519, &body.publisher_public_key)
@@ -1135,6 +1154,48 @@ mod tests {
             }
         };
         assert_eq!(first_head.body.generation, 1);
+        let head_frame = crate::frame_test_support::assert_current_frame(
+            &first_head,
+            "sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerSignedTransparencyHeadV1",
+        );
+        let decoded_head: EvidenceViewerSignedTransparencyHeadV1 =
+            norito::decode_canonical(&head_frame).expect("decode published signed head");
+        decoded_head
+            .verify(&config())
+            .expect("same authenticated public head");
+        let bytes = norito::encode_canonical(&first_head.body).expect("public head body frame");
+        assert_eq!(
+            <EvidenceViewerTransparencyHeadBodyV1 as norito::NoritoSchema>::frame_name(),
+            "sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerTransparencyHeadBodyV1"
+        );
+        assert_eq!(
+            bytes[6..22],
+            norito::schema::identity::frame_hash::<EvidenceViewerTransparencyHeadBodyV1>()
+        );
+        let decoded: EvidenceViewerTransparencyHeadBodyV1 =
+            norito::decode_canonical(&bytes).unwrap();
+        assert_eq!(decoded, first_head.body);
+        let mut wrong_owner = bytes.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<EvidenceViewerTransparencyHeadBodyV1>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<EvidenceViewerTransparencyHeadBodyV1>(
+                &bytes[..bytes.len() - 1]
+            )
+            .is_err()
+        );
+        let mut trailing = bytes.clone();
+        trailing.push(0);
+        assert!(
+            norito::decode_canonical::<EvidenceViewerTransparencyHeadBodyV1>(&trailing).is_err()
+        );
+        assert_eq!(
+            transparency_signature_message(&first_head.body).unwrap(),
+            [TRANSPARENCY_SIGNATURE_DOMAIN_V1, bytes.as_slice()].concat()
+        );
         assert_eq!(first_head.body.receipt_cursor, None);
         assert!(matches!(
             producer
@@ -1217,6 +1278,71 @@ mod tests {
         );
     }
     #[test]
+    fn publisher_readback_verification_rejects_tampering_and_wrong_key() {
+        let publisher = Arc::new(FakePublisher::new(PUBLISHER_HANDLE));
+        let producer = EvidenceViewerTransparencyProducerV1::try_new(config(), publisher.clone())
+            .expect("qualified producer");
+        let source = projection(signed_anchor(1, None, [0x91; 32], None), None, Vec::new());
+        let EvidenceViewerTransparencyProducerOutcomeV1::Published(head) =
+            producer.publish_projection(&source).expect("publish head")
+        else {
+            panic!("first publication installs a head");
+        };
+        let key = config().publisher_public_key;
+        assert_eq!(head.verify_publisher_signature(key), Ok(()));
+        assert_eq!(head.verify(&config()), Ok(()));
+        let invalid = Err(EvidenceViewerTransparencyProducerErrorV1::InvalidPublishedHead);
+        assert_eq!(head.verify_publisher_signature([0; 32]), invalid);
+        assert_eq!(
+            head.verify_publisher_signature(
+                SigningKey::from_bytes(&[0x39; 32])
+                    .verifying_key()
+                    .to_bytes()
+            ),
+            invalid
+        );
+        let mut changed = head.clone();
+        changed.signature[0] ^= 1;
+        assert_eq!(changed.verify_publisher_signature(key), invalid);
+        let mut changed = head.clone();
+        changed.head_digest[0] ^= 1;
+        assert_eq!(changed.verify_publisher_signature(key), invalid);
+        let mut changed = head.clone();
+        changed.body.source_projection_digest[0] ^= 1;
+        assert_eq!(changed.verify_publisher_signature(key), invalid);
+        let mut changed = head;
+        changed.body.publisher_public_key = SigningKey::from_bytes(&[0x39; 32])
+            .verifying_key()
+            .to_bytes();
+        let changed = publisher.sign_head(changed.body);
+        assert_eq!(changed.verify_publisher_signature(key), invalid);
+    }
+
+    #[test]
+    fn publisher_signature_check_does_not_replace_full_source_verification() {
+        let publisher = Arc::new(FakePublisher::new(PUBLISHER_HANDLE));
+        let producer = EvidenceViewerTransparencyProducerV1::try_new(config(), publisher.clone())
+            .expect("qualified producer");
+        let source = projection(signed_anchor(1, None, [0x91; 32], None), None, Vec::new());
+        let EvidenceViewerTransparencyProducerOutcomeV1::Published(mut head) =
+            producer.publish_projection(&source).expect("publish head")
+        else {
+            panic!("first publication installs a head");
+        };
+        head.body.source_checkpoint_anchor.signature[0] ^= 1;
+        head.body.operation_id = transparency_operation_id(&head.body).expect("new operation id");
+        let head = publisher.sign_head(head.body);
+        assert_eq!(
+            head.verify_publisher_signature(config().publisher_public_key),
+            Ok(())
+        );
+        assert_eq!(
+            head.verify(&config()),
+            Err(EvidenceViewerTransparencyProducerErrorV1::InvalidPublishedHead)
+        );
+    }
+
+    #[test]
     fn source_forks_and_live_provider_drift_fail_closed() {
         let publisher = Arc::new(FakePublisher::new(PUBLISHER_HANDLE));
         let producer = EvidenceViewerTransparencyProducerV1::try_new(config(), publisher.clone())
@@ -1260,4 +1386,5 @@ mod tests {
             EvidenceViewerTransparencyProducerErrorV1::PublisherUnavailable
         );
     }
+    include!("transparency_producer_schema_identity_tests.rs");
 }

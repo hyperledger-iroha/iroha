@@ -19,7 +19,6 @@ use iroha_data_model::{
     block::SignedBlock,
     domain::DomainId,
     isi::{InstructionBox, OpenVpnLeaseEscrow, SettleVpnLease},
-    name::Name,
     permission::Permission,
     query::error::QueryExecutionFail,
     soranet::vpn::{
@@ -34,6 +33,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionEntrypoint},
 };
 use iroha_executor_data_model::permission::soranet::CanIssueSoranetVpnQuote;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 use iroha_torii_shared::configuration::Configuration;
 use mv::storage::StorageReadOnly;

@@ -5,9 +5,10 @@
 //! All types derive Norito serialization so manifests, calls, and receipts can
 //! be persisted on-chain or shipped between Torii and SDKs deterministically.
 
+use crate::nexus::UniversalAccountId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{name::Name, nexus::UniversalAccountId};
 use iroha_crypto::{Hash, HashOf};
+use iroha_model_base::name::Name;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use std::{

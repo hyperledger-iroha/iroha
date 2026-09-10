@@ -34,7 +34,6 @@ use iroha_data_model::{
         MusubiSeedIngressReceiptPayloadV1, MusubiSeedIngressReceiptV1, MusubiStorageAvailabilityV1,
         MusubiVerificationLockDigestV1, MusubiVersionPageV1, MusubiVersionReqV1, MusubiVersionV1,
     },
-    name::Name,
     nexus::DataSpaceId,
     sorafs::{
         capacity::ProviderId,
@@ -44,6 +43,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::name::Name;
 use norito::json::{self, JsonDeserialize, JsonSerialize, Value};
 use std::fmt::Debug;
 // Public test material only. Every non-zero Ed25519 seed has one fixture role.

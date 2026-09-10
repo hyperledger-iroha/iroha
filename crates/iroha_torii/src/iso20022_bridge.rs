@@ -21,12 +21,13 @@ use iroha_data_model::{
     alias::AliasIndex,
     asset::AssetDefinitionAlias,
     prelude::{
-        AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, InstructionBox, Metadata, Name,
+        AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, InstructionBox, Metadata,
         TransactionBuilder, Transfer,
     },
     transaction::error::TransactionRejectionReason,
     transaction::{SignedTransaction, TransactionPayload},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use ivm::iso20022::{IdentifierKind, InvalidValueKind, MsgError, ParsedMessage};
 #[cfg(test)]

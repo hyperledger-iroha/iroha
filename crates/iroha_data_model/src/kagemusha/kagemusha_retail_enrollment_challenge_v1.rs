@@ -13,7 +13,7 @@ use super::{
     KagemushaRetailEnrollmentOwnerV1, KagemushaRetailEnrollmentSelectionV1,
     KagemushaRetailEnrollmentSubjectV1, kagemusha_verify_device_response_v1,
 };
-use crate::name::Name;
+use iroha_model_base::name::Name;
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
 use iroha_crypto::{Algorithm, SignatureOf};

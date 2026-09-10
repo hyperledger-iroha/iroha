@@ -1,10 +1,8 @@
 //! Shared helpers for committed transaction predicates.
 #![allow(clippy::missing_errors_doc)]
-use crate::{
-    name::Name,
-    query::{CommittedTransaction, CommittedTxFilters},
-};
+use crate::query::{CommittedTransaction, CommittedTxFilters};
 use iroha_crypto::HashOf;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
 
@@ -1750,8 +1748,8 @@ mod wire {
         MAX_COMMITTED_TX_PREDICATE_NODES, MAX_COMMITTED_TX_TOTAL_MEMBERSHIP_VALUES,
         validate_committed_tx_predicate,
     };
-    use crate::name::Name;
     use iroha_crypto::HashOf;
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use iroha_schema::{IntoSchema, MetaMap, Metadata, TypeId, UnnamedFieldsMeta};
     use norito::{
@@ -2306,13 +2304,13 @@ mod tests {
     use crate::{
         domain::DomainId,
         metadata::Metadata,
-        name::Name,
         transaction::{
             FeePaymentIntent, TransactionBuilder, TransactionEntrypoint, TransactionResult,
         },
     };
     use hex;
     use iroha_crypto::{Algorithm, Hash, HashOf, MerkleProof};
+    use iroha_model_base::name::Name;
     use std::str::FromStr;
     fn bare_bytes(value: &dyn norito::core::SerializePayload) -> Vec<u8> {
         let _flags = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());

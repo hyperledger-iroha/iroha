@@ -24,7 +24,6 @@ use iroha_data_model::isi::smart_contract_code::{
     DeactivateContractInstance, OfferContractOwnership, SetContractParliamentDelegation,
 };
 use iroha_data_model::isi::transfer::{Transfer, TransferBox};
-use iroha_data_model::name::Name;
 use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
 use iroha_data_model::prelude::Quantity;
 use iroha_data_model::ram_lfe::{
@@ -32,6 +31,7 @@ use iroha_data_model::ram_lfe::{
     RamLfeProgramId, RamLfeReceiptAttestation,
 };
 use iroha_data_model::smart_contract::{ContractAddress, ContractLifecycleOwnerV1};
+use iroha_model_base::name::Name;
 use std::env;
 mod fastpq_balance_keys;
 mod multisig_accounts;

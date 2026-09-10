@@ -3,12 +3,12 @@ use clap::{Parser, ValueEnum};
 use eyre::{Result, WrapErr, eyre};
 use iroha_data_model::{
     da::types::{BlobDigest, ExtraMetadata, StorageTicketId},
-    name::Name,
     taikai::{
         TaikaiAudioLayout, TaikaiCodec, TaikaiEventId, TaikaiRenditionId, TaikaiResolution,
         TaikaiStreamId, TaikaiTrackKind, TaikaiTrackMetadata,
     },
 };
+use iroha_model_base::name::Name;
 use norito::json::{self, Map, Value};
 use sorafs_car::taikai::{
     BundleRequest, BundleSummary, RehydrateRequest, bundle_segment, load_extra_metadata,

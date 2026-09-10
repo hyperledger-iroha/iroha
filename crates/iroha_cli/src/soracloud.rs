@@ -34,7 +34,6 @@ use iroha::{
         asset::AssetDefinitionId,
         isi::{InstructionBox, decode_instruction_from_pair},
         metadata::Metadata,
-        name::Name,
         prelude::TransactionEntrypoint,
         smart_contract::manifest::ManifestProvenance,
         soracloud::{
@@ -109,6 +108,7 @@ use iroha_config::{
     parameters::{actual, defaults},
 };
 use iroha_crypto::{Hash, KeyPair, PublicKey, Signature};
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 #[cfg(test)]
 use iroha_torii_shared::{

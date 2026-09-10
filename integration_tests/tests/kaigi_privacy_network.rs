@@ -28,10 +28,11 @@ use iroha_data_model::{
     },
     kaigi::{KaigiId, KaigiPrivacyMode, KaigiRecord, KaigiStatus, NewKaigi, kaigi_metadata_key},
     metadata::Metadata,
-    prelude::{AssetId, DomainId, FindDomainById, HasMetadata, Identifiable, Name},
+    prelude::{AssetId, DomainId, FindDomainById, HasMetadata, Identifiable},
     transaction::{FeePaymentIntent, SignedTransaction, error::TransactionRejectionReason},
 };
 use iroha_executor_data_model::permission::governance::CanManageVerifyingKeys;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry, read_on_dedicated_thread};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -399,12 +400,12 @@ async fn lifecycle() -> Result<()> {
         let member = bounded_client(
             network.peers()[0].client_for(&participant, participant_key.private_key().clone()),
         );
-        let network_id: NetworkId = host.client().network_id;
+        let network_id: NetworkId = *host.client().network_id();
         ensure!(
             clients
                 .iter()
-                .all(|client| client.client().network_id == network_id)
-                && member.client().network_id == network_id,
+                .all(|client| *client.client().network_id() == network_id)
+                && *member.client().network_id() == network_id,
             "client network identities differ"
         );
         applied(

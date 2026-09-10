@@ -1204,7 +1204,7 @@ mod tests {
                 "ca09d19ed5f3bb56ba7432a67b7ad14697c4874ab7870ea53441e4df0624bd7b".to_owned(),
                 "e785c256e2682ad5a82649b8ace70906088b2822d979ffd75b40150e686295e6".to_owned(),
                 90_035,
-                "d249c7a5a0309a71b1674e7f0980d5fe5b68948b1411f16f2567ff746d273000".to_owned(),
+                "db5d4c8201c268ac3bca0a9f1dfe53264535e7d47df8fc7876636718ea15f03d".to_owned(),
             )
         );
     }
@@ -1413,7 +1413,19 @@ mod tests {
         changed_bindings.push(changed);
         let mut changed = base;
         changed.genesis_hash[0] ^= 1;
-        changed_bindings.push(changed);
+        assert!(
+            AnonymousPgcBootstrapStatementV1::new(
+                TEST_NAMESPACE,
+                fixture.initial_root,
+                fixture.initial_epoch,
+                fixture.total_supply,
+                &fixture.public_keys,
+                &fixture.encrypted_balances,
+                changed
+            )
+            .is_err(),
+            "network/genesis disagreement must reject before proof evaluation"
+        );
         let mut changed = base;
         changed.action_index += 1;
         changed_bindings.push(changed);

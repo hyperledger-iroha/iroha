@@ -2,10 +2,7 @@
 use crate::{
     config::BasicAuth,
     crypto::{KeyPair, PrivateKey, PublicKey},
-    data_model::{
-        name,
-        prelude::{AccountId, ChainId, DomainId, NetworkId},
-    },
+    data_model::prelude::{AccountId, ChainId, DomainId, NetworkId},
 };
 use error_stack::{Report, ResultExt};
 use iroha_config_base::{
@@ -13,6 +10,7 @@ use iroha_config_base::{
     attach::ConfigValueAndOrigin,
     util::{DurationMs, Emitter, EmitterResultExt},
 };
+use iroha_model_base::name;
 use iroha_service_model::soranet::AnonymityPolicy;
 use iroha_service_model::soranet::RolloutPhase;
 use iroha_torii_shared::{network_profile, network_profile_names};

@@ -1,6 +1,7 @@
 //! Native DeFi instructions.
 use super::*;
 use crate::rwa::RwaId;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::{Numeric, Quantity};
 isi! {
     /// Submit a solver-fillable `DeFi` intent.

@@ -32,11 +32,11 @@ use iroha_data_model::{
     metadata::Metadata,
     nft::NftId,
     peer::PeerId,
-    prelude::Name,
     role::RoleId,
     rwa::RwaId,
     trigger::{TriggerId, action::Repeats},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     bigint::BigInt,
     json::Json,

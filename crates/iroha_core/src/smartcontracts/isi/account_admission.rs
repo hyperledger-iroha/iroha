@@ -21,9 +21,9 @@ use iroha_data_model::{
         AccountAdmissionInvalidPolicy, AccountAdmissionMinInitialAmountUnsatisfied,
         AccountAdmissionQuotaExceeded, AccountAdmissionQuotaScope, InstructionExecutionError,
     },
-    name::Name,
     prelude::*,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use std::sync::LazyLock;
 static IMPLICIT_CREATED_VIA_KEY: LazyLock<Name> = LazyLock::new(|| {

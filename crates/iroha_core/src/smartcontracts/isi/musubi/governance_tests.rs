@@ -243,7 +243,12 @@ fn invalid_invitation_is_rejected_before_pending_invitations_are_rebased() {
     }
     .execute(&owner, &mut transaction)
     .expect_err("a zero invitation identity must fail before governance advances");
-    assert!(error.to_string().contains("invitation is invalid"));
+    assert!(
+        matches!(&error, Error::InvalidParameter(
+            iroha_data_model::isi::error::InvalidParameterError::SmartContract(message)
+        ) if message.contains("invitation is invalid")),
+        "unexpected invalid invitation rejection: {error:?}"
+    );
     assert_eq!(
         transaction
             .world
@@ -1024,7 +1029,27 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
     let mut transaction = block.transaction();
     let pin = iroha_data_model::sorafs::pin_registry::ManifestDigest::new([0xA1; 32]);
     let order = iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x22; 32]);
-    let first = location_fixture(0xA3, pin, order);
+    let first_archive = retention_archive(0xA3);
+    let mut first = location_fixture(0xA3, pin, order);
+    first.archive_id = first_archive.archive_id;
+    transaction
+        .world
+        .musubi_locations_by_replication_order
+        .insert(
+            order,
+            MusubiReplicationOrderLocationReferenceV1 {
+                binding: MusubiReplicationOrderArchiveBindingV1::new(
+                    order,
+                    first_archive.archive_id,
+                    first_archive.commitment.clone(),
+                ),
+                lifecycle: MusubiReplicationOrderLocationLifecycleV1::PreLocation,
+            },
+        );
+    transaction
+        .world
+        .musubi_archives
+        .insert(first_archive.archive_id, first_archive);
     bind_location_reverse_indices(None, &first, &mut transaction)
         .expect("first exact location binding succeeds");
     assert!(
@@ -1034,13 +1059,33 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
             .get(&pin)
             .is_some_and(|reference| reference.active && reference.location == first.key())
     );
-    let conflicting = location_fixture(
-        0xA4,
-        pin,
-        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x25; 32]),
-    );
-    bind_location_reverse_indices(None, &conflicting, &mut transaction)
+    let conflicting_archive = retention_archive(0xA4);
+    let conflicting_order =
+        iroha_data_model::sorafs::pin_registry::ReplicationOrderId::new([0x25; 32]);
+    let mut conflicting = location_fixture(0xA4, pin, conflicting_order);
+    conflicting.archive_id = conflicting_archive.archive_id;
+    transaction
+        .world
+        .musubi_locations_by_replication_order
+        .insert(
+            conflicting_order,
+            MusubiReplicationOrderLocationReferenceV1 {
+                binding: MusubiReplicationOrderArchiveBindingV1::new(
+                    conflicting_order,
+                    conflicting_archive.archive_id,
+                    conflicting_archive.commitment.clone(),
+                ),
+                lifecycle: MusubiReplicationOrderLocationLifecycleV1::PreLocation,
+            },
+        );
+    transaction
+        .world
+        .musubi_archives
+        .insert(conflicting_archive.archive_id, conflicting_archive);
+    let error = bind_location_reverse_indices(None, &conflicting, &mut transaction)
         .expect_err("one pin manifest cannot be rebound to another location");
+    assert!(matches!(error, Error::InvariantViolation(message)
+        if message.contains("pin manifests cannot be reused")));
     retire_location_reverse_indices(&first, &mut transaction)
         .expect("retirement atomically leaves reuse tombstones");
     assert!(
@@ -1050,8 +1095,10 @@ fn location_reverse_indices_reject_reuse_and_retain_tombstones() {
             .get(&pin)
             .is_some_and(|reference| !reference.active && reference.location == first.key())
     );
-    bind_location_reverse_indices(None, &conflicting, &mut transaction)
+    let error = bind_location_reverse_indices(None, &conflicting, &mut transaction)
         .expect_err("retired pin tombstones permanently reject reuse");
+    assert!(matches!(error, Error::InvariantViolation(message)
+        if message.contains("pin manifests cannot be reused")));
 }
 #[test]
 fn namespace_binding_replay_requires_current_owner_authorization() {
@@ -1237,6 +1284,13 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
     let owner = account(43);
     let address = iroha_data_model::account::AccountAddress::from_account_id(&owner)
         .expect("account address");
+    let mut metadata = iroha_data_model::metadata::Metadata::default();
+    metadata.insert(
+        crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+            .parse()
+            .expect("dataspace id metadata key"),
+        iroha_primitives::json::Json::new(7_u64),
+    );
     let record = iroha_data_model::sns::NameRecordV1::new(
         selector.clone(),
         owner,
@@ -1246,7 +1300,7 @@ fn namespace_home_dataspace_rejects_static_dynamic_alias_conflicts_for_all_scope
         110,
         210,
         310,
-        iroha_data_model::metadata::Metadata::default(),
+        metadata,
     );
     let mut world = World::default();
     world

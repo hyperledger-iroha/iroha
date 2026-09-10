@@ -130,29 +130,34 @@ impl StreamTokenHardwareClientV1 for StreamTokenHardwareBrokerClient {
         expected: &SignerStreamTokenExpectedV1,
         body: &sorafs_manifest::StreamTokenBodyV1,
     ) -> Result<StreamTokenHardwareReceiptV1, StreamTokenHardwareCallErrorV1> {
+        let deadline =
+            BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1).map_err(stream_token_transport_error)?;
         let payload = self.prepared_payload(expected, body)?;
-        let latch = self
-            .latch
-            .lock()
-            .map_err(|_| StreamTokenHardwareCallErrorV1::Unavailable)?;
+        let latch = deadline
+            .lock(&self.latch)
+            .map_err(stream_token_transport_error)?;
         if !matches!(*latch, StreamTokenSignLatchV1::Ambiguous(operation) if operation == expected.operation_id())
         {
             return Err(StreamTokenHardwareCallErrorV1::Refused);
         }
         // This temporary independently authenticated connection executes only the exact read.
         // It never replaces the signed session, resets its poison, or makes another Sign.
-        let session = stream_token_read_session(&self.session, &self.binding, self.metadata_digest)
-            .map_err(stream_token_transport_error)?;
+        let session =
+            stream_token_read_session(&self.session, &self.binding, self.metadata_digest, deadline)
+                .map_err(stream_token_transport_error)?;
         let receipt = session
-            .call_sensitive(
+            .call_before(
                 &self.binding,
                 self.metadata_digest,
                 OPERATION_STREAM_TOKEN_RECOVER_V1,
                 payload,
                 false,
+                deadline,
             )
             .map_err(stream_token_transport_error)?;
-        StreamTokenHardwareReceiptV1::new(receipt.to_vec())
+        let receipt = StreamTokenHardwareReceiptV1::new(receipt.to_vec())?;
+        deadline.remaining().map_err(stream_token_transport_error)?;
+        Ok(receipt)
     }
 }
 
@@ -173,6 +178,8 @@ impl StreamTokenStateObserverClientV1 for StreamTokenObserverBrokerClient {
         &self,
         request: &SignerStreamTokenObservationRequestV1,
     ) -> Result<StreamTokenObserverReplyV1, StreamTokenHardwareCallErrorV1> {
+        let deadline =
+            BrokerDeadlineV1::new(BROKER_IO_TIMEOUT_V1).map_err(stream_token_transport_error)?;
         let payload = request
             .encode_canonical()
             .map_err(|_| StreamTokenHardwareCallErrorV1::Refused)?;
@@ -180,22 +187,26 @@ impl StreamTokenStateObserverClientV1 for StreamTokenObserverBrokerClient {
             .map_err(stream_token_transport_error)?;
         // The observer remains separately routed and usable after the Sign connection is
         // poisoned. Its signed evidence never obtains authority from this shared endpoint.
-        let session = stream_token_read_session(&self.session, &self.binding, self.metadata_digest)
-            .map_err(stream_token_transport_error)?;
+        let session =
+            stream_token_read_session(&self.session, &self.binding, self.metadata_digest, deadline)
+                .map_err(stream_token_transport_error)?;
         let result = session
-            .call(
+            .call_before(
                 &self.binding,
                 self.metadata_digest,
                 OPERATION_STREAM_TOKEN_OBSERVE_V1,
-                payload.clone(),
+                ScrubbedBytes::new(payload.clone()),
                 false,
+                deadline,
             )
             .map_err(stream_token_transport_error)?;
         // Typed result validation already ran under the result-owned decode admission. This
         // second conversion only transfers the bounded untrusted wire leaves to Torii's owner.
         let _scope = result.enter_decode_admission();
-        decode_stream_token_observer_reply(&self.binding, &payload, &result)
-            .map_err(stream_token_transport_error)
+        let reply = decode_stream_token_observer_reply(&self.binding, &payload, &result)
+            .map_err(stream_token_transport_error)?;
+        deadline.remaining().map_err(stream_token_transport_error)?;
+        Ok(reply)
     }
 }
 
@@ -203,12 +214,15 @@ fn stream_token_read_session(
     original: &BrokerSession,
     binding: &ProviderBindingWireV1,
     metadata_digest: [u8; 32],
+    deadline: BrokerDeadlineV1,
 ) -> Result<Arc<BrokerSession>, BrokerError> {
-    let (session, observations) = BrokerSession::connect(
+    let (session, observations) = BrokerSession::connect_before(
         &original.endpoint,
         &original.chain_id,
         original.network_id,
         vec![binding.clone()],
+        deadline,
+        Arc::clone(&original.decode_pool),
     )?;
     if observations.len() != 1
         || observations[0].binding != *binding

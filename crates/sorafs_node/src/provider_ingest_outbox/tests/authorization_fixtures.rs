@@ -159,22 +159,16 @@ pub(super) fn assert_musubi_context_rejects_unmarked_network(
             payload(context),
             "raw carrier must preserve the complete valid context in layout {flags:#04x}"
         );
-        let valid = norito::core::frame_bare_with_header_flags::<
-            FinalizedProviderIngestMusubiContextV1,
-        >(&payload(&raw), flags)
-        .expect("frame valid context");
-        assert_eq!(
-            norito::decode_from_bytes::<FinalizedProviderIngestMusubiContextV1>(&valid)
-                .expect("decode valid context"),
-            *context
-        );
+        let valid = payload(&raw);
+        let (decoded, used) =
+            norito::core::decode_field_canonical::<FinalizedProviderIngestMusubiContextV1>(&valid)
+                .expect("decode valid nested context in the selected layout");
+        assert_eq!(decoded, *context);
+        assert_eq!(used, valid.len());
         raw.network_id.0[Hash::LENGTH - 1] &= !1;
-        let invalid = norito::core::frame_bare_with_header_flags::<
-            FinalizedProviderIngestMusubiContextV1,
-        >(&payload(&raw), flags)
-        .expect("frame malformed context payload");
+        let invalid = payload(&raw);
         assert!(matches!(
-            norito::decode_from_bytes::<FinalizedProviderIngestMusubiContextV1>(&invalid),
+            norito::core::decode_field_canonical::<FinalizedProviderIngestMusubiContextV1>(&invalid),
             Err(norito::Error::Message(message)) if message == "invalid hash lsb"
         ));
     }

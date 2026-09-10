@@ -76,9 +76,7 @@ impl VisitExecute for InstructionBox {
     }
 }
 mod multisig;
-pub(super) fn is_reserved_multisig_metadata_key(
-    key: &iroha_smart_contract::data_model::name::Name,
-) -> bool {
+pub(super) fn is_reserved_multisig_metadata_key(key: &iroha_model_base::name::Name) -> bool {
     multisig::is_reserved_multisig_metadata_key(key)
 }
 #[cfg(test)]

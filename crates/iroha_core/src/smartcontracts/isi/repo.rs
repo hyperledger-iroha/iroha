@@ -842,6 +842,73 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
+    #[test]
+    fn repo_numeric_capability_preserves_typed_consent_and_maturity_frames() {
+        use iroha_data_model::isi::settlement::SettlementId;
+        let (_state, agreement, cash, collateral) = setup_state();
+        let legs = [
+            (
+                AssetId::new(cash.clone(), ALICE_ID.clone()),
+                AssetId::new(cash, BOB_ID.clone()),
+                Quantity::from(10_u32),
+            ),
+            (
+                AssetId::new(collateral.clone(), BOB_ID.clone()),
+                AssetId::new(collateral, ALICE_ID.clone()),
+                Quantity::from(12_u32),
+            ),
+        ];
+        let settlement: SettlementId = "consent_trade".parse().unwrap();
+        let initiation = (
+            settlement,
+            Hash::new(b"initiation-consent"),
+            Hash::new(b"maturity-consent"),
+        );
+        let pair =
+            VerifiedRepoNumericPair::new(ALICE_ID.clone(), &initiation, legs.clone()).unwrap();
+        let (authority, binding, retained_legs) = pair.into_parts();
+        assert_eq!(authority, *ALICE_ID);
+        assert_eq!(retained_legs, legs);
+        assert_eq!(
+            norito::decode_canonical::<(SettlementId, Hash, Hash)>(&binding).unwrap(),
+            initiation
+        );
+        assert_eq!(binding, norito::encode_canonical(&initiation).unwrap());
+        assert!(matches!(
+            norito::decode_canonical::<(RepoAgreementId, Hash, Hash)>(&binding),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let mut different_consent = initiation.clone();
+        different_consent.2 = Hash::new(b"other-maturity-consent");
+        let (_, changed, _) =
+            VerifiedRepoNumericPair::new(ALICE_ID.clone(), &different_consent, legs.clone())
+                .unwrap()
+                .into_parts();
+        assert_ne!(Hash::new(&binding), Hash::new(&changed));
+        assert!(
+            norito::decode_canonical::<(SettlementId, Hash, Hash)>(&binding[..binding.len() - 1])
+                .is_err()
+        );
+        let maturity = (agreement, 1_700_000_000_000_u64);
+        let (_, binding, retained_legs) =
+            VerifiedRepoNumericPair::new(ALICE_ID.clone(), &maturity, legs.clone())
+                .unwrap()
+                .into_parts();
+        assert_eq!(retained_legs, legs);
+        assert_eq!(
+            norito::decode_canonical::<(RepoAgreementId, u64)>(&binding).unwrap(),
+            maturity
+        );
+        assert!(matches!(
+            norito::decode_canonical::<(SettlementId, u64)>(&binding),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let (_, later, _) =
+            VerifiedRepoNumericPair::new(ALICE_ID.clone(), &(maturity.0, maturity.1 + 1), legs)
+                .unwrap()
+                .into_parts();
+        assert_ne!(Hash::new(&binding), Hash::new(&later));
+    }
     fn checked_account_id() -> AccountId {
         let key_pair = KeyPair::try_random().expect("repo fixture key generation should succeed");
         AccountId::new(key_pair.public_key().clone())

@@ -104,6 +104,7 @@ iroha = { workspace = true }
 zk_ace_prover = { path = "../crates/zk_ace_prover", optional = true }
 
 [dev-dependencies]
+iroha_model_base = { workspace = true }
 iroha_service_model = { workspace = true }
 iroha_logger = { workspace = true }
 iroha_config = { workspace = true }

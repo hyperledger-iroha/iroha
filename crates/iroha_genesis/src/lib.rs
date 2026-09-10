@@ -15,6 +15,7 @@
     clippy::items_after_statements,
     clippy::clone_on_copy
 )]
+use iroha_model_base::name::Name;
 mod bounded_manifest;
 #[cfg(test)]
 mod ivm_path_codec_tests;

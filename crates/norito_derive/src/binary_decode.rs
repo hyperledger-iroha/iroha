@@ -910,7 +910,7 @@ pub(super) fn derive_enum_deserialize(
         ident,
         &r#gen,
         container_attrs,
-        slice_decode::DecodeBody::Archived(decode_from_archived_body()),
+        slice_decode::DecodeBody::Prefix,
     );
     quote! {
         impl #impl_generics norito::core::DeserializePayload<'de> for #ident #ty_generics #where_clause {

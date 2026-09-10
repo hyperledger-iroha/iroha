@@ -141,8 +141,8 @@ fn terminal_handoffs_use_exact_finalization_block_across_later_tips() {
     let second_handoffs = queue(&second);
     assert_eq!(first_handoffs.len(), 2);
     assert_eq!(
-        norito::to_bytes(&first_handoffs).expect("encode first handoffs"),
-        norito::to_bytes(&second_handoffs).expect("encode second handoffs")
+        norito::codec::encode_adaptive(&first_handoffs),
+        norito::codec::encode_adaptive(&second_handoffs)
     );
     assert!(first_handoffs.iter().all(|handoff| {
         handoff.finalized_cursor

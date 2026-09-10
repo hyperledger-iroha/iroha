@@ -133,6 +133,7 @@ impl Platform {
     norito::derive::NoritoDeserialize,
     norito::derive::NoritoSerialize,
 )]
+
 pub struct RegisterDeviceRequest {
     pub account_id: String,
     pub platform: String,
@@ -3801,6 +3802,27 @@ mod tests {
             token: "token-123".to_string(),
             topics: None,
         };
+        let encoded = crate::frame_test_support::assert_current_frame(
+            &request,
+            "iroha_torii::push::RegisterDeviceRequest",
+        );
+        let mut wrong_owner = encoded.clone();
+        wrong_owner[6] ^= 1;
+        for invalid in [wrong_owner, encoded[..encoded.len() - 1].to_vec()] {
+            let error =
+                crate::utils::extractors::decode_body_as_norito_or_json::<RegisterDeviceRequest>(
+                    &axum::body::Bytes::from(invalid),
+                    crate::utils::TypedRequestContentFormat::Norito,
+                )
+                .expect_err("invalid device frame must reject after authentication");
+            assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
+        }
+        let request =
+            crate::utils::extractors::decode_body_as_norito_or_json::<RegisterDeviceRequest>(
+                &axum::body::Bytes::from(encoded),
+                crate::utils::TypedRequestContentFormat::Norito,
+            )
+            .expect("decode the canonical device request at the actual typed boundary");
         bridge
             .register_device(request.clone())
             .expect("register device");

@@ -1,7 +1,9 @@
 //! Exact source resource measurement before private touched-tree construction.
 //!
-//! Transcript usage is additive; execution-entry scope is supplied separately by
-//! its owner because non-transfer entries count and repeated fragments share E.
+//! Public statement usage is additive only across complete disjoint entry bundles.
+//! Fragments of the same entry must be remeasured together: common asset scales,
+//! repeated-key chronology and framing span their complete ordered transcripts.
+//! Execution-entry scope is supplied separately because non-transfer entries count.
 //! This seam does not reserve runtime quotas or authenticate that entry scope.
 
 use super::{
@@ -10,7 +12,7 @@ use super::{
 };
 use crate::fastpq::quantity_statement::quantity_statement_frame_len_from_finalized_transcripts;
 
-/// Exact measured transcript dimensions, independent of owned execution-entry scope.
+/// Exact measured complete-bundle dimensions, independent of owned execution-entry scope.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct FastpqSourceTranscriptUsage {
     /// Whole original transcript occurrences, including identical repeated occurrences.
@@ -19,20 +21,21 @@ pub(crate) struct FastpqSourceTranscriptUsage {
     pub deltas: usize,
     /// Complete canonical private-input frames, including supplied witness paths.
     pub input_transcript_bytes: usize,
-    /// Largest complete canonical public statement frame among these occurrences.
+    /// Largest complete canonical public statement frame among the entry bundles.
     pub max_statement_bytes: usize,
-    /// Sum of complete canonical public statement frames, one per transcript.
+    /// Sum of complete canonical public statement frames, one per nonempty entry bundle.
     pub total_statement_bytes: usize,
 }
 
 impl FastpqSourceTranscriptUsage {
-    /// Add disjoint transcript-occurrence sets without inventing an execution-entry sum.
-    /// Callers must ensure occurrences do not overlap and separately derive the complete
+    /// Add measurements for disjoint complete entry bundles, never fragments of one entry.
+    /// Callers must ensure entry identities do not overlap and separately derive the complete
     /// prospective E count, including entries without transcripts, from owned identities.
+    /// A repeated entry must be remeasured as its complete ordered transcript slice.
     ///
     /// # Errors
     /// Rejects arithmetic overflow without mutating either usage value.
-    pub(crate) fn checked_add(self, other: Self) -> Result<Self, String> {
+    fn checked_add_disjoint_entries(self, other: Self) -> Result<Self, String> {
         let add = |left: usize, right: usize| {
             left.checked_add(right)
                 .ok_or_else(|| "FASTPQ source usage overflows".to_owned())
@@ -129,23 +132,16 @@ pub(crate) fn measure_fastpq_source_statement_usage(
     };
     let public_limits = source_statement_public_limits(limits)?;
     for (entry_hash, bundle) in transcripts {
-        for (index, transcript) in bundle.iter().enumerate() {
-            let bytes = quantity_statement_frame_len_from_finalized_transcripts(
-                std::slice::from_ref(transcript),
-                public_limits,
-            )
+        let bytes = quantity_statement_frame_len_from_finalized_transcripts(bundle, public_limits)
             .map_err(|error| {
-                format!(
-                    "FASTPQ source bundle {entry_hash} transcript {index} is not finalized: {error}"
-                )
+                format!("FASTPQ source bundle {entry_hash} is not finalized: {error}")
             })?;
-            usage = usage.checked_add(FastpqSourceTranscriptUsage {
-                max_statement_bytes: bytes,
-                total_statement_bytes: bytes,
-                ..FastpqSourceTranscriptUsage::default()
-            })?;
-            usage.check_limits(executed_entry_count, limits)?;
-        }
+        usage = usage.checked_add_disjoint_entries(FastpqSourceTranscriptUsage {
+            max_statement_bytes: bytes,
+            total_statement_bytes: bytes,
+            ..FastpqSourceTranscriptUsage::default()
+        })?;
+        usage.check_limits(executed_entry_count, limits)?;
     }
     Ok(usage)
 }

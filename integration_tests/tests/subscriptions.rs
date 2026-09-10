@@ -10,6 +10,7 @@ use iroha::{
     blocking::Client,
     data_model::{Level, asset::AssetId, prelude::*},
 };
+use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use ivm::{ProgramMetadata, encoding, instruction, syscalls};

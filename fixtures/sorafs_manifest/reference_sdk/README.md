@@ -2,7 +2,7 @@
 
 The three `pop_membership_*` payloads exercise the native PoP **structural
 validator** used by Kotlin, Java-source consumers, Swift, JNI, FFI and
-`sorafs-validate pop`. The current V1 wire includes a nonzero
+`iroha app sorafs toolkit validate pop`. The current V1 wire includes a nonzero
 `presentation_binding_digest`; the negatives omit that field under the actual
 current schema or set it to zero. Each payload has an exact
 `ValidationOutcomeV1` JSON result in the signed fixture inventory.

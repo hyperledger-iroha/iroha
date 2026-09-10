@@ -321,10 +321,7 @@ fn streaming_writer_errors_never_return_a_partial_digest() {
 
 /// A serializer-owned allocation charge tests the adapter's inherited-budget error path.
 #[derive(norito::NoritoSchema)]
-#[norito_schema(
-    name = "iroha_core::state::fastpq_source_inventory::public_seal::tests::BudgetedField",
-    frame = "u8"
-)]
+#[norito_schema(name = "test::iroha_core::BudgetedField", frame = "u8")]
 struct BudgetedField;
 
 impl norito::SerializePayload for BudgetedField {
@@ -333,6 +330,16 @@ impl norito::SerializePayload for BudgetedField {
         writer.write_all(&[42])?;
         Ok(())
     }
+}
+
+#[test]
+fn canonical_budgeted_field_has_the_exact_primitive_frame() {
+    let mut actual = Vec::new();
+    write_canonical_field(&mut actual, &BudgetedField).unwrap();
+    let mut expected = Vec::new();
+    write_canonical_field(&mut expected, &42_u8).unwrap();
+    assert_eq!(actual, expected);
+    assert_eq!(norito::decode_canonical::<u8>(&actual).unwrap(), 42);
 }
 
 #[test]

@@ -1,10 +1,11 @@
 use crate::{Outcome, RunArgs, tui};
 use clap::Parser;
 use color_eyre::eyre::{WrapErr as _, eyre};
-use iroha_data_model::{account::address::ChainDiscriminantGuard, name::Name};
+use iroha_data_model::account::address::ChainDiscriminantGuard;
 use iroha_genesis::{
     ManifestCrypto, RawGenesisTransaction, genesis_instructions_json, read_genesis_manifest_bytes,
 };
+use iroha_model_base::name::Name;
 use std::{
     io::{BufWriter, Write},
     path::PathBuf,

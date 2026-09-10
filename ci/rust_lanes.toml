@@ -21,6 +21,7 @@ packages = [
   "iroha_file_mmap",
   "iroha_i18n",
   "iroha_macro",
+  "iroha_model_base",
   "iroha_primitives",
   "iroha_primitives_derive",
   "iroha_schema",

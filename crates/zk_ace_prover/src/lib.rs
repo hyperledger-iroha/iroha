@@ -690,7 +690,9 @@ where
 /// Fails closed for invalid policy, context, witness binding, or genesis. An
 /// otherwise valid request returns
 /// [`ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable`] before using
-/// `randomness` while the 128-bit commitment remediation remains incomplete.
+/// `randomness` while the final qROM Fiat-Shamir reduction, six-lane collision
+/// and multi-target accounting, and independent implementation review remain
+/// unregistered for the exact compiled profile.
 #[expect(
     clippy::needless_pass_by_value,
     reason = "the owning convenience API keeps transfer inputs uniform"
@@ -837,12 +839,12 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
         domain::DomainId,
-        name::Name,
         privacy::{
             PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyPolicyDigestV1,
             PrivacyZkAceIdentityCommitmentV1, PrivacyZkAcePolicyRecordDigestV1,
         },
     };
+    use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     fn key_pair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)

@@ -132,7 +132,7 @@ read-only.
 
 `python3 scripts/check_dependency_budget.py` enforces the exact no-growth
 limits in `ci/dependency_budget.json`. The checked-in scopes cover source
-graphs rooted at the shipping crates `iroha`, `iroha_data_model`, `irohad`, and
+graphs rooted at the shipping crates `iroha_model_base`, `iroha`, `iroha_data_model`, `irohad`, and
 `iroha_cli`, plus a whole-workspace/all-targets scope whose roots include
 development dependencies. CI runs this source-only check before classifying
 affected Rust lanes, so it does not fetch crates, invoke Cargo, depend on the
@@ -164,6 +164,14 @@ ceiling and should ratchet it downward in the same change. Required UI/media
 stacks listed in `denied_required_packages` cannot be blessed by a refresh.
 Any manifest-fingerprint drift fails closed until that dependency change and
 the refreshed exact limits are reviewed together.
+
+The foundational model extraction adds one local compilation unit and direct
+consumer ownership edges. Its reviewed graph adds no external package and keeps
+shared `derive_more` and `sha2` declarations in both owners where they are used.
+The base scope has 13 required local packages, 30 external packages and 72
+required declaration edges. Four separately resolved base feature selections
+reject aggregate, privacy/service, HTTP, storage and node execution paths;
+normal and build dependencies are both checked.
 
 `python3 scripts/check_dependency_budget.py --check-boundaries` additionally
 enforces the `architecture` layer ownership and shipping configurations in
@@ -367,3 +375,9 @@ selectors are rejected. Root and external file identities remain independently
 sealed even though their bytes match. Changed manifests or dependencies require
 an explicit graph review, a coherent owner update, and fresh native artifacts;
 source, wheel, ABI, hardware and clean-release gates still apply.
+Review both lock entries and manifest dependency kinds, target conditions and
+features: an unchanged package version inventory does not imply an unchanged
+build closure. After an approved graph change, replace the sole digest and
+provision a fresh external snapshot; previous graph snapshots remain historical
+evidence and cannot authorize new builds. Retain locked metadata validation and
+independent root/external identity checks before and after it.

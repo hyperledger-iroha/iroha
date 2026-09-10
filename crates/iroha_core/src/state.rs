@@ -80,7 +80,6 @@ use iroha_data_model::{
         pin_intent::DaPinIntentWithLocation,
         types::{BlobDigest, StorageTicketId},
     },
-    error::ParseError,
     escrow::{AssetEscrowRecord, AssetEscrowStatus, EscrowId},
     events::{
         EventBox, SharedDataEvent,
@@ -133,7 +132,6 @@ use iroha_data_model::{
         MusubiReplicationOrderLocationReferenceV1, MusubiResolverReleaseRowV1,
         MusubiStorageAvailabilityV1, musubi_provider_bundle_attestation_set_digest_v1,
     },
-    name::Name,
     nexus::{
         AUTOSCALE_META_COMMITTEE, AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_DRAIN_STATE,
         AUTOSCALE_META_MANAGED, AxtAssetIncarnationV1, AxtEnvelopeRecord, AxtHandleBudgetKey,
@@ -199,7 +197,6 @@ use iroha_data_model::{
         pricing::{PricingScheduleRecord, ProviderCreditRecord},
     },
     soranet::vpn::{VpnAddressSlotV1, VpnLeaseRecordV1, VpnLeaseStatusV1},
-    state_path::StatePath,
     transaction::signed::{SignedTransaction, TransactionEntrypoint, TransactionResult},
 };
 use iroha_executor_data_model::permission::{
@@ -209,6 +206,7 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_logger::prelude::*;
+use iroha_model_base::{error::ParseError, name::Name, state_path::StatePath};
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -381,7 +379,10 @@ mod committed_transaction_context;
 mod da_hydration;
 mod fastpq_source_inventory;
 mod prepared_transfer_transcript;
-pub use fastpq_source_inventory::FastpqSourceInventoryV1;
+pub use fastpq_source_inventory::{
+    FastpqSourceInventoryV1, FastpqSourceStatementAttemptV1, FastpqSourceStatementBudgetV1,
+    FastpqSourceStatementUsageV1,
+};
 mod lane_authority;
 mod tiered;
 use canonical_history::committed_block_from_kura;
@@ -2178,9 +2179,8 @@ impl VerifiedNexusFeeBurn {
         (self.asset_id, self.amount)
     }
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::AppliedMergeExecutionBatchMarker")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AppliedMergeExecutionBatchMarker {
     version: u8,
     epoch_id: u64,
@@ -2189,9 +2189,8 @@ struct AppliedMergeExecutionBatchMarker {
     execution_root: Hash,
     application_write_set_root: Hash,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::AppliedMergeLaneExecutionMarker")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AppliedMergeLaneExecutionMarker {
     version: u8,
     epoch_id: u64,
@@ -2201,9 +2200,8 @@ struct AppliedMergeLaneExecutionMarker {
     lane_execution_hash: Hash,
 }
 /// Replicated exact per-lane frontier used by the two-phase autoscale drain.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::AppliedMergeLaneFrontierMarker")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 struct AppliedMergeLaneFrontierMarker {
     version: u8,
     lane_id: LaneId,
@@ -2212,12 +2210,184 @@ struct AppliedMergeLaneFrontierMarker {
     lane_block_height: u64,
     lane_block_descriptor_hash: Hash,
 }
+#[cfg(test)]
+mod remaining_state_frame_identity_tests {
+    use super::*;
+    use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1;
+
+    #[test]
+    fn independently_framed_state_records_declare_current_contracts() {
+        fn decoded<T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>>(
+            name: &str,
+        ) {
+            assert_eq!(T::nominal_name(), name);
+            assert_eq!(T::frame_name(), name);
+        }
+        macro_rules! check {
+            ($owner:ident) => {
+                decoded::<$owner>(concat!("iroha_core::state::", stringify!($owner)));
+            };
+        }
+        check!(AppliedNativeAmxParticipantFrontierMarker);
+        check!(AutoscaleLaneCommitteeV1);
+        assert_eq!(
+            <NativeAmxParticipantApplicationDiagnosticIdentity as norito::NoritoSchema>::frame_name(
+            ),
+            "iroha_core::state::NativeAmxParticipantApplicationDiagnosticIdentity"
+        );
+    }
+
+    #[test]
+    fn native_participant_marker_frame_preserves_exact_route_and_predecessor() {
+        let marker = AppliedNativeAmxParticipantFrontierMarker {
+            version: 2,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"native-frame-incarnation"),
+            lane_block_height: 1,
+            participant_view: 3,
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Hash::new(b"native-frame-descriptor"),
+            participant_proposal_hash: Hash::new(b"native-frame-proposal"),
+            participant_settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-frame-settlement",
+            )),
+            application_block_height: 8,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-frame-carrier",
+            )),
+            source_count: 2,
+        };
+        assert_private_settlement_frame_v1(
+            &marker,
+            "iroha_core::state::AppliedNativeAmxParticipantFrontierMarker",
+        );
+        let (key, bytes) = State::encode_native_amx_participant_frontier_marker(marker)
+            .expect("encode exact participant marker");
+        assert_eq!(
+            State::decode_exact_native_amx_participant_frontier_marker(&key, &bytes)
+                .expect("exact participant marker validates"),
+            marker
+        );
+        let mut wrong_route = marker;
+        wrong_route.lane_id = LaneId::new(8);
+        let (_, wrong_bytes) = State::encode_native_amx_participant_frontier_marker(wrong_route)
+            .expect("encode another valid route");
+        assert!(
+            State::decode_exact_native_amx_participant_frontier_marker(&key, &wrong_bytes).is_err()
+        );
+        let mut wrong_predecessor = marker;
+        wrong_predecessor.previous_lane_block_height = 1;
+        wrong_predecessor.previous_lane_block_descriptor_hash = Some(Hash::new(b"wrong-parent"));
+        let (_, wrong_bytes) =
+            State::encode_native_amx_participant_frontier_marker(wrong_predecessor)
+                .expect("encode malformed predecessor as a current-owner payload");
+        assert!(
+            State::decode_exact_native_amx_participant_frontier_marker(&key, &wrong_bytes).is_err()
+        );
+        let identity = NativeAmxParticipantApplicationDiagnosticIdentity {
+            lane_id: marker.lane_id,
+            dataspace_id: marker.dataspace_id,
+            lane_incarnation: marker.lane_incarnation,
+            participant_height: marker.lane_block_height,
+            participant_view: marker.participant_view,
+            predecessor_height: marker.previous_lane_block_height,
+            predecessor_descriptor_hash: marker.previous_lane_block_descriptor_hash,
+            descriptor_hash: marker.lane_block_descriptor_hash,
+            proposal_hash: marker.participant_proposal_hash,
+            settlement_hash: marker.participant_settlement_hash,
+            source_count: marker.source_count,
+        };
+        let frame = identity.canonical_bytes();
+        assert_eq!(
+            frame[6..22],
+            norito::schema::identity::frame_hash::<NativeAmxParticipantApplicationDiagnosticIdentity>(
+            )
+        );
+        assert!(matches!(
+            norito::decode_canonical::<AppliedNativeAmxParticipantFrontierMarker>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
+    #[test]
+    fn committee_frame_preserves_validated_shape() {
+        let mut lane = iroha_data_model::nexus::LaneConfig::default();
+        attach_synthetic_autoscale_committee_for_test(&mut lane);
+        let committee = decode_autoscale_lane_committee(&lane)
+            .expect("canonical committee metadata and PoPs validate")
+            .expect("fixture has an exact committee");
+        assert_eq!((committee.validator_count, committee.min_quorum), (4, 3));
+        assert_private_settlement_frame_v1(
+            &committee,
+            "iroha_core::state::AutoscaleLaneCommitteeV1",
+        );
+    }
+}
+#[cfg(test)]
+mod merge_marker_frame_identity_tests {
+    use super::*;
+    use crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1;
+
+    #[test]
+    fn merge_application_markers_keep_distinct_frame_owners() {
+        let batch = AppliedMergeExecutionBatchMarker {
+            version: 1,
+            epoch_id: 9,
+            batch_identity_hash: Hash::new(b"frame-owner-batch"),
+            base_state_hash: HashOf::from_untyped_unchecked(Hash::new(b"frame-owner-base")),
+            execution_root: Hash::new(b"frame-owner-execution"),
+            application_write_set_root: Hash::new(b"frame-owner-writes"),
+        };
+        let lane = AppliedMergeLaneExecutionMarker {
+            version: batch.version,
+            epoch_id: batch.epoch_id,
+            batch_identity_hash: batch.batch_identity_hash,
+            base_state_hash: batch.base_state_hash,
+            application_write_set_root: batch.application_write_set_root,
+            lane_execution_hash: Hash::new(b"frame-owner-lane"),
+        };
+        let frontier = AppliedMergeLaneFrontierMarker {
+            version: 1,
+            lane_id: LaneId::new(7),
+            dataspace_id: DataSpaceId::new(9),
+            lane_incarnation: Hash::new(b"frame-owner-incarnation"),
+            lane_block_height: 41,
+            lane_block_descriptor_hash: Hash::new(b"frame-owner-descriptor"),
+        };
+        assert_private_settlement_frame_v1(
+            &batch,
+            "iroha_core::state::AppliedMergeExecutionBatchMarker",
+        );
+        assert_private_settlement_frame_v1(
+            &lane,
+            "iroha_core::state::AppliedMergeLaneExecutionMarker",
+        );
+        assert_private_settlement_frame_v1(
+            &frontier,
+            "iroha_core::state::AppliedMergeLaneFrontierMarker",
+        );
+        // Batch and lane records have the same primitive field sequence. Their
+        // owner envelopes must prevent one replay marker from impersonating the other.
+        let frame = norito::encode_canonical(&batch).expect("batch marker frame");
+        assert!(matches!(
+            norito::decode_canonical::<AppliedMergeLaneExecutionMarker>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        let frame = norito::encode_canonical(&lane).expect("lane marker frame");
+        assert!(matches!(
+            norito::decode_canonical::<AppliedMergeExecutionBatchMarker>(&frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+}
 /// One exact lane incarnation that remains responsible for globally admitted
 /// QueuePlan work until its canonical carrier commits the entrypoint.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationRouteV1")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationRouteV1")]
 struct QueuePlanPendingObligationRouteV1 {
     version: u16,
     lane_id: LaneId,
@@ -2230,10 +2400,10 @@ struct QueuePlanPendingObligationRouteV1 {
 /// carrier kind. Every compact identity and deduplicated route
 /// is checked against the embedded, registry-hash-authenticated admission
 /// binding whenever the marker is decoded.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingObligationV1")]
 struct QueuePlanPendingObligationV1 {
     version: u16,
     network_id_digest: Hash,
@@ -2247,10 +2417,10 @@ struct QueuePlanPendingObligationV1 {
 /// on one deduplicated route. Route-prefixed keys form the authoritative,
 /// canonically ordered roster; bounded prefix enumeration replaces the lossy
 /// count/XOR summary and keeps drain/removal exact.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::QueuePlanPendingRouteMemberV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingRouteMemberV1")]
 struct QueuePlanPendingRouteMemberV1 {
     version: u16,
     route: QueuePlanPendingObligationRouteV1,
@@ -2264,10 +2434,10 @@ struct QueuePlanPendingRouteMemberV1 {
 /// The key is ordered by network, signed payload, then outer entrypoint, so a
 /// committed signed identity can find every distinct pending carrier with one
 /// protocol-bounded prefix scan.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::QueuePlanPendingSignedAliasMemberV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanPendingSignedAliasMemberV1")]
 struct QueuePlanPendingSignedAliasMemberV1 {
     version: u16,
     network_id_digest: Hash,
@@ -2277,16 +2447,136 @@ struct QueuePlanPendingSignedAliasMemberV1 {
 }
 /// Compact outer-key evidence that a distinct committed signed identity made
 /// one QueuePlan carrier replay-terminal.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::QueuePlanSignedAliasTerminalV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::QueuePlanSignedAliasTerminalV1")]
 struct QueuePlanSignedAliasTerminalV1 {
     version: u16,
     network_id_digest: Hash,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
     signed_transaction_hash: HashOf<SignedTransaction>,
     binding_hash: Hash,
+}
+#[cfg(test)]
+mod queue_plan_pending_frame_identity_tests {
+    use super::*;
+    use crate::queue::{
+        QueuePlanAdmissionContextV1, QueuePlanRouteIncarnationV1, RouteLeg, RouteLegRole,
+        RoutingDecision, RoutingPlan,
+    };
+
+    #[test]
+    fn pending_and_alias_frames_keep_exact_owners_and_reject_substitution() {
+        fn check<T>(value: &T, nominal: &str)
+        where
+            T: norito::NoritoSerialize
+                + for<'de> norito::NoritoDeserialize<'de>
+                + PartialEq
+                + std::fmt::Debug,
+        {
+            assert_eq!(T::nominal_name(), nominal);
+            assert_eq!(T::frame_name(), nominal);
+            let frame = norito::encode_canonical(value).expect("encode pending owner");
+            assert_eq!(frame[6..22], norito::schema::identity::frame_hash::<T>());
+            assert_eq!(
+                &norito::decode_canonical::<T>(&frame).expect("decode pending owner"),
+                value
+            );
+            let mut wrong_owner = frame.clone();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+            let mut trailing = frame;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<T>(&trailing).is_err());
+        }
+
+        let network_id = iroha_data_model::NetworkId::from_genesis_hash(
+            HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"pending-owner-genesis")),
+        );
+        let signer =
+            iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
+        let validator =
+            iroha_crypto::KeyPair::from_seed(vec![0x72; 32], iroha_crypto::Algorithm::Ed25519);
+        let transaction = TransactionEntrypoint::External(
+            iroha_data_model::transaction::TransactionBuilder::new(
+                network_id,
+                AccountId::new(signer.public_key().clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(signer.private_key()),
+        );
+        let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(5));
+        let plan = RoutingPlan::single(route);
+        let validator_set = vec![iroha_data_model::peer::PeerId::new(
+            validator.public_key().clone(),
+        )];
+        let context = QueuePlanAdmissionContextV1 {
+            version: crate::queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
+            authority_height: 0,
+            proposal_height: 1,
+            predecessor_block_hash: None,
+            routing_plan_digest: plan.digest(),
+            route_incarnations: vec![QueuePlanRouteIncarnationV1 {
+                leg: RouteLeg::new(route, RouteLegRole::Coordinator),
+                lane_incarnation: Hash::new(b"pending-owner-incarnation"),
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count: 1,
+                durability_threshold: 1,
+            }],
+        };
+        let binding = crate::torii_proxy::QueuePlanAdmissionBindingV1::new(
+            &network_id,
+            &transaction,
+            &plan,
+            context,
+            73,
+        )
+        .expect("construct valid pending-owner admission");
+        let obligation = State::queue_plan_pending_obligation_from_binding(&binding)
+            .expect("construct validated pending obligation");
+        let route = obligation.routes[0];
+        let member = State::queue_plan_pending_route_member_from_obligation(&obligation, route)
+            .expect("derive the framed tuple route-member identity");
+        let alias = State::queue_plan_pending_signed_alias_member_from_obligation(&obligation)
+            .expect("external transaction has a signed alias");
+        let terminal = State::queue_plan_terminal_signed_alias_member_from_obligation(&obligation)
+            .expect("external transaction has terminal signed-alias evidence");
+        check(
+            &route,
+            "iroha_core::state::QueuePlanPendingObligationRouteV1",
+        );
+        check(
+            &obligation,
+            "iroha_core::state::QueuePlanPendingObligationV1",
+        );
+        check(&member, "iroha_core::state::QueuePlanPendingRouteMemberV1");
+        check(
+            &alias,
+            "iroha_core::state::QueuePlanPendingSignedAliasMemberV1",
+        );
+        check(
+            &terminal,
+            "iroha_core::state::QueuePlanSignedAliasTerminalV1",
+        );
+        let alias_frame = norito::encode_canonical(&alias).expect("encode pending alias");
+        let terminal_frame = norito::encode_canonical(&terminal).expect("encode terminal alias");
+        assert!(matches!(
+            norito::decode_canonical::<QueuePlanSignedAliasTerminalV1>(&alias_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_canonical::<QueuePlanPendingSignedAliasMemberV1>(&terminal_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum QueuePlanPendingRouteMemberState {
@@ -2318,10 +2608,10 @@ impl QueuePlanMarkerStorage for StorageTransaction<'_, '_, StatePath, Vec<u8>> {
 /// Replicated Native AMX participant-control frontier. Presence certifies that
 /// the global block committed the exact control QCs; the independently durable
 /// Kura application receipt determines whether its effects are published.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::AppliedNativeAmxParticipantFrontierMarker")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::AppliedNativeAmxParticipantFrontierMarker")]
 pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
     /// Exact marker layout version.
     pub(crate) version: u8,
@@ -2360,9 +2650,8 @@ pub(crate) struct AppliedNativeAmxParticipantFrontierMarker {
 /// finally an exact Kura application receipt. Keeping carrier coordinates out
 /// of the identity lets those durable stages coalesce without hiding
 /// same-height participant equivocation.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::NativeAmxParticipantApplicationDiagnosticIdentity")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode)]
 struct NativeAmxParticipantApplicationDiagnosticIdentity {
     lane_id: LaneId,
     dataspace_id: DataSpaceId,
@@ -2399,9 +2688,8 @@ impl NativeAmxParticipantApplicationDiagnosticIdentity {
 }
 /// Canonical authority pinned for the full lifetime of one autoscale lane
 /// incarnation.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::state::AutoscaleLaneCommitteeV1")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 struct AutoscaleLaneCommitteeV1 {
     version: u8,
     validator_set_hash_version: u16,
@@ -9605,10 +9893,9 @@ pub struct WorldView<'world> {
 /// fixed-shape output record map; keeping both fields makes the release
 /// assertion explicit. `replay_markers` counts both finalized receipts and
 /// terminal abort/expiry markers.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::state::PrivateSettlementLedgerMapCountsV1")]
 #[cfg(any(test, feature = "test-network-private-settlement-evidence"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::state::PrivateSettlementLedgerMapCountsV1")]
 pub struct PrivateSettlementLedgerMapCountsV1 {
     /// Governed opaque pool projections.
     pub governance: u64,
@@ -9920,6 +10207,14 @@ mod private_settlement_ledger_evidence_tests {
             .collect();
         private_settlement_ledger_evidence_commitment_v1(&borrowed, counts)
             .expect("fixture evidence encodes")
+    }
+
+    #[test]
+    fn ledger_count_frame_roundtrips_and_rejects_wrong_owner() {
+        crate::private_settlement::global_state::tests::assert_private_settlement_frame_v1(
+            &counts(),
+            "iroha_core::state::PrivateSettlementLedgerMapCountsV1",
+        );
     }
 
     #[test]
@@ -12333,6 +12628,7 @@ pub(crate) struct SccpVerifierWorkV1 {
 }
 
 /// Fully validated SCCP replay mutation staged until surrounding settlement cannot fail.
+#[derive(Debug)]
 pub(crate) struct PreparedSccpReplayMutationV1 {
     accumulator_id: SccpReplayAccumulatorIdV1,
     forest: SccpReplayForestV1,
@@ -15515,7 +15811,7 @@ mod stake_snapshot_tests {
     ) -> PublicLaneValidatorRecord {
         let activation_height = match &status {
             PublicLaneValidatorStatus::PendingActivation(height) => *height,
-            _ => 1,
+            _ => 0,
         };
         let deactivation_height = match &status {
             PublicLaneValidatorStatus::Exiting(_)
@@ -16008,16 +16304,20 @@ mod stake_snapshot_tests {
     }
     #[test]
     fn state_block_due_activation_ignores_mismatched_public_lane_validator_rows() {
-        let world = World::default();
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), std::sync::Arc::clone(&kura), query);
         let valid_kp = crate::state::checked_keypair();
         let mismatched_kp = crate::state::checked_keypair();
         let valid_validator = DMAccountId::of(valid_kp.public_key().clone());
         let mismatched_validator = DMAccountId::of(mismatched_kp.public_key().clone());
-        let valid_lane = LaneId::new(11);
+        let valid_lane = LaneId::SINGLE;
         let mismatched_key_lane = LaneId::new(12);
         let mismatched_record_lane = LaneId::new(13);
         {
-            let mut block = world.public_lane_validators.block();
+            // Inject the malformed row after validated state construction so this
+            // test reaches the activation filter rather than snapshot admission.
+            let mut block = state.world.public_lane_validators.block();
             block.insert(
                 (valid_lane, valid_validator.clone()),
                 lane_validator_record(
@@ -16040,9 +16340,6 @@ mod stake_snapshot_tests {
             );
             block.commit();
         }
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let state = State::new_for_testing(world, std::sync::Arc::clone(&kura), query);
         let header = BlockHeader::new(
             core::num::NonZeroU64::new(9).expect("non-zero height"),
             None,
@@ -16934,9 +17231,9 @@ mod storage_migration_tests {
         },
         domain::DomainId,
         metadata::Metadata,
-        name::Name,
         nexus::{AssetPermissionManifest, DataSpaceId, ManifestVersion, UniversalAccountId},
     };
+    use iroha_model_base::name::Name;
     use std::{
         collections::{BTreeMap, BTreeSet},
         sync::Arc,
@@ -17562,7 +17859,7 @@ mod custom_parameter_tests {
     fn params_with_gas_limit(payload: Option<Json>) -> Parameters {
         let mut params = Parameters::default();
         if let Some(payload) = payload {
-            let name = iroha_data_model::name::Name::from_str("ivm_gas_limit_per_block")
+            let name = iroha_model_base::name::Name::from_str("ivm_gas_limit_per_block")
                 .expect("constant parameter name is valid");
             let id = CustomParameterId::new(name);
             let custom = iroha_data_model::parameter::CustomParameter::new(id, payload);
@@ -20525,6 +20822,17 @@ mod confidential_policy_transition_index_tests {
             Kura::blank_kura_for_testing(),
             crate::query::store::LiveQueryStore::start_test(),
         );
+        state
+            .block(BlockHeader::new(
+                NonZeroU64::new(1).expect("genesis height"),
+                None,
+                None,
+                None,
+                0,
+                0,
+            ))
+            .commit_world_overlay_for_testing()
+            .expect("seed asset incarnations at genesis");
         let header = BlockHeader::new(
             NonZeroU64::new(5).expect("nonzero height"),
             None,
@@ -22494,9 +22802,13 @@ mod bootle_lantern_policy_world_read_tests {
         );
         let mut corrupted_policy = policy;
         corrupted_policy.record_digest = PrivacyBootleLanternIssuerPolicyDigestV1::new([0xD1; 32]);
-        let validation_error = corrupted_policy
-            .validate()
-            .expect_err("corrupted self-digest must reject");
+        assert_eq!(
+            corrupted_policy
+                .validate()
+                .expect_err("corrupted self-digest must reject")
+                .to_string(),
+            "Bootle/Lantern issuer-policy record digest mismatch"
+        );
         let mut corrupted_world = World::default();
         corrupted_world.privacy_commitments.insert(
             policy_key_v1(issuer_id, policy_id),
@@ -22511,7 +22823,7 @@ mod bootle_lantern_policy_world_read_tests {
                 .privacy_bootle_lantern_issuer_policy_v1(issuer_id, policy_id)
                 .expect_err("corrupt governed policy state must reject"),
             format!(
-                "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is invalid: {validation_error}"
+                "Bootle/Lantern issuer policy {issuer_id:?}/{policy_id:?} is invalid: Bootle/Lantern issuer-policy record is invalid"
             )
         );
     }
@@ -32709,28 +33021,11 @@ impl State {
         lane_id: LaneId,
         block_height: u64,
     ) -> Result<[u8; 32], crate::beacon::GlobalThresholdBeaconError> {
-        let pulse = match crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
+        let pulse = crate::beacon::verified_latest_global_threshold_beacon_pulse_v1(
             world,
             network_id,
             block_height.saturating_sub(1),
-        ) {
-            Ok(pulse) => pulse,
-            #[cfg(test)]
-            Err(_)
-                if world.global_beacon_key_sessions().iter().next().is_none()
-                    && world.global_beacon_active_session().iter().next().is_none()
-                    && world.global_beacon_pulses().iter().next().is_none()
-                    && world.global_beacon_latest_pulse().iter().next().is_none() =>
-            {
-                return Ok(Self::lane_relay_committee_seed_for_fixture(
-                    network_id,
-                    dataspace_id,
-                    lane_id,
-                    block_height,
-                ));
-            }
-            Err(error) => return Err(error),
-        };
+        )?;
         Ok(crate::beacon::global_threshold_beacon_lane_relay_seed_v1(
             &pulse,
             block_height,
@@ -33050,6 +33345,19 @@ impl State {
         };
         if pool.len() < committee_size {
             return Vec::new();
+        }
+        // An exact pool has only one possible committee. Its canonical ordering
+        // needs no entropy; a larger pool still requires a verified beacon to
+        // choose members consistently with relay authority.
+        if pool.len() == committee_size {
+            let mut committee = pool.to_vec();
+            committee.sort();
+            committee.dedup();
+            return if committee.len() == committee_size {
+                committee
+            } else {
+                Vec::new()
+            };
         }
         // Reuse the relay seed and member ranking so lane-block descriptors and
         // later relay verification cannot derive different committee membership.
@@ -34235,8 +34543,9 @@ impl State {
         )
         .and_then(|candidate| candidate.execution_batch)
     }
-    /// Snapshot active merge bindings and their exact lane committees from one
-    /// immutable State view.
+    /// Snapshot merge bindings and their exact lane committees from one immutable
+    /// State view. A closed lane retains its authenticated close committee until
+    /// retirement, while ordinary proposal authority remains closed.
     fn merge_active_lane_authority_snapshot(
         &self,
         authority_height: u64,
@@ -34271,15 +34580,67 @@ impl State {
                 .get(&lane.id)
                 .and_then(|height| height.checked_add(1))
                 .ok_or(MergeLedgerCommitError::UnknownLane { lane_id: lane.id })?;
-            let route = LaneAuthorityRoute::new(lane.id, lane.dataspace_id);
-            let committee = state_view
-                .resolve_lane_committee_at_height(route, authority_height)
-                .map_err(|error| {
+            let drain = decode_autoscale_lane_drain_state(lane).map_err(|error| {
+                MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                    "merge lane {} drain metadata is invalid: {error}",
+                    lane.id
+                ))
+            })?;
+            let committee = if let Some(drain) = drain
+                && authority_height > drain.intent.close_global_height
+            {
+                let committed_height = u64::try_from(state_view.height()).map_err(|_| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(
+                        "committed height does not fit the merge authority namespace".to_owned(),
+                    )
+                })?;
+                if drain.intent.close_global_height > committed_height
+                    || drain.intent.close_global_height < activation_height
+                    || !autoscale_lane_drain_state_matches_context(
+                        lane,
+                        &drain,
+                        state_view.network_id(),
+                        incarnation,
+                    )
+                    || !nexus_autoscale_lane_active_for_authority(
+                        lane,
+                        nexus,
+                        drain.intent.close_global_height,
+                    )
+                {
+                    return Err(MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "merge lane {} closed authority differs from its committed incarnation",
+                        lane.id
+                    )));
+                }
+                let pin = decode_autoscale_lane_committee(lane)
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| {
+                        MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                            "merge lane {} closed authority has no canonical committee pin",
+                            lane.id
+                        ))
+                    })?;
+                validate_autoscale_lane_committee_pops(&pin).map_err(|error| {
+                    MergeLedgerCommitError::ExecutionBatchInvalid(format!(
+                        "merge lane {} closed authority has invalid proofs of possession: {error}",
+                        lane.id
+                    ))
+                })?;
+                drain.intent.validator_set
+            } else {
+                let route = LaneAuthorityRoute::new(lane.id, lane.dataspace_id);
+                state_view
+                    .resolve_lane_committee_at_height(route, authority_height)
+                    .map_err(|error| {
                     MergeLedgerCommitError::ExecutionBatchInvalid(format!(
                         "merge lane {} authority is unavailable at height {authority_height}: {error}",
                         lane.id
                     ))
-                })?;
+                    })?
+                    .into_validators()
+            };
             active_lanes.push(MergeLaneBinding {
                 lane_id: lane.id,
                 dataspace_id: lane.dataspace_id,
@@ -34287,7 +34648,7 @@ impl State {
                 incarnation,
                 activation_height,
             });
-            lane_committees.push(committee.into_validators());
+            lane_committees.push(committee);
         }
         let lane_authority_catalog = MergeLaneAuthorityCatalogV1::from_lane_committees(
             &lane_committees,
@@ -48182,7 +48543,7 @@ fn kagemusha_mint_finality_next_epoch_parameter_from_parameters(
 /// Read the per-block gas limit from on-chain parameters, falling back to defaults on errors.
 pub(crate) fn gas_limit_from_parameters(params: &Parameters) -> u64 {
     use core::str::FromStr;
-    let name = match iroha_data_model::name::Name::from_str("ivm_gas_limit_per_block") {
+    let name = match iroha_model_base::name::Name::from_str("ivm_gas_limit_per_block") {
         Ok(name) => name,
         Err(error) => {
             warn!(?error, "Failed to parse hardcoded gas limit parameter name");
@@ -52994,62 +53355,65 @@ impl<'state> StateBlock<'state> {
         &mut self,
         entrypoints: &[TransactionEntrypoint],
     ) -> Result<Vec<TransferTranscriptBundle>, MergeLedgerCommitError> {
-        let mut selected_by_call_hash = BTreeMap::new();
-        let mut entrypoint_bindings = Vec::new();
+        if self.fastpq_source_inventory.is_some() {
+            return Err(MergeLedgerCommitError::ExecutionDivergence(
+                "lane execution cannot extract FASTPQ evidence after source inventory finalization"
+                    .to_owned(),
+            ));
+        }
+        let mut entrypoint_bindings = BTreeMap::new();
+        let mut call_hashes = BTreeSet::new();
+        let mut selected_call_hashes = BTreeSet::new();
         for entrypoint in entrypoints {
             let entrypoint_hash = Hash::from(entrypoint.hash());
             let call_hash = Self::merge_execution_call_hash(entrypoint);
-            if entrypoint_bindings
-                .iter()
-                .any(|(_, existing_call_hash)| *existing_call_hash == call_hash)
+            if !call_hashes.insert(call_hash)
+                || entrypoint_bindings
+                    .insert(entrypoint_hash, call_hash)
+                    .is_some()
             {
                 return Err(MergeLedgerCommitError::ExecutionDivergence(
                     "lane execution produced duplicate FASTPQ transcript call-hash bindings"
                         .to_owned(),
                 ));
             }
-            entrypoint_bindings.push((entrypoint_hash, call_hash));
-            let Some(transcripts) = self.fastpq_transcripts.remove(&call_hash) else {
+            let Some(transcripts) = self.fastpq_transcripts.get(&call_hash) else {
                 continue;
             };
             if transcripts.is_empty()
                 || transcripts
                     .iter()
                     .any(|transcript| transcript.batch_hash != call_hash)
-                || selected_by_call_hash
-                    .insert(call_hash, transcripts)
-                    .is_some()
             {
                 return Err(MergeLedgerCommitError::ExecutionDivergence(
                     "lane execution produced malformed or duplicate FASTPQ transcript evidence"
                         .to_owned(),
                 ));
             }
+            selected_call_hashes.insert(call_hash);
         }
-        crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut selected_by_call_hash);
-        let mut selected = BTreeMap::new();
-        for (entry_hash, call_hash) in entrypoint_bindings {
-            let Some(transcripts) = selected_by_call_hash.remove(&call_hash) else {
-                continue;
-            };
-            if selected.insert(entry_hash, transcripts).is_some() {
-                return Err(MergeLedgerCommitError::ExecutionDivergence(
-                    "lane execution produced duplicate FASTPQ transcript entrypoint bindings"
-                        .to_owned(),
-                ));
+        // Certified lane execution exports these transcripts in the lane bundle. Their
+        // local captures must leave with them before the carrier seals its own inventory.
+        // Preflight both maps completely so a rejected extraction changes neither one.
+        self.fastpq_source_captures
+            .take_unsealed_sources(&selected_call_hashes)
+            .map_err(|error| MergeLedgerCommitError::ExecutionDivergence(error.to_string()))?;
+        let mut selected_by_call_hash = BTreeMap::new();
+        for call_hash in selected_call_hashes {
+            if let Some(transcripts) = self.fastpq_transcripts.remove(&call_hash) {
+                selected_by_call_hash.insert(call_hash, transcripts);
             }
         }
-        if !selected_by_call_hash.is_empty() {
-            return Err(MergeLedgerCommitError::ExecutionDivergence(
-                "lane execution left selected FASTPQ transcripts without an entrypoint binding"
-                    .to_owned(),
-            ));
-        }
-        Ok(selected
+        crate::fastpq::finalize_transfer_transcript_digests_in_map(&mut selected_by_call_hash);
+        Ok(entrypoint_bindings
             .into_iter()
-            .map(|(entry_hash, transcripts)| TransferTranscriptBundle {
-                entry_hash,
-                transcripts,
+            .filter_map(|(entry_hash, call_hash)| {
+                selected_by_call_hash.remove(&call_hash).map(|transcripts| {
+                    TransferTranscriptBundle {
+                        entry_hash,
+                        transcripts,
+                    }
+                })
             })
             .collect())
     }
@@ -56732,6 +57096,7 @@ mod state_view_lock_tests {
         let kura = Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new_for_testing(World::default(), kura, query);
+        let initial_generation = state.state_view_generation();
         let attempts = Cell::new(0_u32);
         let observed = state
             .derive_diagnostics_at_stable_state_generation(
@@ -56752,7 +57117,7 @@ mod state_view_lock_tests {
             "the mixed-generation observation must be discarded"
         );
         assert_eq!(attempts.get(), 2);
-        assert_eq!(state.state_view_generation(), 2);
+        assert_eq!(state.state_view_generation(), initial_generation + 2);
     }
     #[test]
     fn diagnostic_projection_fails_closed_after_bounded_generation_drift() {
@@ -57417,6 +57782,26 @@ mod tiered_snapshot_diff_tests {
             })
             .collect();
         *state.autoscale_sample_history.write() = history;
+        if let Some(genesis_hash) = state.block_hashes.view().iter().next().copied() {
+            let revision = MusubiResolverIndexRevisionV1::default();
+            let checkpoint = MusubiRegistrySnapshotV1 {
+                finalized_height: 1,
+                finalized_block_hash: *genesis_hash.as_ref(),
+                index_revision: revision.get(),
+            };
+            checkpoint
+                .validate()
+                .expect("canonical genesis resolver checkpoint");
+            let mut world = state.world.block();
+            if let Some(existing) = world.musubi_resolver_index_checkpoints.get(&revision) {
+                assert_eq!(existing, &checkpoint);
+            } else {
+                world
+                    .musubi_resolver_index_checkpoints
+                    .insert(revision, checkpoint);
+            }
+            world.commit();
+        }
     }
     fn seed_sccp_snapshot_height_one(state: &State, block_hash: HashOf<BlockHeader>) {
         seed_sccp_snapshot_block_hashes(state, [block_hash]);
@@ -57707,9 +58092,11 @@ mod tiered_snapshot_diff_tests {
                 .into(),
         )
     }
-    fn snapshot_with_whole_sccp_height_removed(
-        removed_position: usize,
-    ) -> (norito::json::Value, Arc<Kura>, u64) {
+    fn state_with_retained_sccp_archive() -> (
+        State,
+        Arc<Kura>,
+        Vec<(SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1)>,
+    ) {
         let kura = authenticated_sccp_archive_kura();
         let mut previous = None;
         let mut blocks = Vec::new();
@@ -57722,16 +58109,17 @@ mod tiered_snapshot_diff_tests {
             blocks.push(block);
             records.push((key, record));
         }
+        crate::kura::tests::persist_v2_finality_chain_through(
+            &kura,
+            NonZeroUsize::new(blocks.len()).expect("nonempty retained SCCP fixture chain"),
+        );
         let (mut world, _, _) = world_with_valid_pending_sccp_outbound();
         world.sccp_outbound_pending_usage = Cell::default();
         world.sccp_outbound_pending_messages = Storage::default();
         world.sccp_outbound_message_locator = Storage::default();
         world.sccp_outbound_message_index = Storage::default();
-        let removed_height = records[removed_position].1.recorded_at_height;
-        for (position, (key, record)) in records.into_iter().enumerate() {
-            if position != removed_position {
-                insert_complete_sccp_outbound_record(&mut world, key, record);
-            }
+        for (key, record) in &records {
+            insert_complete_sccp_outbound_record(&mut world, *key, record.clone());
         }
         let state = State::new_with_chain(
             world,
@@ -57740,11 +58128,7 @@ mod tiered_snapshot_diff_tests {
             ChainId::from(SCCP_SNAPSHOT_CHAIN_ID),
         );
         seed_sccp_snapshot_block_hashes(&state, blocks.iter().map(|block| block.hash()));
-        (
-            norito::json::to_value(&state).expect("serialize whole-height deletion snapshot"),
-            kura,
-            removed_height,
-        )
+        (state, kura, records)
     }
     fn state_snapshot_world_mut(snapshot: &mut norito::json::Value) -> &mut norito::json::Map {
         let norito::json::Value::Object(state) = snapshot else {
@@ -59289,6 +59673,31 @@ mod tiered_snapshot_diff_tests {
             &route_key,
             &route.settlement.asset_definition_id,
         );
+        let asset_definition_id = route.settlement.asset_definition_id.clone();
+        let account = Account::new(escrow.clone()).build(&escrow);
+        let (account_id, account_value) = account.into_key_value();
+        world.accounts.insert(account_id, account_value);
+        world.asset_definitions.insert(
+            asset_definition_id.clone(),
+            AssetDefinition::numeric(
+                asset_definition_id.clone(),
+                "SCCP escrow backing",
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                None,
+            )
+            .build(&escrow),
+        );
+        let (_, genesis) = exact_sccp_finalized_block_fixture();
+        let incarnation = AxtAssetIncarnationV1::derive(
+            &DEFAULT_TEST_NETWORK_ID,
+            &asset_definition_id,
+            &genesis.header().hash(),
+            &Hash::new(b"SCCP liability asset registration"),
+            0,
+        );
+        world
+            .axt_asset_incarnations
+            .insert(asset_definition_id, incarnation);
         let balance = sccp_liability_quantity_v1(
             outstanding_liability,
             route.settlement.payload_amount_scale,
@@ -59605,20 +60014,62 @@ mod tiered_snapshot_diff_tests {
         );
     }
     #[test]
-    fn sccp_snapshot_rejects_first_middle_and_last_whole_archive_height_omission() {
-        for removed_position in 0..3 {
-            let (snapshot, kura, removed_height) =
-                snapshot_with_whole_sccp_height_removed(removed_position);
-            let error = match decode_state_snapshot_value_with_kura(snapshot, kura) {
-                Ok(_) => panic!("whole retained SCCP archive height omission must fail closed"),
+    fn sccp_snapshot_rejects_first_middle_and_last_pending_height_index_omission() {
+        let (state, kura, records) = state_with_retained_sccp_archive();
+        let snapshot = norito::json::to_value(&state)
+            .expect("serialize complete authenticated SCCP pending inventory");
+        for (key, record) in records {
+            let restored =
+                decode_state_snapshot_value_with_kura(snapshot.clone(), Arc::clone(&kura)).expect(
+                    "complete pending records match their genuine retained finality archives",
+                );
+            let index = SccpOutboundMessageIndexKeyV1::new(key, &record)
+                .expect("exact pending record has an ordered index");
+            {
+                let mut world = restored.world.block();
+                assert_eq!(world.sccp_outbound_message_index.remove(index), Some(()));
+                world.commit();
+            }
+            let malformed = norito::json::to_value(&restored)
+                .expect("serialize missing pending-height ordered index");
+            let error = match decode_state_snapshot_value_with_kura(malformed, Arc::clone(&kura)) {
+                Ok(_) => panic!("pending height without its ordered index must fail closed"),
                 Err(error) => error,
             };
-            let message = error.to_string();
             assert!(
-                message.contains(&format!("height {removed_height}"))
-                    && message.contains("committed WSV retains 0"),
-                "unexpected whole-height omission error at position {removed_position}: {message}"
+                error
+                    .to_string()
+                    .contains("pending outbound registry, global locator, and ordered index cardinalities differ"),
+                "unexpected pending-height index omission error at height {}: {error}",
+                record.recorded_at_height,
             );
+            // Accepted destination proofs remove all pending projections coherently.
+            // The immutable archive remains after that transition; structural hydration
+            // therefore authenticates retained pending records without requiring equality
+            // between historical archive counts and the current pending inventory.
+            {
+                let mut world = restored.world.block();
+                let next_usage = world
+                    .sccp_outbound_pending_usage
+                    .get()
+                    .checked_remove_payload(record.payload_bytes.len())
+                    .expect("coherent pending-height removal keeps exact usage");
+                assert_eq!(
+                    world.sccp_outbound_pending_messages.remove(key),
+                    Some(record)
+                );
+                assert_eq!(
+                    world.sccp_outbound_message_locator.remove(key.message_id),
+                    Some(key)
+                );
+                assert!(world.sccp_outbound_message_index.get(&index).is_none());
+                *world.sccp_outbound_pending_usage.get_mut() = next_usage;
+                world.commit();
+            }
+            let terminalized = norito::json::to_value(&restored)
+                .expect("serialize coherent pending-height removal");
+            decode_state_snapshot_value_with_kura(terminalized, Arc::clone(&kura))
+                .expect("historical archive survives coherent pending-height terminalization");
         }
     }
     #[test]
@@ -60033,7 +60484,7 @@ mod tiered_snapshot_diff_tests {
         assert_rejected(
             world,
             "payload route drift",
-            "differs from its immutable Kura archive entry",
+            "payload route id, asset key, or revision differs from its retained route configuration",
         );
         let (mut world, key, mut message, _, _) = world_with_valid_sccp_outbound_history();
         let mut payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&message.payload_bytes)
@@ -60055,7 +60506,7 @@ mod tiered_snapshot_diff_tests {
         assert_rejected(
             world,
             "non-address sender",
-            "differs from its immutable Kura archive entry",
+            "sender is not an exact Taira I105 account",
         );
         let (mut world, key, mut message, _, _) = world_with_valid_sccp_outbound_history();
         message.destination_binding_hash = [0xA1; 32];
@@ -60090,16 +60541,30 @@ mod tiered_snapshot_diff_tests {
             "cross-route binding/configuration",
             "resolve to different retained routes",
         );
-        let (mut world, key, message, _, other_route) = world_with_valid_sccp_outbound_history();
+        let (mut world, _, mut message, _, other_route) = world_with_valid_sccp_outbound_history();
+        let other_lane = iroha_data_model::bridge::SccpLaneIdV1 {
+            source: other_route.lane_id.target,
+            target: other_route.lane_id.source,
+        };
+        let mut payload = iroha_sccp::decode_canonical_sccp_payload_bytes(&message.payload_bytes)
+            .expect("exact outbound snapshot payload decodes");
+        let iroha_sccp::SccpPayloadV1::Transfer(transfer) = &mut payload;
+        transfer.dest_domain = other_lane.target.domain_id();
+        message.payload_bytes = iroha_sccp::canonical_sccp_payload_bytes(&payload)
+            .expect("alternate-domain payload remains canonical");
+        message.payload_hash = iroha_sccp::payload_hash(&message.payload_bytes);
         let other_lane_key = SccpOutboundMessageKeyV1::new(
-            iroha_data_model::bridge::SccpLaneIdV1 {
-                source: other_route.lane_id.target,
-                target: other_route.lane_id.source,
-            },
-            key.message_id,
+            other_lane,
+            iroha_sccp::sccp_message_id(other_lane, &payload)
+                .expect("alternate outbound lane has an exact message identifier"),
         )
         .expect("alternate exact outbound lane key");
         assert!(message.is_well_formed_for_key(&other_lane_key));
+        assert!(
+            crate::bridge::validate_sccp_outbound_message_record_v1(&other_lane_key, &message)
+                .is_some(),
+            "cross-lane governed-route rejection must follow canonical payload validation"
+        );
         let descriptor = message.descriptor();
         replace_complete_sccp_outbound_history(&mut world, other_lane_key, message, descriptor);
         assert_rejected(world, "cross-lane route", "belongs to another exact lane");
@@ -65722,5 +66187,6 @@ mod npos_effect_application_tests {
 mod tests;
 #[cfg(test)]
 pub(crate) use tests::{
-    prove_finalized_lane_relay_for_registration, ton_breaker_hydration_fixture_for_testing,
+    finalized_lane_relay_registration_fixture, prove_finalized_lane_relay_for_registration,
+    ton_breaker_hydration_fixture_for_testing,
 };

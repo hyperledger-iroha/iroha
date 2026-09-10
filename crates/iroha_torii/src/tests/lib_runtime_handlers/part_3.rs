@@ -441,14 +441,28 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
     let process_session = Hash::new(b"torii-proxy-request-id-test-session");
     let ingress_peer = PeerId::from(keypair.public_key().clone());
     for request in [&query_request, &submit_request] {
-        let legacy = norito::to_bytes(&(
+        crate::frame_test_support::assert_current_frame(
+            request,
+            "iroha_core::torii_proxy::ToriiProxyRequestKindV1",
+        );
+        assert_eq!(
+            <super::BorrowedToriiProxyRequestIdPreimage<'static> as norito::NoritoSchema>::nominal_name(),
+            "iroha_torii::BorrowedToriiProxyRequestIdPreimage<'_>",
+        );
+        assert_eq!(
+            norito::schema::identity::frame_hash::<
+                super::BorrowedToriiProxyRequestIdPreimage<'static>,
+            >(),
+            norito::schema::identity::frame_hash::<super::OwnedToriiProxyRequestIdPreimage>(),
+        );
+        let owned = norito::to_bytes(&(
             "torii:proxy:v1",
             process_session.clone(),
             ingress_peer.clone(),
             7_u64,
             request.clone(),
         ))
-        .expect("legacy owned request-id preimage");
+        .expect("canonical owned request-id preimage");
         let borrowed = norito::to_bytes(&super::BorrowedToriiProxyRequestIdPreimage {
             process_session_id: &process_session,
             local_peer_id: &ingress_peer,
@@ -457,8 +471,8 @@ fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         })
         .expect("borrowed request-id preimage");
         assert_eq!(
-            borrowed, legacy,
-            "borrowed request-id preimage must preserve the established bytes"
+            borrowed, owned,
+            "borrowed request-id preimage must match the canonical owned frame"
         );
     }
     assert_ne!(
@@ -543,8 +557,7 @@ fn torii_proxy_v1_roundtrip_and_forwarding_preserve_transaction_admission_bindin
     )));
     let forwarding_peer = PeerId::from(keypair.public_key().clone());
     let admission = ToriiProxyTransactionAdmissionV1::QueuePlanSynced;
-    let request_id =
-        Hash::new(norito::to_bytes(&admission).expect("encode admission request identity"));
+    let request_id = Hash::new(norito::codec::encode_adaptive(&admission));
     let admission_authorities = vec![forwarding_peer.clone()];
     let context = queue::QueuePlanAdmissionContextV1 {
         version: queue::QUEUE_PLAN_ADMISSION_CONTEXT_VERSION_V1,
@@ -2652,8 +2665,7 @@ async fn incoming_queue_plan_synced_stable_historical_context_acquires_durable_c
         .expect("stable historical admission journal baseline metadata")
         .len();
     set_proxy_fixture_latest_block_height(&app, 1);
-    let response =
-        super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
+    let response = super::execute_incoming_torii_proxy_request(&app, request.clone(), None).await;
     let snapshot =
         super::response_to_torii_proxy_snapshot(response, app.transaction_max_content_len.max(1))
             .await;

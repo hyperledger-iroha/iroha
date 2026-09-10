@@ -2259,7 +2259,6 @@ mod tests {
         asset::AssetDefinitionId,
         block::BlockHeader,
         domain::DomainId,
-        name::Name,
         privacy::{
             BootleLanternAllowedAttributeValuesV1, BootleLanternAttributeValueV1,
             BootleLanternDisclosedAttributeV1, IROHA_JINDO_MAX_ROUNDED_COMMITMENT_COEFFICIENT_V1,
@@ -2284,6 +2283,7 @@ mod tests {
             zk_ams_registry_record_digest_v1,
         },
     };
+    use iroha_model_base::name::Name;
     use iroha_zkp_halo2::vega::ZkAmsMaskedProverConfigV1;
     use p256::ecdsa::{
         Signature as P256Signature, SigningKey as P256SigningKey,
@@ -5418,9 +5418,7 @@ mod tests {
                 &corrupt_proof,
                 fixture.verification_context(Some(&fixture.snapshot))
             ),
-            Err(PrivacyVerificationErrorV1::Context(detail))
-                if detail.code
-                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
+            Err(PrivacyVerificationErrorV1::NativeFcmp(_))
         ));
         let mut corrupt_range_proof = fixture.envelope.clone();
         let PrivacyProofV1::MoneroFcmpPlusPlusV1(proof) = &mut corrupt_range_proof.proof else {
@@ -5722,7 +5720,8 @@ mod tests {
         other_genesis_context.genesis_hash[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&fixture.envelope, other_genesis_context),
-            Err(PrivacyVerificationErrorV1::NativeFcmp(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
     }
     #[test]
@@ -5818,9 +5817,7 @@ mod tests {
                 &altered_statement,
                 verification_context(&activation, &network_id)
             ),
-            Err(PrivacyVerificationErrorV1::Context(detail))
-                if detail.code
-                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
+            Err(PrivacyVerificationErrorV1::NativeVeRange(_))
         ));
         let mut altered_proof = envelope.clone();
         let PrivacyProofV1::VeRangeTransparentRangeV1(proof) = &mut altered_proof.proof else {
@@ -5839,7 +5836,8 @@ mod tests {
         context.genesis_hash[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&envelope, context),
-            Err(PrivacyVerificationErrorV1::NativeVeRange(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
     }
     #[test]
@@ -6364,9 +6362,7 @@ mod tests {
                 &noncanonical_residue,
                 fixture.verification_context(&TEST_CONSENSUS_LIMITS)
             ),
-            Err(PrivacyVerificationErrorV1::Context(detail))
-                if detail.code
-                    == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
+            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
         ));
         let mut cross_suite = fixture.envelope.clone();
         cross_suite.proof = PrivacyProofV1::IrohaJindoPolynomialCommitmentV1(
@@ -6422,7 +6418,8 @@ mod tests {
         changed_genesis.genesis_hash[0] ^= 1;
         assert!(matches!(
             verify_privacy_envelope_v1(&fixture.envelope, changed_genesis),
-            Err(PrivacyVerificationErrorV1::NativeBootleLantern(_))
+            Err(PrivacyVerificationErrorV1::Context(detail))
+                if detail.code == PrivacyVerificationContextFailureCodeV1::NetworkGenesisMismatch
         ));
         let mut changed_action = fixture.envelope.clone();
         bootle_lantern_statement_mut(&mut changed_action)

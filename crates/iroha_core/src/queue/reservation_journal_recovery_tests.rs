@@ -1075,12 +1075,19 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     );
     assert_eq!(shape_state, shape_before);
     let mut owner_state = IndexedReservationReplayState::default();
-    owner_state.ownership.insert(
-        second.key.entrypoint_hash,
-        DurableReservationOwnership::Live(second.key),
+    owner_state
+        .transition(
+            &LaneQueueReservationJournalFrameV1::PutBatch(vec![second.clone()]),
+            8,
+        )
+        .expect("install a complete live reservation owner");
+    assert!(
+        owner_state.prepare_checked_transition(&absent_frame, 8).is_err(),
+        "ForgetCommit cannot forget a live reservation owner"
     );
+    let release_frame = LaneQueueReservationJournalFrameV1::ReleaseBatch(vec![second.key]);
     let owner_authorization = owner_state
-        .prepare_checked_transition(&absent_frame, 8)
+        .prepare_checked_transition(&release_frame, 8)
         .expect("prepare against one exact owner projection");
     owner_state.ownership.insert(
         second.key.entrypoint_hash,
@@ -1088,7 +1095,7 @@ fn checked_transition_result_identity_and_candidate_application_are_atomic() {
     );
     let owner_before = owner_state.clone();
     let error = owner_state
-        .apply_checked_transition(&absent_frame, 8, owner_authorization)
+        .apply_checked_transition(&release_frame, 8, owner_authorization)
         .expect_err("same-shape owner substitution must invalidate checked evidence");
     assert!(
         error

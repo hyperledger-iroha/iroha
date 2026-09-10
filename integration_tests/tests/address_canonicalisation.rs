@@ -16,6 +16,7 @@ use iroha::data_model::{
 use iroha_data_model::account::address::AccountAddress;
 use iroha_data_model::metadata::Metadata;
 use iroha_data_model::prelude::RepoInstructionBox;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};

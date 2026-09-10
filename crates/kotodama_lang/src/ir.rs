@@ -13,7 +13,8 @@ use super::{
         TypedStateDecl, TypedStatement,
     },
 };
-use iroha_data_model::{smart_contract::manifest::DynamicAccessHint, state_path::StatePath};
+use iroha_data_model::smart_contract::manifest::DynamicAccessHint;
+use iroha_model_base::state_path::StatePath;
 use std::collections::{BTreeSet, HashMap};
 pub const TEST_TRIGGER_EVENT_OVERRIDE_KEY: &str = "__koto_test_trigger_event_json";
 const INVOKE_ENTRYPOINT_PREFIX: &str = "__invoke_entrypoint__";

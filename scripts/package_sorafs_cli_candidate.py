@@ -166,7 +166,7 @@ def _normalized_mode(relative: str, suffix: str, source_mode: int) -> int:
     required_binaries = {
         f"sorafs_cli{suffix}",
         f"sorafs_fetch{suffix}",
-        f"sorafs-validate{suffix}",
+        f"iroha{suffix}",
     }
     if relative in required_binaries or source_mode & 0o111:
         return 0o755
@@ -290,31 +290,31 @@ def _scan_candidate(input_dir: Path, *, version: str, target: str) -> list[FileR
             )
 
     records.sort(key=lambda record: record.relative)
-    validator_name = f"sorafs-validate-{version}-{target}"
+    validator_name = f"iroha-{version}-{target}"
     required_files = {
         f"sorafs_cli{suffix}",
         f"sorafs_fetch{suffix}",
-        f"sorafs-validate{suffix}",
+        f"iroha{suffix}",
         "sorafs_cli.help.txt",
         "sorafs_fetch.help.txt",
-        "sorafs-validate.help.txt",
+        "iroha.help.txt",
         "version-map.toml",
         "ROLLBACK-YANK.md",
         "CHANGELOG.md",
         "LICENSE",
-        f"reference-validator/{validator_name}.sha256",
-        f"reference-validator/{validator_name}.tar.gz",
-        f"reference-validator/{validator_name}.tar.gz.sha256",
-        f"reference-validator/{validator_name}.manifest.json",
-        f"reference-validator/{validator_name}.manifest.json.sha256",
-        f"reference-validator/{validator_name}/sorafs-validate{suffix}",
-        f"reference-validator/{validator_name}/HELP.txt",
-        f"reference-validator/{validator_name}/include/sorafs_reference.h",
-        f"reference-validator/{validator_name}/smoke.advert.json",
-        f"reference-validator/{validator_name}/smoke.bundle.json",
+        f"iroha-cli/{validator_name}.sha256",
+        f"iroha-cli/{validator_name}.tar.gz",
+        f"iroha-cli/{validator_name}.tar.gz.sha256",
+        f"iroha-cli/{validator_name}.manifest.json",
+        f"iroha-cli/{validator_name}.manifest.json.sha256",
+        f"iroha-cli/{validator_name}/iroha{suffix}",
+        f"iroha-cli/{validator_name}/HELP.txt",
+        f"iroha-cli/{validator_name}/include/sorafs_reference.h",
+        f"iroha-cli/{validator_name}/smoke.advert.json",
+        f"iroha-cli/{validator_name}/smoke.bundle.json",
     }
     optional_files = {
-        f"reference-validator/{validator_name}.manifest.json.sig"
+        f"iroha-cli/{validator_name}.manifest.json.sig"
     }
     required_files |= _signer_inventory(target)
     present = {record.relative for record in records}
@@ -652,7 +652,7 @@ def _safe_extract_and_smoke(
         smoke_binaries = [
             f"sorafs_cli{suffix}",
             f"sorafs_fetch{suffix}",
-            f"sorafs-validate{suffix}",
+            f"iroha{suffix}",
         ]
         if not target.endswith("windows-msvc"):
             smoke_binaries.extend((SIGNER_BINARY, BROKER_ALIAS))

@@ -739,14 +739,14 @@ mod tests {
             preflight_count(
                 2,
                 BundleLimits {
-                    max_total_queries: 271,
+                    max_total_queries: 749,
                     ..limits(2)
                 }
             ),
             Err(Error::VerifierLimitExceeded {
                 limit: "max_bundle_queries",
-                actual: 272,
-                max: 271
+                actual: 750,
+                max: 749
             })
         ));
         preflight_count(2, limits(2)).unwrap();

@@ -849,7 +849,7 @@ impl sorafs_node::FencedTransparencyPublisherV1 for FencedPrivacyPublisherBroker
     > {
         request.validate()?;
         let wire = FencedPrivacyPublicationRequestWireV1::from_request(request);
-        wire.to_request()
+        wire.to_request_from_pool(Arc::clone(&self.session.decode_pool))
             .map_err(|_| sorafs_node::FencedTransparencyPublishErrorV1::InvalidRequest)?;
         let payload = encode_canonical(&wire, MAX_FENCED_PRIVACY_PUBLICATION_FRAME_BYTES_V1)
             .map_err(|_| sorafs_node::FencedTransparencyPublishErrorV1::InvalidRequest)?;
@@ -3561,6 +3561,13 @@ struct EvidenceViewerBrokerTransparencyPublisher {
     provider: EvidenceViewerBrokerProvider,
     public_key: [u8; 32],
 }
+impl EvidenceViewerBrokerTransparencyPublisher {
+    fn reconnect_for_readback(&self) -> Result<(), BrokerError> {
+        self.provider
+            .session
+            .reconnect_for_readback(&self.provider.binding, self.provider.metadata_digest)
+    }
+}
 impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
     for EvidenceViewerBrokerTransparencyPublisher
 {
@@ -3575,10 +3582,8 @@ impl sorafs_node::evidence_viewer::EvidenceViewerRuntimeProviderV1
     > {
         match self.provider.live_qualification() {
             Ok(qualification) => Ok(qualification),
-            Err(BrokerError::Unavailable) => {
-                self.provider
-                    .session
-                    .reconnect()
+            Err(BrokerError::Ambiguous | BrokerError::Unavailable) => {
+                self.reconnect_for_readback()
                     .map_err(evidence_viewer_readiness_error)?;
                 self.provider
                     .live_qualification()
@@ -3605,32 +3610,50 @@ impl sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerTranspar
             EvidenceViewerTransparencyPublisherExternalErrorV1,
     >{
         let call = || {
-            self.provider.call_sensitive(
+            let payload = encode_sensitive_canonical(&(), MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1)?;
+            self.provider.session.exchange(
+                &self.provider.binding,
+                self.provider.metadata_digest,
                 OPERATION_EVIDENCE_VIEWER_TRANSPARENCY_LOAD_V1,
-                &(),
-                MAX_EVIDENCE_VIEWER_CONTROL_BYTES_V1,
+                payload,
                 false,
             )
         };
-        let result = match call() {
+        let (result, response_session_id) = match call() {
             Ok(result) => result,
-            Err(BrokerError::Unavailable) => {
-                self.provider
-                    .session
-                    .reconnect()
+            Err(BrokerError::Ambiguous | BrokerError::Unavailable) => {
+                self.reconnect_for_readback()
                     .map_err(evidence_viewer_transparency_publisher_error)?;
                 call().map_err(evidence_viewer_transparency_publisher_error)?
             }
             Err(error) => return Err(evidence_viewer_transparency_publisher_error(error)),
         };
-        self.provider
+        let head = self.provider
             .decode_sensitive::<
                 Option<
                     sorafs_node::evidence_viewer::transparency_producer::
                         EvidenceViewerSignedTransparencyHeadV1,
                 >,
             >(&result, MAX_EVIDENCE_VIEWER_BULK_FRAME_BYTES_V1)
-            .map_err(evidence_viewer_transparency_publisher_error)
+            .map_err(evidence_viewer_transparency_publisher_error)?;
+        if let Some(head) = &head {
+            head.verify_publisher_signature(self.public_key)
+                .map_err(|_| BrokerError::Protocol)
+                .inspect_err(|_| self.provider.session.poison())
+                .map_err(evidence_viewer_transparency_publisher_error)?;
+        }
+        // None is an authenticated empty head from the exact catalog endpoint.
+        // A populated head additionally needs the governed publisher signature.
+        // The producer still verifies source trust, policy, lineage and exact body.
+        self.provider
+            .session
+            .complete_readback(
+                &self.provider.binding,
+                self.provider.metadata_digest,
+                response_session_id,
+            )
+            .map_err(evidence_viewer_transparency_publisher_error)?;
+        Ok(head)
     }
     fn compare_and_publish(
         &self,
@@ -3653,7 +3676,7 @@ impl sorafs_node::evidence_viewer::transparency_producer::EvidenceViewerTranspar
                 // A fresh authenticated session is established only so
                 // the producer can requalify and load the authoritative
                 // signed head.
-                let _reconnect_result = self.provider.session.reconnect();
+                let _reconnect_result = self.reconnect_for_readback();
                 return Err(evidence_viewer_transparency_publisher_error(error));
             }
             Err(error) => {

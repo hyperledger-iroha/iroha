@@ -14,6 +14,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, metadata::Metadata, nft::NftId, prelude::*};
+use iroha_model_base::name::Name;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;

@@ -7161,6 +7161,49 @@ mod executor_model {
             }
         }
 
+        pub(crate) fn assert_core_recovery_rejection_for_test(class: &str) {
+            let (inventory, mut journal) = journal(sample_inventory());
+            let step = ExecutionStep::Canary;
+            let mut intent = test_recovery_intent(step);
+            let last = intent.mutations.len() - 1;
+            for mutation in &mut intent.mutations[..last] {
+                mutation.state = RecoveryMutationStateV1::Applied;
+            }
+            intent.mutations[last].state = RecoveryMutationStateV1::Submitted;
+            intent.next_mutation = u16::try_from(last).unwrap();
+            journal.state.status = "recovery_pending".to_owned();
+            journal.state.phase = step.label().to_owned();
+            journal.state.next_step = u16::try_from(
+                EXECUTION_STEPS
+                    .iter()
+                    .position(|candidate| *candidate == step)
+                    .unwrap(),
+            )
+            .unwrap();
+            journal.state.recovery_intent = Some(intent);
+            journal.state.touched_validators = VALIDATOR_SLUGS.map(str::to_owned).to_vec();
+            let mut recovery = MockTransport {
+                recovery_outcome: Some(RecoveryOutcome::Rejected(class.to_owned())),
+                ..MockTransport::default()
+            };
+            execute_plan(&inventory, &mut recovery, &mut journal)
+                .expect_err("authenticated rejection publishes rollback-only successor");
+            assert_eq!(recovery.events, ["recover:canary"]);
+            assert_eq!(journal.state.status, "rolling_back");
+            assert!(journal.state.recovery_intent.is_none());
+            let mut rollback = MockTransport::default();
+            execute_plan(&inventory, &mut rollback, &mut journal)
+                .expect_err("rollback reports the rejected release outcome");
+            assert_eq!(journal.state.status, "rolled_back");
+            assert_eq!(rollback.events.len(), VALIDATOR_SLUGS.len());
+            assert!(
+                rollback
+                    .events
+                    .iter()
+                    .all(|event| event.starts_with("rollback:"))
+            );
+        }
+
         #[test]
         fn pending_recovery_never_runs_the_normal_submit_path() {
             let (inventory, mut journal) = journal(sample_inventory());

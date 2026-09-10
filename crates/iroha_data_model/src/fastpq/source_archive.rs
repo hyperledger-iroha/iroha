@@ -41,7 +41,8 @@ pub struct FastpqOrdinarySourceStatementArchiveV1 {
     pub version: u16,
     /// Advertised manifest matching the complete ordered leaf sequence.
     pub manifest: FastpqOrdinarySourceStatementManifestV1,
-    /// Every original statement leaf in its exact canonical occurrence order.
+    /// One leaf per complete nonempty transcript bundle, in strictly increasing
+    /// original execution-entry order with sequential statement positions.
     pub leaves: Vec<FastpqOrdinarySourceStatementLeafV1>,
     /// Fixed ordinary-write SMT path for the manifest, leaf level first.
     pub manifest_siblings: [Hash; 256],

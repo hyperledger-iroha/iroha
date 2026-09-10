@@ -2852,9 +2852,9 @@ mod tests {
     use crate::{
         block::ValidBlock,
         query::store::LiveQueryStore,
-        state::{State, StateBlock, StateTransaction, World},
+        state::{State, StateTransaction, World},
     };
-    use core::num::{NonZeroU32, NonZeroU64};
+    use core::num::NonZeroU64;
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         account::{Account, MultisigMember, MultisigPolicy},
@@ -2955,8 +2955,7 @@ mod tests {
             1,
             "first block height must start at 1 for snapshot"
         );
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let record = view
             .world
@@ -3231,7 +3230,7 @@ mod tests {
         .execute(&validator, &mut stx);
 
         assert!(
-            matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("unbounded validator consensus key")),
+            matches!(&result, Err(Error::InvariantViolation(msg)) if msg.contains("unbounded committee or validator consensus key")),
             "unexpected result: {result:?}"
         );
         assert!(
@@ -3419,14 +3418,14 @@ mod tests {
             Error::InvalidParameter(InvalidParameterError::SmartContract(msg))
                 if msg.contains("admin-managed")
         ));
+        complete_staking_committee(&mut stx, stake_lane);
         stx.apply();
         assert_eq!(
             block.as_ref().header().height().get(),
             1,
             "first block height must start at 1 for snapshot"
         );
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let block = new_block_with_height(2);
         let mut activation_block = state.block(block.as_ref().header());
         let mut activation_tx = activation_block.transaction();
@@ -3437,16 +3436,23 @@ mod tests {
         .execute(&ALICE_ID, &mut activation_tx)
         .unwrap();
         activation_tx.apply();
-        record_block_commit(&mut activation_block, &block);
-        activation_block.commit().unwrap();
+        activation_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
             .expect("stake-elected roster should be present");
         assert_eq!(
-            roster,
-            vec![stake_peer],
-            "admin-managed lanes must not alter stake-elected roster"
+            roster.len(),
+            4,
+            "stake-elected roster has an exact four-validator committee"
+        );
+        assert!(
+            roster.contains(&stake_peer),
+            "the original stake-elected validator remains selected"
+        );
+        assert!(
+            !roster.contains(&validator_peer_id(&delegator)),
+            "the admin-managed lane contributes no stake-elected validator"
         );
         assert!(
             view.world
@@ -3877,10 +3883,6 @@ mod tests {
 
         let mut safe_block = state.block(block_header_with_height(5));
         let mut safe_stx = safe_block.transaction();
-        safe_stx
-            .commit_topology
-            .get_mut()
-            .push(first_replacement.clone());
         RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), first_replacement.clone())
             .execute(&validator, &mut safe_stx)
             .expect("height five is before the height-seven roster freeze");
@@ -3889,10 +3891,6 @@ mod tests {
 
         let mut frozen_block = state.block(block_header_with_height(6));
         let mut frozen_stx = frozen_block.transaction();
-        frozen_stx
-            .commit_topology
-            .get_mut()
-            .push(second_replacement.clone());
         let err =
             RebindPublicLaneValidatorPeer::new(lane_id, validator.clone(), second_replacement)
                 .execute(&validator, &mut frozen_stx)
@@ -4971,9 +4969,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("retained validator tenure must reject peer unregistration");
         assert!(
-            unregister_error
-                .to_string()
-                .contains("wait for its deactivation height"),
+            matches!(&unregister_error, Error::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("wait for its deactivation height")),
             "unexpected unregistration rejection: {unregister_error}"
         );
         let error = RegisterPublicLaneValidator {
@@ -5048,8 +5044,7 @@ mod tests {
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
-        let replacement_peer = register_peer_for_account(&mut stx, &replacement);
-        stx.commit_topology.get_mut().push(replacement_peer);
+        register_peer_for_account(&mut stx, &replacement);
         stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
         stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
         stx.nexus.staking.slash_sink_account_id = escrow.to_string();
@@ -5109,8 +5104,7 @@ mod tests {
         Register::account(Account::new(replacement.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register replacement account");
-        let replacement_peer = register_peer_for_account(&mut stx, &replacement);
-        stx.commit_topology.get_mut().push(replacement_peer);
+        register_peer_for_account(&mut stx, &replacement);
         Mint::asset_quantity(
             10_000_u32,
             AssetId::new(asset_definition.clone(), replacement.clone()),
@@ -5267,11 +5261,10 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect_err("exited validator must not overwrite retained slashable custody");
-        assert!(matches!(
-            err,
-            Error::InvariantViolation(message)
-                if message.contains("retains slashable stake custody")
-        ));
+        assert!(
+            matches!(&err, Error::InvariantViolation(message) if message.contains("before deactivation height")),
+            "re-registration before the retained election boundary must reject: {err:?}"
+        );
         let record = stx
             .world
             .public_lane_validators
@@ -5384,6 +5377,8 @@ mod tests {
             stx.nexus.staking.stake_asset_id = asset_def_id.to_string();
             stx.nexus.staking.stake_escrow_account_id = escrow.to_string();
             stx.nexus.staking.slash_sink_account_id = escrow.to_string();
+            finalize_validator_lifecycle(&mut stx)
+                .expect("finalize the elapsed exit before replacement admission");
             let error = RegisterPublicLaneValidator {
                 lane_id,
                 peer_id: validator_peer_id(&replacement),
@@ -5399,6 +5394,7 @@ mod tests {
                 Error::InvariantViolation(message)
                     if message.contains("maximum validator capacity")
             ));
+            stx.apply();
         }
         state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
@@ -5458,9 +5454,9 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
+        complete_staking_committee(&mut stx, lane_id);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let validator_peer = crate::PeerId::from(
             validator
                 .try_signatory()
@@ -5482,8 +5478,7 @@ mod tests {
         let mut stx = state_block.transaction();
         seed_validator_consensus_key(&mut stx, &validator_peer, ConsensusKeyStatus::Disabled);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
@@ -5532,9 +5527,9 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
+        complete_staking_committee(&mut stx, lane_id);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let validator_peer = crate::PeerId::from(
             validator
                 .try_signatory()
@@ -5559,8 +5554,7 @@ mod tests {
         stx.commit_topology.get_mut().clear();
         stx.commit_topology.get_mut().push(foreign_peer);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
@@ -5609,9 +5603,9 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .unwrap();
+        complete_staking_committee(&mut stx, lane_id);
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let validator_peer = crate::PeerId::from(
             validator
                 .try_signatory()
@@ -5640,8 +5634,7 @@ mod tests {
             stx.world.peers.remove(pos);
         }
         stx.apply();
-        record_block_commit(&mut state_block, &block);
-        state_block.commit().unwrap();
+        state_block.commit_empty_block_for_testing().unwrap();
         let view = state.view();
         let roster = view
             .epoch_validator_peer_ids_for_testing(0)
@@ -6166,11 +6159,10 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect_err("exit alone must not discard slashable custody");
-        assert!(matches!(
-            err,
-            Error::InvariantViolation(message)
-                if message.contains("retains slashable stake custody")
-        ));
+        assert!(
+            matches!(&err, Error::InvariantViolation(message) if message.contains("before deactivation height")),
+            "re-registration before the retained election boundary must reject: {err:?}"
+        );
         let record = stx
             .world
             .public_lane_validators
@@ -6323,11 +6315,10 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect_err("exit must not erase retained slashable custody");
-        assert!(matches!(
-            err,
-            Error::InvariantViolation(message)
-                if message.contains("retains slashable stake custody")
-        ));
+        assert!(
+            matches!(&err, Error::InvariantViolation(message) if message.contains("before deactivation height")),
+            "re-registration before the retained election boundary must reject: {err:?}"
+        );
         let record = stx
             .world
             .public_lane_validators
@@ -6518,9 +6509,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("active validator tenure must reject peer unregistration");
         assert!(
-            error
-                .to_string()
-                .contains("wait for its deactivation height"),
+            matches!(&error, Error::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("wait for its deactivation height")),
             "unexpected unregistration rejection: {error}"
         );
         assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
@@ -6584,9 +6573,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect_err("retained validator tenure must reject peer unregistration");
         assert!(
-            error
-                .to_string()
-                .contains("wait for its deactivation height"),
+            matches!(&error, Error::InvalidParameter(InvalidParameterError::SmartContract(message)) if message.contains("wait for its deactivation height")),
             "unexpected unregistration rejection: {error}"
         );
         assert!(stx.world.peers().iter().any(|peer| peer == &peer_id));
@@ -6907,6 +6894,8 @@ mod tests {
         }
         .execute(&validator, &mut stx)
         .expect("validator self share occupies the configured capacity");
+        finalize_validator_lifecycle(&mut stx)
+            .expect("settle due lifecycle before admission snapshot");
         let validator_before = stx
             .world
             .public_lane_validators
@@ -7639,7 +7628,8 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect_err("mismatched stake-share row must not satisfy slash");
         assert!(
-            matches!(err, Error::InvariantViolation(msg) if msg.contains("could not be satisfied by stake shares"))
+            matches!(&err, Error::InvariantViolation(msg) if msg.contains("public-lane stake share does not match its storage key")),
+            "malformed share must reject before slash mutation: {err:?}"
         );
         let validator_after = stx
             .world

@@ -6,12 +6,12 @@ use crate::{
     account::AccountId,
     asset::AssetDefinitionId,
     isi::{InstructionBox, Log},
-    name::Name,
     parameter::{CustomParameter, CustomParameterId},
     parliament_types::{GovernanceCertificateId, GovernanceCertificateV1, ProposalContentId},
     smart_contract::ContractAddress,
 };
 use iroha_crypto::Hash;
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -1524,6 +1524,7 @@ pub fn validation_fee_payout_recipient_share() -> Numeric {
 #[cfg(test)]
 mod parliament_tests {
     use super::*;
+    use crate::domain::DomainId;
     use crate::parliament_types::{
         BallotAttemptId, BeaconPulseId, BeaconSessionId, BodyElectionAttemptId, BodyInstanceId,
         GovernanceAttemptId, GovernanceCertificateV1, GovernanceExpectedHeadPresentV1,
@@ -1533,8 +1534,8 @@ mod parliament_tests {
         TleSessionId, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
         parliament_ballot_result_root_v1,
     };
-    use crate::{domain::DomainId, name::Name};
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_model_base::name::Name;
     use std::str::FromStr as _;
     const TEST_AUTHORIZATION_STRIDE: u64 = 10_000;
 

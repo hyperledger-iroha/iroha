@@ -14,7 +14,6 @@ use iroha_data_model::{
         transfer::{Transfer, TransferBox},
     },
     metadata::Metadata,
-    name::Name,
     soranet::{
         RelayId,
         incentives::{
@@ -23,6 +22,7 @@ use iroha_data_model::{
         },
     },
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -1455,9 +1455,9 @@ mod tests {
         asset::{AssetDefinitionId, AssetId},
         domain::DomainId,
         metadata::Metadata,
-        name::Name,
         soranet::incentives::{RelayBondPolicyV1, RelayComplianceStatusV1},
     };
+    use iroha_model_base::name::Name;
     use std::sync::Arc;
     fn quantity(value: u32) -> Quantity {
         Quantity::from(value)

@@ -29,25 +29,25 @@ pub const MAX_ASSET_DESCRIPTION_LEN: usize = 2048;
 /// # Errors
 /// Returns [`crate::error::ParseError`] when `name` is blank, too long, or contains
 /// reserved alias separators (`#`/`@`).
-pub fn validate_asset_name(name: &str) -> Result<(), crate::error::ParseError> {
+pub fn validate_asset_name(name: &str) -> Result<(), iroha_model_base::error::ParseError> {
     let trimmed = name.trim();
     if trimmed.is_empty() {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name must not be blank",
         ));
     }
     if trimmed.len() > MAX_ASSET_NAME_LEN {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name exceeds maximum length",
         ));
     }
     if name.contains('#') || name.contains('@') {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name must not contain `#` or `@`",
         ));
     }
     if name.chars().any(char::is_control) {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset name must not contain control characters",
         ));
     }
@@ -60,22 +60,22 @@ pub fn validate_asset_name(name: &str) -> Result<(), crate::error::ParseError> {
 /// or contains control characters.
 pub fn validate_asset_description(
     description: Option<&str>,
-) -> Result<(), crate::error::ParseError> {
+) -> Result<(), iroha_model_base::error::ParseError> {
     let Some(description) = description else {
         return Ok(());
     };
     if description.trim().is_empty() {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset description must not be blank when provided",
         ));
     }
     if description.len() > MAX_ASSET_DESCRIPTION_LEN {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset description exceeds maximum length",
         ));
     }
     if description.chars().any(char::is_control) {
-        return Err(crate::error::ParseError::new(
+        return Err(iroha_model_base::error::ParseError::new(
             "asset description must not contain control characters",
         ));
     }
@@ -91,7 +91,7 @@ pub fn validate_asset_description(
 pub fn validate_asset_alias(
     alias: Option<&AssetDefinitionAlias>,
     expected_name: &str,
-) -> Result<(), crate::error::ParseError> {
+) -> Result<(), iroha_model_base::error::ParseError> {
     validate_asset_alias_against_names(alias, [expected_name])
 }
 /// Validate optional alias literal for an asset definition against a set of allowed name stems.
@@ -103,7 +103,7 @@ pub fn validate_asset_alias(
 pub fn validate_asset_alias_against_names<I, S>(
     alias: Option<&AssetDefinitionAlias>,
     expected_names: I,
-) -> Result<(), crate::error::ParseError>
+) -> Result<(), iroha_model_base::error::ParseError>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
@@ -118,7 +118,7 @@ where
     {
         return Ok(());
     }
-    Err(crate::error::ParseError::new(
+    Err(iroha_model_base::error::ParseError::new(
         "asset alias name segment must match the asset name",
     ))
 }
@@ -1137,7 +1137,8 @@ mod validation_tests {
 #[cfg(test)]
 mod json_tests {
     use super::*;
-    use crate::{Name, domain::DomainId, metadata::Metadata};
+    use crate::{domain::DomainId, metadata::Metadata};
+    use iroha_model_base::name::Name;
     use norito::json::{Arena, FastFromJson, TapeWalker};
     use std::str::FromStr;
     #[test]

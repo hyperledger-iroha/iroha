@@ -3,6 +3,7 @@ use iroha_config::parameters::{ProductionRuntimeHandleError, validate_production
 use iroha_crypto::{
     PublicKey,
     encryption::{ChaCha20Poly1305, SymmetricEncryptor},
+    zeroize_value_for_confidential_discard,
 };
 use iroha_data_model::sorafs::moderation::{
     AdversarialCorpusManifestV1, ModerationCommitteeAggregateV1, ModerationReproManifestV1,
@@ -95,9 +96,10 @@ pub struct ModerationCorpusRegistryRecord {
     pub variant_count: u32,
 }
 /// Snapshot of the local SoraFS moderation model registry.
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationModelRegistrySnapshot")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationModelRegistrySnapshot {
     /// Admitted reproducibility manifests sorted by manifest id.
     pub reproducibility_manifests: Vec<ModerationReproRegistryRecord>,
@@ -320,9 +322,8 @@ pub enum ModerationAuthenticatedScreeningAdmissionError {
 ///
 /// The deployment configuration separately pins the BLAKE3 digest of the exact canonical Norito
 /// bytes, so replacing this local file cannot silently change the active screening authority.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationScreeningAuthorityBundleV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningAuthorityBundleV1 {
     /// Schema version.
     pub version: u16,
@@ -733,8 +734,7 @@ impl std::fmt::Debug for ModerationQuarantineObjectInput {
 }
 impl Drop for ModerationQuarantineObjectInput {
     fn drop(&mut self) {
-        self.payload.fill(0);
-        let _ = std::hint::black_box(&self.payload);
+        zeroize_value_for_confidential_discard(&mut self.payload);
         scrub_optional_quarantine_text(&mut self.content_type);
         scrub_optional_quarantine_text(&mut self.notes);
     }
@@ -746,8 +746,7 @@ fn scrub_optional_quarantine_text(value: &mut Option<String>) {
 }
 fn scrub_owned_quarantine_text(value: String) {
     let mut bytes = value.into_bytes();
-    bytes.fill(0);
-    let _ = std::hint::black_box(&bytes);
+    zeroize_value_for_confidential_discard(&mut bytes);
 }
 /// Persisted index record for one encrypted local quarantine payload object.
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -784,7 +783,7 @@ pub struct ModerationQuarantineObjectRecord {
     pub envelope_path: String,
 }
 /// Decrypted local quarantine object payload.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineObjectPayload {
     /// Persisted object index record.
     pub record: ModerationQuarantineObjectRecord,
@@ -792,7 +791,7 @@ pub struct ModerationQuarantineObjectPayload {
     pub payload: Vec<u8>,
 }
 /// Authenticated byte range from a local quarantine object.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ModerationQuarantineObjectRangePayload {
     /// Persisted object index record.
     pub record: ModerationQuarantineObjectRecord,
@@ -804,9 +803,10 @@ pub struct ModerationQuarantineObjectRangePayload {
     pub payload: Vec<u8>,
 }
 /// Snapshot of local encrypted quarantine object index records.
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineObjectSnapshot")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationQuarantineObjectSnapshot {
     /// Object records sorted by quarantine id.
     pub objects: Vec<ModerationQuarantineObjectRecord>,
@@ -979,9 +979,10 @@ pub struct ModerationEvidenceViewerAccessEventRecord {
     pub event_digest: [u8; 32],
 }
 /// Snapshot of local payload-free evidence viewer session and access-log state.
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationEvidenceViewerSnapshot")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerSnapshot {
     /// Session records sorted by session id.
     pub sessions: Vec<ModerationEvidenceViewerSessionRecord>,
@@ -1023,9 +1024,8 @@ pub struct ModerationEvidenceViewerAuditKindCount {
     pub count: u64,
 }
 /// Payload-free local evidence-viewer access report for transparency export.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationEvidenceViewerAuditReport")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationEvidenceViewerAuditReport {
     /// Schema version; currently [`MODERATION_EVIDENCE_VIEWER_AUDIT_REPORT_VERSION_V1`].
     pub version: u16,
@@ -1096,9 +1096,10 @@ pub struct ModerationScreeningOutcome {
     pub quarantine: Option<ModerationQuarantineRecord>,
 }
 /// Snapshot of local SFM-4a screening and quarantine state.
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationScreeningSnapshot")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct ModerationScreeningSnapshot {
     /// Screening records sorted by record id.
     pub screening_records: Vec<ModerationScreeningRecord>,
@@ -3201,9 +3202,8 @@ pub(crate) struct ModerationQuarantineCiphertextChunkV1 {
     pub ciphertext: Vec<u8>,
 }
 /// Canonical V1 chunked ChaCha20-Poly1305 quarantine object envelope.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineObjectEnvelopeV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
     pub version: u16,
     pub algorithm: String,
@@ -3225,9 +3225,8 @@ pub(crate) struct ModerationQuarantineObjectEnvelopeV1 {
     pub chunk_plaintext_bytes: u32,
     pub chunks: Vec<ModerationQuarantineCiphertextChunkV1>,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineImmutableMetadataV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineImmutableMetadataV1 {
     version: u16,
     algorithm: String,
@@ -3242,16 +3241,14 @@ struct ModerationQuarantineImmutableMetadataV1 {
     chunk_plaintext_bytes: u32,
     chunk_count: u32,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineAadHeaderV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineAadHeaderV1 {
     metadata: ModerationQuarantineImmutableMetadataV1,
     object_id: [u8; 16],
 }
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema)]
 #[norito_schema(name = "sorafs_node::moderation::ModerationQuarantineChunkAadV1")]
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 struct ModerationQuarantineChunkAadV1 {
     header_digest: [u8; 32],
     index: u32,
@@ -3261,8 +3258,7 @@ struct ModerationQuarantineChunkAadV1 {
 struct ModerationQuarantineDek([u8; 32]);
 impl Drop for ModerationQuarantineDek {
     fn drop(&mut self) {
-        self.0.fill(0);
-        let _ = std::hint::black_box(&self.0);
+        zeroize_value_for_confidential_discard(&mut self.0);
     }
 }
 struct ModerationQuarantineWrappedDek(Vec<u8>);
@@ -3273,22 +3269,10 @@ impl ModerationQuarantineWrappedDek {
 }
 impl Drop for ModerationQuarantineWrappedDek {
     fn drop(&mut self) {
-        self.0.fill(0);
-        let _ = std::hint::black_box(&self.0);
+        zeroize_value_for_confidential_discard(&mut self.0);
     }
 }
-struct ModerationQuarantinePlaintext(Vec<u8>);
-impl ModerationQuarantinePlaintext {
-    fn into_vec(mut self) -> Vec<u8> {
-        std::mem::take(&mut self.0)
-    }
-}
-impl Drop for ModerationQuarantinePlaintext {
-    fn drop(&mut self) {
-        self.0.fill(0);
-        let _ = std::hint::black_box(&self.0);
-    }
-}
+include!("moderation/quarantine_plaintext.rs");
 /// Decode one fixed V1 envelope before any key-provider operation.
 ///
 /// The configured byte ceiling and byte-derived allocation, element and depth
@@ -3495,18 +3479,18 @@ pub(crate) fn open_moderation_quarantine_object(
     record: &ModerationQuarantineObjectRecord,
     key_provider_binding: &ModerationQuarantineKeyProviderBindingV1,
     key_wrapper: &dyn ModerationQuarantineKeyWrapper,
-) -> Result<Vec<u8>, ModerationQuarantineObjectError> {
-    let payload = ModerationQuarantinePlaintext(open_moderation_quarantine_object_range(
+) -> Result<ModerationQuarantinePlaintext, ModerationQuarantineObjectError> {
+    let payload = open_moderation_quarantine_object_range(
         envelope,
         record,
         key_provider_binding,
         key_wrapper,
         0..envelope.payload_len,
-    )?);
+    )?;
     if *blake3::hash(&payload.0).as_bytes() != envelope.payload_digest {
         return Err(authentication_failed(envelope.quarantine_id));
     }
-    Ok(payload.into_vec())
+    Ok(payload)
 }
 /// Authenticate and decrypt only chunks intersecting `range`.
 ///
@@ -3519,7 +3503,7 @@ pub(crate) fn open_moderation_quarantine_object_range(
     key_provider_binding: &ModerationQuarantineKeyProviderBindingV1,
     key_wrapper: &dyn ModerationQuarantineKeyWrapper,
     range: Range<u64>,
-) -> Result<Vec<u8>, ModerationQuarantineObjectError> {
+) -> Result<ModerationQuarantinePlaintext, ModerationQuarantineObjectError> {
     validate_quarantine_object_envelope(envelope)?;
     let rebuilt = moderation_quarantine_object_record_from_envelope(
         envelope,
@@ -3621,7 +3605,7 @@ pub(crate) fn open_moderation_quarantine_object_range(
     if output.0.len() != output_len {
         return Err(authentication_failed(envelope.quarantine_id));
     }
-    Ok(output.into_vec())
+    Ok(output)
 }
 /// Rewrap a per-object DEK without decrypting or rewriting ciphertext chunks.
 pub(crate) fn rewrap_moderation_quarantine_object(

@@ -2,7 +2,7 @@
 use blstrs::{G1Projective, G2Projective, Scalar};
 use group::{Curve, Group};
 use iroha_crypto::Hash;
-use iroha_data_model::prelude::Name;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use ivm::{
     IVM, ProgramMetadata,

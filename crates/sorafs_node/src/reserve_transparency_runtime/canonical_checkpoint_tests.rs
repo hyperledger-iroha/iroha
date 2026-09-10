@@ -37,6 +37,22 @@ fn scanner_checkpoint_frames_and_digests_survive_every_caller_layout() {
         );
         // The independent oracle retains the existing domain and full-frame length prefix.
         let payload_bytes = norito::encode_canonical(&first_checkpoint.payload).unwrap();
+        if expected_frames.is_none() {
+            assert_eq!(
+                crate::frame_test_support::assert_current_frame(
+                    &first_checkpoint,
+                    "sorafs_node::reserve_transparency_runtime::ReserveTransparencyCheckpointV1"
+                ),
+                first_bytes
+            );
+            assert_eq!(
+                crate::frame_test_support::assert_current_frame(
+                    &first_checkpoint.payload,
+                    "sorafs_node::reserve_transparency_runtime::ReserveTransparencyCheckpointPayloadV1"
+                ),
+                payload_bytes
+            );
+        }
         let mut hasher = blake3::Hasher::new();
         hasher.update(CHECKPOINT_DIGEST_DOMAIN_V1);
         hasher.update(&u64::try_from(payload_bytes.len()).unwrap().to_le_bytes());

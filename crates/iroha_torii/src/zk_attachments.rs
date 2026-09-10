@@ -3305,9 +3305,14 @@ struct SanitizeErrorWire {
     reason: String,
     message: String,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_torii::zk_attachments::SanitizerRequest")]
-#[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct SanitizerRequest {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -3318,9 +3323,14 @@ struct SanitizerRequest {
     max_archive_depth: u32,
     timeout_ms: u64,
 }
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Debug,
+    Clone,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_torii::zk_attachments::SanitizerResponse")]
-#[derive(Debug, Clone, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 enum SanitizerResponse {
     /// Sanitization succeeded with one summary and exact replacement body.
     Accepted {

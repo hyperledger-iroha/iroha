@@ -148,7 +148,6 @@ use iroha_data_model::{
     },
     parliament_types::BallotAttemptId,
     peer::PeerId,
-    prelude::Name,
     privacy::GoldilocksDigest384V1,
     transaction::signed::{TransactionEntrypoint, TransactionResult},
     validation_fee::ValidationFeePolicyWitnessProofV1,
@@ -156,6 +155,7 @@ use iroha_data_model::{
 use iroha_file_mmap::ReadOnlyMmap;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal, spawn_os_thread_as_future};
 use iroha_logger::prelude::*;
+use iroha_model_base::name::Name;
 #[cfg(test)]
 use iroha_primitives::time::TimeSource;
 #[cfg(test)]
@@ -255,6 +255,7 @@ fn kagemusha_finality_decode_limits(wire_bytes: usize) -> norito::DecodeLimits {
     )
 }
 include!("kura/startup_finality_support.rs");
+include!("kura/read_only_evidence.rs");
 /// Finality artifact returned by Kura's authenticated, cryptographically verified reader.
 ///
 /// The private field prevents other crate modules from fabricating durable-read
@@ -3136,7 +3137,31 @@ impl Kura {
             }
         }
         let startup_lane_storage_entries = if defer_lane_provisioning {
-            BTreeMap::from([(primary_lane.lane_id, primary_lane.clone())])
+            // Pending primary relabels have already resolved and authenticated
+            // their physical pair. Startup sidecar readers must use that same
+            // pair until State publishes its authoritative geometry.
+            let mut resolved_primary = primary_lane.clone();
+            resolved_primary.kura_segment = blocks_root
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            resolved_primary.merge_segment = merge_log_path
+                .file_stem()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_owned();
+            if resolved_primary.kura_segment.is_empty()
+                || resolved_primary.merge_segment.is_empty()
+                || resolved_primary.blocks_dir(&store_dir) != blocks_root
+                || resolved_primary.merge_log_path(&store_dir) != merge_log_path
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    store_dir.clone(),
+                    "resolved primary storage pair is outside its canonical lane namespace",
+                ));
+            }
+            BTreeMap::from([(primary_lane.lane_id, resolved_primary)])
         } else {
             Self::lane_storage_entries_from_config(lane_config)
         };
@@ -3392,6 +3417,7 @@ impl Kura {
         }
         if !provisional_open {
             if config.init_mode == InitMode::Strict {
+                kura.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
                 kura.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
                 kura.recover_retained_block_rewrite_stage_on_startup(&blocks_root)?;
                 kura.recover_lane_consensus_sidecar_pairs_on_startup()?;
@@ -5858,6 +5884,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
@@ -5942,6 +5969,7 @@ impl Kura {
             );
             return Ok(());
         }
+        self.cleanup_autonomous_atomic_sidecar_temps_on_startup()?;
         self.seal_completed_autonomous_lifecycle_replica_claims_on_startup()?;
         self.recover_lane_consensus_sidecar_pairs_on_startup()?;
         self.recover_canonical_autonomous_lane_replica_pairs_on_startup()?;
@@ -23267,10 +23295,10 @@ impl BlockIndex {
         })
     }
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::BlockStoreCommitMarker")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::BlockStoreCommitMarker")]
 struct BlockStoreCommitMarker {
     /// Marker format version (v1).
     version: u32,
@@ -23305,10 +23333,10 @@ impl DaBlockRewriteImageV1 {
     }
 }
 /// Write-ahead record making DA-sidecar and canonical-journal rewrites recoverable.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::DaBlockRewriteStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::DaBlockRewriteStageV1")]
 struct DaBlockRewriteStageV1 {
     /// Stage format version.
     format_version: u16,
@@ -23343,10 +23371,10 @@ struct EvictionCompactionEntryV1 {
     wire_len: u64,
 }
 /// Roll-forward manifest for the two-file body-eviction compaction publication.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::EvictionCompactionStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::EvictionCompactionStageV1")]
 struct EvictionCompactionStageV1 {
     /// Stage format version.
     format_version: u16,
@@ -23390,10 +23418,10 @@ struct LaneArtifactPhysicalTarget {
     blocks_path: PathBuf,
 }
 /// Durable lane/merge association decision resolved only after the canonical marker is known.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::CanonicalAssociationStageV1")]
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_core::kura::CanonicalAssociationStageV1")]
 struct CanonicalAssociationStageV1 {
     /// Stage format version.
     format_version: u16,
@@ -23409,9 +23437,8 @@ struct CanonicalAssociationStageV1 {
     merge_entry: Option<MergeLedgerEntry>,
 }
 /// Authenticated metadata for a body-less Kura suffix recovered from a verified local snapshot.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::VerifiedSnapshotTailMarkerV1")]
-#[derive(Debug, Clone, Encode, Decode)]
 struct VerifiedSnapshotTailMarkerV1 {
     /// Marker format version.
     version: u32,
@@ -31969,15 +31996,15 @@ impl Kura {
         }
         Ok(())
     }
-    /// Check one exact indexed lane-height slot without invoking sidecar
-    /// recovery. This is used only to resolve a claim temp after a crash; a
-    /// malformed or in-progress index is conservatively treated as occupied.
-    fn autonomous_lane_claim_target_may_be_durable_locked(
+    /// Check one exact indexed lane-height slot without invoking sidecar recovery.
+    /// `None` preserves a staged claim until its lane geometry and payload can be
+    /// resolved; uncertainty never grants a durable owner or proves absence.
+    fn autonomous_lane_claim_target_is_durable_locked(
         &self,
         claim: &AutonomousLaneEntrypointClaimV1,
-    ) -> bool {
+    ) -> Option<bool> {
         if !matches!(claim.state, AutonomousLaneEntrypointClaimStateV1::Active) {
-            return false;
+            return Some(false);
         }
         let Some(entry) = self
             .lane_storage_entries
@@ -31985,19 +32012,18 @@ impl Kura {
             .get(&claim.lane_id)
             .cloned()
         else {
-            // A retired lane may no longer have a readable active segment. Do
-            // not discard its crash-recovered replay claim.
-            return true;
+            // State has not restored secondary geometry yet, or this lane was
+            // retired. Keep the exact crash boundary until authority is known.
+            return None;
         };
         if self
             .require_active_lane_incarnation(&entry, claim.lane_incarnation, claim.proposal_height)
             .is_err()
         {
-            return false;
+            return None;
         }
-        // The exact current attempt is pointer-resolved. Any malformed or
-        // in-progress durable state remains conservatively occupied; only a
-        // proven absence lets a staged claim be discarded.
+        // Only an exact resolved attempt can promote a staged claim, and only
+        // proven absence allows its removal.
         match self.read_autonomous_lane_block_record_locked(
             &entry,
             claim.lane_id,
@@ -32006,9 +32032,9 @@ impl Kura {
             claim.epoch,
             None,
         ) {
-            Ok(Some(record)) => claim.active_for_payload(&record.artifact.executable_payload),
-            Ok(None) => false,
-            Err(_) => true,
+            Ok(Some(record)) => Some(claim.active_for_payload(&record.artifact.executable_payload)),
+            Ok(None) => Some(false),
+            Err(_) => None,
         }
     }
     fn reconcile_autonomous_lane_entrypoint_claim_temps_on_startup_locked(&self) -> Result<()> {
@@ -32155,8 +32181,12 @@ impl Kura {
                     resource_child.finish();
                     continue;
                 }
-                let target_is_durable =
-                    self.autonomous_lane_claim_target_may_be_durable_locked(&pending);
+                let Some(target_is_durable) =
+                    self.autonomous_lane_claim_target_is_durable_locked(&pending)
+                else {
+                    resource_child.finish();
+                    continue;
+                };
                 if target_is_durable {
                     if let Some(claim) = existing.as_ref()
                         && !self.autonomous_lane_entrypoint_claim_is_replaceable_terminal_locked(
@@ -32304,7 +32334,15 @@ impl Kura {
                         "autonomous entrypoint temp claim has a mismatched or released identity",
                     ));
                 }
-                if self.autonomous_lane_claim_target_may_be_durable_locked(&pending) {
+                let target_is_durable = self
+                    .autonomous_lane_claim_target_is_durable_locked(&pending)
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            temp_path.clone(),
+                            "autonomous entrypoint temp claim awaits exact lane payload recovery",
+                        )
+                    })?;
+                if target_is_durable {
                     let replaced_bytes = if existing.is_some() {
                         Self::file_len_or_zero(&path)?
                     } else {
@@ -34901,19 +34939,16 @@ impl Kura {
         let origin = artifact.executable_payload.origin_proposal.clone();
         Some((artifact.executable_payload, origin))
     }
-    /// Explicitly reconstruct the bounded route/incarnation latest pointers.
+    /// Discard bounded, unpublished atomic sidecars before startup repairs need capacity.
     ///
-    /// This is the only autonomous path that scans the versioned attempt
-    /// namespace. It runs during startup or restored-geometry activation before
-    /// consensus can hydrate work. Runtime hydration subsequently performs one
-    /// exact pointer lookup per configured route.
-    fn rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup(&self) -> Result<()> {
+    /// Only the authenticated active geometry is scanned. Named protocol publication
+    /// temporaries keep their dedicated recovery paths; generic atomic-writer residue
+    /// is never decoded or promoted into durable authority.
+    fn cleanup_autonomous_atomic_sidecar_temps_on_startup(&self) -> Result<()> {
         let _prune_guard = self.prune_lock.lock();
         self.ensure_prune_recovery_not_required()?;
         self.durable_mutation_authorized()?;
         let _canonical_chain_guard = self.canonical_chain_lock.lock();
-        let pending_canonical_bytes =
-            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
         let _geometry_guard = self.lane_geometry_lock.lock();
         let entries = self
             .lane_storage_entries
@@ -35026,6 +35061,83 @@ impl Kura {
                     directory,
                     "autonomous startup inventory directory changed during bounded preflight",
                 ));
+            }
+            if !temporary_paths.is_empty() {
+                if !Self::progress_mutation_namespace_unchanged(&namespace) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup inventory directory changed before temporary cleanup",
+                    ));
+                }
+                let mut accounting_mutation = self
+                    .begin_total_disk_usage_mutation()
+                    .with_resource_children(temporary_paths.len());
+                let mut removed_bytes = 0_u64;
+                for (path, expected_metadata) in &temporary_paths {
+                    let resource_child = accounting_mutation.resource_child(vec![path.clone()]);
+                    let current = secure_file_metadata::from_path(path)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    if !Self::sidecar_file_metadata_unchanged(expected_metadata, &current) {
+                        return Err(Self::invalid_lane_artifact_error(
+                            path.clone(),
+                            "autonomous startup temporary changed after bounded preflight",
+                        ));
+                    }
+                    removed_bytes = removed_bytes.checked_add(current.len()).ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            directory.clone(),
+                            "autonomous startup temporary byte count overflows",
+                        )
+                    })?;
+                    Self::remove_bound_progress_temp_if_present(&namespace, path)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    resource_child.finish();
+                }
+                if !Self::sync_bound_progress_mutation_directories(
+                    &namespace,
+                    "autonomous startup temporary cleanup",
+                ) {
+                    return Err(Self::invalid_lane_artifact_error(
+                        directory,
+                        "autonomous startup temporary cleanup lost its bound directory",
+                    ));
+                }
+                self.sub_disk_usage_bytes(removed_bytes);
+                accounting_mutation.finish();
+            }
+        }
+        Ok(())
+    }
+    /// Explicitly reconstruct the bounded route/incarnation latest pointers.
+    ///
+    /// After bounded temporary cleanup, this path validates the versioned attempt
+    /// namespace during startup or restored-geometry activation before
+    /// consensus can hydrate work. Runtime hydration subsequently performs one
+    /// exact pointer lookup per configured route.
+    fn rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup(&self) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let pending_canonical_bytes =
+            self.pending_canonical_capacity_bytes_under_prune_and_canonical_guards()?;
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let lifecycle_process_generation = self
+            .read_autonomous_lifecycle_process_generation_record()?
+            .map(|(record, _)| record);
+        let _sidecar_guard = self.sidecar_lock.lock();
+        for entry in entries {
+            let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+            match std::fs::symlink_metadata(&directory) {
+                Ok(_) => {}
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(Error::IO(error, directory)),
             }
             let directory_entries = std::fs::read_dir(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?;
@@ -35590,49 +35702,6 @@ impl Kura {
                         ));
                     }
                 }
-            }
-            if !temporary_paths.is_empty() {
-                if !Self::progress_mutation_namespace_unchanged(&namespace) {
-                    return Err(Self::invalid_lane_artifact_error(
-                        directory,
-                        "autonomous startup inventory directory changed before temporary cleanup",
-                    ));
-                }
-                let mut accounting_mutation = self
-                    .begin_total_disk_usage_mutation()
-                    .with_resource_children(temporary_paths.len());
-                let mut removed_bytes = 0_u64;
-                for (path, expected_metadata) in &temporary_paths {
-                    let resource_child = accounting_mutation.resource_child(vec![path.clone()]);
-                    let current = secure_file_metadata::from_path(path)
-                        .map_err(|error| Error::IO(error, path.clone()))?;
-                    if !Self::sidecar_file_metadata_unchanged(expected_metadata, &current) {
-                        return Err(Self::invalid_lane_artifact_error(
-                            path.clone(),
-                            "autonomous startup temporary changed after bounded preflight",
-                        ));
-                    }
-                    removed_bytes = removed_bytes.checked_add(current.len()).ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            directory.clone(),
-                            "autonomous startup temporary byte count overflows",
-                        )
-                    })?;
-                    Self::remove_bound_progress_temp_if_present(&namespace, path)
-                        .map_err(|error| Error::IO(error, path.clone()))?;
-                    resource_child.finish();
-                }
-                if !Self::sync_bound_progress_mutation_directories(
-                    &namespace,
-                    "autonomous startup temporary cleanup",
-                ) {
-                    return Err(Self::invalid_lane_artifact_error(
-                        directory,
-                        "autonomous startup temporary cleanup lost its bound directory",
-                    ));
-                }
-                self.sub_disk_usage_bytes(removed_bytes);
-                accounting_mutation.finish();
             }
             for directory_entry in std::fs::read_dir(&directory)
                 .map_err(|error| Error::IO(error, directory.clone()))?
@@ -46356,6 +46425,166 @@ include!("kura/test_fault_injection_controls.rs");
 include!("kura/file_error_support.rs");
 #[cfg(test)]
 pub(crate) mod tests {
+    #[test]
+    fn root_storage_frame_owners_roundtrip_and_reject_substitution() {
+        fn check<T>(value: &T, nominal: &str) -> T
+        where
+            T: norito::NoritoSerialize + for<'de> norito::NoritoDeserialize<'de>,
+        {
+            assert_eq!(T::nominal_name(), nominal);
+            assert_eq!(T::frame_name(), nominal);
+            let frame = norito::encode_canonical(value).expect("encode storage owner");
+            assert_eq!(frame[6..22], norito::schema::identity::frame_hash::<T>());
+            let decoded = norito::decode_canonical::<T>(&frame).expect("decode storage owner");
+            assert_eq!(
+                norito::encode_canonical(&decoded).expect("re-encode storage owner"),
+                frame
+            );
+            let mut wrong_owner = frame.clone();
+            wrong_owner[6] ^= 1;
+            assert!(matches!(
+                norito::decode_canonical::<T>(&wrong_owner),
+                Err(norito::Error::SchemaMismatch)
+            ));
+            assert!(norito::decode_canonical::<T>(&frame[..frame.len() - 1]).is_err());
+            let mut trailing = frame;
+            trailing.push(0);
+            assert!(norito::decode_canonical::<T>(&trailing).is_err());
+            decoded
+        }
+        fn file_digest(mut bytes: &[u8]) -> Hash {
+            let len = bytes.len() as u64;
+            BlockStore::eviction_reader_digest(&mut bytes, len).expect("digest fixture file image")
+        }
+
+        let mut blocks = DummyBlocks::new();
+        let first = blocks.next();
+        let second = blocks.next();
+        let first_wire = first.encode_wire().expect("encode first canonical block");
+        let second_wire = second.encode_wire().expect("encode second canonical block");
+        let marker = BlockStoreCommitMarker::new(2, Some(second.hash()));
+        assert_eq!(
+            check(&marker, "iroha_core::kura::BlockStoreCommitMarker"),
+            marker
+        );
+        let store = BlockStore::new(Path::new(""));
+        let rewrite = DaBlockRewriteStageV1 {
+            format_version: DA_BLOCK_REWRITE_STAGE_VERSION,
+            old_marker: BlockStoreCommitMarker::new(1, Some(first.hash())),
+            new_marker: marker.clone(),
+            old_data_len: first_wire.len() as u64,
+            old_index_count: 1,
+            old_hash_count: 1,
+            old_suffix: Vec::new(),
+            replacement: vec![DaBlockRewriteImageV1 {
+                height: 2,
+                block_hash: second.hash(),
+                index_start: first_wire.len() as u64,
+                index_length: second_wire.len() as u64,
+                body: Some(second_wire.clone()),
+            }],
+        };
+        store
+            .validate_da_block_rewrite_stage(&rewrite)
+            .expect("valid rewrite fixture");
+        assert_eq!(
+            check(&rewrite, "iroha_core::kura::DaBlockRewriteStageV1"),
+            rewrite
+        );
+        let marker_bytes = norito::encode_canonical(&marker).expect("encode commit marker image");
+        let hashes = [first.hash(), second.hash()];
+        let hash_bytes: Vec<u8> = hashes
+            .iter()
+            .flat_map(|hash| hash.as_ref().iter().copied())
+            .collect();
+        let index_bytes = [
+            BlockIndex {
+                start: 0,
+                length: first_wire.len() as u64,
+            }
+            .encode(),
+            BlockIndex {
+                start: EVICTED_BLOCK_START,
+                length: second_wire.len() as u64,
+            }
+            .encode(),
+        ]
+        .concat();
+        let eviction = EvictionCompactionStageV1 {
+            format_version: EVICTION_COMPACTION_STAGE_VERSION,
+            marker,
+            marker_len: marker_bytes.len() as u64,
+            marker_digest: file_digest(&marker_bytes),
+            hashes_len: hash_bytes.len() as u64,
+            hashes_digest: file_digest(&hash_bytes),
+            data_temp_name: EVICTION_COMPACTION_DATA_FILE_NAME.to_owned(),
+            data_len: first_wire.len() as u64,
+            data_digest: file_digest(&first_wire),
+            index_temp_name: EVICTION_COMPACTION_INDEX_FILE_NAME.to_owned(),
+            index_len: index_bytes.len() as u64,
+            index_digest: file_digest(&index_bytes),
+            evicted: vec![EvictionCompactionEntryV1 {
+                height: 2,
+                block_hash: second.hash(),
+                canonical_wire_hash: Hash::new(&second_wire),
+                wire_len: second_wire.len() as u64,
+            }],
+        };
+        store
+            .validate_eviction_compaction_stage(&eviction)
+            .expect("valid eviction fixture");
+        assert_eq!(
+            check(&eviction, "iroha_core::kura::EvictionCompactionStageV1"),
+            eviction
+        );
+        let association = CanonicalAssociationStageV1 {
+            format_version: CANONICAL_ASSOCIATION_STAGE_VERSION,
+            height: 2,
+            block_hash: second.hash(),
+            canonical_wire_hash: Hash::new(&second_wire),
+            block_wire: second_wire,
+            merge_entry: None,
+        };
+        Kura::blank_kura_for_testing()
+            .validate_canonical_association_stage(&association)
+            .expect("valid canonical association fixture");
+        assert_eq!(
+            check(
+                &association,
+                "iroha_core::kura::CanonicalAssociationStageV1"
+            ),
+            association
+        );
+        let snapshot = VerifiedSnapshotTailMarkerV1::new(
+            1,
+            2,
+            verified_snapshot_hash_journal_digest(&hashes).expect("snapshot hash journal digest"),
+            Some(Hash::new(b"storage-owner-snapshot-lineage")),
+        );
+        let decoded = check(&snapshot, "iroha_core::kura::VerifiedSnapshotTailMarkerV1");
+        assert_eq!(
+            (
+                decoded.version,
+                decoded.body_prefix_count,
+                decoded.snapshot_height,
+                decoded.hash_journal_digest,
+                decoded.bootstrap_lineage_hash
+            ),
+            (
+                snapshot.version,
+                snapshot.body_prefix_count,
+                snapshot.snapshot_height,
+                snapshot.hash_journal_digest,
+                snapshot.bootstrap_lineage_hash
+            )
+        );
+        let rewrite_frame = norito::encode_canonical(&rewrite).expect("encode rewrite owner");
+        assert!(matches!(
+            norito::decode_canonical::<EvictionCompactionStageV1>(&rewrite_frame),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
+
     fn kaigi_signal_test_call(name: &str) -> iroha_data_model::kaigi::KaigiId {
         iroha_data_model::kaigi::KaigiId::new(
             iroha_data_model::DomainId::try_new("kaigi", "universal").expect("test domain"),
@@ -46631,6 +46860,7 @@ pub(crate) mod tests {
     include!("kura/tests/11_roster_and_progress_sidecars.rs");
     include!("kura/tests/12_sidecar_index_and_pruning.rs");
     include!("kura/tests/13_manifests_and_fsync.rs");
+    include!("kura/tests/14_pipeline_and_lane_frame_owners.rs");
     include!("kura/tests/14b_sidecar_physical_resource_tests.rs");
     include!("kura/tests/14c_authenticated_snapshot_resource_tests.rs");
     include!("kura/tests/14_resource_evidence.rs");
@@ -46639,4 +46869,6 @@ pub(crate) mod tests {
     include!("kura/tests/15_remaining_physical_writer_tests.rs");
     include!("kura/tests/15a_merge_recovery_resource_failure_tests.rs");
     include!("kura/tests/16_resource_file_admission_tests.rs");
+    #[cfg(all(unix, not(any(target_os = "redox", target_os = "espidf"))))]
+    include!("kura/tests/17_read_only_evidence_tests.rs");
 }

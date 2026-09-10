@@ -1,7 +1,7 @@
 pub use self::model::SettlementId;
 use super::*;
 use crate::{
-    Name, NetworkId,
+    NetworkId,
     block::BlockHeader,
     metadata::Metadata,
     nexus::DataSpaceId,
@@ -12,6 +12,7 @@ use derive_more::{Constructor, Display, FromStr};
 use getset::{CopyGetters, Getters};
 use iroha_crypto::{Hash, HashOf, derive_non_signing_ed25519_public_key};
 use iroha_data_model_derive::model;
+use iroha_model_base::name::Name;
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -45,6 +46,7 @@ mod model {
     #[getset(get = "pub")]
     #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
+
     pub struct SettlementId {
         /// Logical identifier chosen by upstream trade/collateral workflows.
         pub name: Name,

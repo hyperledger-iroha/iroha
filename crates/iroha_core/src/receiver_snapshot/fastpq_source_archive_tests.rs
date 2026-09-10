@@ -28,12 +28,13 @@ fn source() -> FastpqSourceStatementContextV1 {
 }
 
 fn source_entries(count: u32) -> Vec<FastpqSourceExecutionEntryV1> {
-    // Independent complete execution inventory: positions 1..=3 have no transfer
+    // Independent complete execution inventory: positions 1 and 3 have no transfer
     // leaves, but their identities still contribute to the source commitment.
     (0..count)
         .map(|index| FastpqSourceExecutionEntryV1 {
             entry_hash: match index {
                 0 => Hash::new(b"first"),
+                2 => Hash::new(b"second"),
                 4 => Hash::new(b"third"),
                 _ => Hash::new(index.to_le_bytes()),
             },
@@ -49,10 +50,9 @@ fn leaves() -> Vec<FastpqOrdinarySourceStatementLeafV1> {
         .map(|index| FastpqOrdinarySourceStatementLeafV1 {
             source: source(),
             statement_index: index,
-            entry_index: if index < 2 { 0 } else { 4 },
-            transcript_index: if index < 2 { index } else { 0 },
+            entry_index: index * 2,
             entry_transcript_count: if index < 2 { 2 } else { 1 },
-            entry_hash: Hash::new(if index < 2 { b"first" } else { b"third" }),
+            entry_hash: source_entries(5)[(index * 2) as usize].entry_hash,
             execution_kind: FastpqSourceExecutionKindV1::ExecutionCall,
             route: FastpqSourceRouteV1::Unrouted,
             dataspace_id: DataSpaceId::new(4),
@@ -621,12 +621,12 @@ fn shared_archive_binds_complete_entries_without_transfer_leaves() {
         for mutation in 0..5 {
             let mut changed = entries.clone();
             match mutation {
-                0 => changed[2].entry_hash = Hash::new(b"changed non-transfer entry"),
-                1 => changed.swap(1, 2),
-                2 => changed[2].execution_kind = FastpqSourceExecutionKindV1::ProtocolPurpose,
-                3 => changed[2].dataspace_id = DataSpaceId::new(9),
+                0 => changed[1].entry_hash = Hash::new(b"changed non-transfer entry"),
+                1 => changed.swap(1, 3),
+                2 => changed[1].execution_kind = FastpqSourceExecutionKindV1::ProtocolPurpose,
+                3 => changed[1].dataspace_id = DataSpaceId::new(9),
                 4 => {
-                    changed.remove(2);
+                    changed.remove(1);
                 }
                 _ => unreachable!(),
             }

@@ -9,9 +9,9 @@ use iroha::client::Client;
 use iroha::data_model::{
     governance::types::{AbiVersion, ContractAbiHash, ContractCodeHash},
     isi::{InstructionBox, SetParameter},
-    name::Name,
     parameter::{CustomParameterId, Parameter, custom::CustomParameter},
 };
+use iroha_model_base::name::Name;
 #[derive(clap::Args, Debug)]
 pub struct ProposeDeployArgs {
     #[arg(long, conflicts_with = "contract_alias")]

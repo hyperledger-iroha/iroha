@@ -335,6 +335,31 @@ fn canonical_stored_receipt_bound_measures_the_actual_frame_in_every_layout() {
     let expected =
         norito::encode_canonical(&receipt.to_stored()).expect("actual canonical receipt frame");
     assert!(expected.len() <= PROVIDER_INGEST_VERIFIED_MUSUBI_RECEIPT_MAX_CANONICAL_BYTES_V1);
+    assert_eq!(
+        <StoredProviderIngestVerifiedMusubiBundleReceiptV1 as norito::NoritoSchema>::frame_name(),
+        "sorafs_node::provider_ingest_runtime::StoredProviderIngestVerifiedMusubiBundleReceiptV1"
+    );
+    let decoded: StoredProviderIngestVerifiedMusubiBundleReceiptV1 =
+        norito::decode_canonical(&expected).expect("receipt exact roundtrip");
+    assert_eq!(decoded, receipt.to_stored());
+    let mut wrong_owner = expected.clone();
+    wrong_owner[6] ^= 1;
+    assert!(matches!(
+        norito::decode_canonical::<StoredProviderIngestVerifiedMusubiBundleReceiptV1>(&wrong_owner),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    assert!(
+        norito::decode_canonical::<StoredProviderIngestVerifiedMusubiBundleReceiptV1>(
+            &expected[..expected.len() - 1]
+        )
+        .is_err()
+    );
+    let mut trailing = expected.clone();
+    trailing.push(0);
+    assert!(
+        norito::decode_canonical::<StoredProviderIngestVerifiedMusubiBundleReceiptV1>(&trailing)
+            .is_err()
+    );
     for flags in canonical_order_test_layouts() {
         let _caller = norito::core::DecodeFlagsGuard::enter(flags);
         assert_eq!(
@@ -354,4 +379,43 @@ fn canonical_stored_receipt_bound_measures_the_actual_frame_in_every_layout() {
         substituted.semantic_release_manifest_digest = MusubiSemanticReleaseDigestV1::new([0; 32]);
         assert!(!substituted.validate_stored(&authorization));
     }
+}
+
+#[test]
+fn verified_receipt_frame_replays_owned_fields_and_rejects_a_vector_root() {
+    let row = fixture_musubi_row(0x38, 0x85);
+    let authorization = validate_assignment(&row, cursor(8), LOCAL_PROVIDER, runtime_policy())
+        .unwrap()
+        .authorization;
+    let receipt =
+        test_verified_musubi_receipt(row.musubi_archive.as_ref().unwrap(), &authorization);
+    let stored = receipt.to_stored();
+    let bytes = crate::schema_identity_test_support::assert_canonical_frame(
+        &stored,
+        "sorafs_node::provider_ingest_runtime::StoredProviderIngestVerifiedMusubiBundleReceiptV1",
+    );
+    assert_eq!(bytes.len(), receipt.canonical_stored_len().unwrap());
+    assert_eq!(
+        norito::decode_canonical::<StoredProviderIngestVerifiedMusubiBundleReceiptV1>(&bytes)
+            .unwrap(),
+        stored
+    );
+    let foreign = norito::encode_canonical(&vec![stored]).unwrap();
+    assert_eq!(
+        norito::decode_canonical::<Vec<StoredProviderIngestVerifiedMusubiBundleReceiptV1>>(
+            &foreign
+        )
+        .unwrap()
+        .len(),
+        1
+    );
+    assert!(matches!(
+        norito::decode_canonical::<StoredProviderIngestVerifiedMusubiBundleReceiptV1>(&foreign),
+        Err(norito::Error::SchemaMismatch)
+    ));
+    crate::schema_identity_test_support::assert_identity::<
+        ProviderIngestMusubiCompletionClaimDigestPreimageV1,
+    >(
+        "sorafs_node::provider_ingest_runtime::ProviderIngestMusubiCompletionClaimDigestPreimageV1"
+    );
 }

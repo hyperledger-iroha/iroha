@@ -33,9 +33,9 @@ http = []
 #ffi_import = ["iroha_ffi", "iroha_primitives/ffi_import", "iroha_crypto/ffi_import"]
 
 # Expose FFI API for dynamic linking (Internal use only)
-ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_export"]
+ffi_export = ["iroha_ffi", "iroha_primitives/ffi_export", "iroha_crypto/ffi_export", "iroha_model_base/ffi_export"]
 # Expose API for mutating structures (Internal use only)
-transparent_api = ["iroha_data_model_derive/transparent_api"]
+transparent_api = ["iroha_data_model_derive/transparent_api", "iroha_model_base/transparent_api"]
 # Enable fault injection to simulate malicious data tampering during testing.
 fault_injection = []
 trybuild-tests = ["dep:trybuild"]
@@ -48,6 +48,7 @@ pqc = ["iroha_crypto/pqc", "sorafs_manifest/pqc"]
 [dependencies]
 # Protocol JSON is mandatory: custom parameters and retained ledger metadata use it.
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }
+iroha_model_base = { workspace = true }
 
 iroha_primitives = { workspace = true, features = ["json"] }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "json"] }
@@ -74,13 +75,8 @@ base64 = { workspace = true, features = ["alloc"] }
 bech32 = { workspace = true }
 nonzero_ext = { workspace = true }
 rustc-hash = { workspace = true }
-# `Name` NFC normalization is consensus-visible. Keep the algorithm exact;
-# `src/name.rs` fingerprints the already-transitive baked data and fails closed
-# if it differs from the reviewed normalization profile.
-icu_normalizer = { version = "=2.2.0", default-features = false, features = ["compiled_data"] }
 blake2 = "0.10.6"
 blake3 = { workspace = true }
-idna = { version = "1.1.0", default-features = false, features = ["std"] }
 bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }

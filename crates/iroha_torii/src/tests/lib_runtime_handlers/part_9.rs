@@ -1019,7 +1019,7 @@ async fn soracloud_status_routing_reports_sparse_configured_lane_namespace() {
 #[test]
 fn soracloud_hosted_http_topology_section_excludes_inactive_validator() {
     let mut world = seed_public_soracloud_world();
-    let service_name: iroha_data_model::name::Name =
+    let service_name: iroha_model_base::name::Name =
         "web_portal".parse().expect("hosted topology service");
     let service_version = "2026.02.0";
     let mut bundle = world

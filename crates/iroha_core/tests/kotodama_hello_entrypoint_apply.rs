@@ -8,6 +8,7 @@ use iroha_core::{
 };
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_model_base::name::Name;
 use ivm::{IVM, KotodamaCompiler, ProgramMetadata};
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;

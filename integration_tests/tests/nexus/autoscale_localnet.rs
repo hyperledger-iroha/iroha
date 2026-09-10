@@ -29,8 +29,7 @@ use iroha::{
         nexus::{DataSpaceId, LaneCatalog, LaneId},
         peer::PeerId,
         prelude::{
-            FindAccountById, HashOf, Name, QueryBuilderExt, SignedTransaction,
-            TransactionEntrypoint,
+            FindAccountById, HashOf, QueryBuilderExt, SignedTransaction, TransactionEntrypoint,
         },
         query::{
             CommittedTransaction, block::prelude::FindBlocks,
@@ -56,6 +55,7 @@ use iroha_core::{
     queue::{LaneQueueReservationKeyV1, RoutingPlan},
     sumeragi::network_topology::commit_quorum_from_len,
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use iroha_test_network::{
     ConsensusMessageControlAction, ConsensusMessageControlKind, ConsensusMessageControlRule,

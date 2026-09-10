@@ -3919,7 +3919,8 @@ mod tests {
         sample_proof, sample_provider_key, sample_verdict,
     };
     use ed25519_dalek::{Signer, SigningKey};
-    use iroha_data_model::{metadata::Metadata, name::Name};
+    use iroha_data_model::metadata::Metadata;
+    use iroha_model_base::name::Name;
     use sorafs_car::{POR_LEAF_SIZE, PorMerkleTree, StoredChunk};
     use std::{
         collections::BTreeMap,
@@ -4745,4 +4746,45 @@ mod tests {
     }
     include!("por/tests/reputation_archive.rs");
     include!("por/tests/tracker_failure.rs");
+    #[test]
+    fn authenticated_archive_frames_bind_distinct_record_and_receipt_identities() {
+        let (binding, record, receipt) = test_support::sample_replay_archive_record_and_head(0x51);
+        let record_bytes = norito::to_bytes(&record).unwrap();
+        let receipt_bytes = norito::to_bytes(&receipt).unwrap();
+        for (frame, identity) in [
+            (
+                record_bytes.as_slice(),
+                "sorafs_node::por::PorFinalizedReplayArchiveRecordV1",
+            ),
+            (
+                receipt_bytes.as_slice(),
+                "sorafs_node::por::PorFinalizedReplayArchiveReceiptV1",
+            ),
+        ] {
+            assert_eq!(
+                norito::core::Header::read(frame).unwrap().schema,
+                norito::core::schema_hash_for_name(identity)
+            );
+        }
+        let decoded_record: PorFinalizedReplayArchiveRecordV1 =
+            norito::decode_from_bytes(&record_bytes).unwrap();
+        let decoded_receipt: PorFinalizedReplayArchiveReceiptV1 =
+            norito::decode_from_bytes(&receipt_bytes).unwrap();
+        assert_eq!(decoded_record, record);
+        assert_eq!(decoded_receipt, receipt);
+        assert_eq!(norito::to_bytes(&decoded_record).unwrap(), record_bytes);
+        assert_eq!(norito::to_bytes(&decoded_receipt).unwrap(), receipt_bytes);
+        decoded_record.validate().unwrap();
+        decoded_receipt
+            .validate_record(binding, &decoded_record, Some(None))
+            .unwrap();
+        assert!(matches!(
+            norito::decode_from_bytes::<PorFinalizedReplayArchiveRecordV1>(&receipt_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(matches!(
+            norito::decode_from_bytes::<PorFinalizedReplayArchiveReceiptV1>(&record_bytes),
+            Err(norito::Error::SchemaMismatch)
+        ));
+    }
 }

@@ -22,9 +22,10 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     peer::PeerId,
-    prelude::{AccountId, DomainId, Name},
+    prelude::{AccountId, DomainId},
     sns::{NameControllerV1, NameRecordV1},
 };
+use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, time::TimeSource};
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 use tower::ServiceExt;

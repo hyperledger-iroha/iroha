@@ -1118,9 +1118,8 @@ fn choose_address_with_quorum(
         .find_map(|(address, count)| (count == max_count).then(|| address.clone()))
 }
 /// Message for gossiping peers addresses.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::peers_gossiper::PeersGossip")]
-#[derive(Debug, Clone)]
 pub struct PeersGossip {
     /// Peers known to the sender, deduplicated but encoded in insertion order.
     pub peers: UniqueVec<Peer>,
@@ -1460,6 +1459,48 @@ mod tests {
             .expect("generate checked peers gossiper BLS fixture keypair")
     }
     #[test]
+    fn captured_original_core_peers_frames() {
+        use crate::frame_identity_tests::shapes;
+        let kp1 = checked_seed_keypair(&[1, 2, 3, 4]);
+        let kp2 = checked_seed_keypair(&[5, 6, 7, 8]);
+        let peer1 = Peer::new("127.0.0.1:8080".parse().unwrap(), kp1.public_key().clone());
+        let peer2 = Peer::new("127.0.0.1:8081".parse().unwrap(), kp2.public_key().clone());
+        let gossip = PeersGossip {
+            peers: UniqueVec::from_iter(vec![peer1.clone(), peer2.clone()]),
+            peer_capabilities: BTreeMap::from([(
+                peer1.id().clone(),
+                PeerTransportCapabilities {
+                    scion_supported: true,
+                },
+            )]),
+        };
+        let bytes = ncore::to_bytes(&gossip).expect("existing populated gossip frame");
+        let decoded: PeersGossip =
+            norito::decode_from_bytes(&bytes).expect("existing gossip decode");
+        assert_eq!(
+            decoded.peers.into_iter().collect::<Vec<_>>(),
+            vec![peer1.clone(), peer2.clone()]
+        );
+        assert_eq!(
+            decoded.peer_capabilities.get(peer1.id()),
+            Some(&PeerTransportCapabilities {
+                scion_supported: true
+            })
+        );
+        shapes("peers_gossip", "populated", &gossip);
+        shapes(
+            "network_message",
+            "peers_gossip",
+            &crate::NetworkMessage::PeersGossiper(Box::new(gossip)),
+        );
+        let empty = PeersGossip {
+            peers: UniqueVec::new(),
+            peer_capabilities: BTreeMap::new(),
+        };
+        shapes("peers_gossip", "empty", &empty);
+    }
+
+    #[test]
     fn peers_gossip_roundtrip() {
         // Use seeded keypairs to produce valid Ed25519 public keys deterministically.
         let kp1 = checked_seed_keypair(&[1, 2, 3, 4]);
@@ -1503,9 +1544,17 @@ mod tests {
                 signature: sig.clone(),
             }],
         };
-        let bytes = ncore::to_bytes(&gossip).expect("serialize trust gossip");
-        let decoded: PeerTrustGossip =
-            norito::decode_from_bytes(&bytes).expect("decode trust gossip");
+        let message = crate::NetworkMessage::PeerTrustGossip(Box::new(gossip));
+        let bytes = ncore::to_bytes(&message).expect("serialize network trust gossip frame");
+        assert_eq!(
+            bytes[6..22],
+            norito::schema::identity::frame_hash::<crate::NetworkMessage>()
+        );
+        let crate::NetworkMessage::PeerTrustGossip(decoded) =
+            norito::decode_from_bytes(&bytes).expect("decode network trust gossip frame")
+        else {
+            panic!("network frame must retain the trust gossip variant");
+        };
         assert_eq!(decoded.trust.len(), 1);
         assert_eq!(decoded.network_id, trust_test_network_id());
         assert_eq!(decoded.trust[0].info.peer_id, info.peer_id);

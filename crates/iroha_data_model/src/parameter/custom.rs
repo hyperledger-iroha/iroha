@@ -1,6 +1,6 @@
 //! Custom parameter definitions.
-use crate::name::Name;
 use getset::Getters;
+use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 
 use norito::json::{self, JsonDeserialize, JsonSerialize};
@@ -267,8 +267,8 @@ impl JsonDeserialize for CustomParameter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::name::Name;
     use core::str::FromStr as _;
+    use iroha_model_base::name::Name;
     #[test]
     fn id_name_returns_inner() {
         let id = CustomParameterId::new(Name::from_str("param").expect("Valid"));

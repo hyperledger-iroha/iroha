@@ -59,6 +59,38 @@ privacy_sdk_materialize_canonical_cargo_lock "$2" "$3" "$state" "$4"
         self.assertEqual(self.destination.stat().st_mode & 0o777, 0o400)
         self.assertEqual(self.lock.stat(), before)
 
+    def test_stale_graph_owner_rejects_current_authenticated_source(self):
+        # A preceding reviewed digest is a rejected fixture, never an alternate
+        # selector. Even a correct current physical seal cannot authorize it.
+        stale_digest = "fe9a6f9e30fe537059868ebddd826a70c1312d09b7d308cbe5d55e6ec7bfd32b"
+        self.assertNotEqual(stale_digest, OWNER[0])
+        state = self.run_python_owner("privacy_sdk_file_seal", [self.lock])
+        self.assertEqual(state.returncode, 0, state.stderr)
+        before = self.lock.stat(), self.lock.read_bytes()
+        result = self.run_python_owner(
+            "privacy_sdk_materialize_canonical_cargo_lock",
+            [self.source, self.destination, "present:" + state.stdout.strip(), stale_digest],
+        )
+        self.assert_rejected(result)
+        self.assertIn("authenticated reviewed state", result.stderr)
+        self.assertEqual((self.lock.stat(), self.lock.read_bytes()), before)
+
+    def test_current_owner_rejects_stale_authenticated_state(self):
+        state = self.run_python_owner("privacy_sdk_file_seal", [self.lock])
+        self.assertEqual(state.returncode, 0, state.stderr)
+        digest, separator, physical_state = state.stdout.strip().partition(":")
+        self.assertEqual(digest, OWNER[0])
+        self.assertEqual(separator, ":")
+        before = self.lock.stat(), self.lock.read_bytes()
+        stale_state = "present:" + ("0" * 64) + ":" + physical_state
+        result = self.run_python_owner(
+            "privacy_sdk_materialize_canonical_cargo_lock",
+            [self.source, self.destination, stale_state, OWNER[0]],
+        )
+        self.assert_rejected(result)
+        self.assertIn("authenticated reviewed state", result.stderr)
+        self.assertEqual((self.lock.stat(), self.lock.read_bytes()), before)
+
     def test_unreviewed_graph_bytes_are_rejected(self):
         self.lock.write_bytes(self.lock.read_bytes() + b"\n# unreviewed bytes\n")
         self.assert_rejected(self.invoke())

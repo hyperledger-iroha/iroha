@@ -20607,6 +20607,18 @@ pub(super) mod tests {
     }
     const STARTUP_FINALITY_DEADLOCK_CHILD_CASE: &str = "IROHA_STARTUP_FINALITY_DEADLOCK_CHILD_CASE";
     const STARTUP_FINALITY_DEADLOCK_TIMEOUT: Duration = Duration::from_secs(30);
+    const STARTUP_FINALITY_PREPARATION_TIMEOUT: Duration = Duration::from_secs(120);
+    const STARTUP_FINALITY_READER_READY_PATH: &str = "IROHA_STARTUP_FINALITY_READER_READY_PATH";
+
+    fn signal_startup_finality_reader_ready() {
+        let ready_path = std::path::PathBuf::from(
+            std::env::var_os(STARTUP_FINALITY_READER_READY_PATH)
+                .expect("startup watchdog supplies a readiness path"),
+        );
+        let temporary = ready_path.with_extension("tmp");
+        std::fs::write(&temporary, b"ready\n").expect("write reader readiness handshake");
+        std::fs::rename(temporary, ready_path).expect("publish reader readiness handshake");
+    }
 
     fn run_startup_finality_deadlock_child(case: &str) {
         let signer = KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::BlsNormal)
@@ -20618,6 +20630,7 @@ pub(super) mod tests {
                 crate::kura::tests::install_minimal_startup_finality_inventory_for_test(
                     fixture.kura.as_ref(),
                 );
+                signal_startup_finality_reader_ready();
                 fixture
                     .kura
                     .refresh_v2_startup_finality_verification()
@@ -20651,6 +20664,7 @@ pub(super) mod tests {
                         fixture.kura.as_ref(),
                         &fixture.payload,
                     );
+                signal_startup_finality_reader_ready();
                 fixture
                     .kura
                     .refresh_v2_startup_finality_verification()
@@ -20680,6 +20694,8 @@ pub(super) mod tests {
     }
 
     fn assert_startup_finality_child_returns(case: &str) {
+        let handshake_directory = tempfile::tempdir().expect("create startup watchdog handshake");
+        let ready_path = handshake_directory.path().join("reader-ready");
         let mut child = std::process::Command::new(
             std::env::current_exe().expect("resolve current iroha_core test executable"),
         )
@@ -20687,21 +20703,44 @@ pub(super) mod tests {
         .arg("--nocapture")
         .arg("--test-threads=1")
         .env(STARTUP_FINALITY_DEADLOCK_CHILD_CASE, case)
+        .env(STARTUP_FINALITY_READER_READY_PATH, &ready_path)
         .spawn()
         .expect("spawn isolated startup deadlock regression");
-        let deadline = Instant::now() + STARTUP_FINALITY_DEADLOCK_TIMEOUT;
+        let preparation_deadline = Instant::now() + STARTUP_FINALITY_PREPARATION_TIMEOUT;
+        let mut reader_deadline = None;
         loop {
+            if reader_deadline.is_none() {
+                match std::fs::read(&ready_path) {
+                    Ok(readiness) => {
+                        assert_eq!(readiness, b"ready\n", "exact child readiness handshake");
+                        reader_deadline = Some(Instant::now() + STARTUP_FINALITY_DEADLOCK_TIMEOUT);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(error) => panic!("read startup readiness handshake: {error}"),
+                }
+            }
             if let Some(status) = child
                 .try_wait()
                 .expect("poll isolated startup deadlock regression")
             {
                 assert!(status.success(), "startup deadlock child exited {status}");
+                assert_eq!(
+                    std::fs::read(&ready_path).expect("child must enter the guarded reader"),
+                    b"ready\n",
+                    "completed child publishes its exact readiness handshake"
+                );
                 return;
             }
+            let deadline = reader_deadline.unwrap_or(preparation_deadline);
             if Instant::now() >= deadline {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("startup finality {case} reader deadlocked for thirty seconds");
+                if reader_deadline.is_some() {
+                    panic!("startup finality {case} reader deadlocked for thirty seconds");
+                }
+                panic!(
+                    "startup finality {case} fixture preparation exceeded 120 seconds before reader readiness"
+                );
             }
             thread::sleep(Duration::from_millis(10));
         }
@@ -21878,6 +21917,39 @@ pub(super) mod tests {
             record_capacity,
         );
     }
+    /// Missing authenticated sidecar and its exact durable successor context.
+    pub(in crate::sumeragi) fn missing_lifecycle_sidecar_fixture_for_test() -> (
+        V2LaneWorkAdapter,
+        Vec<KeyPair>,
+        super::super::v2::VerifiedHeightContext,
+        CertifiedMergeLedgerReference,
+        Arc<Kura>,
+    ) {
+        let (adapter, keys) = fixture_at_height_inner(wire::ConsensusMode::Permissioned, 2, true);
+        let (parent, receipt) = adapter
+            .kura
+            .v2_finality_artifact_with_receipt(1)
+            .expect("read authenticated fixture parent")
+            .expect("the durable parent is present");
+        let pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("validator PoP")
+            })
+            .collect::<Vec<_>>();
+        let verified = super::super::v2::VerifiedHeightContext::successor(
+            adapter.context.clone(),
+            pops,
+            &parent,
+            &receipt,
+            &parent.validator_set_pops,
+        )
+        .expect("authenticate the exact lane-work successor context");
+        let reference = missing_sidecar_reference(&adapter, &keys, 0);
+        let kura = Arc::clone(&adapter.kura);
+        (adapter, keys, verified, reference, kura)
+    }
+
     fn missing_sidecar_reference(
         adapter: &V2LaneWorkAdapter,
         keys: &[KeyPair],

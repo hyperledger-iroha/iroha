@@ -6,7 +6,7 @@ use iroha::data_model::query::{dsl::SelectorTuple, parameters::SortOrder};
 pub struct CommonArgs {
     /// Sort by metadata key
     #[arg(long)]
-    pub sort_by_metadata_key: Option<iroha::data_model::name::Name>,
+    pub sort_by_metadata_key: Option<iroha_model_base::name::Name>,
     /// Sort order (asc or desc)
     #[arg(long, value_enum)]
     pub order: Option<CliOrder>,

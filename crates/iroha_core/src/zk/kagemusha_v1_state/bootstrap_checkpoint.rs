@@ -15,11 +15,10 @@ const BOOTSTRAP_FORMAT: private_journal::PrivateJournalFormat =
 // One canonical first-release manifest binds the exact initialized resource policy as well
 // as the complete initial snapshot. Resume must never reinterpret the same bundle under a
 // different coordinator reservation budget.
-#[derive(norito::NoritoSchema)]
+#[derive(norito::Encode, norito::NoritoSchema)]
 #[norito_schema(
     name = "iroha_core::zk::kagemusha_v1_state::bootstrap_checkpoint::BootstrapJournalManifestV1"
 )]
-#[derive(norito::Encode)]
 struct BootstrapJournalManifestV1 {
     coordinator_live_capacity_bytes: u64,
     snapshot: KagemushaStateSnapshotV1,
@@ -512,4 +511,12 @@ fn publish_bundle_noreplace(
 pub(super) enum BootstrapJournalFailure {
     AfterFirstJournal,
     AfterRename,
+}
+
+#[cfg(test)]
+#[test]
+fn captured_state_frame_owners() {
+    crate::zk::kagemusha_v1_state::state_frame_identity_tests::observed::<BootstrapJournalManifestV1>(
+        "iroha_core::zk::kagemusha_v1_state::bootstrap_checkpoint::BootstrapJournalManifestV1",
+    );
 }

@@ -19,5 +19,3 @@ mod por_fixtures;
 mod provider_admission_fixtures;
 #[path = "replication_order_fixtures.rs"]
 mod replication_order_fixtures;
-#[path = "sorafs_validate_cli.rs"]
-mod sorafs_validate_cli;

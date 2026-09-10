@@ -403,10 +403,9 @@ impl KuraPruneCapacityAdmissionV3 {
     }
 }
 /// Durable forward-recovery record for a canonical Kura prune transaction.
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::kura::KuraPruneIntentV3")]
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito(deny_unknown_fields)]
+#[norito_schema(name = "iroha_core::kura::KuraPruneIntentV3")]
 struct KuraPruneIntentV3 {
     /// Intent schema version. Only version three is accepted.
     version: u8,
@@ -1193,9 +1192,8 @@ enum MergeLedgerAppendFailurePoint {
 }
 /// Durable sparse association between one committed merge entry and the exact
 /// global block whose compact reference ordered its application.
-#[derive(norito::NoritoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_core::kura::MergeLedgerCarrierRecord")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
 pub(crate) struct MergeLedgerCarrierRecord {
     /// Carrier-record schema version. Only version one is accepted.
     pub version: u8,

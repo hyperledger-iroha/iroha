@@ -1055,7 +1055,7 @@ mod tests {
     fn ordinary_test_limits() -> OrdinaryQueryExecutionLimits {
         OrdinaryQueryExecutionLimits::try_new(
             5,
-            QueryExecutionBudget::from_weighted_limit(64 * 1_024, 1, 1),
+            QueryExecutionBudget::from_weighted_limit(128 * 1_024, 1, 1),
             16,
             64 * 1_024,
             ORDINARY_NAME_ID_SOURCE_BYTES,

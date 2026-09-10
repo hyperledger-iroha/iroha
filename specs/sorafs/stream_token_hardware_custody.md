@@ -81,6 +81,34 @@ canonical Norito V1 frame, capped at 2048 decoded bytes and 4096 header bytes.
 Same-value alternate layouts and compression are rejected; finite decoder limits
 also intersect any stricter caller budget.
 
+## Current custody before serving admission
+
+Every new CAR-range or chunk admission authenticates a separately challenged
+`CurrentCustody` observation with the current-only `BeforeAdmission` phase. Static
+canonical token, signature, key generation, provider, manifest, profile and initial
+issue/expiry checks precede observer I/O. The driver authenticates current custody
+and repeats local finalized-history checks, then resamples its monotonic trusted
+time and checks token issue/expiry again before any accepted quota transaction.
+The exact final millisecond becomes the accepted quota and reputation-callback
+timestamp; that qualification is never cached for another request.
+
+Revoked, stale, unavailable or substituted authority evidence fails closed with
+HTTP `503`. The typed `Excluded(SignerAuthorityUnavailable)` callback retains the
+decoded body digest and key generation without counting a provider observation or
+violation or obtaining an accepted quota lease. Its failure timestamp is the initial
+request observation, since a failed or rolled-back clock cannot establish a trusted
+final admission time. If the durable audit provider also fails, no terminal outcome
+is fabricated. An already-expired token is rejected before observer I/O; expiry while
+waiting on observer/finality work is an infrastructure exclusion.
+
+This is a logical cutoff for new admissions using freshly authenticated evidence
+and the node's known finalized history. It neither proves globally latest custody
+state nor cancels packets from a previously admitted stream. Same-key custody
+renewal does not revoke existing token signatures. Governed revocation must be
+terminal for the revoked key generation; reactivation with the same key/version
+would otherwise revive earlier tokens. The native control reader and authoritative
+terminal-generation transition enforcement remain independent integration work.
+
 ## Cutover and qualification
 
 Generate a replacement key inside qualified hardware, obtain independent

@@ -76,7 +76,7 @@ every summary JSON to an output directory. It is ideal for CI runners or for
 developers who want to capture canonical artefacts without typing each step.
 For release authentication, see `scripts/release_sorafs_cli.sh`. It requires an
 external Ed25519 signer, a governed raw public key and reviewed fingerprint, and
-an explicitly pinned `sorafs-validate` path and SHA256. It has no fixture,
+an explicitly pinned `iroha` path and SHA256. It has no fixture,
 credential, or verifier defaults.
 If you need deterministic content fixtures to diff against, use the
 content-only set under `fixtures/sorafs_manifest/ci_sample` and the accompanying
@@ -113,12 +113,12 @@ scripts/release_sorafs_cli.sh \
   --external-signer /run/sorafs-release/ed25519-sign \
   --signing-public-key /run/sorafs-release/release.ed25519.pub \
   --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
-  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --release-manifest-verifier /opt/iroha/bin/iroha \
   --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
 The wrapper signs the canonical aggregate release manifest through the external
-signer and verifies immutable snapshots with `sorafs-validate release-manifest`.
+signer and verifies immutable snapshots with `iroha app sorafs toolkit release-manifest`.
 The signature must be exactly 64 raw bytes; the public key must be exactly 32
 raw bytes and match the reviewed SHA256 fingerprint. A pinned verifier digest
 is mandatory. OIDC/cosign attestations remain useful provenance, but they do not

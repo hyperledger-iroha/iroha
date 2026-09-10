@@ -1562,8 +1562,8 @@ impl Parameters {
 /// Consensus handshake metadata helpers used during genesis provisioning.
 pub mod consensus_metadata {
     use super::*;
-    use crate::Name;
     use core::str::FromStr as _;
+    use iroha_model_base::name::Name;
     static HANDSHAKE_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("consensus_handshake_meta")
@@ -1578,8 +1578,8 @@ pub mod consensus_metadata {
 /// Cryptography snapshot metadata helpers used during genesis provisioning.
 pub mod crypto_metadata {
     use super::*;
-    use crate::Name;
     use core::str::FromStr as _;
+    use iroha_model_base::name::Name;
     static MANIFEST_META_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("crypto_manifest_meta").expect("crypto_manifest_meta is a valid Name"),
@@ -1593,8 +1593,8 @@ pub mod crypto_metadata {
 /// Confidential registry metadata helpers used during genesis provisioning.
 pub mod confidential_metadata {
     use super::*;
-    use crate::Name;
     use core::str::FromStr as _;
+    use iroha_model_base::name::Name;
     static REGISTRY_ROOT_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("confidential_registry_root")
@@ -1609,8 +1609,8 @@ pub mod confidential_metadata {
 /// IVM metadata helpers stored in the custom parameter registry.
 pub mod ivm_metadata {
     use super::*;
-    use crate::Name;
     use core::str::FromStr as _;
+    use iroha_model_base::name::Name;
     static PUBLIC_INPUTS_ID: LazyLock<CustomParameterId> = LazyLock::new(|| {
         CustomParameterId::new(
             Name::from_str("ivm_public_inputs").expect("ivm_public_inputs is a valid Name"),
@@ -2377,11 +2377,9 @@ impl JsonDeserialize for SmartContractParameter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        name::Name,
-        parameter::custom::{CustomParameter, CustomParameterId},
-    };
+    use crate::parameter::custom::{CustomParameter, CustomParameterId};
     use core::str::FromStr as _;
+    use iroha_model_base::name::Name;
     use iroha_primitives::json::Json;
     use norito::codec::{DecodeAll as _, Encode as _};
     use norito::json::{Number, Value};

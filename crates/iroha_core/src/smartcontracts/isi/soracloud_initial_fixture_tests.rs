@@ -641,7 +641,7 @@ fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
     ]
 }
 fn sample_inrou_replica_runtime_state_for(
-    service_name: iroha_data_model::name::Name,
+    service_name: iroha_model_base::name::Name,
     service_version: &str,
     replica_slot: u16,
     validator_account_id: AccountId,
@@ -666,7 +666,7 @@ fn sample_inrou_replica_runtime_state_for(
     }
 }
 fn sample_inrou_service_placement_record_for(
-    service_name: iroha_data_model::name::Name,
+    service_name: iroha_model_base::name::Name,
     service_version: &str,
     runtime_state: &SoraInrouReplicaRuntimeStateV1,
 ) -> SoraInrouServicePlacementRecordV1 {
@@ -916,6 +916,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         available_after_height: 0,
         expires_at_height: 0,
     };
+    let sequence_before_mailbox = *stx.world.soracloud_sequence_watermark.get();
     let mailbox_error = isi::RecordSoracloudMailboxMessage {
         message: mailbox_message.clone(),
     }
@@ -964,6 +965,10 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         if message.contains("explicitly closed"))
     );
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
+    assert_eq!(
+        *stx.world.soracloud_sequence_watermark.get(),
+        sequence_before_mailbox
+    );
     let mut runtime_receipt = SoraRuntimeReceiptV1 {
         schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: Hash::new(b"cross-service-runtime-receipt"),
@@ -1031,6 +1036,10 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     );
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
     assert!(stx.world.soracloud_runtime_receipts.is_empty());
+    assert_eq!(
+        *stx.world.soracloud_sequence_watermark.get(),
+        sequence_before_mailbox
+    );
     let direct_mailbox_receipt_error = execute_initial_soracloud(
         isi::RecordSoracloudRuntimeReceipt {
             receipt: mailbox_receipt.clone(),
@@ -1206,7 +1215,7 @@ fn exact_service_revision_precondition(
     )
 }
 fn rollback_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     target_version: &str,
 ) -> ManifestProvenance {
     let payload = encode_rollback_provenance_payload(service_name.as_ref(), target_version)
@@ -1217,7 +1226,7 @@ fn rollback_provenance(
     }
 }
 fn rollout_provenance(
-    service_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
     rollout_handle: &str,
     healthy: bool,
     promote_to_percent: Option<u8>,
@@ -1263,8 +1272,8 @@ fn sample_bundle_with_state_binding(
     bundle
 }
 fn state_mutation_provenance(
-    service_name: &iroha_data_model::name::Name,
-    binding_name: &iroha_data_model::name::Name,
+    service_name: &iroha_model_base::name::Name,
+    binding_name: &iroha_model_base::name::Name,
     state_key: &str,
     operation: SoraStateMutationOperationV1,
     value_size_bytes: Option<u64>,

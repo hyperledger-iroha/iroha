@@ -1,9 +1,10 @@
 //! Space Directory manifest representations and evaluation helpers.
 use super::DataSpaceId;
 
+use crate::asset::AssetDefinitionId;
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
-use crate::{asset::AssetDefinitionId, error::ParseError, name::Name};
 use iroha_crypto::Hash;
+use iroha_model_base::{error::ParseError, name::Name};
 use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -146,7 +147,7 @@ impl From<SmartContractId> for Name {
     }
 }
 impl FromStr for SmartContractId {
-    type Err = crate::ParseError;
+    type Err = iroha_model_base::error::ParseError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Name::from_str(s).map(Self::new)
     }
@@ -201,6 +202,7 @@ impl From<ManifestVersion> for u16 {
     all(feature = "ffi_export", not(feature = "ffi_import")),
     ffi_type(opaque)
 )]
+
 pub struct AssetPermissionManifest {
     /// Schema version used to interpret the manifest.
     pub version: ManifestVersion,
@@ -1364,6 +1366,35 @@ mod tests {
             expiry_epoch: None,
             entries: Vec::new(),
         };
+        assert_eq!(
+            <AssetPermissionManifest as norito::NoritoSchema>::nominal_name(),
+            "iroha_data_model::nexus::manifest::AssetPermissionManifest"
+        );
+        let frame = norito::encode_canonical(&manifest).expect("encode declared owner frame");
+        assert_eq!(
+            frame[6..22],
+            norito::core::schema_hash_for_name(
+                "iroha_data_model::nexus::manifest::AssetPermissionManifest"
+            )
+        );
+        let restored: AssetPermissionManifest =
+            norito::decode_canonical(&frame).expect("decode declared owner frame");
+        assert_eq!(
+            norito::encode_canonical(&restored).expect("reencode restored owner"),
+            frame
+        );
+        let mut wrong_owner = frame.clone();
+        wrong_owner[6] ^= 1;
+        assert!(matches!(
+            norito::decode_canonical::<AssetPermissionManifest>(&wrong_owner),
+            Err(norito::Error::SchemaMismatch)
+        ));
+        assert!(
+            norito::decode_canonical::<AssetPermissionManifest>(&frame[..frame.len() - 1]).is_err()
+        );
+        let mut trailing = frame;
+        trailing.push(0);
+        assert!(norito::decode_canonical::<AssetPermissionManifest>(&trailing).is_err());
         let encoded = manifest.encode();
         let mut input = encoded.as_slice();
         let decoded = AssetPermissionManifest::decode(&mut input)

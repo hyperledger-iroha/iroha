@@ -57,7 +57,7 @@ fn agent_apartment_renew_rejects_lease_height_overflow_without_mutation() -> Res
     })
     .execute(&ALICE_ID, &mut stx)?;
 
-    let apartment_name: iroha_data_model::name::Name =
+    let apartment_name: iroha_model_base::name::Name =
         "overflow_agent".parse().expect("valid apartment name");
     let before = stx
         .world
@@ -161,7 +161,7 @@ fn agent_execute_paths_reject_pre_v1_text_rewrites_before_state_lookup() -> Resu
         .header();
     let mut state_block = state.block(block_header);
     let mut stx = state_block.transaction();
-    let apartment_name: iroha_data_model::name::Name =
+    let apartment_name: iroha_model_base::name::Name =
         "missing_agent".parse().expect("valid apartment name");
     let provenance_for = |payload: Vec<u8>| ManifestProvenance {
         signer: ALICE_KEYPAIR.public_key().clone(),
@@ -352,7 +352,7 @@ fn agent_apartment_lifecycle_instructions_record_authoritative_state() -> Result
         provenance: agent_deploy_provenance(manifest, 120, 500),
     })
     .execute(&ALICE_ID, &mut stx)?;
-    let apartment_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
+    let apartment_name: iroha_model_base::name::Name = "ops_agent".parse().expect("valid");
     let renew_payload = encode_agent_lease_renew_provenance_payload(apartment_name.as_ref(), 60)
         .expect("renew payload");
     iroha_data_model::isi::InstructionBox::from(isi::RenewSoracloudAgentLease {
@@ -479,8 +479,8 @@ fn agent_wallet_mailbox_and_autonomy_instructions_record_authoritative_state()
         provenance: agent_deploy_provenance(worker_manifest, 120, 250),
     })
     .execute(&ALICE_ID, &mut stx)?;
-    let ops_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
-    let worker_name: iroha_data_model::name::Name = "worker_agent".parse().expect("valid");
+    let ops_name: iroha_model_base::name::Name = "ops_agent".parse().expect("valid");
+    let worker_name: iroha_model_base::name::Name = "worker_agent".parse().expect("valid");
     let wallet_amount: Quantity = "0.001".parse().expect("wallet amount");
     let wallet_request_id = "ops-wallet-request-1";
     let wallet_spend_payload = encode_agent_wallet_spend_provenance_payload(
@@ -712,7 +712,7 @@ fn auto_approved_agent_wallet_request_id_cannot_be_replayed() -> Result<(), eyre
         provenance: agent_deploy_provenance(manifest, 120, 500),
     })
     .execute(&ALICE_ID, &mut stx)?;
-    let apartment_name: iroha_data_model::name::Name =
+    let apartment_name: iroha_model_base::name::Name =
         "auto_wallet_agent".parse().expect("valid apartment name");
     let noncanonical_asset_definition = " 61CtjvNd9T3THAR65GsMVHr82Bjc";
     let noncanonical_request_id = "auto-wallet-request-whitespace";
@@ -799,7 +799,7 @@ fn record_agent_autonomy_execution_is_exactly_once_and_audited() -> Result<(), e
         provenance: agent_deploy_provenance(ops_manifest, 120, 500),
     })
     .execute(&ALICE_ID, &mut stx)?;
-    let apartment_name: iroha_data_model::name::Name = "ops_agent".parse().expect("valid");
+    let apartment_name: iroha_model_base::name::Name = "ops_agent".parse().expect("valid");
     let artifact_allow_payload = encode_agent_artifact_allow_provenance_payload(
         apartment_name.as_ref(),
         "hash:artifact#1",

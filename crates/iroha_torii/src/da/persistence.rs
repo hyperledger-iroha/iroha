@@ -5,7 +5,11 @@ use crate::secure_file_metadata;
 use eyre::{WrapErr, eyre};
 use iroha_core::da::{LaneEpoch, ReplayFingerprint};
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
-use iroha_data_model::{NetworkId, da::prelude::*, nexus::LaneId};
+use iroha_data_model::{
+    NetworkId,
+    da::{ingest::StoredDaReceipt, prelude::*},
+    nexus::LaneId,
+};
 use iroha_logger::{debug, warn};
 use norito::{
     decode_from_bytes,
@@ -53,7 +57,6 @@ const MANIFEST_ARTIFACT_FILE_NAME: &str = "manifest.norito";
 const PDP_COMMITMENT_ARTIFACT_FILE_NAME: &str = "pdp-commitment.norito";
 /// Placeholder signature bytes used before signing DA receipts.
 pub(crate) const RECEIPT_SIGNATURE_PLACEHOLDER: [u8; 64] = [0xA5; 64];
-pub(super) const STORED_RECEIPT_VERSION: u16 = 1;
 const RECEIPT_SIGNING_PAYLOAD_VERSION: u16 = 1;
 const DA_COMMITMENT_SCHEDULE_ENTRY_VERSION: u16 = 1;
 const DA_INGEST_SERVER_ASSIGNMENT_VERSION: u16 = 1;
@@ -70,6 +73,7 @@ static DA_INGEST_SERVER_ASSIGNMENT_LOCK: OnceLock<NonPoisoningMutex<()>> = OnceL
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
 /// Durable server-owned choices for one signed DA ingest request.
+
 pub(super) struct DaIngestServerAssignmentV1 {
     /// Assignment layout version.
     pub(super) version: u16,
@@ -112,6 +116,7 @@ pub(super) struct DaIngestServerAssignmentV1 {
 #[derive(
     Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
 )]
+
 struct DaIngestSignedReceiptAssignmentV1 {
     version: u16,
     request_digest: [u8; 32],
@@ -1844,17 +1849,14 @@ pub struct DaReceiptLogEntry {
     /// Full DA ingest receipt payload.
     pub receipt: DaIngestReceipt,
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_torii::da::persistence::StoredDaReceipt")]
-#[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
-pub(super) struct StoredDaReceipt {
-    pub(super) version: u16,
-    pub(super) sequence: u64,
-    pub(super) receipt: DaIngestReceipt,
-}
-#[derive(norito::NoritoSchema)]
+#[derive(
+    Clone,
+    Debug,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::NoritoSchema,
+)]
 #[norito_schema(name = "iroha_torii::da::persistence::DaReceiptSigningPayload")]
-#[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 struct DaReceiptSigningPayload {
     version: u16,
     sequence: u64,
@@ -2543,6 +2545,11 @@ impl DaReceiptLog {
         );
         Ok(Some((path, stored.receipt)))
     }
+    /// Inspect the recovered in-memory head without reading or adopting durable receipts.
+    #[cfg(test)]
+    pub fn indexed_sequence_for(&self, lane_epoch: LaneEpoch) -> Option<u64> {
+        self.lock_index().get(&lane_epoch).map(|head| head.sequence)
+    }
     /// Load receipts for a `(lane, epoch)` window in sequence order.
     #[cfg(test)]
     pub fn receipts_for(&self, lane_epoch: LaneEpoch) -> Vec<DaReceiptLogEntry> {
@@ -2571,68 +2578,88 @@ impl DaReceiptLog {
         let Some(dir_entries) = open_spool_dir_no_follow(dir)? else {
             return Ok(BTreeMap::new());
         };
+        // Keep a single error while scanning: directory enumeration order must not
+        // choose which independently invalid receipt is reported. Recovery publishes
+        // no recovered cursor seeding or index until the scan succeeds, and memory remains
+        // bounded by the lane/epoch summaries plus this one error.
+        let mut first_error: Option<(PathBuf, eyre::Report)> = None;
         for entry in dir_entries {
             let entry = entry?;
             let path = entry.path();
-            if !artifact_path_matches(&path, RECEIPT_FILE_PREFIX)? {
-                continue;
-            }
-            if !fs::symlink_metadata(&path)?.file_type().is_file() {
-                return Err(eyre!(
-                    "durable DA receipt {} is not a regular file",
-                    path.display()
-                ));
-            }
-            let filename_key = parse_receipt_file_key(&path).wrap_err_with(|| {
-                format!(
-                    "failed to parse durable DA receipt filename {}",
-                    path.display()
-                )
-            })?;
-            let filename_lane_epoch = LaneEpoch::new(filename_key.lane_id, filename_key.epoch);
-            if !retain(filename_lane_epoch) {
-                continue;
-            }
-            let (receipt_key, stored) =
-                Self::decode_receipt_with_key(&path).wrap_err_with(|| {
-                    format!("failed to load durable DA receipt {}", path.display())
-                })?;
-            let StoredDaReceipt {
-                sequence, receipt, ..
-            } = stored;
-            verify_receipt_signature(&receipt, sequence, signer_public_key).wrap_err_with(
-                || format!("failed to verify durable DA receipt {}", path.display()),
-            )?;
-            validate_receipt_manifest_artifact_if_present(dir, &receipt_key, &receipt)
-                .wrap_err_with(|| {
+            let outcome = (|| -> eyre::Result<()> {
+                if !artifact_path_matches(&path, RECEIPT_FILE_PREFIX)? {
+                    return Ok(());
+                }
+                if !fs::symlink_metadata(&path)?.file_type().is_file() {
+                    return Err(eyre!(
+                        "durable DA receipt {} is not a regular file",
+                        path.display()
+                    ));
+                }
+                let filename_key = parse_receipt_file_key(&path).wrap_err_with(|| {
                     format!(
-                        "failed to validate durable DA receipt {} against manifest spool",
+                        "failed to parse durable DA receipt filename {}",
                         path.display()
                     )
                 })?;
-            let lane_epoch = LaneEpoch::new(receipt.lane_id, receipt.epoch);
-            if !summaries.contains_key(&lane_epoch) && summaries.len() >= max_lane_epochs.get() {
-                return Err(eyre!(
-                    "durable DA receipt log exceeds lane/epoch capacity {}",
-                    max_lane_epochs
-                ));
-            }
-            let encoded = encode_stored_da_receipt(&receipt, sequence).map_err(|err| eyre!(err))?;
-            let head = ReceiptHead {
-                sequence,
-                manifest_hash: receipt.manifest_hash,
-                fingerprint: receipt_key.fingerprint,
-                path,
-                receipt_digest: *blake3::hash(&encoded).as_bytes(),
-            };
-            match summaries.entry(lane_epoch) {
-                std::collections::btree_map::Entry::Vacant(entry) => {
-                    entry.insert(ReceiptScanSummary::new(sequence, head));
+                let filename_lane_epoch = LaneEpoch::new(filename_key.lane_id, filename_key.epoch);
+                if !retain(filename_lane_epoch) {
+                    return Ok(());
                 }
-                std::collections::btree_map::Entry::Occupied(mut entry) => {
-                    entry.get_mut().observe(sequence, head)?;
+                let (receipt_key, stored) =
+                    Self::decode_receipt_with_key(&path).wrap_err_with(|| {
+                        format!("failed to load durable DA receipt {}", path.display())
+                    })?;
+                let StoredDaReceipt {
+                    sequence, receipt, ..
+                } = stored;
+                verify_receipt_signature(&receipt, sequence, signer_public_key).wrap_err_with(
+                    || format!("failed to verify durable DA receipt {}", path.display()),
+                )?;
+                validate_receipt_manifest_artifact_if_present(dir, &receipt_key, &receipt)
+                    .wrap_err_with(|| {
+                        format!(
+                            "failed to validate durable DA receipt {} against manifest spool",
+                            path.display()
+                        )
+                    })?;
+                let lane_epoch = LaneEpoch::new(receipt.lane_id, receipt.epoch);
+                if !summaries.contains_key(&lane_epoch) && summaries.len() >= max_lane_epochs.get()
+                {
+                    return Err(eyre!(
+                        "durable DA receipt log exceeds lane/epoch capacity {}",
+                        max_lane_epochs
+                    ));
                 }
+                let encoded =
+                    encode_stored_da_receipt(&receipt, sequence).map_err(|err| eyre!(err))?;
+                let head = ReceiptHead {
+                    sequence,
+                    manifest_hash: receipt.manifest_hash,
+                    fingerprint: receipt_key.fingerprint,
+                    path: path.clone(),
+                    receipt_digest: *blake3::hash(&encoded).as_bytes(),
+                };
+                match summaries.entry(lane_epoch) {
+                    std::collections::btree_map::Entry::Vacant(entry) => {
+                        entry.insert(ReceiptScanSummary::new(sequence, head));
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut entry) => {
+                        entry.get_mut().observe(sequence, head)?;
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(error) = outcome
+                && first_error
+                    .as_ref()
+                    .is_none_or(|(first_path, _)| path < *first_path)
+            {
+                first_error = Some((path, error));
             }
+        }
+        if let Some((_, error)) = first_error {
+            return Err(error);
         }
         let mut index = BTreeMap::new();
         for (lane_epoch, summary) in summaries {
@@ -2670,11 +2697,11 @@ impl DaReceiptLog {
             DA_RECEIPT_ARTIFACT_MAX_BYTES_V1,
         )?;
         let stored = decode_from_bytes::<StoredDaReceipt>(&data).map_err(|err| eyre!(err))?;
-        if stored.version != STORED_RECEIPT_VERSION {
+        if stored.version != StoredDaReceipt::VERSION {
             return Err(eyre!(
                 "unsupported DA receipt version {} (expected {})",
                 stored.version,
-                STORED_RECEIPT_VERSION
+                StoredDaReceipt::VERSION
             ));
         }
         validate_receipt_resource_bounds(&stored.receipt).wrap_err_with(|| {
@@ -2849,13 +2876,30 @@ fn read_linked_retirement_artifact(
 ) -> std::io::Result<Vec<u8>> {
     read_regular_spool_artifact_with_link_policy(path, artifact, max_bytes, true)
 }
+fn map_spool_artifact_open_error(
+    path: &Path,
+    artifact: &str,
+    err: std::io::Error,
+) -> std::io::Error {
+    #[cfg(unix)]
+    if err.raw_os_error() == Some(libc::ELOOP) {
+        return std::io::Error::new(
+            ErrorKind::InvalidData,
+            format!("{artifact} {} is not a direct regular file", path.display()),
+        );
+    }
+    #[cfg(not(unix))]
+    let _ = (path, artifact);
+    err
+}
 fn read_regular_spool_artifact_with_link_policy(
     path: &Path,
     artifact: &str,
     max_bytes: usize,
     allow_multiple_links: bool,
 ) -> std::io::Result<Vec<u8>> {
-    let path_metadata = secure_file_metadata::from_path(path)?;
+    let path_metadata = secure_file_metadata::from_path(path)
+        .map_err(|err| map_spool_artifact_open_error(path, artifact, err))?;
     if !secure_file_metadata::is_direct_file(&path_metadata)
         || (!allow_multiple_links
             && secure_file_metadata::number_of_links(&path_metadata) != Some(1))
@@ -2877,7 +2921,8 @@ fn read_regular_spool_artifact_with_link_policy(
         ));
     }
     #[cfg(windows)]
-    let mut file = secure_file_metadata::open_direct_file(path)?;
+    let mut file = secure_file_metadata::open_direct_file(path)
+        .map_err(|err| map_spool_artifact_open_error(path, artifact, err))?;
     #[cfg(not(windows))]
     let mut file = {
         let mut options = fs::OpenOptions::new();
@@ -2887,7 +2932,9 @@ fn read_regular_spool_artifact_with_link_policy(
             use std::os::unix::fs::OpenOptionsExt as _;
             options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
         }
-        options.open(path)?
+        options
+            .open(path)
+            .map_err(|err| map_spool_artifact_open_error(path, artifact, err))?
     };
     let opened_metadata = secure_file_metadata::from_file(&file)?;
     if !secure_file_metadata::is_direct_file(&opened_metadata)
@@ -2928,7 +2975,8 @@ fn read_regular_spool_artifact_with_link_policy(
         ));
     }
     let final_metadata = secure_file_metadata::from_file(&file)?;
-    let named_after = secure_file_metadata::from_path(path)?;
+    let named_after = secure_file_metadata::from_path(path)
+        .map_err(|err| map_spool_artifact_open_error(path, artifact, err))?;
     if !secure_file_metadata::is_direct_file(&final_metadata)
         || !secure_file_metadata::is_direct_file(&named_after)
         || !secure_file_metadata::unchanged(&opened_metadata, &final_metadata)
@@ -3025,25 +3073,93 @@ fn existing_artifact_path_if_matching(
         ),
     ))
 }
+// Publish one existing file without ever exposing a second hard link. Unsupported
+// platforms/filesystems fail closed: hard-link publication violates the spool's
+// single-link admission rule while the temporary name is still present.
+fn rename_artifact_without_overwrite(tmp_path: &Path, target_path: &Path) -> std::io::Result<()> {
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox"
+    ))]
+    {
+        rustix::fs::renameat_with(
+            rustix::fs::CWD,
+            tmp_path,
+            rustix::fs::CWD,
+            target_path,
+            rustix::fs::RenameFlags::NOREPLACE,
+        )
+        .map_err(std::io::Error::from)
+    }
+    #[cfg(windows)]
+    {
+        // tempfile's Windows implementation uses MoveFileExW without replacement.
+        // Keep cleanup explicit in our caller, including on publication failure.
+        let mut temporary = tempfile::TempPath::try_from_path(tmp_path.to_path_buf())?;
+        temporary.disable_cleanup(true);
+        temporary
+            .persist_noclobber(target_path)
+            .map_err(|err| err.error)
+    }
+    #[cfg(not(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox",
+        windows
+    )))]
+    {
+        let _ = (tmp_path, target_path);
+        Err(std::io::Error::new(
+            ErrorKind::Unsupported,
+            "atomic no-replace DA artifact publication is unavailable on this platform",
+        ))
+    }
+}
 fn install_artifact_without_overwrite(
     tmp_path: &Path,
     target_path: &Path,
     expected: &[u8],
     artifact: &str,
 ) -> std::io::Result<()> {
-    match fs::hard_link(tmp_path, target_path) {
-        Ok(()) => {
-            let sync_result = sync_parent_dir(target_path);
-            let remove_result = remove_temp_artifact(tmp_path);
-            sync_result?;
-            remove_result
+    let publication = (|| {
+        // Renaming can move directories and linked files; admit only the exact
+        // single-link temporary artifact that the production writer just synced.
+        let temporary = read_regular_spool_artifact(tmp_path, artifact, expected.len())?;
+        if temporary != expected {
+            return Err(std::io::Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "{artifact} temporary file {} has different bytes",
+                    tmp_path.display()
+                ),
+            ));
         }
+        rename_artifact_without_overwrite(tmp_path, target_path)
+    })();
+    match publication {
+        Ok(()) => sync_parent_dir(target_path),
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
             let existing_result =
-                existing_artifact_path_if_matching(target_path, expected, artifact).map(|_| ());
+                existing_artifact_path_if_matching(target_path, expected, artifact).and_then(
+                    |existing| {
+                        existing.map(|_| ()).ok_or_else(|| {
+                            std::io::Error::new(
+                                ErrorKind::NotFound,
+                                format!(
+                                    "{artifact} {} disappeared during publication",
+                                    target_path.display()
+                                ),
+                            )
+                        })
+                    },
+                );
             let remove_result = remove_temp_artifact(tmp_path);
             existing_result?;
-            remove_result
+            remove_result?;
+            sync_parent_dir(target_path)
         }
         Err(err) => {
             remove_temp_artifact(tmp_path)?;
@@ -3195,6 +3311,23 @@ mod temp_artifact_tests {
         let unsigned = unsigned_receipt_bytes(&receipt, 11).expect("unsigned receipt encodes");
         let payload: DaReceiptSigningPayload =
             decode_from_bytes(&unsigned).expect("unsigned receipt payload decodes");
+        crate::frame_test_support::assert_current_frame(
+            &payload,
+            "iroha_torii::da::persistence::DaReceiptSigningPayload",
+        );
+        let assignment = DaIngestSignedReceiptAssignmentV1 {
+            version: DA_INGEST_SIGNED_RECEIPT_ASSIGNMENT_VERSION,
+            request_digest: [0x43; 32],
+            lane_id: receipt.lane_id,
+            epoch: receipt.epoch,
+            sequence: 11,
+            operator_public_key: signer.public_key().clone(),
+            receipt: receipt.clone(),
+        };
+        crate::frame_test_support::assert_current_frame(
+            &assignment,
+            "iroha_torii::da::persistence::DaIngestSignedReceiptAssignmentV1",
+        );
         let placeholder = payload.receipt.operator_signature.payload();
         assert_eq!(placeholder, RECEIPT_SIGNATURE_PLACEHOLDER);
         assert!(!placeholder.iter().all(|byte| *byte == 0));
@@ -3349,6 +3482,158 @@ mod temp_artifact_tests {
         );
         assert_eq!(counter.load(Ordering::Relaxed), u64::MAX);
     }
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox",
+        windows
+    ))]
+    #[test]
+    fn da_artifact_atomic_rename_never_overwrites_and_publishes_one_link() {
+        let dir = tempdir().expect("tempdir");
+        let tmp_path = dir.path().join(".da.tmp");
+        let target_path = dir.path().join("da-target.norito");
+        write_temp_artifact(&tmp_path, b"new").expect("temporary artifact");
+        fs::write(&target_path, b"existing").expect("existing artifact");
+        let err = rename_artifact_without_overwrite(&tmp_path, &target_path)
+            .expect_err("atomic publication must not replace an existing path");
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+        assert_eq!(
+            fs::read(&target_path).expect("original artifact"),
+            b"existing"
+        );
+        assert_eq!(fs::read(&tmp_path).expect("unpublished artifact"), b"new");
+
+        fs::remove_file(&target_path).expect("remove original fixture");
+        rename_artifact_without_overwrite(&tmp_path, &target_path).expect("atomic publication");
+        assert!(!tmp_path.exists(), "rename must consume the temporary name");
+        let metadata = secure_file_metadata::from_path(&target_path).expect("published metadata");
+        assert!(secure_file_metadata::is_direct_file(&metadata));
+        assert_eq!(secure_file_metadata::number_of_links(&metadata), Some(1));
+        assert_eq!(
+            read_regular_spool_artifact(&target_path, "DA artifact", 3).expect("strict read"),
+            b"new"
+        );
+    }
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox",
+        windows
+    ))]
+    #[test]
+    fn da_artifact_publication_converges_only_for_identical_bytes() {
+        let dir = tempdir().expect("tempdir");
+        let target_path = dir.path().join("da-target.norito");
+        for suffix in ["first", "duplicate"] {
+            let tmp_path = dir.path().join(format!(".da-{suffix}.tmp"));
+            write_temp_artifact(&tmp_path, b"expected").expect("temporary artifact");
+            install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "DA artifact")
+                .expect("identical publication converges");
+            assert!(
+                !tmp_path.exists(),
+                "publication must remove its temporary name"
+            );
+            assert_eq!(
+                read_regular_spool_artifact(&target_path, "DA artifact", 8).expect("strict read"),
+                b"expected"
+            );
+        }
+        let tmp_path = dir.path().join(".da-conflict.tmp");
+        write_temp_artifact(&tmp_path, b"conflict").expect("conflicting temporary artifact");
+        let err =
+            install_artifact_without_overwrite(&tmp_path, &target_path, b"conflict", "DA artifact")
+                .expect_err("different content must not replace the published artifact");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(!tmp_path.exists());
+        assert_eq!(
+            fs::read(&target_path).expect("original artifact"),
+            b"expected"
+        );
+
+        let tmp_path = dir.path().join(".da-mismatched.tmp");
+        let rejected_target = dir.path().join("rejected.norito");
+        write_temp_artifact(&tmp_path, b"conflict").expect("mismatched temporary artifact");
+        let err = install_artifact_without_overwrite(
+            &tmp_path,
+            &rejected_target,
+            b"expected",
+            "DA artifact",
+        )
+        .expect_err("temporary content must match the intended publication");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(!tmp_path.exists());
+        assert!(!rejected_target.exists());
+    }
+    #[cfg(any(
+        target_vendor = "apple",
+        target_os = "linux",
+        target_os = "android",
+        target_os = "redox",
+        windows
+    ))]
+    #[test]
+    fn da_artifact_publication_rejects_hardlinked_source_and_destination() {
+        let dir = tempdir().expect("tempdir");
+        let target_path = dir.path().join("da-target.norito");
+        let target_alias = dir.path().join("external-target-alias");
+        let tmp_path = dir.path().join(".da.tmp");
+        fs::write(&target_path, b"expected").expect("target artifact");
+        fs::hard_link(&target_path, &target_alias).expect("hostile target link");
+        write_temp_artifact(&tmp_path, b"expected").expect("temporary artifact");
+        let err =
+            install_artifact_without_overwrite(&tmp_path, &target_path, b"expected", "DA artifact")
+                .expect_err("matching bytes do not authorize a hardlinked destination");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(!tmp_path.exists());
+        assert_eq!(
+            fs::read(&target_alias).expect("retained target alias"),
+            b"expected"
+        );
+
+        let rejected_target = dir.path().join("rejected.norito");
+        let source_alias = dir.path().join("external-source-alias");
+        write_temp_artifact(&tmp_path, b"expected").expect("temporary artifact");
+        fs::hard_link(&tmp_path, &source_alias).expect("hostile source link");
+        let err = install_artifact_without_overwrite(
+            &tmp_path,
+            &rejected_target,
+            b"expected",
+            "DA artifact",
+        )
+        .expect_err("hardlinked temporary artifact must never be published");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(!tmp_path.exists());
+        assert!(!rejected_target.exists());
+        assert_eq!(
+            fs::read(&source_alias).expect("retained source alias"),
+            b"expected"
+        );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bounded_spool_reader_rejects_symlinks_with_direct_file_error() {
+        use std::os::unix::fs::symlink;
+        let dir = tempdir().expect("tempdir");
+        let target_path = dir.path().join("target.norito");
+        let link_path = dir.path().join("artifact.norito");
+        fs::write(&target_path, b"expected").expect("target artifact");
+        assert_eq!(
+            read_regular_spool_artifact(&target_path, "DA artifact", 8).expect("direct control"),
+            b"expected"
+        );
+        symlink(&target_path, &link_path).expect("hostile artifact symlink");
+        let err = read_regular_spool_artifact(&link_path, "DA artifact", 8)
+            .expect_err("symbolic link must be rejected without following it");
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(err.to_string().contains("not a direct regular file"));
+        assert_eq!(
+            fs::read(&target_path).expect("unchanged target"),
+            b"expected"
+        );
+    }
     #[test]
     fn da_install_artifact_reports_temp_cleanup_failure_after_link_error() {
         let dir = tempdir().expect("tempdir");
@@ -3369,7 +3654,7 @@ mod temp_artifact_tests {
         );
         assert!(
             !target_path.exists(),
-            "failed hard-link install must not create the target artifact"
+            "failed publication must not create the target artifact"
         );
     }
     #[test]
@@ -3636,7 +3921,7 @@ pub(super) fn persist_da_receipt(
 }
 fn encode_stored_da_receipt(receipt: &DaIngestReceipt, sequence: u64) -> std::io::Result<Vec<u8>> {
     let encoded = to_bytes(&StoredDaReceipt {
-        version: STORED_RECEIPT_VERSION,
+        version: StoredDaReceipt::VERSION,
         sequence,
         receipt: receipt.clone(),
     })
@@ -3723,7 +4008,7 @@ fn open_spool_dir_no_follow(spool_dir: &Path) -> std::io::Result<Option<fs::Read
     let metadata = match secure_file_metadata::from_path(spool_dir) {
         Ok(metadata) => metadata,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
-        Err(err) => return Err(err),
+        Err(err) => return Err(map_spool_dir_open_error(spool_dir, err)),
     };
     validate_spool_dir_metadata(spool_dir, &metadata)?;
     fs::read_dir(spool_dir).map(Some)
@@ -4694,6 +4979,7 @@ pub(super) fn persist_da_commitment_record(
 #[norito_schema(name = "iroha_torii::da::persistence::DaCommitmentScheduleEntry")]
 #[derive(Clone, Debug, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)]
 /// On-disk schedule entry combining commitment record and PDP commitment bytes.
+
 pub(super) struct DaCommitmentScheduleEntry {
     /// Entry layout version for future migrations.
     pub(super) version: u16,
