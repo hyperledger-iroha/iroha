@@ -1,9 +1,9 @@
 {
   "version": 2,
-  "generated_unix_ms": 1789029679000,
-  "generator_commit": "6cbe67c914bbf5d9a333c18cde7d4ddc583ca2ba",
+  "generated_unix_ms": 1789033840000,
+  "generator_commit": "1fe3b5220a38c146b970429116638e6a58213f82",
   "generator_dirty": false,
-  "generator_source_sha256_hex": "6ddcfec26db2738e57400575e1e03feb767f3d85f5af3526e8abc0f7f1da6687",
+  "generator_source_sha256_hex": "ae252f177c200dee2389a5617d314de01188dbf406b7b2ef6630c57ab6ff3b1a",
   "artifact": {
     "path": "torii.json",
     "bytes": 3672958,
