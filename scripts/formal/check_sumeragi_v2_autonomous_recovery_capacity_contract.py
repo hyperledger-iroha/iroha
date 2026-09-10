@@ -213,6 +213,12 @@ STABLE_BINDING_IDENTITIES = {
         "method",
         "Kura::preflight_certified_bundle_inventory_locked",
     ),
+    "certified_bundle_startup_authenticated_preimage_validation": (
+        "MLCertifiedFrontierCapacityReconstructable",
+        "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+        "method",
+        "Kura::validate_startup_persisted_autonomous_bundle_under_prune_guard",
+    ),
     "certified_bundle_aggregate_capacity_gate": (
         "MLCertifiedFrontierCapacityReconstructable",
         "crates/iroha_core/src/kura/certified_bundle_capacity.rs",
@@ -599,6 +605,15 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         "self.validate_autonomous_lane_merge_bundle_pair_layout_locked",
         "if bundle.certified != *artifact",
         "non-frontier autonomous certificate lacks its durable bundle",
+        "Result<Vec<AutonomousLaneMergeBundleV1>>",
+        "Ok(bundles.into_values().collect())",
+    ),
+    "certified_bundle_startup_authenticated_preimage_validation": (
+        "persisted: &AutonomousLaneMergeBundleV1",
+        "self.durable_autonomous_lane_merge_source_under_prune_guard",
+        "Some(&persisted.certified), false",
+        "source.bundle != *persisted",
+        "source.source_bundle != persisted.encode_framed()?",
     ),
     "certified_bundle_aggregate_capacity_gate": (
         "another certified/bundle capacity identity is still outstanding for this route",
@@ -647,6 +662,7 @@ STABLE_BINDING_REQUIRED_ANCHORS = {
         ".checked_add(pending_block_bytes)",
         "Self::canonical_prune_intent_maintenance_headroom_bytes()",
         "*self.certified_bundle_capacity_reservations.lock() = rebuilt",
+        "self.validate_startup_persisted_autonomous_bundle_under_prune_guard",
     ),
     "lane_history_compaction_recovery_before_capacity": (
         'self.lane_merge_application_frontier_expected_receipt_under_prune_and_canonical_guards',

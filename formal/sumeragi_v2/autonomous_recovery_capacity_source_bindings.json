@@ -500,7 +500,9 @@
         "self.bound_indexed_sidecar_payload_heights",
         "self.validate_autonomous_lane_merge_bundle_pair_layout_locked",
         "if bundle.certified != *artifact",
-        "non-frontier autonomous certificate lacks its durable bundle"
+        "non-frontier autonomous certificate lacks its durable bundle",
+        "Result<Vec<AutonomousLaneMergeBundleV1>>",
+        "Ok(bundles.into_values().collect())"
       ],
       "ordered_tokens": [
         "let certified_recovery",
@@ -510,7 +512,31 @@
         "for (height, bundle) in &bundles",
         "if bundle.certified != *artifact",
         "for (height, artifact) in &certified",
-        "non-frontier autonomous certificate lacks its durable bundle"
+        "non-frontier autonomous certificate lacks its durable bundle",
+        "Ok(bundles.into_values().collect())"
+      ]
+    },
+    {
+      "id": "certified_bundle_startup_authenticated_preimage_validation",
+      "invariant": "MLCertifiedFrontierCapacityReconstructable",
+      "coverage": "invariant_chain",
+      "path": "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs",
+      "kind": "method",
+      "symbol": "Kura::validate_startup_persisted_autonomous_bundle_under_prune_guard",
+      "required_tokens": [
+        "persisted: &AutonomousLaneMergeBundleV1",
+        "self.durable_autonomous_lane_merge_source_under_prune_guard",
+        "Some(&persisted.certified), false",
+        "source.bundle != *persisted",
+        "source.source_bundle != persisted.encode_framed()?"
+      ],
+      "ordered_tokens": [
+        "let descriptor = &persisted.certified.proposal.descriptor",
+        "self.durable_autonomous_lane_merge_source_under_prune_guard",
+        "Some(&persisted.certified), false",
+        "source.bundle != *persisted",
+        "source.source_bundle != persisted.encode_framed()?",
+        "Ok(())"
       ]
     },
     {
@@ -638,14 +664,19 @@
         "startup_physical_credit_bytes.min(reserved)",
         ".checked_add(pending_block_bytes)",
         "Self::canonical_prune_intent_maintenance_headroom_bytes()",
-        "*self.certified_bundle_capacity_reservations.lock() = rebuilt"
+        "*self.certified_bundle_capacity_reservations.lock() = rebuilt",
+        "self.validate_startup_persisted_autonomous_bundle_under_prune_guard"
       ],
       "ordered_tokens": [
         "let mut rebuilt = BTreeMap",
         "read_latest_certified_lane_block_frontier_locked(&active, true)?",
+        "for bundle in persisted",
+        "self.validate_startup_persisted_autonomous_bundle_under_prune_guard",
         "self.certified_bundle_capacity_plan(&active, &artifact, &source)?",
         "self.certified_bundle_capacity_consumed_components_locked",
         "self.preflight_certified_bundle_inventory_locked",
+        "for bundle in persisted",
+        "self.validate_startup_persisted_autonomous_bundle_under_prune_guard",
         "let rebuilt_effective_reserved = rebuilt",
         "startup_physical_credit_bytes.min(reserved)",
         "let required = used",

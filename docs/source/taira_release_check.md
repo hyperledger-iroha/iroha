@@ -65,7 +65,10 @@ never publishes independent-check success. Strict storage construction and both
 snapshot geometry restoration paths share one recovery sequence: rebuild budgets,
 finish publication recovery, then compact terminal history and rebuild route indexes.
 The source contract rejects bypassing this sequence or moving compaction before
-publication repair.
+publication repair. Cold fixtures establish signed bootstrap and live lifecycle custody
+before publishing payload history, so their negative controls reach the intended
+corruption boundary. Startup inventory retains authenticated append-preimage bundle
+rows through source validation; it does not reread an unfinished pair as a live one.
 
 CLI client admission binds the configured chain, genesis NetworkId and account
 address discriminant to the signed inventory during assembly, apply and recovery.

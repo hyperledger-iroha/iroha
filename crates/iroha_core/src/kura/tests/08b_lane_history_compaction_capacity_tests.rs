@@ -387,7 +387,7 @@ fn linked_compaction_payload(
             proposal.proposal_hash.as_ref(),
         ]);
     }
-    LaneExecutablePayloadV1::new_signed_with_reservations(
+    let payload = LaneExecutablePayloadV1::new_signed_with_reservations(
         template.network_id,
         template.epoch,
         proposal,
@@ -398,7 +398,8 @@ fn linked_compaction_payload(
         PeerId::new(signer.public_key().clone()),
         signer.private_key(),
     )
-    .expect("sign exact linked compaction payload")
+    .expect("sign exact linked compaction payload");
+    historical_capacity_bound_payload_for_fixture(&payload, signer)
 }
 
 fn autonomous_history_compaction_fixture(observer: bool) -> AutonomousHistoryCompactionFixture {
@@ -423,7 +424,7 @@ fn autonomous_history_compaction_fixture_with_observer_append(
     for height in 1..=3 {
         let payload = linked_compaction_payload(lane, height, predecessor, &signer);
         predecessor = Some(payload.origin_proposal.descriptor.descriptor_hash);
-        let prepared = prepare_autonomous_certification_for_capacity_payload(
+        let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
             &kura,
             &lane_config,
             &payload,
@@ -455,7 +456,7 @@ fn autonomous_history_compaction_fixture_with_observer_append(
         let (observer_kura, _) =
             Kura::open_test_kura_with_configured_lane_config(&observer_config, &lane_config)
                 .expect("open compaction observer");
-        let local = prepare_autonomous_certification_for_capacity_payload(
+        let local = prepare_cold_autonomous_certification_for_capacity_payload(
             &observer_kura,
             &lane_config,
             &payloads[0],
@@ -535,6 +536,59 @@ fn compaction_source_pairs(
     ]
 }
 
+// This fixture has exactly one canonical merge carrier. Discover its cold
+// owner from the actual incomplete identity inventory; the observer's warm
+// publication envelope alone is not durable ownership of source slot2.
+fn cold_compaction_capacity_reservations(
+    fixture: &AutonomousHistoryCompactionFixture,
+) -> (u64, u64) {
+    let kura = &fixture.kura;
+    let terminal = kura
+        .autonomous_global_terminal_outcome_reserved_bytes()
+        .expect("measure durable terminal-family obligations");
+    let owns_carrier = {
+        let _geometry_guard = kura.lane_geometry_lock.lock();
+        let _sidecar_guard = kura.sidecar_lock.lock();
+        let inventory = kura
+            .autonomous_lane_attempt_inventory_counts_locked(fixture.lane_config.primary(), 1)
+            .expect("read actual incomplete local lifecycle identities");
+        let identity = (
+            fixture.frontier.lane_block_height,
+            fixture.frontier.proposal_height,
+        );
+        let owns_carrier = (inventory.lifecycle_identities.contains(&identity)
+            || inventory.terminal_outcome_identities.contains(&identity))
+            && !inventory
+                .complete_terminal_outcome_identities
+                .contains(&identity);
+        if !owns_carrier {
+            let local = &fixture.payloads[0].origin_proposal.descriptor;
+            assert_eq!(
+                inventory.lifecycle_identities,
+                BTreeSet::from([(local.lane_block_height, local.proposal_height)])
+            );
+            assert!(
+                inventory.terminal_outcome_identities.is_empty(),
+                "observer has no terminal outcome that names the replica's carrier"
+            );
+            assert_ne!((local.lane_block_height, local.proposal_height), identity);
+        }
+        owns_carrier
+    };
+    if !owns_carrier {
+        return (terminal, 0);
+    }
+    let before = snapshot_regular_test_tree(fixture.temp_dir.path());
+    kura.rebuild_post_wsv_lane_artifact_budget_reservations_on_startup()
+        .expect("run actual reconstruction for the locally owned carrier");
+    assert_eq!(snapshot_regular_test_tree(fixture.temp_dir.path()), before);
+    (
+        terminal,
+        kura.post_wsv_lane_artifact_budget_reserved_bytes()
+            .expect("measure actual reconstructed carrier obligation"),
+    )
+}
+
 fn assert_compaction_retained_sources(
     kura: &Kura,
     fixture_sources: &[DurableAutonomousLaneMergeSource],
@@ -596,7 +650,7 @@ fn lane_history_cold_restore_accepts_independent_authenticated_prefix_cuts() {
 #[test]
 fn lane_history_cold_restore_recovers_certified_and_bundle_rewrite_cuts() {
     for observer in [false, true] {
-        for pair_index in [1, 2] {
+        for pair_index in [0, 1, 2] {
             for (data_promoted, index_pending) in [(false, true), (true, true), (false, false)] {
                 let fixture = autonomous_history_compaction_fixture(observer);
                 let (frontier_path, _) = Kura::latest_certified_lane_block_frontier_paths_for_entry(
@@ -783,6 +837,12 @@ fn lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix() {
         .kura
         .persisted_count_and_unindexed_bytes()
         .expect("canonical pending cursor");
+    let (terminal_reserved, cold_post_wsv_reserved) =
+        cold_compaction_capacity_reservations(&fixture);
+    assert!(
+        terminal_reserved > 0,
+        "unfinished lifecycle cleanup remains budgeted"
+    );
     let baseline = fixture
         .kura
         .kura_disk_usage_bytes()
@@ -791,14 +851,9 @@ fn lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix() {
             .kura
             .pending_block_bytes(persisted, unindexed)
             .expect("pending bytes")
+        + terminal_reserved
+        + cold_post_wsv_reserved
         + Kura::canonical_prune_intent_maintenance_headroom_bytes();
-    assert_eq!(
-        fixture
-            .kura
-            .autonomous_global_terminal_outcome_reserved_bytes()
-            .expect("no terminal lifecycle owner in this storage fixture"),
-        0
-    );
     assert_eq!(
         fixture
             .kura
@@ -806,15 +861,14 @@ fn lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix() {
             .expect("all local certification publications completed"),
         0
     );
-    // This storage fixture creates no lifecycle cursor or terminal record, so
-    // cold startup reconstructs no post-WSV owner. Its warm carrier publication
-    // envelope must not inflate the cold limit and accidentally permit a rewrite.
-    // The actual reopened owner inventories and constructor enforce this below.
+    // Use actual retained terminal owners and the authenticated cold carrier
+    // envelope; neither can be assumed absent merely because certification ended.
     let pairs = compaction_source_pairs(&fixture);
     let ((data, index), _) = &pairs[1];
     let rewrite_bytes = Kura::sidecar_tracked_bytes(data, index).expect("certified rewrite peak");
     assert!(rewrite_bytes > 1);
-    fixture.config.max_disk_usage_bytes = iroha_config_base::util::Bytes(baseline + rewrite_bytes - 1);
+    fixture.config.max_disk_usage_bytes =
+        iroha_config_base::util::Bytes(baseline + rewrite_bytes - 1);
     Arc::get_mut(&mut fixture.kura)
         .expect("exclusive compaction fixture")
         .max_disk_usage_bytes = fixture.config.max_disk_usage_bytes.0;
@@ -844,7 +898,13 @@ fn lane_history_capacity_blocked_cold_restore_keeps_authenticated_prefix() {
         reopened
             .post_wsv_lane_artifact_budget_reserved_bytes()
             .expect("actual cold post-WSV owner inventory"),
-        0
+        cold_post_wsv_reserved
+    );
+    assert_eq!(
+        reopened
+            .autonomous_global_terminal_outcome_reserved_bytes()
+            .expect("cold terminal obligations"),
+        terminal_reserved
     );
     assert_compaction_retained_sources(&reopened, &sources);
     assert_eq!(snapshot_regular_test_tree(temp_dir.path()), before);
@@ -1036,6 +1096,8 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
                 .kura
                 .persisted_count_and_unindexed_bytes()
                 .expect("cold append pending cursor");
+            let (terminal_reserved, cold_post_wsv_reserved) =
+                cold_compaction_capacity_reservations(&fixture);
             let required = fixture
                 .kura
                 .kura_disk_usage_bytes()
@@ -1044,9 +1106,12 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
                     .kura
                     .pending_block_bytes(persisted, unindexed)
                     .expect("pending canonical bytes")
+                + terminal_reserved
+                + cold_post_wsv_reserved
                 + Kura::canonical_prune_intent_maintenance_headroom_bytes()
                 + remaining_index_growth;
-            fixture.config.max_disk_usage_bytes = iroha_config_base::util::Bytes(required - u64::from(one_under));
+            fixture.config.max_disk_usage_bytes =
+                iroha_config_base::util::Bytes(required - u64::from(one_under));
             let AutonomousHistoryCompactionFixture {
                 temp_dir,
                 config,
@@ -1086,8 +1151,14 @@ fn lane_history_cold_restore_admits_obsolete_append_at_exact_capacity() {
                 assert_eq!(
                     reopened
                         .post_wsv_lane_artifact_budget_reserved_bytes()
-                        .expect("cold fixture has no lifecycle owner"),
-                    0
+                        .expect("cold carrier reservation matches actual durable owners"),
+                    cold_post_wsv_reserved
+                );
+                assert_eq!(
+                    reopened
+                        .autonomous_global_terminal_outcome_reserved_bytes()
+                        .expect("cold terminal obligations"),
+                    terminal_reserved
                 );
                 if input_cut {
                     assert_eq!(

@@ -389,6 +389,38 @@ class AutonomousRecoveryCapacityContractTests(unittest.TestCase):
             "certified_bundle_transactional_startup_rebuild",
         )
 
+    def test_startup_bundle_inventory_must_preserve_authenticated_preimages(self) -> None:
+        capacity = "crates/iroha_core/src/kura/certified_bundle_capacity.rs"
+        self.assert_source_mutation_rejected(
+            capacity,
+            "Ok(bundles.into_values().collect())",
+            "Ok(Vec::new())",
+            "certified_bundle_history_preflight",
+        )
+        for occurrence in (1, 2):
+            with self.subTest(inventory_consumer=occurrence):
+                self.assert_source_mutation_rejected(
+                    capacity,
+                    "self.validate_startup_persisted_autonomous_bundle_under_prune_guard",
+                    "self.durable_autonomous_lane_merge_source_under_prune_guard",
+                    "certified_bundle_transactional_startup_rebuild",
+                    occurrence=occurrence,
+                )
+        support = "crates/iroha_core/src/kura/autonomous_merge_bundle_support.rs"
+        for old, new in (
+            (
+                "Some(&persisted.certified),\n                false,",
+                "None,\n                true,",
+            ),
+            ("source.bundle != *persisted", "false"),
+            ("source.source_bundle != persisted.encode_framed()?", "false"),
+        ):
+            with self.subTest(authenticated_row=old):
+                self.assert_source_mutation_rejected(
+                    support, old, new,
+                    "certified_bundle_startup_authenticated_preimage_validation",
+                )
+
     def test_certified_bundle_consumption_cannot_ignore_durable_hash(self) -> None:
         self.assert_source_mutation_rejected(
             "crates/iroha_core/src/kura/certified_bundle_capacity.rs",

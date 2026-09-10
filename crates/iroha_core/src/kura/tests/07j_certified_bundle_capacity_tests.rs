@@ -168,6 +168,38 @@ fn prepare_certified_bundle_reset_fixture(
     }
 }
 
+// Cold fixtures use the same signed bootstrap → payload → Prepared → Live
+// sequence as the producer. Direct payload persistence alone is not restart
+// custody and deliberately remains rejected by production inventory.
+fn cold_autonomous_capacity_payload_at(
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_block_height: u64,
+    proposal_height: u64,
+    signer: &KeyPair,
+) -> LaneExecutablePayloadV1 {
+    historical_capacity_bound_payload_for_fixture(
+        &autonomous_capacity_payload_at(
+            lane_id,
+            dataspace_id,
+            lane_block_height,
+            proposal_height,
+            signer,
+        ),
+        signer,
+    )
+}
+fn prepare_cold_autonomous_certification_for_capacity_payload(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+    payload: &LaneExecutablePayloadV1,
+    signer: &KeyPair,
+) -> PreparedAutonomousCertification {
+    install_autonomous_lane_marker_for_kura(kura, lane_config, payload);
+    persist_historical_capacity_payload_fixture(kura, payload, signer);
+    prepare_autonomous_certification_for_capacity_payload(kura, lane_config, payload, signer)
+}
+
 #[test]
 fn sequential_autonomous_certificates_advance_the_durable_frontier() {
     let temp_dir = TempDir::new().expect("sequential certificate temp dir");
@@ -187,14 +219,14 @@ fn sequential_autonomous_certificates_advance_the_durable_frontier() {
 
     let mut completed = Vec::new();
     for lane_block_height in 1..=2 {
-        let payload = autonomous_capacity_payload_at(
+        let payload = cold_autonomous_capacity_payload_at(
             lane_id,
             lane.dataspace_id,
             lane_block_height,
             lane_block_height,
             &signer,
         );
-        let prepared = prepare_autonomous_certification_for_capacity_payload(
+        let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
             &kura,
             &lane_config,
             &payload,
@@ -288,11 +320,11 @@ fn mixed_ordinary_autonomous_certificates_cold_restore_preserves_completed_histo
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("mixed certificate Kura");
-    let first = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
+    let first = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
     let first_artifact =
         persist_ordinary_capacity_certificate(&kura, &lane_config, &first, &signer);
-    let middle = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
-    let prepared = prepare_autonomous_certification_for_capacity_payload(
+    let middle = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
+    let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
         &kura,
         &lane_config,
         &middle,
@@ -300,7 +332,7 @@ fn mixed_ordinary_autonomous_certificates_cold_restore_preserves_completed_histo
     );
     kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
         .expect("publish autonomous middle slot");
-    let last = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 3, 3, &signer);
+    let last = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 3, 3, &signer);
     let last_artifact = persist_ordinary_capacity_certificate(&kura, &lane_config, &last, &signer);
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
@@ -346,8 +378,8 @@ fn certified_bundle_cold_restore_repairs_only_latest_partial_publication() {
         let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("partial successor Kura");
-        let first = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
-        let completed = prepare_autonomous_certification_for_capacity_payload(
+        let first = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
+        let completed = prepare_cold_autonomous_certification_for_capacity_payload(
             &kura,
             &lane_config,
             &first,
@@ -355,8 +387,8 @@ fn certified_bundle_cold_restore_repairs_only_latest_partial_publication() {
         );
         kura.persist_committed_lane_block_session(&completed.session, &completed.signer_pops)
             .expect("publish completed historical slot");
-        let last = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
-        let partial = prepare_autonomous_certification_for_capacity_payload(
+        let last = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
+        let partial = prepare_cold_autonomous_certification_for_capacity_payload(
             &kura,
             &lane_config,
             &last,
@@ -428,8 +460,8 @@ fn certified_bundle_cold_restore_rejects_corrupt_or_missing_completed_history_wi
         let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
         let (kura, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
             .expect("invalid historical bundle Kura");
-        let first = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
-        let prepared = prepare_autonomous_certification_for_capacity_payload(
+        let first = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 1, &signer);
+        let prepared = prepare_cold_autonomous_certification_for_capacity_payload(
             &kura,
             &lane_config,
             &first,
@@ -437,7 +469,7 @@ fn certified_bundle_cold_restore_rejects_corrupt_or_missing_completed_history_wi
         );
         kura.persist_committed_lane_block_session(&prepared.session, &prepared.signer_pops)
             .expect("publish historical autonomous slot");
-        let last = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
+        let last = cold_autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 2, 2, &signer);
         let last_artifact =
             persist_ordinary_capacity_certificate(&kura, &lane_config, &last, &signer);
         assert_eq!(
@@ -499,6 +531,7 @@ fn certified_bundle_reserved_for(
 fn initial_certified_bundle_reserved(plan: &CertifiedBundleCapacityPlan) -> u64 {
     certified_bundle_reserved_for(plan, plan.component_bytes.keys().copied())
 }
+
 #[test]
 fn certified_bundle_reservation_rejects_a_missing_outstanding_transient_entry() {
     let temp_dir = TempDir::new().expect("missing transient-entry temp dir");

@@ -1381,7 +1381,7 @@ impl Kura {
         frontier_source: Option<&DurableAutonomousLaneMergeSource>,
         retention: Option<&AuthenticatedLaneHistoryRetention>,
         obsolete_bundle_recovery: Option<&CertifiedBundleAppendRecovery>,
-    ) -> Result<Vec<(u64, iroha_data_model::NetworkId, u64)>> {
+    ) -> Result<Vec<AutonomousLaneMergeBundleV1>> {
         let (certified_data_path, certified_index_path) =
             Self::certified_lane_block_paths_for_entry(entry, &self.store_root);
         let certified_recovery = if let Some(frontier) = frontier {
@@ -1645,7 +1645,6 @@ impl Kura {
             !retention
                 .is_some_and(|proof| proof.permits_discard(&bundle.certified.proposal.descriptor))
         });
-        let mut persisted = Vec::new();
         for (height, bundle) in &bundles {
             let Some(artifact) = certified.get(height) else {
                 return Err(Self::invalid_lane_artifact_error(
@@ -1653,23 +1652,18 @@ impl Kura {
                     "autonomous bundle exists without its exact certified lane slot",
                 ));
             };
-            let Some(availability) = artifact.prepare_qc.payload_availability_qc.as_ref() else {
+            if artifact.prepare_qc.payload_availability_qc.is_none() {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
                     "autonomous bundle exists for an ordinary certified lane slot",
                 ));
-            };
+            }
             if bundle.certified != *artifact {
                 return Err(Self::invalid_lane_artifact_error(
                     self.store_root.clone(),
                     "autonomous bundle differs from its exact certified lane slot",
                 ));
             }
-            persisted.push((
-                *height,
-                availability.body.network_id,
-                availability.body.epoch,
-            ));
         }
         for (height, artifact) in &certified {
             if artifact.prepare_qc.payload_availability_qc.is_some()
@@ -1682,7 +1676,11 @@ impl Kura {
                 ));
             }
         }
-        Ok(persisted)
+        // Preserve the complete authenticated rows, including an append's
+        // stable preimage. A caller must not discard this evidence and reread
+        // the same pair through the live no-recovery-artifacts path before
+        // all-route capacity admission permits completing the pending append.
+        Ok(bundles.into_values().collect())
     }
     fn certified_bundle_capacity_consumed_components_locked(
         &self,
@@ -2258,23 +2256,10 @@ impl Kura {
                                 .find_map(|plan| plan.bundle_recovery()),
                         )?
                     };
-                    for (height, network_id, epoch) in persisted {
-                        self.durable_autonomous_lane_merge_source_under_prune_guard(
-                            entry.lane_id,
-                            height,
-                            network_id,
-                            epoch,
-                            None,
-                            true,
-                        )
-                        .map_err(|message| {
-                            Self::invalid_lane_artifact_error(
-                                self.store_root.clone(),
-                                format!(
-                                    "startup persisted autonomous bundle is invalid: {message}"
-                                ),
-                            )
-                        })?;
+                    for bundle in persisted {
+                        self.validate_startup_persisted_autonomous_bundle_under_prune_guard(
+                            &bundle,
+                        )?;
                     }
                     obsolete_append_plans.extend(obsolete_plans);
                     continue;
@@ -2320,21 +2305,8 @@ impl Kura {
                     )?;
                     (plan, consumed, persisted)
                 };
-                for (height, network_id, epoch) in persisted {
-                    self.durable_autonomous_lane_merge_source_under_prune_guard(
-                        entry.lane_id,
-                        height,
-                        network_id,
-                        epoch,
-                        None,
-                        true,
-                    )
-                    .map_err(|message| {
-                        Self::invalid_lane_artifact_error(
-                            self.store_root.clone(),
-                            format!("startup persisted autonomous bundle is invalid: {message}"),
-                        )
-                    })?;
+                for bundle in persisted {
+                    self.validate_startup_persisted_autonomous_bundle_under_prune_guard(&bundle)?;
                 }
                 if rebuilt.keys().any(|identity| {
                     identity.lane_id == plan.identity.lane_id

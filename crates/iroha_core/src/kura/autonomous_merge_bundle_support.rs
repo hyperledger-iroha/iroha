@@ -3305,6 +3305,44 @@ impl Kura {
         Ok(())
     }
 
+    /// Validate one exact bundle row already authenticated by startup pair
+    /// inventory, including a stable preimage beneath an exact append intent.
+    ///
+    /// The caller holds `prune_lock`. Reconstruct the source from its active
+    /// signed attempt and execution input without rereading either inventoried
+    /// pair through the live no-recovery guard. Equality with the complete
+    /// canonical row retains the pair's authority while leaving all pending
+    /// append mutation deferred until aggregate capacity admission succeeds.
+    fn validate_startup_persisted_autonomous_bundle_under_prune_guard(
+        &self,
+        persisted: &AutonomousLaneMergeBundleV1,
+    ) -> Result<()> {
+        let descriptor = &persisted.certified.proposal.descriptor;
+        let payload = persisted.executable_payload();
+        let source = self
+            .durable_autonomous_lane_merge_source_under_prune_guard(
+                descriptor.lane_id,
+                descriptor.lane_block_height,
+                payload.network_id,
+                payload.epoch,
+                Some(&persisted.certified),
+                false,
+            )
+            .map_err(|message| {
+                Self::invalid_lane_artifact_error(
+                    self.store_root.clone(),
+                    format!("startup persisted autonomous bundle is invalid: {message}"),
+                )
+            })?;
+        if source.bundle != *persisted || source.source_bundle != persisted.encode_framed()? {
+            return Err(Self::invalid_lane_artifact_error(
+                self.store_root.clone(),
+                "startup persisted autonomous bundle differs from its exact durable components",
+            ));
+        }
+        Ok(())
+    }
+
     /// Reconcile independently durable autonomous merge bundles with the
     /// exact active certified slots that authorize them.
     ///
