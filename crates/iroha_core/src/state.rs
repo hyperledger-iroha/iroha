@@ -66222,6 +66222,7 @@ pub(crate) struct SnapshotLaneIncarnationLineage {
 }
 /// Closed snapshot representation of the staking activation modes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+#[norito(tag = "mode", content = "value")]
 pub(crate) enum SnapshotLaneValidatorMode {
     StakeElected,
     AdminManaged,
