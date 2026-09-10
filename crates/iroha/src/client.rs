@@ -25038,7 +25038,6 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, gen_account_in};
     use iroha_torii_shared::status::GovernanceStatus;
     use iroha_version::codec::DecodeVersioned;
-    use norito::json::Value;
     use std::{
         collections::HashMap,
         fs,

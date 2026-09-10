@@ -57,7 +57,7 @@ class IndependentCheckpointTests(unittest.TestCase):
         stack.enter_context(patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "CARGO_HOME": str(self.root / "cargo-home")}, clear=True))
         self.source_lock = stack.enter_context((self.root / "source-lock").open("w"))
         self.events = []
-        for group in ("CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES",
+        for group in ("CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES",
                       "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
             stack.enter_context(patch.object(gate, group, ()))
         for group, selection in (("CORE_STAGES", "core"), ("STAGES", "cli"), ("NETWORK_STAGES", "network")):

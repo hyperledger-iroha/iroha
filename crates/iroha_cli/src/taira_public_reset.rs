@@ -1040,6 +1040,7 @@ pub(super) enum RecoveryMutationStateV1 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum RecoveryOutcome {
     Applied,
+    ReadyToContinue,
     Pending,
     Rejected(String),
 }
@@ -3091,6 +3092,17 @@ fn validate_recovery_intent(
     Ok(())
 }
 
+fn recovery_ready_to_continue(
+    intent: &RecoveryIntentV1,
+    step: executor_model::ExecutionStep,
+) -> bool {
+    validate_recovery_intent(intent, step).is_ok()
+        && intent
+            .mutations
+            .get(usize::from(intent.next_mutation))
+            .is_some_and(|mutation| mutation.state == RecoveryMutationStateV1::Prepared)
+}
+
 fn validate_absolute_normal_path(path: &Path, label: &str) -> Result<()> {
     if !path.is_absolute()
         || path
@@ -3888,7 +3900,14 @@ mod executor_model {
             || (actual.edge_rollback_complete && !actual.edge_touched)
             || (actual.status == "in_progress"
                 && (!valid_in_progress_phase(actual)
-                    || actual.recovery_intent.is_some()
+                    || actual.recovery_intent.as_ref().is_some_and(|intent| {
+                        !EXECUTION_STEPS
+                            .get(usize::from(actual.next_step))
+                            .copied()
+                            .is_some_and(|step| {
+                                step.supports_recovery() && recovery_ready_to_continue(intent, step)
+                            })
+                    })
                     || actual.edge_rollback_complete
                     || actual.rollback_next_validator != 0
                     || !actual.failure_summary.is_empty()
@@ -4058,8 +4077,9 @@ mod executor_model {
     fn valid_recovery_intent_transition(before: &JournalV1, after: &JournalV1) -> bool {
         match (before.status.as_str(), after.status.as_str()) {
             ("in_progress", "recovery_pending") => {
-                before.recovery_intent.is_none()
-                    && after.recovery_intent.is_some()
+                after.recovery_intent.is_some()
+                    && (before.recovery_intent.is_none()
+                        || before.recovery_intent == after.recovery_intent)
                     && after.next_step == before.next_step
             }
             ("recovery_pending", "recovery_pending") => {
@@ -4070,6 +4090,17 @@ mod executor_model {
                     .is_some_and(|(before, after)| valid_recovery_progress(before, after))
                     && after.next_step == before.next_step
             }
+            ("recovery_pending", "in_progress") if after.recovery_intent.is_some() => {
+                before.recovery_intent == after.recovery_intent
+                    && after.next_step == before.next_step
+                    && EXECUTION_STEPS
+                        .get(usize::from(after.next_step))
+                        .copied()
+                        .zip(after.recovery_intent.as_ref())
+                        .is_some_and(|(step, intent)| recovery_ready_to_continue(intent, step))
+            }
+            ("in_progress", "in_progress") => before.recovery_intent == after.recovery_intent,
+            ("in_progress", "rolling_back") => after.recovery_intent.is_none(),
             ("recovery_pending", "in_progress" | "sealing" | "rolling_back") => {
                 before.recovery_intent.is_some() && after.recovery_intent.is_none()
             }
@@ -4825,6 +4856,23 @@ mod executor_model {
                 if let Err(error) = validate_recovery_intent(&intent, step) {
                     return rollback_after_failure(inventory, transport, journal, error);
                 }
+                let intent = if let Some(retained) = journal.state().recovery_intent.as_ref() {
+                    if !recovery_ready_to_continue(retained, step)
+                        || !host::recovery_intent_identity_matches(retained, &intent)
+                    {
+                        return rollback_after_failure(
+                            inventory,
+                            transport,
+                            journal,
+                            eyre!(
+                                "forward mutation continuation differs from its exact prepared intent"
+                            ),
+                        );
+                    }
+                    retained.clone()
+                } else {
+                    intent
+                };
                 let mut prepared = journal.state().clone();
                 prepared.status = "recovery_pending".to_owned();
                 prepared.phase = step.label().to_owned();
@@ -5025,6 +5073,28 @@ mod executor_model {
             Err(error) => return preserve_recovery_pending(journal, step, error),
         };
         match outcome {
+            RecoveryOutcome::ReadyToContinue => {
+                let mut state = journal.state().clone();
+                if !state
+                    .recovery_intent
+                    .as_ref()
+                    .is_some_and(|intent| recovery_ready_to_continue(intent, step))
+                {
+                    return preserve_recovery_pending(
+                        journal,
+                        step,
+                        eyre!(
+                            "read-only recovery did not establish an exact Prepared continuation frontier"
+                        ),
+                    );
+                }
+                state.status = "in_progress".to_owned();
+                state.failure_summary.clear();
+                journal.replace(state)?;
+                Err(eyre!(
+                    "read-only recovery advanced the mutation cursor; resume remaining Prepared mutations with the original forward authorization"
+                ))
+            }
             RecoveryOutcome::Applied => {
                 let recovered = journal
                     .state()
@@ -5440,6 +5510,7 @@ mod executor_model {
         #[derive(Default)]
         struct MockTransport {
             events: Vec<String>,
+            mutation_dispatches: Vec<(ExecutionStep, usize)>,
             fail: Option<String>,
             recovery_outcome: Option<RecoveryOutcome>,
             submitted_step: Option<ExecutionStep>,
@@ -5488,12 +5559,10 @@ mod executor_model {
                         if index + 1 == intent.mutations.len() {
                             Ok(RecoveryOutcome::Applied)
                         } else {
-                            Ok(RecoveryOutcome::Rejected("not_attempted".to_owned()))
+                            Ok(RecoveryOutcome::ReadyToContinue)
                         }
                     }
-                    RecoveryMutationStateV1::Prepared => {
-                        Ok(RecoveryOutcome::Rejected("not_attempted".to_owned()))
-                    }
+                    RecoveryMutationStateV1::Prepared => Ok(RecoveryOutcome::ReadyToContinue),
                     RecoveryMutationStateV1::Applied => {
                         Err(eyre!("cursor cannot point at an applied mutation"))
                     }
@@ -5510,6 +5579,7 @@ mod executor_model {
             ) -> Result<()> {
                 validate_recovery_intent(intent, step)?;
                 for index in usize::from(intent.next_mutation)..intent.mutations.len() {
+                    self.mutation_dispatches.push((step, index));
                     if self.submitted_step == Some(step) && index + 1 == intent.mutations.len() {
                         self.events
                             .push(format!("dispatch:{}:{index}", step.label()));
@@ -5579,9 +5649,9 @@ mod executor_model {
                 step_label: step.label().to_owned(),
                 next_mutation: 0,
                 mutations: (0..match step {
-                    ExecutionStep::Canary => 2,
-                    ExecutionStep::RestartProof => 8,
-                    ExecutionStep::EdgeVerify => 1,
+                    ExecutionStep::Canary => 3,
+                    ExecutionStep::RestartProof => 16,
+                    ExecutionStep::EdgeVerify => 3,
                     _ => 1,
                 })
                     .map(|index| RecoveryMutationV1 {
@@ -7232,7 +7302,7 @@ mod executor_model {
         }
 
         #[test]
-        fn never_attempted_next_mutation_transitions_to_safe_rollback() {
+        fn never_attempted_next_mutation_preserves_authorized_continuation() {
             let (inventory, mut journal) = journal(sample_inventory());
             let step = ExecutionStep::Canary;
             journal.state.status = "recovery_pending".to_owned();
@@ -7251,13 +7321,141 @@ mod executor_model {
             let mut intent = test_recovery_intent(step);
             intent.mutations[0].state = RecoveryMutationStateV1::Applied;
             intent.next_mutation = 1;
-            journal.state.recovery_intent = Some(intent);
+            journal.state.recovery_intent = Some(intent.clone());
             let mut transport = MockTransport::default();
             let _ = execute_plan(&inventory, &mut transport, &mut journal)
-                .expect_err("never-attempted mutation must choose rollback");
+                .expect_err("read-only recovery must stop before ordinary forward continuation");
             assert_eq!(transport.events, ["recover:canary"]);
-            assert_eq!(journal.state.status, "rolling_back");
-            assert!(journal.state.recovery_intent.is_none());
+            assert!(transport.mutation_dispatches.is_empty());
+            assert_eq!(journal.state.status, "in_progress");
+            assert_eq!(journal.state.recovery_intent, Some(intent));
+        }
+
+        #[test]
+        fn recovered_partial_mutation_reopens_and_dispatches_only_prepared_suffix() {
+            for step in [
+                ExecutionStep::Canary,
+                ExecutionStep::RestartProof,
+                ExecutionStep::EdgeVerify,
+            ] {
+                let count = test_recovery_intent(step).mutations.len();
+                for submitted in 0..count - 1 {
+                    let admitted = signed_admitted(sample_inventory(), 1_000_000);
+                    let directory = private_tempdir();
+                    let canonical = directory.path().canonicalize().unwrap();
+                    let mut journal = DurableJournal::open(&canonical, &admitted).unwrap();
+                    let mut intent = test_recovery_intent(step);
+                    for mutation in &mut intent.mutations[..submitted] {
+                        mutation.state = RecoveryMutationStateV1::Applied;
+                    }
+                    intent.mutations[submitted].state = RecoveryMutationStateV1::Submitted;
+                    intent.next_mutation = u16::try_from(submitted).unwrap();
+                    let mut state = journal.state().clone();
+                    state.status = "recovery_pending".to_owned();
+                    state.phase = step.label().to_owned();
+                    state.next_step =
+                        u16::try_from(EXECUTION_STEPS.iter().position(|s| *s == step).unwrap())
+                            .unwrap();
+                    state.touched_validators = VALIDATOR_SLUGS.map(str::to_owned).to_vec();
+                    state.edge_touched = step == ExecutionStep::EdgeVerify;
+                    state.recovery_intent = Some(intent.clone());
+                    journal.replace(state).unwrap();
+                    let outer_cursor = journal.state().next_step;
+                    let mut observer = MockTransport::default();
+                    execute_plan(&admitted.inventory, &mut observer, &mut journal)
+                        .expect_err("observation must stop before forward siblings");
+                    assert!(observer.mutation_dispatches.is_empty());
+                    assert_eq!(observer.events, [format!("recover:{}", step.label())]);
+                    intent.mutations[submitted].state = RecoveryMutationStateV1::Applied;
+                    intent.next_mutation += 1;
+                    assert_eq!(journal.state().recovery_intent.as_ref(), Some(&intent));
+                    assert_eq!(journal.state().next_step, outer_cursor);
+                    assert_eq!(journal.state().status, "in_progress");
+                    let mut invalid = journal.state().clone();
+                    invalid.recovery_intent.as_mut().unwrap().mutations[submitted + 1].state =
+                        RecoveryMutationStateV1::Submitted;
+                    assert!(
+                        validate_resumable_journal(&invalid, journal.state()).is_err(),
+                        "Submitted frontier cannot select ordinary Forward custody"
+                    );
+                    invalid = journal.state().clone();
+                    invalid.recovery_intent.as_mut().unwrap().mutations[submitted].state =
+                        RecoveryMutationStateV1::Prepared;
+                    assert!(
+                        validate_resumable_journal(&invalid, journal.state()).is_err(),
+                        "Applied prefix cannot be forgotten"
+                    );
+                    invalid = journal.state().clone();
+                    invalid.recovery_intent.as_mut().unwrap().mutations[submitted + 1]
+                        .idempotency_key = "f".repeat(64);
+                    assert!(
+                        !valid_journal_successor(journal.state(), &invalid),
+                        "retained mutation identity cannot change across continuation"
+                    );
+                    drop(journal);
+                    let mut journal = match DurableJournal::classify(&canonical, &admitted).unwrap()
+                    {
+                        JournalOpen::Resumable(journal) => journal,
+                        JournalOpen::Fresh(_) => panic!("partial recovery cannot reopen fresh"),
+                    };
+                    assert_eq!(journal.resume_disposition(), ResumeDisposition::Forward);
+                    assert_eq!(journal.state().recovery_intent.as_ref(), Some(&intent));
+                    let expires = admitted.authorization.claims.execution_expires_at_unix_ms;
+                    verify_forward_authorization(&admitted, expires - 1).unwrap();
+                    let mut forward = MockTransport::default();
+                    execute_plan(&admitted.inventory, &mut forward, &mut journal).unwrap();
+                    assert_eq!(
+                        forward
+                            .mutation_dispatches
+                            .iter()
+                            .filter(|(s, _)| *s == step)
+                            .map(|(_, index)| *index)
+                            .collect::<Vec<_>>(),
+                        (submitted + 1..count).collect::<Vec<_>>()
+                    );
+                    assert!(
+                        !forward
+                            .events
+                            .iter()
+                            .any(|event| event.starts_with("rollback:"))
+                    );
+                    assert_eq!(journal.state().status, "completed");
+                }
+            }
+        }
+
+        #[test]
+        fn partial_mutation_continuation_rejects_expired_forward_authorization() {
+            let admitted = signed_admitted(sample_inventory(), 1_000_000);
+            let (_, mut journal) = journal(admitted.inventory.clone());
+            let step = ExecutionStep::Canary;
+            let mut intent = test_recovery_intent(step);
+            intent.mutations[0].state = RecoveryMutationStateV1::Submitted;
+            journal.state.status = "recovery_pending".to_owned();
+            journal.state.phase = step.label().to_owned();
+            journal.state.next_step =
+                u16::try_from(EXECUTION_STEPS.iter().position(|s| *s == step).unwrap()).unwrap();
+            journal.state.touched_validators = VALIDATOR_SLUGS.map(str::to_owned).to_vec();
+            journal.state.recovery_intent = Some(intent);
+            let mut observer = MockTransport::default();
+            execute_plan(&admitted.inventory, &mut observer, &mut journal)
+                .expect_err("stop after exact proof");
+            assert_eq!(journal.state.status, "in_progress");
+            let expiry = admitted.authorization.claims.execution_expires_at_unix_ms;
+            let error = verify_forward_authorization(&admitted, expiry)
+                .expect_err("original expiry cannot be refreshed");
+            begin_rollback_after_preparation_failure(&mut journal, &error).unwrap();
+            let mut rollback = MockTransport::default();
+            execute_plan(&admitted.inventory, &mut rollback, &mut journal)
+                .expect_err("expired continuation rolls back");
+            assert!(rollback.mutation_dispatches.is_empty());
+            assert!(
+                rollback
+                    .events
+                    .iter()
+                    .all(|event| event.starts_with("rollback:"))
+            );
+            assert_eq!(journal.state.status, "rolled_back");
         }
 
         #[test]

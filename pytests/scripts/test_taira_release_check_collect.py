@@ -58,7 +58,7 @@ class CollectIndependentRegressionTests(unittest.TestCase):
                 env = dict(os.environ, CARGO="/unused/cargo", CARGO_HOME="/isolated", CARGO_TARGET_DIR=str(root))
                 for name, group in self.groups:
                     stack.enter_context(patch.object(gate, group, ((name, (name + "_first", name + "_second")),)))
-                for group in ("PROOF_STAGES", "PROOF_FLOW_STAGES"):
+                for group in ("CONFIG_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
                     stack.enter_context(patch.object(gate, group, ()))
                 for function in ("run_pure_fsm_checks", "run_lifecycle_source_checks", "run_config_checks", "require_network_fixture_capacity"):
                     stack.enter_context(patch.object(gate, function))

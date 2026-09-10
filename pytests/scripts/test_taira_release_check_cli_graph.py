@@ -19,8 +19,8 @@ class CombinedCliGraphTests(unittest.TestCase):
     artifact = staticmethod(existing.NativeTestBatchBuildTests.artifact)
     process = existing.NativeTestBatchBuildTests.process
 
-    def test_ten_targets_share_one_graph_without_extra_binary_or_feature_selection(self):
-        names = ("crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
+    def test_eleven_targets_share_one_graph_without_extra_binary_or_feature_selection(self):
+        names = ("config", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
         lines = "".join(self.artifact(name) for name in reversed(names))
         lines += self.artifact("cli")
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
@@ -34,9 +34,9 @@ class CombinedCliGraphTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.args[0], [
             "/fixed/cargo", "--config", "/frozen/.cargo/config.toml", "test",
             "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
-            "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core",
+            "-p", "iroha_config", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core",
             "-p", "iroha_test_network", "-p", "iroha", "-p", "iroha_torii",
-            "-p", "irohad", "-p", "iroha_cli", "--lib", "--test", "taira_app_contracts",
+            "-p", "irohad", "-p", "iroha_cli", "--test", "taira_config_contracts", "--lib", "--test", "taira_app_contracts",
             "--test", "taira_consensus_contracts", "--bin", "iroha",
             "--no-run", "--message-format=json-render-diagnostics",
         ])
@@ -187,7 +187,7 @@ class CliCopyLifetimeTests(unittest.TestCase):
                 raise gate.CheckError("synthetic four-peer failure")
 
         with contextlib.ExitStack() as stack:
-            for group in ("CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
+            for group in ("CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES", "TEST_NETWORK_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "TORII_STAGES", "DAEMON_STAGES", "PROOF_STAGES", "PROOF_FLOW_STAGES"):
                 stack.enter_context(patch.object(gate, group, ()))
             stack.enter_context(patch.object(gate, "NETWORK_STAGES", gate.NETWORK_STAGES if network else ()))
             stack.enter_context(patch.object(gate, "STAGES", (("CLI fixture", ("cli_fixture",)),)))

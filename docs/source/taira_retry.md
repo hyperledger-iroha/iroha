@@ -9,7 +9,7 @@ build or transfer unchanged binaries or source.
 
 For a changed release, freeze the source once and run `scripts/taira_release.py
 prepare` with the existing repository `target/` lane. Preparation runs the native
-CLI regressions first after the combined native test build, starting with the
+configuration checks first from the combined native test build, followed by CLI
 canary command composition checks before the consensus regressions. Every
 independent test still completes before the four-peer gate and Linux build.
 Use the routine development check while

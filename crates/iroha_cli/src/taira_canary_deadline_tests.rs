@@ -38,7 +38,7 @@ fn exercise_final_canary_deadline(applied: bool) {
             200,
             norito::json!({
                 "data_model_version": (iroha::data_model::DATA_MODEL_VERSION),
-                "signed_transaction_schema_hash_hex": hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
+                "signed_transaction_schema_hash_hex": (hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>()))
             }),
         ),
         "/v1/pipeline/transactions/status" => {

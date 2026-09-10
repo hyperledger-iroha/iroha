@@ -42,6 +42,9 @@ STAGES = (
         "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
     )),
     ("submitted canary recovery state machine", (
+        "taira_public_reset::executor_model::tests::never_attempted_next_mutation_preserves_authorized_continuation",
+        "taira_public_reset::executor_model::tests::recovered_partial_mutation_reopens_and_dispatches_only_prepared_suffix",
+        "taira_public_reset::executor_model::tests::partial_mutation_continuation_rejects_expired_forward_authorization",
         "taira_public_reset::executor_model::tests::submitted_child_failures_preserve_parent_intent_until_read_only_recovery",
         "taira_public_reset::executor_model::tests::authenticated_submitted_child_rejection_remains_terminal",
         "taira_public_reset::host::tests::submitted_child_process_failures_require_read_only_recovery",
@@ -1024,12 +1027,12 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
     return isolate_native_artifacts(root, env, records)
 
 
-def run_config_checks(root: Path, fixture_root: Path, env: dict[str, str],
+def run_config_checks(harnesses: NativeArtifactCopies, fixture_root: Path, env: dict[str, str],
                       lock_fds: tuple[int, ...]) -> None:
-    """Reject schema failures before compiling the Core and network harnesses."""
+    """Execute the shared graph's configuration artifact before all other tests."""
     if CONFIG_STAGES:
-        with compile_harness(root, env, lock_fds=lock_fds, harness="config") as artifacts:
-            run_stages(artifacts["config"], fixture_root, env, CONFIG_STAGES, lock_fds)
+        run_stages(harnesses["config"], fixture_root, env, CONFIG_STAGES, lock_fds)
+        harnesses.release("config")
 
 
 def run_network_checks(root: Path, fixture_root: Path, env: dict[str, str], lock_fds: tuple[int, ...],
@@ -1189,7 +1192,9 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
         require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
-    run_config_checks(root, fixture_root, env, lock_fds)
+    # Include the configuration integration target in this same Cargo graph:
+    # its separate narrower dependency feature union rebuilt shared prefixes.
+    # Configuration still executes first and gates all other tests and node builds.
     # Build early library/HTTP, network and CLI test harnesses in one Cargo graph.
     # A separate CLI test build after the production node build changes the
     # package/dev-dependency feature union and recompiles shared dependencies.
@@ -1204,7 +1209,7 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
         ("test-network", TEST_NETWORK_STAGES),
         ("client", CLIENT_STAGES), ("torii-unit", TORII_UNIT_STAGES),
         ("torii", TORII_STAGES), ("daemon", DAEMON_STAGES)) if stages)
-    selections = tuple(name for name, _ in early_stages)
+    selections = (("config",) if CONFIG_STAGES else ()) + tuple(name for name, _ in early_stages)
     if NETWORK_STAGES:
         selections += ("network",)
     if STAGES:
@@ -1212,6 +1217,9 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     if selections:
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
+            # Always rerun configuration, including exact independent-pass reuse.
+            # A schema failure propagates immediately and releases the whole batch.
+            run_config_checks(harnesses, fixture_root, env, lock_fds)
             failures = []
             independent_stages = ((("cli", STAGES),) if STAGES else ()) + early_stages
             checkpoint_enabled = update_independent_checks is not None

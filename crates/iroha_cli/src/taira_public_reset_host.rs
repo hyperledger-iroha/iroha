@@ -15446,7 +15446,7 @@ fn require_forward_lease_budget(admitted: &AdmittedReset, action_secs: u64) -> R
     Ok(())
 }
 
-fn recovery_intent_identity_matches(
+pub(super) fn recovery_intent_identity_matches(
     actual: &RecoveryIntentV1,
     expected: &RecoveryIntentV1,
 ) -> bool {
@@ -15537,6 +15537,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         intent: &RecoveryIntentV1,
         progress: &mut dyn RecoveryProgress,
     ) -> Result<RecoveryOutcome> {
+        super::validate_recovery_intent(intent, step)?;
         let expected = self
             .recovery_intent(inventory, step)?
             .ok_or_else(|| eyre!("step has no read-only recovery identity"))?;
@@ -15562,7 +15563,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         if next < intent.mutations.len() {
             let mutation = &intent.mutations[next];
             if mutation.state != RecoveryMutationStateV1::Submitted {
-                return Ok(RecoveryOutcome::Rejected("not_attempted".to_owned()));
+                return Ok(RecoveryOutcome::ReadyToContinue);
             }
             let outcome = match mutation.kind.as_str() {
                 "host_restart" => {
@@ -15620,7 +15621,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 }
             }
             if next + 1 < intent.mutations.len() {
-                return Ok(RecoveryOutcome::Rejected("not_attempted".to_owned()));
+                return Ok(RecoveryOutcome::ReadyToContinue);
             }
         }
         match step {
@@ -15674,9 +15675,12 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
         let expected = self
             .recovery_intent(inventory, step)?
             .ok_or_else(|| eyre!("step has no recoverable mutation identity"))?;
-        if intent != &expected {
+        if !super::recovery_ready_to_continue(intent, step)
+            || !recovery_intent_identity_matches(intent, &expected)
+        {
             return Err(eyre!("prepared mutation intent is not exact"));
         }
+        let next_mutation = usize::from(intent.next_mutation);
         match step {
             ExecutionStep::Canary => {
                 for (index, kind) in inventory
@@ -15684,6 +15688,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                     .canary_kinds()
                     .iter()
                     .enumerate()
+                    .skip(next_mutation)
                 {
                     match *kind {
                         "onboarding" | "faucet" | "write_canary" => self
@@ -15718,25 +15723,30 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                         .map(|client| client.probe_origin.clone())
                         .collect::<Vec<_>>();
                     let admitted = self.admitted;
-                    run_restart_with_validator_http_readiness(
-                        &origins,
-                        Duration::from_secs(inventory.timeouts.restart_secs),
-                        || ensure_authorization_current(admitted),
-                        |deadline| {
-                            progress.mark_submitted(restart_index)?;
-                            self.bootstrap_and_dispatch_validator(
-                                validator,
-                                HostAction::Restart,
-                                remaining_seconds(deadline)?,
-                            )?;
-                            progress.mark_applied(restart_index)
-                        },
-                    )?;
+                    if restart_index >= next_mutation {
+                        run_restart_with_validator_http_readiness(
+                            &origins,
+                            Duration::from_secs(inventory.timeouts.restart_secs),
+                            || ensure_authorization_current(admitted),
+                            |deadline| {
+                                progress.mark_submitted(restart_index)?;
+                                self.bootstrap_and_dispatch_validator(
+                                    validator,
+                                    HostAction::Restart,
+                                    remaining_seconds(deadline)?,
+                                )?;
+                                progress.mark_applied(restart_index)
+                            },
+                        )?;
+                    }
                     let phase = format!("restart-wave-{wave}");
                     for (offset, kind) in ["onboarding", "faucet", "write_canary"]
                         .into_iter()
                         .enumerate()
                     {
+                        if restart_index + offset + 1 < next_mutation {
+                            continue;
+                        }
                         self.run_journaled_write_canary_child(
                             progress,
                             restart_index + offset + 1,
@@ -15765,6 +15775,7 @@ impl<R: ProcessRunner> ResetTransport for OpenSshTransport<'_, R> {
                 for (index, kind) in ["onboarding", "faucet", "write_canary"]
                     .into_iter()
                     .enumerate()
+                    .skip(next_mutation)
                 {
                     self.run_journaled_write_canary_child(
                         progress,

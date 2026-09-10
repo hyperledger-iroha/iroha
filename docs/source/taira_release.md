@@ -84,10 +84,12 @@ The native gate receives the same source, toolchain and explicit target director
 Before Cargo, the gate compiles the dependency-free consensus reducers and the
 shared lifecycle source assertions directly with the pinned Rust compiler. Both
 must execute every listed test without skips. Lifecycle mutation controls check
-that removing or reordering required retries still fails. Crypto, P2P, Core and
-fixture library harnesses then share one Cargo invocation, resolving the union
-of their existing default features. Tests retain crypto, transport, consensus
-and fixture order; a failure stops before daemon startup. The daemon/CLI and
+that removing or reordering required retries still fails. Configuration, CLI,
+SDK, Torii, crypto, P2P, Core and fixture harnesses then share one Cargo invocation,
+resolving the union of their existing default features. Configuration runs first
+and fails immediately, including when an independent-test checkpoint can be reused.
+CLI checks follow before the crypto, transport, consensus and fixture selections;
+a failure stops before daemon startup. The daemon/CLI production and
 Linux release feature selections remain independent. This reduces repeated
 dependency work; it does not promise a fixed build duration.
 The fixture checks read the public Taira Nexus profile without runtime inputs
