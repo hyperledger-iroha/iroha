@@ -9,7 +9,6 @@ use iroha::{
         AccountOnboardingPlanRequestV1, AccountOnboardingPrepareResponseV1,
         AccountOnboardingPreparedTransactionV1, AccountOnboardingProofRequiredPrepareResponseV1,
         Client as IrohaClient, PreparedOperationBindingV1, PreparedTransactionOutcomeV1,
-        TransactionWaitOptions,
     },
     config::Config,
     data_model::{
@@ -2320,9 +2319,9 @@ fn prove_inrou_predecessor_applied(
     let mut status_config = config.clone();
     status_config.torii_api_url = Url::parse(&format!("{public_root}/"))?;
     await_predecessor_applied(deadline, Duration::from_millis(200), |request_budget| {
-        let mut bounded_config = status_config.clone();
-        bounded_config.torii_request_timeout = request_budget;
-        let client = IrohaClient::builder(bounded_config).build()?;
+        let client = IrohaClient::builder(status_config.clone())
+            .build()?
+            .with_request_deadline(deadline);
         let Some(status) = client.get_transaction_status_response_global(transaction.hash())?
         else {
             return Ok(false);
@@ -4020,13 +4019,14 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
     let binding = args.binding()?;
     let action = args.validated_action()?;
     let expected_fee_payment = context.transaction_fee_payment()?;
+    let deadline = prepared_observation_deadline(
+        args.timeout_secs,
+        (!matches!(action, PreparedEnvelopeAction::Recover(_)))
+            .then_some(binding.execution_expires_at_unix_ms),
+    )?;
     match action {
         PreparedEnvelopeAction::Prepare(output) => {
             require_forward_binding_current(&binding)?;
-            let deadline = prepared_observation_deadline(
-                args.timeout_secs,
-                Some(binding.execution_expires_at_unix_ms),
-            )?;
             prove_predecessor_applied(
                 context.config(),
                 args,
@@ -4042,7 +4042,9 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 &public_root,
                 &binding,
                 expected_fee_payment.clone(),
+                deadline,
             )?;
+            remaining_prepared_budget(deadline)?;
             let envelope_bytes = canonical_prepared_envelope_bytes(&envelope)?;
             write_prepared_envelope(output, &envelope_bytes)?;
             let (outcome, evidence) = initial_prepared_report_state(&envelope.operation);
@@ -4071,6 +4073,7 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                 &public_root,
                 &validated,
                 &expected_fee_payment,
+                deadline,
             )?;
             report_prepared_classification(&public_root, args, &validated, classification)
         }
@@ -4091,8 +4094,17 @@ fn run_write_canary_exact<C: RunContext>(context: &mut C, args: &WriteCanary) ->
                     key_pair: context.config().key_pair.clone(),
                 },
             )?)
-            .build()?;
-            let classification = classify_exact_prepared_operation(&client, &validated)?;
+            .build()?
+            .with_request_deadline(deadline);
+            let classification = match classify_exact_prepared_operation(&client, &validated) {
+                Ok(classification) => classification,
+                Err(error) if Instant::now() >= deadline && prepared_request_timed_out(&error) => {
+                    PreparedRecoveryClassification::Pending {
+                        terminal_kind: "ObservationUnavailable".to_owned(),
+                    }
+                }
+                Err(error) => return Err(error),
+            };
             report_prepared_classification(&public_root, args, &validated, classification)
         }
     }
@@ -4127,17 +4139,23 @@ fn prepare_one_write_canary_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     match args.operation {
         WriteCanaryOperation::Onboarding => {
-            prepare_onboarding_operation(config, args, public_root, binding, &fee_payment)
+            prepare_onboarding_operation(config, args, public_root, binding, &fee_payment, deadline)
         }
         WriteCanaryOperation::Faucet => {
-            prepare_faucet_operation(config, args, public_root, binding, &fee_payment)
+            prepare_faucet_operation(config, args, public_root, binding, &fee_payment, deadline)
         }
-        WriteCanaryOperation::FinalCanary => {
-            prepare_final_canary_operation(config, args, public_root, binding, fee_payment)
-        }
+        WriteCanaryOperation::FinalCanary => prepare_final_canary_operation(
+            config,
+            args,
+            public_root,
+            binding,
+            fee_payment,
+            deadline,
+        ),
     }
 }
 
@@ -4186,10 +4204,10 @@ fn prove_predecessor_applied(
         key_pair: config.key_pair.clone(),
     };
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    await_predecessor_applied(deadline, Duration::from_millis(200), |request_budget| {
-        let mut bounded_config = canary_config.clone();
-        bounded_config.torii_request_timeout = request_budget;
-        let client = IrohaClient::builder(bounded_config).build()?;
+    let client = IrohaClient::builder(canary_config)
+        .build()?
+        .with_request_deadline(deadline);
+    await_predecessor_applied(deadline, Duration::from_millis(200), |_| {
         match classify_exact_prepared_operation(&client, &validated)? {
             PreparedRecoveryClassification::Applied { .. } => Ok(true),
             PreparedRecoveryClassification::Absent
@@ -4207,12 +4225,16 @@ fn prepare_final_canary_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client =
-        BlockingIrohaClient::from_client(IrohaClient::builder(canary_config.clone()).build()?)
-            .wrap_err("failed to initialize blocking transaction client")?;
+    let client = BlockingIrohaClient::from_client(
+        IrohaClient::builder(canary_config.clone())
+            .build()?
+            .with_request_deadline(deadline),
+    )
+    .wrap_err("failed to initialize blocking transaction client")?;
     let message = prepared_canary_message(binding)?;
     let semantic_sha256 = prepared_semantic_sha256(binding, WRITE_CANARY_OPERATION, &message)?;
     let mut metadata = Metadata::default();
@@ -4860,72 +4882,6 @@ fn validate_live_prepared_transaction_freshness(
     Ok(())
 }
 
-fn submit_exact_prepared_operation(
-    config: &Config,
-    args: &WriteCanary,
-    public_root: &str,
-    validated: &ValidatedPreparedOperation,
-    expected_fee_payment: &FeePaymentIntent,
-) -> Result<PreparedRecoveryClassification> {
-    match args.operation {
-        WriteCanaryOperation::Onboarding | WriteCanaryOperation::Faucet => {
-            submit_server_prepared_operation(
-                config,
-                args,
-                public_root,
-                validated,
-                expected_fee_payment,
-            )
-        }
-        WriteCanaryOperation::FinalCanary => {
-            let signer = CanarySigner {
-                account_id: config.account.clone(),
-                key_pair: config.key_pair.clone(),
-            };
-            let client = BlockingIrohaClient::from_client(
-                IrohaClient::builder(write_canary_config(config, public_root, &signer)?).build()?,
-            )?;
-            let classification = classify_exact_prepared_operation(client.client(), validated)?;
-            if !submit_required_after_classification(&validated.envelope.binding, &classification)?
-            {
-                return Ok(classification);
-            }
-            let transaction = validated.transaction()?;
-            let prepared = iroha::client::PreparedTransactionPayload::from_transaction(transaction);
-            if prepared.as_bytes() != validated.wire()? {
-                eyre::bail!("raw submit bytes differ from the retained prepared envelope");
-            }
-            let submitted = match client.submit_prepared_transaction_payload(&prepared) {
-                Ok(submitted) => submitted,
-                Err(error) => {
-                    return match classify_exact_prepared_operation(client.client(), validated)? {
-                        PreparedRecoveryClassification::Absent => Err(hint_submit_error(error)),
-                        reconciled => Ok(reconciled),
-                    };
-                }
-            };
-            if submitted != transaction.hash() {
-                eyre::bail!("raw submit returned a different transaction hash");
-            }
-            let _ = client.wait_for_transaction_applied(
-                submitted,
-                TransactionWaitOptions {
-                    timeout: Duration::from_secs(args.timeout_secs),
-                    poll_interval: Duration::from_millis(500),
-                },
-            );
-            match classify_exact_prepared_operation(client.client(), validated)? {
-                PreparedRecoveryClassification::Absent => {
-                    Ok(PreparedRecoveryClassification::Pending {
-                        terminal_kind: "AcceptedNotVisible".to_owned(),
-                    })
-                }
-                reconciled => Ok(reconciled),
-            }
-        }
-    }
-}
-
 fn classify_exact_prepared_operation(
     client: &IrohaClient,
     validated: &ValidatedPreparedOperation,
@@ -5022,8 +4978,20 @@ fn prepared_observation_deadline(timeout_secs: u64, expires_at: Option<u64>) -> 
         .ok_or_else(|| eyre!("prepared observation deadline overflow"))
 }
 
+fn remaining_prepared_budget(deadline: Instant) -> Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "prepared action exhausted its original deadline",
+        )
+        .into());
+    }
+    Ok(remaining)
+}
+
 /// A successor observes its retained predecessor under one original deadline.
-/// Each observation performs at most status, compatibility, exact details, and pin reads.
+/// Each observer binds its physical reads to this same absolute deadline.
 fn await_predecessor_applied(
     deadline: Instant,
     poll_interval: Duration,
@@ -5033,7 +5001,7 @@ fn await_predecessor_applied(
         eyre::bail!("predecessor poll interval must be positive");
     }
     loop {
-        let request_budget = deadline.saturating_duration_since(Instant::now()) / 4;
+        let request_budget = deadline.saturating_duration_since(Instant::now());
         if request_budget.is_zero() {
             eyre::bail!(
                 "predecessor has not reached exact Applied proof within the original deadline"
@@ -5298,11 +5266,14 @@ fn prepare_onboarding_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     let token = args.read_onboarding_token()?;
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = IrohaClient::builder(canary_config.clone()).build()?;
+    let client = IrohaClient::builder(canary_config.clone())
+        .build()?
+        .with_request_deadline(deadline);
     let alias = canary_alias(signer.key_pair.public_key());
     let request =
         AccountOnboardingPlanRequestV1::try_new(alias, &signer.account_id, std::iter::empty())?;
@@ -5365,13 +5336,20 @@ fn prepare_faucet_operation(
     public_root: &str,
     binding: &PreparedMutationBindingV1,
     fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedMutationEnvelopeV1> {
     let signer = resolve_canary_signer(config)?;
     let canary_config = write_canary_config(config, public_root, &signer)?;
-    let client = IrohaClient::builder(canary_config.clone()).build()?;
+    let client = IrohaClient::builder(canary_config.clone())
+        .build()?
+        .with_request_deadline(deadline);
     let faucet_policy = args.faucet_policy()?;
-    let claim =
-        solve_account_faucet_claim(public_root, &signer.account_id, &canary_config.network_id)?;
+    let claim = solve_account_faucet_claim(
+        public_root,
+        &signer.account_id,
+        &canary_config.network_id,
+        deadline,
+    )?;
     let public_binding = binding.faucet_binding(&claim)?;
     let prepared = client
         .prepare_account_faucet_transaction(&claim, &public_binding, fee_payment, &faucet_policy)
@@ -5400,26 +5378,18 @@ fn prepare_faucet_operation(
     Ok(envelope)
 }
 
-fn submit_server_prepared_operation(
+fn submit_exact_prepared_operation(
     config: &Config,
     args: &WriteCanary,
     public_root: &str,
     validated: &ValidatedPreparedOperation,
     expected_fee_payment: &FeePaymentIntent,
+    deadline: Instant,
 ) -> Result<PreparedRecoveryClassification> {
-    let deadline = Instant::now()
-        .checked_add(Duration::from_secs(args.timeout_secs))
-        .ok_or_else(|| eyre!("prepared server submission deadline overflow"))?;
     let signer = resolve_canary_signer(config)?;
-    let mut client_builder =
-        IrohaClient::builder(write_canary_config(config, public_root, &signer)?);
-    let request_budget = Duration::from_secs(args.timeout_secs);
-    client_builder.torii_request_timeout = if client_builder.torii_request_timeout.is_zero() {
-        request_budget
-    } else {
-        client_builder.torii_request_timeout.min(request_budget)
-    };
-    let client = client_builder.build()?;
+    let client = IrohaClient::builder(write_canary_config(config, public_root, &signer)?)
+        .build()?
+        .with_request_deadline(deadline);
     let classification = classify_exact_prepared_operation(&client, validated)?;
     if !submit_required_after_classification(&validated.envelope.binding, &classification)? {
         return await_exact_prepared_operation(
@@ -5438,35 +5408,60 @@ fn submit_server_prepared_operation(
                 &signer.account_id,
                 std::iter::empty(),
             )?;
-            client.submit_prepared_account_onboarding_transaction(
-                &request,
-                prepared,
-                expected_fee_payment,
-                token.as_str(),
-            )
+            client
+                .submit_prepared_account_onboarding_transaction(
+                    &request,
+                    prepared,
+                    expected_fee_payment,
+                    token.as_str(),
+                )
+                .map(|submitted| submitted.outcome)
         }
         PreparedTransactionOperationV1::FaucetPrepared(prepared) => {
             let faucet_policy = args.faucet_policy()?;
-            client.submit_prepared_account_faucet_transaction(
-                prepared,
-                expected_fee_payment,
-                &faucet_policy,
-            )
+            client
+                .submit_prepared_account_faucet_transaction(
+                    prepared,
+                    expected_fee_payment,
+                    &faucet_policy,
+                )
+                .map(|submitted| submitted.outcome)
         }
         PreparedTransactionOperationV1::OnboardingProofRequired(_) => {
             eyre::bail!("a proof-required onboarding result must never be submitted")
         }
         PreparedTransactionOperationV1::FinalCanary(_) => {
-            eyre::bail!("final-canary transaction reached the server-prepared submit path")
+            let transaction = validated.transaction()?;
+            let prepared = iroha::client::PreparedTransactionPayload::from_transaction(transaction);
+            if prepared.as_bytes() != validated.wire()? {
+                eyre::bail!("raw submit bytes differ from the retained prepared envelope");
+            }
+            let blocking = BlockingIrohaClient::from_client(client.clone())?;
+            blocking
+                .submit_prepared_transaction_payload(&prepared)
+                .and_then(|submitted| {
+                    if submitted != transaction.hash() {
+                        eyre::bail!("raw submit returned a different transaction hash");
+                    }
+                    Ok(PreparedTransactionOutcomeV1::Pending)
+                })
         }
     };
     let submitted = match submitted {
         Ok(submitted) => submitted,
         Err(error) => {
-            return match classify_exact_prepared_operation(&client, validated)? {
-                PreparedRecoveryClassification::Absent => Err(error).wrap_err(
-                    "exact server-prepared transaction submission failed before observability",
-                ),
+            let reconciled = match classify_exact_prepared_operation(&client, validated) {
+                Ok(reconciled) => reconciled,
+                Err(error) if Instant::now() >= deadline && prepared_request_timed_out(&error) => {
+                    return Ok(PreparedRecoveryClassification::Pending {
+                        terminal_kind: "ObservationUnavailable".to_owned(),
+                    });
+                }
+                Err(error) => return Err(error),
+            };
+            return match reconciled {
+                PreparedRecoveryClassification::Absent => Err(hint_submit_error(error))
+                    .wrap_err("exact prepared transaction submission failed before observability"),
                 reconciled => await_exact_prepared_operation(
                     &client,
                     validated,
@@ -5477,21 +5472,36 @@ fn submit_server_prepared_operation(
             };
         }
     };
-    match submitted.outcome {
+    match submitted {
         PreparedTransactionOutcomeV1::Rejected => Ok(PreparedRecoveryClassification::Rejected {
             terminal_kind: "Rejected".to_owned(),
         }),
         PreparedTransactionOutcomeV1::Applied | PreparedTransactionOutcomeV1::Pending => {
-            let classification = classify_exact_prepared_operation(&client, validated)?;
             await_exact_prepared_operation(
                 &client,
                 validated,
-                classification,
+                PreparedRecoveryClassification::Pending {
+                    terminal_kind: "AcceptedNotVisible".to_owned(),
+                },
                 deadline,
                 Duration::from_millis(500),
             )
         }
     }
+}
+
+fn prepared_request_timed_out(error: &eyre::Report) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<reqwest::Error>()
+            .is_some_and(reqwest::Error::is_timeout)
+            || cause
+                .downcast_ref::<iroha::client::CapabilityProbeError>()
+                .is_some_and(iroha::client::CapabilityProbeError::is_timeout)
+            || cause
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+    })
 }
 /// Poll only the already authenticated transaction; submission is never repeated here.
 /// Timeouts imposed by the remaining confirmation budget retain the last observation.
@@ -5505,6 +5515,7 @@ fn await_exact_prepared_operation(
     if poll_interval.is_zero() {
         eyre::bail!("prepared confirmation poll interval must be positive");
     }
+    let bounded_client = client.with_request_deadline(deadline);
     loop {
         if matches!(
             classification,
@@ -5527,33 +5538,13 @@ fn await_exact_prepared_operation(
         if remaining.is_zero() {
             return Ok(classification);
         }
-        let mut bounded_builder = client.to_builder();
-        // One classification performs at most a status read, a compatibility probe,
-        // and its one-item committed query. Keep their combined I/O within the budget.
-        let request_budget = remaining / 3;
-        if request_budget.is_zero() {
-            return Ok(classification);
-        }
-        let deadline_limits_request = client.torii_request_timeout().is_zero()
-            || request_budget < client.torii_request_timeout();
-        bounded_builder.torii_request_timeout = if deadline_limits_request {
-            request_budget
-        } else {
-            client.torii_request_timeout()
-        };
-        let bounded_client = bounded_builder.build()?;
+        let deadline_limits_request =
+            client.torii_request_timeout().is_zero() || remaining < client.torii_request_timeout();
         match classify_exact_prepared_operation(&bounded_client, validated) {
             Ok(observed) => classification = observed,
             Err(error)
-                if deadline_limits_request
-                    && error.chain().any(|cause| {
-                        cause
-                            .downcast_ref::<reqwest::Error>()
-                            .is_some_and(reqwest::Error::is_timeout)
-                            || cause
-                                .downcast_ref::<std::io::Error>()
-                                .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
-                    }) =>
+                if (deadline_limits_request || Instant::now() >= deadline)
+                    && prepared_request_timed_out(&error) =>
             {
                 // A shrinking deadline can cancel even a healthy read. Keep the
                 // last observation and retry only within the original deadline.
@@ -7465,10 +7456,17 @@ fn solve_account_faucet_claim(
     public_root: &str,
     account_id: &AccountId,
     expected_network_id: &NetworkId,
+    deadline: Instant,
 ) -> Result<AccountFaucetClaimV1> {
     let http = http_client()?;
     let puzzle_url = join_url(public_root, "/v1/accounts/faucet/puzzle")?;
-    let puzzle = http_json(&http, reqwest::Method::GET, puzzle_url.as_str(), None)?;
+    let response = http
+        .get(puzzle_url)
+        .header(reqwest::header::ACCEPT, "application/json")
+        .timeout(Duration::from_secs(30).min(remaining_prepared_budget(deadline)?))
+        .send()
+        .wrap_err("faucet puzzle request failed")?;
+    let puzzle = decode_http_json_response(response)?;
     if puzzle.status != 200 {
         eyre::bail!(
             "faucet puzzle request failed with HTTP {}; no transaction was prepared",
@@ -7479,7 +7477,12 @@ fn solve_account_faucet_claim(
         .body
         .as_ref()
         .ok_or_else(|| eyre!("faucet puzzle response was not canonical JSON"))?;
-    let claim = solve_faucet_puzzle(&account_id.to_string(), expected_network_id, puzzle)?;
+    let claim = solve_faucet_puzzle(
+        &account_id.to_string(),
+        expected_network_id,
+        puzzle,
+        deadline,
+    )?;
     json::from_value(claim).wrap_err("decode solved faucet claim into its closed V1 schema")
 }
 
@@ -7487,6 +7490,7 @@ fn solve_faucet_puzzle(
     account_id: &str,
     expected_network_id: &NetworkId,
     puzzle: &Value,
+    deadline: Instant,
 ) -> Result<Value> {
     validate_exact_faucet_puzzle_shape(puzzle)?;
     let algorithm = required_str(puzzle, "algorithm")?;
@@ -7528,7 +7532,7 @@ fn solve_faucet_puzzle(
         .map_err(|err| eyre!("invalid faucet scrypt parameters: {err}"))?;
     let difficulty_bits =
         u32::try_from(difficulty_bits).map_err(|_| eyre!("faucet difficulty is too large"))?;
-    let nonce = solve_faucet_pow(&challenge, &params, difficulty_bits)?;
+    let nonce = solve_faucet_pow(&challenge, &params, difficulty_bits, deadline)?;
     body.insert("pow_anchor_height".into(), Value::from(anchor_height));
     body.insert("pow_nonce_hex".into(), Value::String(hex::encode(nonce)));
     Ok(Value::Object(body))
@@ -7648,12 +7652,15 @@ fn solve_faucet_pow(
     challenge: &[u8; 32],
     params: &ScryptParams,
     difficulty_bits: u32,
+    deadline: Instant,
 ) -> Result<[u8; 8]> {
     for nonce in 0_u64..(1_u64 << 63) {
+        remaining_prepared_budget(deadline)?;
         let nonce_bytes = nonce.to_be_bytes();
         let mut digest = [0_u8; 32];
         derive_scrypt(&nonce_bytes, challenge, params, &mut digest)
             .map_err(|err| eyre!("failed faucet scrypt derivation: {err}"))?;
+        remaining_prepared_budget(deadline)?;
         if leading_zero_bits(&digest) >= difficulty_bits {
             return Ok(nonce_bytes);
         }
@@ -7711,6 +7718,7 @@ fn compact_json(value: &Value) -> String {
 }
 #[cfg(test)]
 mod tests {
+    include!("taira_canary_deadline_tests.rs");
     use super::*;
     use clap::Parser as _;
     use iroha_i18n::{Bundle, Language, Localizer};
@@ -8531,7 +8539,7 @@ mod tests {
         .expect("local proof may become visible after globally Applied status");
         assert_eq!(budgets.len(), 2);
         assert!(budgets[1] < budgets[0]);
-        assert!(budgets[0] <= Duration::from_secs(5) / 4);
+        assert!(budgets[0] <= Duration::from_secs(5));
         assert_eq!(finish_mock(server).len(), 6);
 
         let mut observations = 0;
@@ -8755,7 +8763,7 @@ mod tests {
         let timeouts = transport.timeouts.lock().unwrap();
         assert_eq!(timeouts[0], Some(configured_timeout));
         assert!(timeouts.iter().skip(1).all(|timeout| {
-            timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget / 3)
+            timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget)
         }));
     }
 
@@ -8791,7 +8799,7 @@ mod tests {
             let timeouts = transport.timeouts.lock().unwrap();
             assert_eq!(timeouts.len(), 2);
             assert!(timeouts.iter().all(|timeout| {
-                timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget / 3)
+                timeout.is_some_and(|timeout| !timeout.is_zero() && timeout <= wait_budget)
             }));
         }
     }
@@ -8861,7 +8869,7 @@ mod tests {
         let timeouts = transport.timeouts.lock().unwrap();
         assert_eq!(timeouts.len(), 1);
         assert!(
-            timeouts[0].is_some_and(|timeout| { !timeout.is_zero() && timeout <= wait_budget / 3 })
+            timeouts[0].is_some_and(|timeout| { !timeout.is_zero() && timeout <= wait_budget })
         );
     }
 
@@ -12754,6 +12762,7 @@ mod tests {
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             &network_id,
             &puzzle,
+            Instant::now() + Duration::from_secs(5),
         )
         .expect_err("pre-release faucet algorithm must fail closed");
         let message = format!("{error:#}");
@@ -12798,6 +12807,7 @@ mod tests {
             "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
             &network_id,
             &puzzle,
+            Instant::now() + Duration::from_secs(5),
         )
         .expect_err("zero-difficulty faucet puzzle must fail closed");
         assert!(format!("{error:#}").contains("difficulty_bits must be positive"));
@@ -12823,6 +12833,7 @@ mod tests {
                 "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 &network_id,
                 &missing,
+                Instant::now() + Duration::from_secs(5),
             )
             .expect_err("omitted exact puzzle field must fail closed");
             assert!(format!("{error:#}").contains("exact V1 field set"));
@@ -12838,6 +12849,7 @@ mod tests {
                 "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 &network_id,
                 &unknown,
+                Instant::now() + Duration::from_secs(5),
             )
             .is_err(),
             "unknown puzzle fields must fail closed"

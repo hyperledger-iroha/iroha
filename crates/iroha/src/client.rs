@@ -8233,12 +8233,19 @@ pub enum TransactionSchemaCompatibilityError {
 #[error("Torii node capability probe failed: {details}")]
 pub struct CapabilityProbeError {
     details: Arc<str>,
+    timed_out: bool,
 }
 
 impl CapabilityProbeError {
     fn from_report(error: &eyre::Report) -> Self {
         Self {
             details: Arc::from(format!("{error:#}")),
+            timed_out: error.chain().any(|cause| {
+                cause.downcast_ref::<reqwest::Error>().is_some_and(reqwest::Error::is_timeout)
+                    || cause.downcast_ref::<std::io::Error>()
+                        .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+                    || cause.downcast_ref::<Self>().is_some_and(Self::is_timeout)
+            }),
         }
     }
 
@@ -8246,6 +8253,14 @@ impl CapabilityProbeError {
     #[must_use]
     pub fn details(&self) -> &str {
         &self.details
+    }
+
+    /// Whether the original typed transport failure was a timeout.
+    ///
+    /// Preserved when one failed capability probe is shared with waiting callers.
+    #[must_use]
+    pub fn is_timeout(&self) -> bool {
+        self.timed_out
     }
 }
 
@@ -15757,6 +15772,20 @@ impl Client {
         ClientBuilder::from_client(self)
     }
 
+    /// Bound every HTTP dispatch in a cloned context by one absolute deadline.
+    ///
+    /// Sequential capability probes, submissions and proof reads share this budget.
+    /// The clone retains connection pools and compatibility state without changing
+    /// its source context. Reapplying a deadline can only shorten an existing one.
+    /// This bounds HTTP work; callers must separately bound CPU work and polling sleeps.
+    /// Custom synchronous transports must honor the supplied request timeout.
+    #[must_use]
+    pub fn with_request_deadline(&self, deadline: std::time::Instant) -> Self {
+        let mut client = self.clone();
+        client.http_transport = self.http_transport.with_deadline(deadline);
+        client
+    }
+
     #[cfg(test)]
     pub(crate) fn with_test_http_transport(self, transport: DefaultHttpTransport) -> Self {
         let mut builder = self.to_builder();
@@ -16137,7 +16166,20 @@ impl Client {
     ) -> Result<()> {
         crate::blocking::reject_inside_async_runtime()?;
         let observed_generation = self.compatibility_probe.generation();
-        let _probe = self.compatibility_probe.gate.blocking_lock();
+        let _probe = if let Some(deadline) = self.http_transport.deadline() {
+            loop {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return Err(crate::http_default::request_deadline_elapsed());
+                }
+                if let Ok(probe) = self.compatibility_probe.gate.try_lock() {
+                    break probe;
+                }
+                std::thread::sleep(Duration::from_millis(5).min(remaining));
+            }
+        } else {
+            self.compatibility_probe.gate.blocking_lock()
+        };
         if let Some(result) = self.completed_compatibility_result(observed_generation, requirement)
         {
             return result;
@@ -16164,7 +16206,15 @@ impl Client {
         require_fresh_probe: bool,
     ) -> Result<()> {
         let observed_generation = self.compatibility_probe.generation();
-        let _probe = self.compatibility_probe.gate.lock().await;
+        let _probe = if let Some(deadline) = self.http_transport.deadline() {
+            if std::time::Instant::now() >= deadline {
+                return Err(crate::http_default::request_deadline_elapsed());
+            }
+            tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), self.compatibility_probe.gate.lock())
+                .await.map_err(|_| crate::http_default::request_deadline_elapsed())?
+        } else {
+            self.compatibility_probe.gate.lock().await
+        };
         if let Some(result) = self.completed_compatibility_result(observed_generation, requirement)
         {
             return result;

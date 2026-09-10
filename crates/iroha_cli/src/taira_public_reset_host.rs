@@ -12796,13 +12796,84 @@ struct RetainedPreparedMutation {
     transaction_hash: String,
 }
 
-enum PreparedMutationOutcome {
+impl RetainedPreparedMutation {
+    fn requires_onboarding_proof(&self, kind: &str) -> Result<bool> {
+        if !self.transaction_hash.is_empty() {
+            return Ok(false);
+        }
+        if kind != "onboarding"
+            || self.bytes.is_empty()
+            || sha256_hex(&self.bytes) != self.sha256
+            || !prepared_envelope_transaction_hash(&self.bytes)?.is_empty()
+        {
+            return Err(eyre!(
+                "transaction-free prepared mutation is not exact onboarding proof"
+            ));
+        }
+        prepared_onboarding_proof_required_result(&self.bytes)?;
+        Ok(true)
+    }
+
+    fn write_recovery_requires_observation(&self, kind: &str) -> Result<bool> {
+        if self.state == "absent" {
+            return Ok(false);
+        }
+        // ProofRequired has no submission marker: its prepared envelope owns
+        // a fresh read proof, including after that observation was interrupted.
+        let proof_required = self.requires_onboarding_proof(kind)?;
+        Ok(self.state != "prepared" || proof_required)
+    }
+}
+
+pub(super) enum PreparedMutationOutcome {
     Applied {
         value: norito::json::Value,
         evidence: Vec<u8>,
     },
     Pending,
     Rejected(String),
+}
+
+#[derive(Clone, Copy)]
+enum PreparedChildProtocol {
+    WriteCanary,
+    Inrou,
+}
+
+fn retain_applied_mutation_outcome(
+    prepared: &RetainedPreparedMutation,
+    outcome: PreparedMutationOutcome,
+) -> PreparedMutationOutcome {
+    if prepared.state == "applied" && !matches!(outcome, PreparedMutationOutcome::Applied { .. }) {
+        // A lost or contradictory observation cannot revoke the retained
+        // Applied identity in either forward execution or read-only recovery.
+        PreparedMutationOutcome::Pending
+    } else {
+        outcome
+    }
+}
+
+/// Once submission is durable, only an authenticated terminal outcome can
+/// resolve it. Transport, report, and receipt failures retain the same intent
+/// for read-only recovery instead of authorizing rollback.
+pub(super) fn run_journaled_submitted_mutation(
+    progress: &mut dyn RecoveryProgress,
+    mutation_index: usize,
+    execute: impl FnOnce() -> Result<PreparedMutationOutcome>,
+) -> Result<()> {
+    progress.mark_submitted(mutation_index)?;
+    let pending = || LocalMutationRecoveryPending {
+        action: "submitted_prepared_child",
+    };
+    match execute().map_err(|error| error.wrap_err(pending()))? {
+        PreparedMutationOutcome::Applied { .. } => progress
+            .mark_applied(mutation_index)
+            .map_err(|error| error.wrap_err(pending())),
+        PreparedMutationOutcome::Pending => Err(pending().into()),
+        PreparedMutationOutcome::Rejected(class) => {
+            Err(eyre!("prepared child was definitively rejected: {class}"))
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13760,72 +13831,84 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         phase: &str,
         kind: &str,
     ) -> Result<()> {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(timeout_secs))
-            .ok_or_else(|| eyre!("journaled write child deadline overflow"))?;
-        let prepared =
-            self.prepare_write_canary_child_until(deadline, timeout_secs, phase, kind)?;
-        if prepared.state == "applied" {
-            let outcome =
-                self.run_write_canary_prepared_until(deadline, phase, kind, &prepared, true)?;
-            let PreparedMutationOutcome::Applied { value, .. } = outcome else {
-                return Err(LocalMutationRecoveryPending {
-                    action: "preapplied_write_canary_child",
-                }
-                .into());
-            };
-            progress.mark_submitted(mutation_index)?;
-            self.publish_local_receipt(
-                &format!("{}-{phase}.json", kind.replace('_', "-")),
-                &value,
-            )?;
-            return progress.mark_applied(mutation_index);
-        }
-        progress.mark_submitted(mutation_index)?;
-        let proof_required = prepared.transaction_hash.is_empty();
-        let prepared = if proof_required {
-            prepared
-        } else {
-            self.coordinate_shared_prepared_mutation(
-                "submitted",
-                kind,
-                phase,
-                &child_mutation_idempotency_key(
-                    &self.admitted.inventory.authorization_nonce,
-                    phase,
-                    kind,
-                ),
-                None,
-                "",
-                "",
-                None,
-                false,
-                remaining_seconds(deadline)?,
-            )?
-        };
-        match self.run_write_canary_prepared_until(
-            deadline,
+        self.run_journaled_prepared_child(
+            progress,
+            mutation_index,
+            timeout_secs,
             phase,
             kind,
-            &prepared,
-            proof_required,
-        )? {
-            PreparedMutationOutcome::Applied { value, evidence } => {
-                self.mark_shared_prepared_applied(phase, kind, &prepared, &evidence, deadline)?;
+            PreparedChildProtocol::WriteCanary,
+        )
+    }
+
+    fn run_journaled_prepared_child(
+        &mut self,
+        progress: &mut dyn RecoveryProgress,
+        mutation_index: usize,
+        timeout_secs: u64,
+        phase: &str,
+        kind: &str,
+        protocol: PreparedChildProtocol,
+    ) -> Result<()> {
+        let deadline = Instant::now()
+            .checked_add(Duration::from_secs(timeout_secs))
+            .ok_or_else(|| eyre!("journaled prepared child deadline overflow"))?;
+        let prepared = match protocol {
+            PreparedChildProtocol::WriteCanary => {
+                self.prepare_write_canary_child_until(deadline, timeout_secs, phase, kind)?
+            }
+            PreparedChildProtocol::Inrou => {
+                self.prepare_inrou_child_until(deadline, timeout_secs, phase, kind)?
+            }
+        };
+        run_journaled_submitted_mutation(progress, mutation_index, || {
+            let already_applied = prepared.state == "applied";
+            let proof_required = matches!(protocol, PreparedChildProtocol::WriteCanary)
+                && prepared.requires_onboarding_proof(kind)?;
+            let prepared = if already_applied || proof_required {
+                prepared
+            } else {
+                self.coordinate_shared_prepared_mutation(
+                    "submitted",
+                    kind,
+                    phase,
+                    &child_mutation_idempotency_key(
+                        &self.admitted.inventory.authorization_nonce,
+                        phase,
+                        kind,
+                    ),
+                    None,
+                    "",
+                    "",
+                    None,
+                    false,
+                    remaining_seconds(deadline)?,
+                )?
+            };
+            let recover_only = already_applied || proof_required;
+            let outcome = match protocol {
+                PreparedChildProtocol::WriteCanary => self.run_write_canary_prepared_until(
+                    deadline,
+                    phase,
+                    kind,
+                    &prepared,
+                    recover_only,
+                )?,
+                PreparedChildProtocol::Inrou => {
+                    self.run_inrou_prepared_until(deadline, phase, kind, &prepared, recover_only)?
+                }
+            };
+            if let PreparedMutationOutcome::Applied { value, evidence } = &outcome {
+                if !already_applied {
+                    self.mark_shared_prepared_applied(phase, kind, &prepared, evidence, deadline)?;
+                }
                 self.publish_local_receipt(
                     &format!("{}-{phase}.json", kind.replace('_', "-")),
-                    &value,
+                    value,
                 )?;
-                progress.mark_applied(mutation_index)
             }
-            PreparedMutationOutcome::Pending => Err(LocalMutationRecoveryPending {
-                action: "write_canary_child",
-            }
-            .into()),
-            PreparedMutationOutcome::Rejected(class) => {
-                Err(eyre!("prepared write child was rejected: {class}"))
-            }
-        }
+            Ok(outcome)
+        })
     }
 
     fn prepare_write_canary_child_until(
@@ -14101,17 +14184,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             outcome,
             Some(prepared),
         )?;
-        match outcome {
+        let outcome = match outcome {
             "Applied" => {
                 let evidence = canonical_json_report_bytes(&value)?;
-                Ok(PreparedMutationOutcome::Applied { value, evidence })
+                PreparedMutationOutcome::Applied { value, evidence }
             }
-            "Pending" => Ok(PreparedMutationOutcome::Pending),
-            "Rejected" => Ok(PreparedMutationOutcome::Rejected(
+            "Pending" => PreparedMutationOutcome::Pending,
+            "Rejected" => PreparedMutationOutcome::Rejected(
                 required_report_evidence(&value, "prepared write child")?.to_owned(),
-            )),
-            _ => Err(eyre!("prepared write child report has an invalid outcome")),
-        }
+            ),
+            _ => return Err(eyre!("prepared write child report has an invalid outcome")),
+        };
+        Ok(retain_applied_mutation_outcome(prepared, outcome))
     }
 
     fn write_canary_base_args(
@@ -14231,7 +14315,7 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             true,
             remaining_seconds(deadline)?,
         )?;
-        if matches!(prepared.state.as_str(), "absent" | "prepared") {
+        if !prepared.write_recovery_requires_observation(&mutation.kind)? {
             return Ok(PreparedMutationOutcome::Rejected(
                 "prepared_child_not_submitted".to_owned(),
             ));
@@ -14305,59 +14389,14 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
         phase: &str,
         kind: &str,
     ) -> Result<()> {
-        let deadline = Instant::now()
-            .checked_add(Duration::from_secs(timeout_secs))
-            .ok_or_else(|| eyre!("journaled Inrou child deadline overflow"))?;
-        let prepared = self.prepare_inrou_child_until(deadline, timeout_secs, phase, kind)?;
-        if prepared.state == "applied" {
-            let outcome = self.run_inrou_prepared_until(deadline, phase, kind, &prepared, true)?;
-            let PreparedMutationOutcome::Applied { value, .. } = outcome else {
-                return Err(LocalMutationRecoveryPending {
-                    action: "preapplied_inrou_child",
-                }
-                .into());
-            };
-            progress.mark_submitted(mutation_index)?;
-            self.publish_local_receipt(
-                &format!("{}-{phase}.json", kind.replace('_', "-")),
-                &value,
-            )?;
-            return progress.mark_applied(mutation_index);
-        }
-        progress.mark_submitted(mutation_index)?;
-        let prepared = self.coordinate_shared_prepared_mutation(
-            "submitted",
-            kind,
+        self.run_journaled_prepared_child(
+            progress,
+            mutation_index,
+            timeout_secs,
             phase,
-            &child_mutation_idempotency_key(
-                &self.admitted.inventory.authorization_nonce,
-                phase,
-                kind,
-            ),
-            None,
-            "",
-            "",
-            None,
-            false,
-            remaining_seconds(deadline)?,
-        )?;
-        match self.run_inrou_prepared_until(deadline, phase, kind, &prepared, false)? {
-            PreparedMutationOutcome::Applied { value, evidence } => {
-                self.mark_shared_prepared_applied(phase, kind, &prepared, &evidence, deadline)?;
-                self.publish_local_receipt(
-                    &format!("{}-{phase}.json", kind.replace('_', "-")),
-                    &value,
-                )?;
-                progress.mark_applied(mutation_index)
-            }
-            PreparedMutationOutcome::Pending => Err(LocalMutationRecoveryPending {
-                action: "inrou_prepared_child",
-            }
-            .into()),
-            PreparedMutationOutcome::Rejected(class) => {
-                Err(eyre!("prepared Inrou child was rejected: {class}"))
-            }
-        }
+            kind,
+            PreparedChildProtocol::Inrou,
+        )
     }
 
     fn prepare_inrou_child_until(
@@ -14548,17 +14587,18 @@ impl<R: ProcessRunner> OpenSshTransport<'_, R> {
             outcome,
             Some(prepared),
         )?;
-        match outcome {
+        let outcome = match outcome {
             "Applied" => {
                 let evidence = canonical_json_report_bytes(&value)?;
-                Ok(PreparedMutationOutcome::Applied { value, evidence })
+                PreparedMutationOutcome::Applied { value, evidence }
             }
-            "Pending" => Ok(PreparedMutationOutcome::Pending),
-            "Rejected" => Ok(PreparedMutationOutcome::Rejected(
+            "Pending" => PreparedMutationOutcome::Pending,
+            "Rejected" => PreparedMutationOutcome::Rejected(
                 required_report_evidence(&value, "prepared Inrou child")?.to_owned(),
-            )),
-            _ => Err(eyre!("prepared Inrou child report has an invalid outcome")),
-        }
+            ),
+            _ => return Err(eyre!("prepared Inrou child report has an invalid outcome")),
+        };
+        Ok(retain_applied_mutation_outcome(prepared, outcome))
     }
 
     fn inrou_prepared_base_args(
@@ -18282,6 +18322,79 @@ mod tests {
             .to_string();
         assert!(error.contains("status: HTTP 502"));
         assert!(!error.contains("do-not-forward") && !error.contains("untrusted-label"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn submitted_child_process_failures_require_read_only_recovery() {
+        use std::os::unix::process::ExitStatusExt as _;
+
+        #[derive(Default)]
+        struct Progress {
+            submitted: bool,
+            applied: bool,
+            fail_applied: bool,
+        }
+        impl RecoveryProgress for Progress {
+            fn mark_submitted(&mut self, index: usize) -> Result<()> {
+                assert_eq!(index, 2);
+                assert!(!self.submitted);
+                self.submitted = true;
+                Ok(())
+            }
+            fn mark_applied(&mut self, index: usize) -> Result<()> {
+                assert_eq!(index, 2);
+                assert!(self.submitted);
+                if self.fail_applied {
+                    return Err(eyre!("failed to publish Applied journal transition"));
+                }
+                self.applied = true;
+                Ok(())
+            }
+        }
+        for case in 0..4 {
+            let mut progress = Progress {
+                fail_applied: case == 3,
+                ..Progress::default()
+            };
+            let error = run_journaled_submitted_mutation(&mut progress, 2, || {
+                if case == 3 {
+                    return Ok(PreparedMutationOutcome::Applied {
+                        value: norito::json::Value::Null,
+                        evidence: Vec::new(),
+                    });
+                }
+                let output = match case {
+                    0 => run_bounded_process(&ProcessSpec {
+                        program: PathBuf::from("/bin/sh"),
+                        args: vec!["-c".into(), "/bin/sleep 2".into()],
+                        stdin_prefix: Vec::new(),
+                        stdin_file: None,
+                        stdin_files: Vec::new(),
+                        inherited_files: Vec::new(),
+                        deadline: Instant::now() + Duration::from_millis(50),
+                    })?,
+                    1 => ProcessOutput {
+                        status: ExitStatus::from_raw(1 << 8),
+                        stdout: br#"{"status":"ok","recovery_outcome":"Applied"}"#.to_vec(),
+                        stderr: b"fixture-secret-must-not-escape".to_vec(),
+                    },
+                    2 => ProcessOutput {
+                        status: ExitStatus::from_raw(0),
+                        stdout: br#"{"status":"ok","recovery_outcome":"#.to_vec(),
+                        stderr: Vec::new(),
+                    },
+                    _ => unreachable!(),
+                };
+                parse_prepared_child_report(output, "exact prepared write child")?;
+                panic!("no failed fixture may authorize an outcome")
+            })
+            .expect_err("unknown outcome after Submitted must remain pending");
+            assert!(is_local_mutation_recovery_pending(&error), "case {case}");
+            assert!(progress.submitted);
+            assert!(!progress.applied);
+            assert!(!format!("{error:#}").contains("fixture-secret-must-not-escape"));
+        }
     }
 
     #[cfg(unix)]
@@ -22515,6 +22628,75 @@ time.sleep(30)
         assert_eq!(digest, prepared.prepared_sha256);
         assert_eq!(transaction_hash, prepared.transaction_hash);
         assert_eq!(operation, prepared.operation);
+    }
+
+    #[test]
+    fn interrupted_onboarding_proof_recovers_from_its_authenticated_prepared_envelope() {
+        let _chain = ChainDiscriminantGuard::enter(0x02f1);
+        let (_, prepared, bytes, _, _) =
+            authenticated_proof_required_fixture("http://127.0.0.1:8080");
+        let mut retained = RetainedPreparedMutation {
+            state: "prepared".to_owned(),
+            bytes,
+            sha256: prepared.prepared_sha256,
+            transaction_hash: prepared.transaction_hash,
+        };
+        assert!(
+            retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap(),
+            "an interrupted atomic state proof has no Submitted transaction marker"
+        );
+        assert!(
+            retained
+                .write_recovery_requires_observation("faucet")
+                .is_err()
+        );
+        assert!(
+            retained
+                .write_recovery_requires_observation("write_canary")
+                .is_err()
+        );
+        retained.bytes.push(b' ');
+        assert!(
+            retained
+                .write_recovery_requires_observation("onboarding")
+                .is_err()
+        );
+        retained.bytes.pop();
+
+        for state in ["prepared", "submitted", "applied"] {
+            retained.state = state.to_owned();
+            let outcome = retain_applied_mutation_outcome(
+                &retained,
+                PreparedMutationOutcome::Rejected("Rejected".to_owned()),
+            );
+            assert_eq!(
+                matches!(outcome, PreparedMutationOutcome::Pending),
+                state == "applied",
+                "a contradictory observation cannot revoke retained Applied custody"
+            );
+        }
+        retained.state = "prepared".to_owned();
+        retained.transaction_hash = "11".repeat(32);
+        assert!(
+            !retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap(),
+            "a real transaction still requires its exact Submitted marker"
+        );
+        retained.state = "submitted".to_owned();
+        assert!(
+            retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap()
+        );
+        retained.state = "absent".to_owned();
+        assert!(
+            !retained
+                .write_recovery_requires_observation("onboarding")
+                .unwrap()
+        );
     }
 
     fn proof_required_evidence(admitted: &HostAdmission, prepared: &PreparedMutationV1) -> Vec<u8> {

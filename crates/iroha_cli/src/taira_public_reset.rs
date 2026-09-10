@@ -5442,6 +5442,8 @@ mod executor_model {
             events: Vec<String>,
             fail: Option<String>,
             recovery_outcome: Option<RecoveryOutcome>,
+            submitted_step: Option<ExecutionStep>,
+            submitted_outcome: Option<fn() -> Result<host::PreparedMutationOutcome>>,
         }
 
         impl MockTransport {
@@ -5508,6 +5510,17 @@ mod executor_model {
             ) -> Result<()> {
                 validate_recovery_intent(intent, step)?;
                 for index in usize::from(intent.next_mutation)..intent.mutations.len() {
+                    if self.submitted_step == Some(step) && index + 1 == intent.mutations.len() {
+                        self.events
+                            .push(format!("dispatch:{}:{index}", step.label()));
+                        return host::run_journaled_submitted_mutation(
+                            progress,
+                            index,
+                            self.submitted_outcome
+                                .take()
+                                .expect("submitted outcome fixture"),
+                        );
+                    }
                     progress.mark_submitted(index)?;
                     progress.mark_applied(index)?;
                 }
@@ -7015,6 +7028,137 @@ mod executor_model {
                 "recovery must never resubmit the ambiguous canary step"
             );
             assert_eq!(journal.state.status, "completed");
+        }
+
+        #[test]
+        fn submitted_child_failures_preserve_parent_intent_until_read_only_recovery() {
+            fn timeout() -> Result<host::PreparedMutationOutcome> {
+                Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "child deadline").into())
+            }
+            fn lost_response() -> Result<host::PreparedMutationOutcome> {
+                Err(eyre!("child exited without an authenticated response"))
+            }
+            fn receipt_failure() -> Result<host::PreparedMutationOutcome> {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "Applied receipt publication failed",
+                )
+                .into())
+            }
+            fn pending() -> Result<host::PreparedMutationOutcome> {
+                Ok(host::PreparedMutationOutcome::Pending)
+            }
+            let failures: [fn() -> Result<host::PreparedMutationOutcome>; 4] =
+                [timeout, lost_response, receipt_failure, pending];
+            for step in [
+                ExecutionStep::Canary,
+                ExecutionStep::RestartProof,
+                ExecutionStep::EdgeVerify,
+            ] {
+                for failure in failures {
+                    let (inventory, mut journal) = journal(sample_inventory());
+                    let mut transport = MockTransport {
+                        submitted_step: Some(step),
+                        submitted_outcome: Some(failure),
+                        ..MockTransport::default()
+                    };
+                    let error = execute_plan(&inventory, &mut transport, &mut journal)
+                        .expect_err("a submitted child remains ambiguous");
+                    assert!(host::is_local_mutation_recovery_pending(&error));
+                    assert_eq!(journal.state.status, "recovery_pending");
+                    assert_eq!(journal.state.phase, step.label());
+                    assert!(!journal.finished);
+                    assert!(
+                        !transport
+                            .events
+                            .iter()
+                            .any(|event| event.starts_with("rollback:"))
+                    );
+                    assert_eq!(
+                        transport
+                            .events
+                            .iter()
+                            .filter(|event| event.starts_with("dispatch:"))
+                            .count(),
+                        1
+                    );
+
+                    let mut expected = test_recovery_intent(step);
+                    let last = expected.mutations.len() - 1;
+                    for mutation in &mut expected.mutations[..last] {
+                        mutation.state = RecoveryMutationStateV1::Applied;
+                    }
+                    expected.mutations[last].state = RecoveryMutationStateV1::Submitted;
+                    expected.next_mutation = u16::try_from(last).unwrap();
+                    assert_eq!(
+                        journal.state.recovery_intent.as_ref(),
+                        Some(&expected),
+                        "retain exact phase, kind, idempotency key and receipt identities"
+                    );
+
+                    let mut recovery = MockTransport::default();
+                    let _ = execute_plan(&inventory, &mut recovery, &mut journal)
+                        .expect_err("read-only proof publishes the successor and stops");
+                    assert_eq!(recovery.events, [format!("recover:{}", step.label())]);
+                    assert!(journal.state.recovery_intent.is_none());
+                    assert_eq!(
+                        usize::from(journal.state.next_step),
+                        EXECUTION_STEPS
+                            .iter()
+                            .position(|candidate| *candidate == step)
+                            .unwrap()
+                            + 1
+                    );
+
+                    let mut successor = MockTransport::default();
+                    execute_plan(&inventory, &mut successor, &mut journal)
+                        .expect("resume proven successor");
+                    assert_eq!(journal.state.status, "completed");
+                    assert!(
+                        !successor.events.iter().any(|event| event == step.label()
+                            || event.starts_with("dispatch:")
+                            || event.starts_with("rollback:")),
+                        "recovery must never resubmit the completed child or step"
+                    );
+                }
+            }
+        }
+
+        #[test]
+        fn authenticated_submitted_child_rejection_remains_terminal() {
+            fn rejected() -> Result<host::PreparedMutationOutcome> {
+                Ok(host::PreparedMutationOutcome::Rejected(
+                    "Rejected".to_owned(),
+                ))
+            }
+            for step in [
+                ExecutionStep::Canary,
+                ExecutionStep::RestartProof,
+                ExecutionStep::EdgeVerify,
+            ] {
+                let (inventory, mut journal) = journal(sample_inventory());
+                let mut transport = MockTransport {
+                    submitted_step: Some(step),
+                    submitted_outcome: Some(rejected),
+                    ..MockTransport::default()
+                };
+                let error = execute_plan(&inventory, &mut transport, &mut journal)
+                    .expect_err("authenticated rejection permits rollback");
+                assert!(!host::is_local_mutation_recovery_pending(&error));
+                assert_eq!(journal.state.status, "rolled_back");
+                assert!(
+                    transport
+                        .events
+                        .iter()
+                        .any(|event| event.starts_with("rollback:"))
+                );
+                assert!(
+                    !transport
+                        .events
+                        .iter()
+                        .any(|event| event.starts_with("recover:"))
+                );
+            }
         }
 
         #[test]

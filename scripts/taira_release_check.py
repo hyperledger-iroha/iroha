@@ -41,6 +41,11 @@ STAGES = (
         "taira::tests::final_canary_predecessor_requires_its_independent_faucet_policy",
         "taira::tests::write_canary_policy_inputs_are_operation_and_action_scoped",
     )),
+    ("submitted canary recovery state machine", (
+        "taira_public_reset::executor_model::tests::submitted_child_failures_preserve_parent_intent_until_read_only_recovery",
+        "taira_public_reset::executor_model::tests::authenticated_submitted_child_rejection_remains_terminal",
+        "taira_public_reset::host::tests::submitted_child_process_failures_require_read_only_recovery",
+    )),
     ("explicit core testnet qualification", (
         "taira_public_reset::executor_model::tests::qualification_scope_is_required_and_canonical_in_all_authority_documents",
         "taira_public_reset::executor_model::tests::qualification_scope_is_bound_before_normal_and_recovery_signature_admission",
@@ -424,7 +429,15 @@ CORE_STAGES += (("resolved validation and exact application ownership", (
     "sumeragi::v2_lane_work::tests::autonomous_fixture_binds_final_lane_context_before_opening_signing_guards",
 )),)
 
-CLIENT_STAGES = (("public contract SDK envelope", (
+CLIENT_STAGES = (("shared absolute HTTP operation deadline", (
+    "http_default::tests::operation_deadline_bounds_sequential_blocking_dispatches",
+    "http_default::tests::expired_operation_deadline_prevents_dispatch_and_cannot_be_extended",
+    "http_default::tests::operation_deadline_cancels_injected_async_transport",
+    "client::context_tests::request_deadline_clones_context_and_survives_rebuilding",
+    "client::context_tests::request_deadline_bounds_waiting_for_blocking_compatibility_probe",
+    "client::context_tests::request_deadline_bounds_waiting_for_async_compatibility_probe",
+    "client::context_tests::shared_capability_probe_preserves_typed_timeout_classification",
+)), ("public contract SDK envelope", (
     "client::evidence_http_tests::post_contract_call_accepts_only_the_caller_trusted_draft_intent",
     "client::evidence_http_tests::post_contract_call_authenticates_bound_account_and_rejects_foreign_authority",
     "client::evidence_http_tests::post_contract_call_rejects_ordinary_draft_before_signing_or_submission",
