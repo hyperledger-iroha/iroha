@@ -339,6 +339,13 @@ CORE_STAGES = (("consensus scheduling and multi-route progress", (
     "fastpq::lane::tests::persisted_proof_encoding_is_canonical_bounded_and_digest_bound",
 )),)
 
+CORE_STAGES += (("descriptor-bound storage namespace identity", (
+    "kura::tests::progress_witness_durability::bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement",
+    "kura::tests::progress_witness_durability::bound_progress_directory_chain_rejects_replaced_or_symlinked_ancestors",
+    "kura::tests::progress_witness_durability::bound_progress_directory_chain_rejects_inconsistent_child_paths",
+    "kura::tests::progress_witness_durability::progress_sidecar_mutation_rejects_symlinks_without_external_writes",
+)),)
+
 CORE_STAGES += (("durable output capacity and strict handoff", (
     "sumeragi::v2_worker::tests::final_exact_output_seal_is_one_shot_and_blocks_late_enqueue",
     "sumeragi::v2_worker::tests::applied_height_handoff_retires_all_sidecar_flush_states_without_blocking_successor",

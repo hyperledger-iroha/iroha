@@ -407,6 +407,83 @@ fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacemen
         "a new binding must reject a symlinked progress directory"
     );
 }
+#[cfg(unix)]
+fn bound_progress_directory_chain_rejects_replaced_or_symlinked_ancestors() {
+    use std::os::unix::fs::symlink;
+    for component in ["root", "ancestor", "leaf"] {
+        let temp = TempDir::new().expect("create namespace parent");
+        let root = temp.path().join("store");
+        let config = kura_config_for_path(&root, BLOCKS_IN_MEMORY);
+        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
+            &config,
+            &RuntimeLaneConfig::default(),
+        )
+        .expect("init Kura");
+        let ancestor = root.join("ancestor");
+        let leaf = ancestor.join("leaf");
+        fs::create_dir_all(&leaf).expect("create nested namespace");
+        let namespace = kura
+            .open_bound_progress_namespace(
+                &leaf.join("progress.data"),
+                &leaf.join("progress.index"),
+            )
+            .expect("bind nested namespace");
+        assert!(kura.bound_progress_namespace_unchanged(&namespace));
+        let replaced = match component {
+            "root" => &root,
+            "ancestor" => &ancestor,
+            "leaf" => &leaf,
+            _ => unreachable!(),
+        };
+        let displaced = replaced.with_extension("displaced");
+        fs::rename(replaced, &displaced).expect("displace bound directory");
+        fs::create_dir(replaced).expect("replace bound directory");
+        assert!(
+            !kura.bound_progress_namespace_unchanged(&namespace),
+            "replacement of {component} must invalidate the entire chain"
+        );
+        fs::remove_dir(replaced).expect("remove replacement");
+        symlink(&displaced, replaced).expect("substitute symlink to the original directory");
+        assert!(
+            !kura.bound_progress_namespace_unchanged(&namespace),
+            "symlink substitution of {component} must fail even when it resolves to the same inode"
+        );
+        fs::remove_file(replaced).expect("remove symlink");
+        fs::rename(&displaced, replaced).expect("restore original directory");
+        assert!(
+            kura.bound_progress_namespace_unchanged(&namespace),
+            "restoring the exact directory links must restore the binding"
+        );
+    }
+}
+#[cfg(unix)]
+fn bound_progress_directory_chain_rejects_inconsistent_child_paths() {
+    let (_temp, config) = kura_storage_fixture("create path-binding fixture", BLOCKS_IN_MEMORY);
+    let (kura, _) =
+        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
+            .expect("init Kura");
+    let leaf = kura.store_root().join("ancestor").join("leaf");
+    fs::create_dir_all(&leaf).expect("create nested namespace");
+    for altered in ["expected_path", "canonical_path", "entry_name"] {
+        let mut namespace = kura
+            .open_bound_progress_namespace(
+                &leaf.join("progress.data"),
+                &leaf.join("progress.index"),
+            )
+            .expect("bind nested namespace");
+        let child = &mut namespace.directories[0];
+        match altered {
+            "expected_path" => child.expected_path = kura.store_root().join("leaf"),
+            "canonical_path" => child.canonical_path = child.canonical_path.with_extension("other"),
+            "entry_name" => child.entry_name = Some("other".into()),
+            _ => unreachable!(),
+        }
+        assert!(
+            !kura.bound_progress_namespace_unchanged(&namespace),
+            "an altered {altered} must not reuse the bound descriptor identity"
+        );
+    }
+}
 fn absent_progress_namespace_requires_every_directory_barrier() {
     for (label, failure) in strict_progress_sidecar_failure_modes().into_iter().skip(2) {
         let (_temp_dir, config) = kura_storage_fixture("create temp dir", BLOCKS_IN_MEMORY);
@@ -2352,6 +2429,16 @@ mod progress_witness_durability {
     #[test]
     fn bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement() {
         super::bound_progress_directory_binding_allows_child_mutation_but_rejects_replacement();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bound_progress_directory_chain_rejects_replaced_or_symlinked_ancestors() {
+        super::bound_progress_directory_chain_rejects_replaced_or_symlinked_ancestors();
+    }
+    #[cfg(unix)]
+    #[test]
+    fn bound_progress_directory_chain_rejects_inconsistent_child_paths() {
+        super::bound_progress_directory_chain_rejects_inconsistent_child_paths();
     }
     #[cfg(unix)]
     #[test]

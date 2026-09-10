@@ -8173,12 +8173,23 @@ impl Kura {
                 let Ok(opened) = secure_file_metadata::from_file(&directory.file) else {
                     return false;
                 };
+                if !opened.is_dir()
+                    || !Self::sidecar_directory_binding_unchanged(&directory.metadata, &opened)
+                {
+                    return false;
+                }
                 #[cfg(unix)]
                 if let Some(name) = directory.entry_name.as_deref() {
                     use std::os::unix::fs::MetadataExt as _;
                     let Some(parent) = namespace.directories.get(_index.saturating_add(1)) else {
                         return false;
                     };
+                    if directory.expected_path.parent() != Some(parent.expected_path.as_path())
+                        || directory.expected_path.file_name() != Some(name)
+                        || directory.canonical_path != parent.canonical_path.join(name)
+                    {
+                        return false;
+                    }
                     let Ok(entry) = rustix::fs::statat(
                         &parent.file,
                         name,
@@ -8186,18 +8197,15 @@ impl Kura {
                     ) else {
                         return false;
                     };
-                    if rustix::fs::FileType::from_raw_mode(entry.st_mode)
-                        != rustix::fs::FileType::Directory
-                        || entry.st_dev as u64 != opened.dev()
-                        || entry.st_ino as u64 != opened.ino()
-                    {
-                        return false;
-                    }
-                }
-                let opened_matches =
-                    Self::sidecar_directory_binding_unchanged(&directory.metadata, &opened);
-                if !opened.is_dir() || !opened_matches {
-                    return false;
+                    // Every ancestor is checked by this same traversal. The
+                    // terminal root (or standalone directory) below retains
+                    // its full canonical path binding. A fresh no-follow link
+                    // to that bound parent proves this child's path identity
+                    // without resolving the whole root-to-child path again.
+                    return rustix::fs::FileType::from_raw_mode(entry.st_mode)
+                        == rustix::fs::FileType::Directory
+                        && entry.st_dev as u64 == opened.dev()
+                        && entry.st_ino as u64 == opened.ino();
                 }
                 Self::canonical_sidecar_directory_for(&self.store_root, &directory.expected_path)
                     .ok()
