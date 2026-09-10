@@ -642,6 +642,28 @@ impl LifecycleValidateIoSnapshotV1 {
 }
 
 impl LifecyclePlannerIoFixture {
+    /// Verify durable bytes through their exclusive worker owner without
+    /// attempting a competing store open before the simulated crash.
+    pub(in crate::sumeragi) fn assert_owned_durable_body_for_test(
+        &self,
+        receipt: &crate::sumeragi::v2_body_store::DurableBodyReceipt,
+        expected_wire: &[u8],
+    ) {
+        assert_eq!(
+            self.body_store
+                .receipt(receipt.round(), receipt.subject())
+                .as_ref(),
+            Some(receipt),
+            "the worker retains the exact fsynced body receipt",
+        );
+        assert_eq!(
+            self.body_store
+                .load_canonical_wire(receipt)
+                .expect("read the immutable frame through its owning store"),
+            expected_wire,
+        );
+    }
+
     /// Execute the executor's genuine ordinary Store task against the owner-held store.
     pub(in crate::sumeragi) fn execute_ordinary_body_store_for_test(
         &mut self,

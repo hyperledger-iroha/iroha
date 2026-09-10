@@ -80,7 +80,11 @@ fn active_prepare_body_survives_decision_crash_fixture(
             0,
             "the old Validate has no physical result at the TC crash cut",
         );
-        assert_reopened_body(&fixture.transport, fixture._owner_directory.path());
+        fixture.planner_io.assert_owned_durable_body_for_test(
+            &fixture.transport.executor.durable_bodies
+                [&(fixture.transport.round, fixture.transport.subject)],
+            &fixture.transport.body,
+        );
         drop(pending_timeout);
     }
     let commit = fixture.transport.quorum_certificate(
@@ -535,7 +539,11 @@ fn recover_stale_prepare_decision_crash_fixture(
     fixture
         .owner
         .body_recovery_snapshot_for_test(previous_ordinal, validate);
-    assert_reopened_body(&fixture.transport, fixture._owner_directory.path());
+    fixture.planner_io.assert_owned_durable_body_for_test(
+        &fixture.transport.executor.durable_bodies
+            [&(fixture.transport.round, fixture.transport.subject)],
+        &fixture.transport.body,
+    );
     finish_current_decision_validate_and_reopen(fixture, validate);
 }
 

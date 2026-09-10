@@ -26,6 +26,8 @@ source guards must check semantics without freezing unrelated test-file bytes.
 Retain source-asset grammar, shared lifecycle and production configuration gates
 before Core compilation. Prove cold Ready Validate can establish exact Decision
 protection before its first Runtime turn and preserve conflict rejection.
+Carry the passing cold recovery checks through the corrected exact-TC scheduler
+fixture and exclusive-store ownership checks, then complete the remaining gates.
 
 ## Architecture and build ownership
 
