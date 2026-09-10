@@ -52,6 +52,9 @@ class IndependentCheckpointTests(unittest.TestCase):
                 "manifest_path": str(self.fixture.source / "crates" / gate.HARNESS_TARGETS[selection][3][1] / "Cargo.toml"),
             }
         self.actual_checks = gate.run_checks
+        shipping = patch.object(gate, "shipping_harnesses", return_value=())
+        shipping.start()
+        self.addCleanup(shipping.stop)
         stack = contextlib.ExitStack()
         self.addCleanup(stack.close)
         stack.enter_context(patch.dict(os.environ, {"PATH": "/usr/bin:/bin", "CARGO_HOME": str(self.root / "cargo-home")}, clear=True))

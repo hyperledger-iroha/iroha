@@ -20,6 +20,7 @@ accept no live configuration, credentials, SSH, deployment or signing inputs.
 from __future__ import annotations
 
 import argparse
+import ast
 import contextlib
 import fcntl
 import hashlib
@@ -33,6 +34,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 
 
 STAGES = (
@@ -586,6 +588,9 @@ HARNESS_TARGETS = {
     "daemon": ("native offline genesis qualification", "irohad", "lib", ["-p", "irohad", "--lib"]),
     "config": ("native configuration contracts", "taira_config_contracts", "test", ["-p", "iroha_config", "--test", "taira_config_contracts"]),
     "cli": ("native CLI", "iroha", "bin", ["-p", "iroha_cli", "--bin", "iroha"]),
+    "kagami": ("native Kagami", "kagami", "bin", ["-p", "iroha_kagami", "--bin", "kagami"]),
+    "sorafs-bin": ("native SoraFS shipping target", "sorafs-node", "bin", ["-p", "sorafs_node", "--bin", "sorafs-node"]),
+    "taira-launcher": ("native Taira shipping launcher", "iroha3d_taira", "bin", ["-p", "irohad", "--bin", "iroha3d_taira"]),
     "crypto": ("native puzzle cryptography", "iroha_crypto", "lib", ["-p", "iroha_crypto", "--lib"]),
     "p2p": ("native peer transport", "iroha_p2p", "lib", ["-p", "iroha_p2p", "--lib"]),
     "torii": ("native Torii contracts", "taira_app_contracts", "test", ["-p", "iroha_torii", "--test", "taira_app_contracts"]),
@@ -597,6 +602,11 @@ HARNESS_TARGETS = {
     "test-network": ("native validator fixture configuration", "iroha_test_network", "lib", ["-p", "iroha_test_network", "--lib"]),
     "network": ("native consensus contracts", "taira_consensus_contracts", "test", ["-p", "iroha_test_network", "--test", "taira_consensus_contracts"]),
 }
+
+
+KAGAMI_STAGES = (("canonical Kagami export projection", (
+    "kura::scaling_evidence::export::tests::unix::strict_projection_has_exact_types_order_and_signed_hash_identity",
+)),)
 
 
 class CheckError(Exception):
@@ -612,13 +622,71 @@ class SelectedRegressionFailures(CheckError):
                          + "; ".join(self.failures))
 
 
+def shipping_harnesses(root: Path) -> tuple[str, ...]:
+    """Reconcile shipping binaries with manifests and early native compilation.
+
+    Read the one literal shipping table from the captured preparation source,
+    without importing another gate or executing it. Native tests catch shared
+    source errors; the separate Linux build still qualifies platform code.
+    """
+    try:
+        source = ast.parse((root / "scripts/taira_release.py").read_text())
+        tables = [node.value for node in source.body if isinstance(node, ast.Assign)
+                  and any(isinstance(target, ast.Name) and target.id == "BINARIES"
+                          for target in node.targets)]
+        if len(tables) != 1:
+            raise CheckError("shipping binaries require one literal authoritative table")
+        binaries = ast.literal_eval(tables[0])
+        if (not isinstance(binaries, tuple) or not binaries
+                or any(not isinstance(row, tuple) or len(row) != 2
+                       or any(not isinstance(value, str) or re.fullmatch(r"[a-z0-9_-]+", value) is None
+                              for value in row) for row in binaries)
+                or len({row[0] for row in binaries}) != len(binaries)):
+            raise CheckError("invalid authoritative shipping binary table")
+        selected = []
+        for name, package in binaries:
+            matches = [key for key, (_, target, kind, arguments) in HARNESS_TARGETS.items()
+                       if target == name and kind == "bin"
+                       and arguments == ["-p", package, "--bin", name]]
+            if len(matches) != 1:
+                raise CheckError("shipping binary lacks exact early native coverage: " + name)
+            package_root = root / "crates" / package
+            manifest = tomllib.loads((package_root / "Cargo.toml").read_text())
+            targets = [target for target in manifest.get("bin", []) if target.get("name") == name]
+            if manifest.get("package", {}).get("name") != package or len(targets) != 1:
+                raise CheckError("shipping binary differs from its Cargo manifest: " + name)
+            target = targets[0]
+            path = target.get("path")
+            if (not isinstance(path, str) or Path(path).is_absolute() or ".." in Path(path).parts
+                    or not (package_root / path).is_file()):
+                raise CheckError("shipping binary requires an existing explicit source path: " + name)
+            features = manifest.get("features", {})
+            enabled, pending = set(), list(features.get("default", []))
+            while pending:
+                feature = pending.pop()
+                if feature not in enabled:
+                    enabled.add(feature)
+                    pending.extend(features.get(feature, []))
+            if not set(target.get("required-features", [])).issubset(enabled):
+                raise CheckError("shipping binary requires non-default features: " + name)
+            # Catch the specific invalid exported-macro namespace on every
+            # source branch. This is not a Rust parser or Linux type check.
+            for path in (package_root / "src").rglob("*.rs"):
+                if re.search(r"\bnorito\s*::\s*json\s*::\s*json\s*!", path.read_text()):
+                    raise CheckError("invalid Norito JSON macro path in " + str(path.relative_to(root)))
+            selected.append(matches[0])
+        return tuple(selected)
+    except (OSError, SyntaxError, ValueError, TypeError) as error:
+        raise CheckError("shipping native coverage audit failed: " + str(error)) from error
+
+
 def selected_regression_count() -> int:
     """Return the complete native census shared by execution and result capture."""
     return sum(len(names)
                for stages in (STAGES, CONFIG_STAGES, CRYPTO_STAGES, P2P_STAGES, CORE_STAGES,
                               TEST_NETWORK_STAGES, NETWORK_STAGES, PROOF_STAGES,
                               PROOF_FLOW_STAGES, TORII_STAGES, CLIENT_STAGES, TORII_UNIT_STAGES,
-                              DAEMON_STAGES)
+                              DAEMON_STAGES, KAGAMI_STAGES)
                for _, names in stages)
 
 
@@ -986,10 +1054,16 @@ def run_stages(harness: str, fixture_root: Path, env: dict[str, str], stages,
 
 
 def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> dict[str, str]:
-    """Use real Cargo artifacts so the network harness never starts a fallback build."""
+    """Build the shipping package graph plus the ordinary fixture launcher."""
+    expected = {"iroha3d": ("iroha3d", "irohad"), "iroha": ("iroha", "iroha_cli")}
+    for selection in shipping_harnesses(root):
+        _, name, _, arguments = HARNESS_TARGETS[selection]
+        expected[name] = ("iroha" if name == "iroha" else selection, arguments[1])
+    packages = tuple(dict.fromkeys(package for _, package in expected.values()))
     command = [env["CARGO"], "--config", str(root / ".cargo/config.toml"), "build",
                "--manifest-path", str(root / "Cargo.toml"), "--locked", "--offline",
-               "-p", "irohad", "--bin", "iroha3d", "-p", "iroha_cli", "--bin", "iroha",
+               *(argument for package in packages for argument in ("-p", package)),
+               *(argument for name in expected for argument in ("--bin", name)),
                "--message-format=json-render-diagnostics"]
     print("[taira-check] build native network binaries", flush=True)
     started = time.monotonic()
@@ -1009,20 +1083,21 @@ def compile_network_binaries(root: Path, env: dict[str, str], lock_fds: tuple[in
             target = event.get("target", {})
             name = target.get("name")
             executable = event.get("executable")
-            if (name in ("iroha3d", "iroha") and "bin" in target.get("kind", [])
+            if (isinstance(name, str) and name in expected and "bin" in target.get("kind", [])
                     and event.get("profile", {}).get("test") is False
                     and isinstance(executable, str) and executable):
                 if name in artifacts and artifacts[name] != executable:
                     raise CheckError("native network binary has conflicting Cargo artifacts")
                 record = native_artifact_record(event)
-                if name in records and records[name] != record:
+                selection = expected[name][0]
+                if selection in records and records[selection] != record:
                     raise CheckError("native network binary has conflicting Cargo metadata")
                 artifacts[name] = executable
-                records[name] = record
+                records[selection] = record
                 print("[taira-check] native network artifact " + json.dumps(record, sort_keys=True), flush=True)
         code = child.wait()
-    if code or set(artifacts) != {"iroha3d", "iroha"}:
-        raise CheckError(f"native network build did not produce both executable artifacts (exit {code})")
+    if code or set(artifacts) != set(expected):
+        raise CheckError(f"native network build did not produce every required executable artifact (exit {code})")
     print(f"[taira-check] network binary build passed in {time.monotonic() - started:.1f}s", flush=True)
     return isolate_native_artifacts(root, env, records)
 
@@ -1192,9 +1267,14 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
         require_network_fixture_capacity(fixture_root)
     run_pure_fsm_checks(root, env, lock_fds)
     run_lifecycle_source_checks(root, env, lock_fds)
+    shipping = shipping_harnesses(root)
+    print(f"[taira-check] shipping source coverage passed ({len(shipping)} binaries)", flush=True)
     # Include the configuration integration target in this same Cargo graph:
     # its separate narrower dependency feature union rebuilt shared prefixes.
     # Configuration still executes first and gates all other tests and node builds.
+    # Proof bounds and CPU proof flows belong to this same independent test
+    # graph. A later proof-only Cargo invocation narrows dependency features
+    # and recompiles shared prefixes without adding release coverage.
     # Build early library/HTTP, network and CLI test harnesses in one Cargo graph.
     # A separate CLI test build after the production node build changes the
     # package/dev-dependency feature union and recompiles shared dependencies.
@@ -1205,6 +1285,8 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
     # missing tests, artifact custody failures and other infrastructure errors
     # still stop immediately. Production binaries use a separate graph below.
     early_stages = tuple((name, stages) for name, stages in (
+        ("kagami", KAGAMI_STAGES if "kagami" in shipping else ()),
+        ("proof", PROOF_STAGES), ("proof-flows", PROOF_FLOW_STAGES),
         ("crypto", CRYPTO_STAGES), ("p2p", P2P_STAGES), ("core", CORE_STAGES),
         ("test-network", TEST_NETWORK_STAGES),
         ("client", CLIENT_STAGES), ("torii-unit", TORII_UNIT_STAGES),
@@ -1214,9 +1296,15 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
         selections += ("network",)
     if STAGES:
         selections += ("cli",)
+    # Compile every shipped entry point in this one native graph. Targets with
+    # no selected regression have compile evidence only, never invented passes.
+    compile_only = tuple(name for name in shipping if name not in selections)
+    selections += compile_only
     if selections:
         with compile_test_harnesses(root, env, lock_fds=lock_fds,
                                     harnesses=selections) as harnesses:
+            for name in compile_only:
+                harnesses.release(name)
             # Always rerun configuration, including exact independent-pass reuse.
             # A schema failure propagates immediately and releases the whole batch.
             run_config_checks(harnesses, fixture_root, env, lock_fds)
@@ -1245,11 +1333,6 @@ def run_checks(root: Path, *, environment: dict[str, str] | None = None,
             if NETWORK_STAGES:
                 run_network_checks(root, fixture_root, env, lock_fds, harness=harnesses["network"])
                 harnesses.release("network")
-    for name, stages in (("proof", PROOF_STAGES),
-                         ("proof-flows", PROOF_FLOW_STAGES)):
-        if stages:
-            with compile_harness(root, env, lock_fds=lock_fds, harness=name) as artifacts:
-                run_stages(artifacts[name], fixture_root, env, stages, lock_fds)
     if source_commit is None and subprocess.check_output(["git", "--no-replace-objects", "rev-parse", "HEAD"], cwd=root, env=env,
                                stdin=subprocess.DEVNULL, text=True).strip() != head:
         raise CheckError("HEAD changed during checks; rerun against the intended source")

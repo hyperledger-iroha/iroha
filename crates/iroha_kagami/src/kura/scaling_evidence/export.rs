@@ -122,20 +122,20 @@ impl VerifiedExport {
 
 fn projection_row(row: &ExportRowV1) -> Result<String> {
     let r = &row.request;
-    let value = norito::json::json!({
-        "logical_id": r.logical_id,
-        "phase": match r.phase { WorkloadPhase::Warmup => "warmup", WorkloadPhase::Measurement => "measurement" },
-        "sequence": row.sequence,
-        "authority": r.authority.canonical_i105()?,
-        "entrypoint_hash": r.entrypoint_hash.to_string(),
-        "carrier_height": r.carrier_height,
-        "carrier_hash": r.carrier_hash.to_string(),
-        "merge_entry_hash": r.merge_entry_hash.to_string(),
-        "merge_epoch": r.merge_epoch,
-        "leaf_index": r.leaf_index,
-        "lane_id": r.lane_id.as_u32(),
-        "dataspace_id": r.dataspace_id.as_u64(),
-        "incarnation": r.incarnation.to_string(),
+    let value = norito::json!({
+        "logical_id": (r.logical_id),
+        "phase": (match r.phase { WorkloadPhase::Warmup => "warmup", WorkloadPhase::Measurement => "measurement" }),
+        "sequence": (row.sequence),
+        "authority": (r.authority.canonical_i105()?),
+        "entrypoint_hash": (r.entrypoint_hash.to_string()),
+        "carrier_height": (r.carrier_height),
+        "carrier_hash": (r.carrier_hash.to_string()),
+        "merge_entry_hash": (r.merge_entry_hash.to_string()),
+        "merge_epoch": (r.merge_epoch),
+        "leaf_index": (r.leaf_index),
+        "lane_id": (r.lane_id.as_u32()),
+        "dataspace_id": (r.dataspace_id.as_u64()),
+        "incarnation": (r.incarnation.to_string()),
     });
     Ok(norito::json::to_json_bounded(
         &value,

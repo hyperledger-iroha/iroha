@@ -84,13 +84,20 @@ The native gate receives the same source, toolchain and explicit target director
 Before Cargo, the gate compiles the dependency-free consensus reducers and the
 shared lifecycle source assertions directly with the pinned Rust compiler. Both
 must execute every listed test without skips. Lifecycle mutation controls check
-that removing or reordering required retries still fails. Configuration, CLI,
-SDK, Torii, crypto, P2P, Core and fixture harnesses then share one Cargo invocation,
+that removing or reordering required retries still fails. The gate also reconciles
+the shipping binary table with Cargo manifests and the early compilation targets.
+Configuration, CLI, SDK, Torii, crypto, P2P, Core, proof and fixture harnesses,
+including all four shipping entry points, then share one Cargo invocation,
 resolving the union of their existing default features. Configuration runs first
 and fails immediately, including when an independent-test checkpoint can be reused.
-CLI checks follow before the crypto, transport, consensus and fixture selections;
-a failure stops before daemon startup. The daemon/CLI production and
-Linux release feature selections remain independent. This reduces repeated
+CLI and the canonical Kagami projection checks precede the proof, crypto,
+transport, consensus and fixture selections. Every independent failure stops
+before daemon startup. Shipping targets without selected tests provide actual
+compilation evidence, with no invented test passes. The native production build
+uses the same four shipping packages and binaries, plus the ordinary `iroha3d`
+fixture launcher; the four-peer test continues to launch that ordinary binary.
+The Linux release command and its production features remain unchanged. Proof
+harnesses are not rebuilt separately after the network test. This reduces repeated
 dependency work; it does not promise a fixed build duration.
 The fixture checks read the public Taira Nexus profile without runtime inputs
 and verify that collection decoding preserves declared configuration defaults

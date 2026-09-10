@@ -12,7 +12,7 @@ use super::{
 use color_eyre::eyre::{Result, ensure, eyre};
 use iroha_core::kura::CanonicalKuraEvidenceLimits;
 use iroha_crypto::Hash;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const MAX_INPUT_FILES: usize = 64;
 const MAX_INPUT_BYTES: u64 = 256 * 1024 * 1024;
@@ -94,18 +94,13 @@ mod supported;
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 ))]
 use supported::InputPublicationLease;
-#[cfg(all(
-    unix,
-    any(target_vendor = "apple", target_os = "linux", target_os = "android")
-))]
-pub(crate) use supported::{ProofOutput, export_bound_kura, replay_bound_export};
-
 #[cfg(not(all(
     unix,
     any(target_vendor = "apple", target_os = "linux", target_os = "android")
 )))]
 mod unsupported {
     use super::*;
+    use std::path::Path;
 
     // TODO: implement retained directory/file handles and atomic NOREPLACE on
     // other targets. Pinned rustix does not provide this full API set everywhere.
@@ -146,12 +141,6 @@ mod unsupported {
         }
     }
 }
-#[cfg(not(all(
-    unix,
-    any(target_vendor = "apple", target_os = "linux", target_os = "android")
-)))]
-pub(crate) use unsupported::{ProofOutput, export_bound_kura, replay_bound_export};
-
 #[cfg(not(all(
     unix,
     any(target_vendor = "apple", target_os = "linux", target_os = "android")

@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 
-EXPECTED_REGRESSION_COUNT = 425
+EXPECTED_REGRESSION_COUNT = 426
 
 SCRIPT = Path(__file__).with_name("taira_release_check.py")
 if not SCRIPT.exists():
@@ -29,6 +29,13 @@ SPEC = importlib.util.spec_from_file_location("taira_release_check", SCRIPT)
 assert SPEC and SPEC.loader
 gate = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(gate)
+
+
+def isolate_shipping_fixture(case):
+    """Keep unrelated orchestration fixtures focused on their selected harnesses."""
+    audit = patch.object(gate, "shipping_harnesses", return_value=())
+    audit.start()
+    case.addCleanup(audit.stop)
 
 
 class FixtureCopies(dict):
@@ -45,6 +52,7 @@ class FixtureCopies(dict):
 
 class EarlyReleaseCheckTests(unittest.TestCase):
     def setUp(self):
+        isolate_shipping_fixture(self)
         mock = patch.object(gate, "run_pure_fsm_checks")
         self.pure_fsm = mock.start()
         self.addCleanup(mock.stop)
@@ -187,7 +195,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         self.assertEqual(gate.selected_regression_count(), EXPECTED_REGRESSION_COUNT)
         for group in ("STAGES", "CONFIG_STAGES", "CRYPTO_STAGES", "P2P_STAGES", "CORE_STAGES",
                       "TEST_NETWORK_STAGES", "NETWORK_STAGES", "PROOF_STAGES",
-                      "PROOF_FLOW_STAGES", "TORII_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES"):
+                      "PROOF_FLOW_STAGES", "TORII_STAGES", "CLIENT_STAGES", "TORII_UNIT_STAGES", "DAEMON_STAGES", "KAGAMI_STAGES"):
             original_count = sum(len(names) for _, names in getattr(gate, group))
             with self.subTest(group=group), patch.object(gate, group, (("fixture", ("one", "two")),)):
                 self.assertEqual(gate.selected_regression_count(), EXPECTED_REGRESSION_COUNT - original_count + 2)
@@ -316,14 +324,14 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                 gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
         self.assertEqual(compile.call_count, 1)
         network.assert_not_called()
-        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")})
+        self.assertEqual(compile.call_args.kwargs, {"lock_fds": (77,), "harnesses": ("config", "proof", "proof-flows", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")})
         self.assertEqual(run.call_args.args[3], gate.STAGES)
         self.assertEqual(run.call_args.args[4], (77,))
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
 
-    def test_network_failure_stops_before_independent_harness_builds(self):
+    def test_network_failure_does_not_trigger_separate_harness_builds(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
+        names = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
         with patch.object(gate, "run_network_checks", side_effect=gate.CheckError("consensus stalled")) as network, \
              patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
                  name: "/warm/" + name for name in names})) as batch, \
@@ -338,15 +346,15 @@ class EarlyReleaseCheckTests(unittest.TestCase):
         compile.assert_not_called()
         self.assertEqual([call.args[0] for call in stages.call_args_list], ["/warm/" + name for name in ("cli",) + names[1:-2]])
         self.assertEqual([call.args[3] for call in stages.call_args_list],
-                         [gate.STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, gate.DAEMON_STAGES])
+                         [gate.STAGES, gate.PROOF_STAGES, gate.PROOF_FLOW_STAGES, gate.CRYPTO_STAGES, gate.P2P_STAGES, gate.CORE_STAGES, gate.TEST_NETWORK_STAGES, gate.CLIENT_STAGES, gate.TORII_UNIT_STAGES, gate.TORII_STAGES, gate.DAEMON_STAGES])
 
     def test_transport_or_fixture_failure_stops_before_network_and_release_success(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
-        for failed, outcomes, expected in (("crypto", [None, gate.CheckError("crypto failed")], ["cli", "crypto"]),
-                                           ("p2p", [None, None, gate.CheckError("p2p failed")], ["cli", "crypto", "p2p"]),
-                                           ("fixture", [None, None, None, None, gate.CheckError("fixture failed")],
-                                            ["cli", "crypto", "p2p", "core", "test-network"])):
+        names = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
+        for failed, expected in (("crypto", ["cli", "proof", "proof-flows", "crypto"]),
+                                 ("p2p", ["cli", "proof", "proof-flows", "crypto", "p2p"]),
+                                 ("fixture", ["cli", "proof", "proof-flows", "crypto", "p2p", "core", "test-network"])):
+            outcomes = [None] * (len(expected) - 1) + [gate.CheckError(failed + " failed")]
             output = io.StringIO()
             with self.subTest(failed=failed), \
                  patch.object(gate, "compile_test_harnesses", return_value=FixtureCopies({
@@ -368,7 +376,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
     def test_public_contract_library_failures_stop_before_http_and_node_builds(self):
         env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
-        names = ("config", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
+        names = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
         for failed in ("client", "torii-unit", "torii"):
             def run(harness, *args):
                 if harness == "/warm/" + failed:
@@ -408,7 +416,7 @@ class EarlyReleaseCheckTests(unittest.TestCase):
                     result = gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (77,))
                     self.assertEqual(result, {"iroha3d": "/warm/iroha3d", "iroha": "/warm/iroha"})
                 else:
-                    with self.assertRaisesRegex(gate.CheckError, "both executable artifacts"):
+                    with self.assertRaisesRegex(gate.CheckError, "every required executable artifact"):
                         gate.compile_network_binaries(Path("/frozen"), {"CARGO": "/fixed/cargo"}, (77,))
             self.assertEqual(spawn.call_args.kwargs["cwd"], "/")
             self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77,))
@@ -432,6 +440,9 @@ class EarlyReleaseCheckTests(unittest.TestCase):
 
 
 class EarlyConfigurationGateTests(unittest.TestCase):
+    def setUp(self):
+        isolate_shipping_fixture(self)
+
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated",
            "CARGO_TARGET_DIR": "/warm", "CARGO_INCREMENTAL": "1"}
 
@@ -465,7 +476,7 @@ class EarlyConfigurationGateTests(unittest.TestCase):
 
     def test_one_batch_runs_configuration_first_after_source_audits(self):
         events = []
-        libraries = ("config", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
+        libraries = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "daemon", "network", "cli")
 
         def run_stage(harness, root, env, stages, lock_fds):
             self.assertEqual((root, lock_fds), (Path("/warm"), (77,)))
@@ -568,6 +579,9 @@ class EarlyConfigurationGateTests(unittest.TestCase):
 
 
 class NetworkFixtureCapacityTests(unittest.TestCase):
+    def setUp(self):
+        isolate_shipping_fixture(self)
+
     def test_storage_floor_accepts_exact_boundary_and_rejects_one_byte_less(self):
         for available, passes in ((gate.NETWORK_FIXTURE_FREE_BYTES, True),
                                   (gate.NETWORK_FIXTURE_FREE_BYTES - 1, False)):
@@ -602,6 +616,9 @@ class NetworkFixtureCapacityTests(unittest.TestCase):
 
 
 class NativeTestBatchBuildTests(unittest.TestCase):
+    def setUp(self):
+        isolate_shipping_fixture(self)
+
     names = ("crypto", "p2p", "core", "test-network")
     env = {"CARGO": "/fixed/cargo", "CARGO_HOME": "/isolated", "CARGO_TARGET_DIR": "/warm"}
 
@@ -640,7 +657,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_args.kwargs["pass_fds"], (77, 88))
 
     def test_mixed_batch_includes_configuration_in_one_graph_and_requires_every_artifact(self):
-        names = ("config", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "network")
+        names = ("config", "proof", "proof-flows", "crypto", "p2p", "core", "test-network", "client", "torii-unit", "torii", "network")
         lines = "".join(self.artifact(name) for name in reversed(names))
         with patch.object(gate.subprocess, "Popen", return_value=self.process(lines)) as spawn, \
              patch.object(gate, "isolate_native_artifacts", side_effect=lambda root, env, rows: {name: row["executable"] for name, row in rows.items()}), \
@@ -650,8 +667,8 @@ class NativeTestBatchBuildTests(unittest.TestCase):
         self.assertEqual(spawn.call_count, 1)
         self.assertEqual(spawn.call_args.args[0], ["/fixed/cargo", "--config", "/frozen/.cargo/config.toml",
             "test", "--manifest-path", "/frozen/Cargo.toml", "--locked", "--offline",
-            "-p", "iroha_config", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_test_network",
-            "-p", "iroha", "-p", "iroha_torii", "--test", "taira_config_contracts", "--lib", "--test", "taira_app_contracts",
+            "-p", "iroha_config", "-p", "fastpq_prover", "-p", "iroha_crypto", "-p", "iroha_p2p", "-p", "iroha_core", "-p", "iroha_test_network",
+            "-p", "iroha", "-p", "iroha_torii", "--test", "taira_config_contracts", "--lib", "--test", "fastpq_integration", "--test", "taira_app_contracts",
             "--test", "taira_consensus_contracts", "--no-run", "--message-format=json-render-diagnostics"])
         for missing in ("config", "torii", "network"):
             incomplete = "".join(self.artifact(name) for name in names if name != missing)
@@ -716,6 +733,7 @@ class NativeTestBatchBuildTests(unittest.TestCase):
 
 class NativeArtifactIsolationTests(unittest.TestCase):
     def setUp(self):
+        isolate_shipping_fixture(self)
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name).resolve()
@@ -1124,6 +1142,7 @@ class NativeArtifactIsolationTests(unittest.TestCase):
 
 class PureFsmGateTests(unittest.TestCase):
     def setUp(self):
+        isolate_shipping_fixture(self)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.target = Path(self.directory.name).resolve()

@@ -14,6 +14,9 @@ gate = existing.gate
 
 
 class CollectIndependentRegressionTests(unittest.TestCase):
+    def setUp(self):
+        existing.isolate_shipping_fixture(self)
+
     groups = (
         ("crypto", "CRYPTO_STAGES"), ("p2p", "P2P_STAGES"),
         ("core", "CORE_STAGES"), ("test-network", "TEST_NETWORK_STAGES"),

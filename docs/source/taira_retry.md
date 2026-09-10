@@ -17,11 +17,13 @@ editing; a separate cold development check adds a second dependency build to a
 release that already runs the same gate. Keep each lane's Cargo home, profile and
 source location consistent so subsequent builds reuse its artifacts.
 
-Preparation records an independent-test checkpoint before the four-peer and proof
-checks. After a later failure, retrying the same request still acquires and checks
+Preparation records an independent-test checkpoint, including the six proof
+regressions and canonical Kagami projection, before the four-peer check.
+After a later failure, retrying the same request still acquires and checks
 the actual Cargo artifacts but can reuse that independent pass. Reuse requires
 the exact source, tools, native environment, selected test census and executable
-identities. Network and proof checks run again after partial failure; changed
+identities. All shipping entry points must compile again, while matching proof
+passes can be reused. Network checks run again after partial failure; changed
 inputs cannot inherit the checkpoint. Completed preparation remains a separate
 receipt and does not establish deployment readiness.
 
