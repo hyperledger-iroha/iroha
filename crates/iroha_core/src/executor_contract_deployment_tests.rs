@@ -435,14 +435,18 @@ fn default_user_provided_executor_rejects_existing_bootstrap_before_grant_dispat
             )
             .expect_err("an existing authority cannot replay the bootstrap prefix")
     };
-    assert!(matches!(error, ValidationFail::NotPermitted(message) if
-        message.contains("CanRegisterSmartContractCode")
-            && message.contains("genesis block")));
+    assert!(
+        matches!(&error, ValidationFail::InstructionFailed(
+            iroha_data_model::isi::error::InstructionExecutionError::Repetition(detail)
+        ) if detail.instruction == iroha_data_model::isi::InstructionType::Register
+            && detail.id == iroha_data_model::IdBox::AccountId(authority.clone())),
+        "duplicate bootstrap registration must reject the exact existing account: {error:?}"
+    );
     let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
     assert_eq!(
         runtime_stats_after.hits + runtime_stats_after.misses,
         runtime_stats_before.hits + runtime_stats_before.misses + 1,
-        "only the idempotent account registration may reach the runtime before Core rejects the grant"
+        "only the rejected duplicate account registration may reach the runtime"
     );
     block
         .world
@@ -588,9 +592,12 @@ fn user_provided_borrowed_overlay_rejects_deployment_permission_before_runtime_d
             None,
         )
         .expect_err("borrowed overlay permission mutation must be consensus-gated");
-    assert!(matches!(error, ValidationFail::NotPermitted(message) if
+    assert!(
+        matches!(&error, ValidationFail::NotPermitted(message) if
         message.contains("CanRegisterSmartContractCode")
-            && message.contains("genesis block")));
+            && message.contains("genesis block")),
+        "unexpected bootstrap rejection: {error:?}"
+    );
     let (runtime_stats_after, _) = loaded_executor.runtime_pool_snapshot();
     assert_eq!(runtime_stats_after, runtime_stats_before);
     assert!(
@@ -649,8 +656,13 @@ fn initial_executor_denies_preexisting_deployment_self_grant_without_state_chang
             &mut ivm_cache,
         )
         .expect_err("an existing authority cannot replay the bootstrap prefix");
-    assert!(matches!(error, ValidationFail::NotPermitted(message) if
-        message.contains("only allowed inside the genesis block")));
+    assert!(
+        matches!(&error, ValidationFail::InstructionFailed(
+            iroha_data_model::isi::error::InstructionExecutionError::Repetition(detail)
+        ) if detail.instruction == iroha_data_model::isi::InstructionType::Register
+            && detail.id == iroha_data_model::IdBox::AccountId(authority.clone())),
+        "duplicate bootstrap registration must reject the exact existing account: {error:?}"
+    );
     assert!(
         !state_transaction
             .world

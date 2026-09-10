@@ -22945,7 +22945,7 @@ pub mod tests {
         );
         assert_eq!(
             queue.router.read().try_route(&tx),
-            Err(RoutingResolveError::UnknownDataspace {
+            Err(RoutingResolveError::NoLaneForDataspace {
                 dataspace_id: unknown_dataspace,
             })
         );
@@ -23614,6 +23614,7 @@ pub mod tests {
         }
         seed_committed_height_for_queue_test(&state, 2);
         let committed_nexus = state.nexus_snapshot();
+        let authoritative_manifests = Arc::clone(&state.lane_manifests.read());
         let manifest_policy_digest_before = state.lane_manifests.read().consensus_policy_digest();
         assert!(queue.reconfigure_nexus_with_state_if_needed(&committed_nexus, &state, None));
         assert_eq!(
@@ -23644,8 +23645,12 @@ pub mod tests {
         assert!(!queue.accepted_work_validation_faulted());
         assert_eq!(queue.lane_catalog.read().lanes().len(), 2);
         assert!(
-            state.lane_manifests.read().status(LaneId::new(1)).is_some(),
-            "committed queue reconfiguration must publish the same manifest registry to consensus state even when background polling is disabled"
+            queue.lane_manifests.read().status(LaneId::new(1)).is_some(),
+            "queue reconfiguration must refresh its manifest projection for the current catalog"
+        );
+        assert!(
+            Arc::ptr_eq(&state.lane_manifests.read(), &authoritative_manifests),
+            "refreshing a queue projection must preserve State's authoritative manifest registry"
         );
         assert_eq!(
             state.lane_manifests.read().consensus_policy_digest(),
@@ -24415,7 +24420,9 @@ pub mod tests {
         let time_source = TimeSource::new_system();
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_id.clone()],
@@ -24468,7 +24475,9 @@ pub mod tests {
         let time_source = TimeSource::new_system();
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             validators: vec![validator_id],
@@ -24577,7 +24586,9 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_primary, primary_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_primary);
         let (validator_secondary, _secondary_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_secondary);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24737,7 +24748,9 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, _validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let (other_id, other_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &other_id);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24818,6 +24831,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator_id, validator_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator_id);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -24907,6 +24921,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -25071,6 +25086,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
         let mut statuses = BTreeMap::new();
@@ -25265,7 +25281,7 @@ pub mod tests {
     async fn governance_manifest_rejects_cross_namespace_rebind() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let mut world = world_with_test_domains();
+        let world = world_with_test_domains();
         let (validator, keypair) = gen_account_in("wonderland");
         let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
@@ -25276,10 +25292,8 @@ pub mod tests {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        world
-            .contract_instances
-            .insert(existing_contract_address.clone(), Hash::new(b"demo"));
         let state = Arc::new(State::new(world, kura.clone(), query_handle.clone()));
+        register_test_authority(&state, &validator);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let mut protected = BTreeSet::new();
@@ -25356,6 +25370,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
             hooks: GovernanceHooks {
@@ -25430,6 +25445,7 @@ pub mod tests {
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (validator, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &validator);
         let mut statuses = BTreeMap::new();
         let metadata_key = Name::from_str("gov_upgrade_id").expect("static metadata key");
         let mut allowed_ids = BTreeSet::new();
@@ -25546,14 +25562,16 @@ pub mod tests {
         );
     }
     fn accepted_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
-        accepted_tx_by(account_id, &key_pair, time_source)
+        accepted_tx_by(
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
+            time_source,
+        )
     }
     fn accepted_queue_plan_tx_by_someone(time_source: &TimeSource) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         accepted_queue_plan_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             vec![sample_unregister_instruction()],
             Metadata::default(),
@@ -25568,14 +25586,13 @@ pub mod tests {
     fn accepted_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("reservation");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
         ))];
         accepted_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
@@ -25584,14 +25601,13 @@ pub mod tests {
     fn accepted_queue_plan_unique_entrypoint_tx_by_someone(
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("reservation");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").expect("unique reservation domain"),
         ))];
         accepted_queue_plan_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
@@ -25602,18 +25618,44 @@ pub mod tests {
         dataspace_alias: &str,
         time_source: &TimeSource,
     ) -> AcceptedTransaction<'static> {
-        let (account_id, key_pair) = gen_account_in("wonderland");
         let domain_name = unique_test_domain_name("dummy");
         let instructions = vec![InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, dataspace_alias).unwrap(),
         ))];
         accepted_tx_with(
-            account_id,
-            &key_pair,
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            &ALICE_KEYPAIR,
             time_source,
             instructions,
             Metadata::default(),
         )
+    }
+    #[test]
+    fn shared_queue_transactions_have_registered_authority_and_unique_entrypoints() {
+        let state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let transactions = [
+            accepted_tx_by_someone(&time_source),
+            accepted_tx_by_someone(&time_source),
+            accepted_queue_plan_tx_by_someone(&time_source),
+            accepted_unique_entrypoint_tx_by_someone(&time_source),
+            accepted_queue_plan_unique_entrypoint_tx_by_someone(&time_source),
+        ];
+        let view = state.view();
+        let mut hashes = BTreeSet::new();
+        for transaction in transactions {
+            assert!(
+                view.world()
+                    .accounts()
+                    .get(transaction.as_ref().authority())
+                    .is_some()
+            );
+            assert!(hashes.insert(transaction.hash_as_entrypoint()));
+        }
     }
     #[test]
     fn compute_tx_encoded_len_matches_payload() {
@@ -26556,19 +26598,13 @@ pub mod tests {
             &plan,
             &context,
         ));
-        let mutated_tx_error = queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-                mutated_tx,
-                &state,
-                plan.clone(),
-                &context,
-            )
-            .expect_err("a different transaction must not reuse an earlier durable claim");
-        assert!(matches!(
-            mutated_tx_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("admission context no longer matches")
-        ));
+        assert_eq!(
+            queue
+                .durable_plan_admission_claim_with_state(&mutated_tx, &state)
+                .expect("an unrelated transaction has no existing claim"),
+            None,
+            "a historical context does not transfer ownership of an earlier transaction claim"
+        );
         mutable_router.set(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::new(42)));
         assert_eq!(
             queue
@@ -27498,19 +27534,16 @@ pub mod tests {
         let original_journal_len = std::fs::metadata(&journal_path)
             .expect("stale-incarnation journal metadata")
             .len();
-        {
-            // This queue-only ABA test changes the authoritative routing/incarnation state.
-            // Keep the test Kura's marker projection synchronized so the fixture remains a
-            // valid State even though the assertion concerns only durable queue claims.
-            let nexus = state.nexus.get_mut();
-            let mut lanes = nexus.lane_catalog.lanes().to_vec();
-            lanes[0].alias = "recreated-single-lane".to_owned();
-            nexus.lane_catalog =
-                LaneCatalog::new(nonzero!(1_u32), lanes).expect("recreated lane catalog");
-            nexus.lane_config =
-                iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
-        }
-        state.reseed_static_lane_incarnations_for_tests();
+        let recreated_incarnation = Hash::new(b"recreated lane incarnation for queue claim replay");
+        state.set_lane_incarnation_for_test(LaneId::SINGLE, recreated_incarnation);
+        state
+            .kura()
+            .install_lane_incarnation_marker_for_test(
+                state.nexus_snapshot().lane_config.primary(),
+                recreated_incarnation,
+                0,
+            )
+            .expect("replace exact incarnation marker for queue replay fixture");
         let current_context = make_queue()
             .plan_admission_context_with_state(&state, &plan)
             .expect("capture recreated incarnation context");
@@ -27528,19 +27561,32 @@ pub mod tests {
             ),
             "same lane id with a new active incarnation must not reuse the old claim"
         );
-        let recreated_retry_error = queue
-            .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
-                tx.clone(),
-                &state,
-                plan.clone(),
+        for (context, expected_reason) in [
+            (
                 &original_context,
-            )
-            .expect_err("same-ID ABA must invalidate a same-process durable-claim retry");
-        assert!(matches!(
-            recreated_retry_error.err,
-            Error::UnresolvedRoute { ref reason }
-                if reason.contains("active lane incarnation")
-        ));
+                "neither the existing claim nor the exact current generation",
+            ),
+            (&current_context, "active lane incarnation"),
+        ] {
+            let error = queue
+                .push_with_lane_with_state_and_routing_plan_strict_durable_claim(
+                    tx.clone(),
+                    &state,
+                    plan.clone(),
+                    context,
+                )
+                .expect_err(
+                    "same-ID ABA must invalidate original retries and current-generation rollover",
+                );
+            assert!(
+                matches!(
+                    &error.err,
+                    Error::UnresolvedRoute { reason } if reason.contains(expected_reason)
+                ),
+                "unexpected ABA retry failure: {:?}",
+                error.err
+            );
+        }
         assert_eq!(queue.active_len(), 1);
         assert_eq!(
             std::fs::metadata(&journal_path)
@@ -27714,9 +27760,10 @@ pub mod tests {
         assert_eq!(
             replay_queue
                 .route_plan_with_state(&tx, &state)
-                .expect("resolve current policy")
-                .coordinator_route(),
-            current_route
+                .expect_err("the replacement policy targets an unavailable dataspace"),
+            RoutingResolveError::UnknownDataspace {
+                dataspace_id: current_route.dataspace_id,
+            }
         );
         let summary = replay_queue
             .replay_plan_journal(&state)
@@ -28783,6 +28830,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install stateless-rejection journal");
         let (authority, keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority);
         let wrong_network_id =
             crate::sumeragi::synthetic_network_id("wrong-network-for-queue-journal-replay");
         let signed = TransactionBuilder::new_with_time_source(
@@ -28986,18 +29034,7 @@ pub mod tests {
             .expect("install journal");
         let tx = accepted_tx_by(authority_id, &authority_keypair, &time_source);
         let hash = tx.hash_as_entrypoint();
-        let stale_plan = queue
-            .router
-            .read()
-            .try_route_plan_with_state(&tx, &state)
-            .and_then(|plan| {
-                resolve_routing_plan_against_catalogs(
-                    plan,
-                    &stale_nexus.lane_catalog,
-                    &stale_nexus.dataspace_catalog,
-                )
-            })
-            .expect("stale plan resolves against stale Nexus catalogs");
+        let stale_plan = RoutingPlan::single(old_route);
         assert_eq!(stale_plan.coordinator_route(), old_route);
         let admission_context = synthetic_queue_plan_admission_context(&stale_plan);
         queue
@@ -29145,6 +29182,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let tx = accepted_tx_with(
             authority_id.clone(),
             &authority_keypair,
@@ -29269,6 +29307,7 @@ pub mod tests {
             .install_plan_journal(&journal_path, 1024 * 1024, true)
             .expect("install journal");
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let (tx, stale_plan) = (0_u32..512)
             .map(|idx| {
                 let tx = accepted_tx_with(
@@ -29536,6 +29575,7 @@ pub mod tests {
             nexus.dataspace_catalog = dataspace_catalog.clone();
         }
         let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        register_test_authority(&state, &authority_id);
         let tx = accepted_tx_with(
             authority_id,
             &authority_keypair,

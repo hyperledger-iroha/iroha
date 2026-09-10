@@ -2585,7 +2585,7 @@ mod tests {
     }
     #[test]
     fn hybrid_repeated_table_and_direct_paths_match_independent_fft_v1() {
-        let domain = domain_v1(6, 8).expect("hybrid domain");
+        let domain = domain_v1(6, 9).expect("hybrid domain");
         let schedule = ZkX509FixedAlgebraicScheduleV1::new_v1(
             domain,
             2,
@@ -2779,7 +2779,7 @@ mod tests {
     }
     #[test]
     fn exact_release_272_by_472_result_boundary_is_accepted_v1() {
-        assert_eq!(ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1, 54_752);
+        assert_eq!(ZK_X509_FIXED_ALGEBRAIC_MAX_OUTPUT_FIELDS_V1, 128_384);
         let domain = domain_v1(7, 9).expect("boundary domain");
         let schedule = ZkX509FixedAlgebraicScheduleV1::new_v1(
             domain,
@@ -2796,14 +2796,14 @@ mod tests {
         assert_eq!(openings.len_v1(), 272);
         assert_eq!(openings.width_v1(), 472);
         assert_eq!(
-            openings.row_v1(115).expect("last row").len(),
+            openings.row_v1(271).expect("last row").len(),
             usize::from(ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1)
         );
         assert_eq!(
             ZkX509FixedAlgebraicScheduleBuilderV1::new_v1(domain, 473).err(),
             Some(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
-        let too_many_queries: Vec<u64> = (0..117).collect();
+        let too_many_queries: Vec<u64> = (0..273).collect();
         assert_eq!(
             schedule.evaluate_query_indices_v1(&too_many_queries),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidQuery)

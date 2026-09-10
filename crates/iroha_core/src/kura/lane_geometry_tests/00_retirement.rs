@@ -40,8 +40,8 @@ fn retirement_work_bound_scales_with_routes_and_configured_retention() {
 #[test]
 fn retirement_artifact_file_bound_counts_every_fixed_frontier() {
     assert_eq!(
-        LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE, 13,
-        "five data/index pairs plus three independent frontier/index files are fixed per route"
+        LANE_RETIREMENT_FIXED_ARTIFACT_FILES_PER_ROUTE, 17,
+        "seven data/index pairs plus three independent frontier/index files are fixed per route"
     );
     for native_retention in [0_usize, 1, 4_096] {
         let expected = MAX_AUTONOMOUS_LANE_ATTEMPT_NAMESPACE_FILES
@@ -133,6 +133,10 @@ fn retirement_artifact_snapshot_accepts_the_exact_fixed_namespace_boundary() {
         LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE,
         LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
         LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE,
+        AUTONOMOUS_LANE_MERGE_BUNDLES_DATA_FILE,
+        AUTONOMOUS_LANE_MERGE_BUNDLES_INDEX_FILE,
+        CANONICAL_AUTONOMOUS_LANE_REPLICAS_DATA_FILE,
+        CANONICAL_AUTONOMOUS_LANE_REPLICAS_INDEX_FILE,
         LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
         LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE,
         NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE,
@@ -496,13 +500,14 @@ fn before_first_height_cursor_replays_same_height_transitions_in_sequence() {
 }
 fn open_configured_anchor_for_publication_test(
     root: &Path,
-    lane_config: &RuntimeLaneConfig,
-    baseline: Hash,
+    catalog: &LaneCatalog,
     primary_incarnation: Hash,
 ) -> Arc<Kura> {
-    Kura::establish_or_verify_configured_lane_catalog_baseline(root, baseline)
-        .expect("establish configured baseline before opening lane storage");
-    let kura = open_kura(root, lane_config);
+    let baseline = LaneLifecycleParameterV1::catalog_hash(catalog);
+    let lane_config = RuntimeLaneConfig::from_catalog(catalog);
+    let (kura, _) =
+        Kura::new_with_configured_lane_catalog(&kura_config(root), &lane_config, catalog)
+            .expect("open the exact authenticated configured catalog");
     kura.establish_or_verify_configured_primary_geometry_anchor(
         lane_config.primary(),
         primary_incarnation,
@@ -521,12 +526,8 @@ fn post_write_publication_failure_restores_anchored_description_only_journal() {
     let config = RuntimeLaneConfig::from_catalog(&catalog);
     let baseline = iroha_data_model::nexus::LaneLifecycleParameterV1::catalog_hash(&catalog);
     let (incarnations, activation_heights) = initial_geometry();
-    let kura = open_configured_anchor_for_publication_test(
-        &root,
-        &config,
-        baseline,
-        incarnations[&LaneId::SINGLE],
-    );
+    let kura =
+        open_configured_anchor_for_publication_test(&root, &catalog, incarnations[&LaneId::SINGLE]);
     let journal_path = kura.lane_geometry_journal_path();
     let prior_bytes = fs::read(&journal_path).expect("anchored journal");
     kura.apply_lane_geometry_transition(
@@ -590,8 +591,7 @@ fn publication_temp_recovery_consumes_only_an_exact_preexisting_value() {
     let unrelated_root = unrelated_temp.path().join("kura");
     let unrelated_kura = open_configured_anchor_for_publication_test(
         &unrelated_root,
-        &config,
-        baseline,
+        &catalog,
         incarnations[&LaneId::SINGLE],
     );
     let publication_temp = unrelated_root.join(JOURNAL_TEMP_FILE_NAME);
@@ -620,8 +620,7 @@ fn publication_temp_recovery_consumes_only_an_exact_preexisting_value() {
     let resumable_root = resumable_temp.path().join("kura");
     let resumable_kura = open_configured_anchor_for_publication_test(
         &resumable_root,
-        &config,
-        baseline,
+        &catalog,
         incarnations[&LaneId::SINGLE],
     );
     let expected_journal = resumable_kura
@@ -660,11 +659,11 @@ fn post_write_publication_failure_restores_exact_files_applied_journal() {
     let (initial, extended) = initial_and_extended_configs();
     let (initial_incarnations, initial_activations) = initial_geometry();
     let (extended_incarnations, extended_activations) = extended_geometry();
-    let baseline = Hash::new(b"configured-catalog-baseline");
+    let catalog = LaneCatalog::default();
+    let baseline = LaneLifecycleParameterV1::catalog_hash(&catalog);
     let kura = open_configured_anchor_for_publication_test(
         &root,
-        &initial,
-        baseline,
+        &catalog,
         initial_incarnations[&LaneId::SINGLE],
     );
     kura.apply_lane_geometry_transition(
@@ -728,11 +727,11 @@ fn publication_restore_failure_is_distinct_and_leaves_published_journal_fail_clo
     let (initial, extended) = initial_and_extended_configs();
     let (initial_incarnations, initial_activations) = initial_geometry();
     let (extended_incarnations, extended_activations) = extended_geometry();
-    let baseline = Hash::new(b"configured-catalog-baseline");
+    let catalog = LaneCatalog::default();
+    let baseline = LaneLifecycleParameterV1::catalog_hash(&catalog);
     let kura = open_configured_anchor_for_publication_test(
         &root,
-        &initial,
-        baseline,
+        &catalog,
         initial_incarnations[&LaneId::SINGLE],
     );
     kura.apply_lane_geometry_transition(
@@ -817,12 +816,15 @@ fn install_retirement_test_lane_markers(
     incarnations: &BTreeMap<LaneId, Hash>,
     activation_heights: &BTreeMap<LaneId, u64>,
 ) {
+    kura.replace_lane_storage_entries_for_test(config);
     for binding in kura
         .geometry_bindings(config, incarnations, activation_heights)
         .expect("retirement test geometry bindings")
     {
         kura.write_lane_marker(&binding)
             .expect("install authoritative retirement-test lane marker");
+        kura.provision_geometry_binding(&binding)
+            .expect("provision paired retirement-test lane storage");
     }
 }
 #[allow(clippy::too_many_arguments)]

@@ -11632,7 +11632,6 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         source_record.repo_id = repo_id.clone();
         source_record.resolved_revision = resolved_revision.clone();
         source_record.updated_at_ms = now_ms;
-        record_hf_source(state_transaction, source_record.clone())?;
 
         let member_key = (pool_id.to_string(), authority.to_string());
         let mut pool_record = state_transaction
@@ -11643,6 +11642,21 @@ impl Execute for isi::JoinSoracloudHfSharedLease {
         if let Some(pool) = pool_record.as_ref() {
             ensure_hf_shared_lease_settlement_asset_matches(pool, &lease_asset_definition_id)?;
         }
+        let reconciles_queued_window = pool_record.as_ref().is_some_and(|pool| {
+            pool.window_expires_at_ms <= now_ms
+                && matches!(
+                    pool.status,
+                    SoraHfSharedLeaseStatusV1::Active | SoraHfSharedLeaseStatusV1::Draining
+                )
+                && pool.queued_next_window.is_some()
+        });
+        // A queued-window transition emits one event before the join's own event.
+        // Reserve the complete sequence range before publishing a source or moving funds.
+        ensure_soracloud_audit_sequence_capacity(
+            state_transaction,
+            1 + usize::from(reconciles_queued_window),
+        )?;
+        record_hf_source(state_transaction, source_record.clone())?;
         if let Some(pool) = pool_record.as_mut()
             && pool.window_expires_at_ms <= now_ms
             && matches!(

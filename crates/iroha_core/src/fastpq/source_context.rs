@@ -3,7 +3,7 @@
 //! These records preserve local execution provenance only. They are not finality
 //! proofs, qualified compact statements or spend-authority tokens.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -99,6 +99,12 @@ pub enum FastpqSourceCaptureError {
     /// Transcript capture was applied after the local source inventory was sealed.
     #[error("FASTPQ transcript capture was applied after source sealing")]
     AppliedAfterSeal,
+    /// Evidence extraction selected a transcript without an applied source capture.
+    #[error("FASTPQ transcript {entry_hash} has no applied source capture")]
+    MissingSource {
+        /// Transcript-map key whose source capture is absent.
+        entry_hash: Hash,
+    },
 }
 
 /// Immutable height context shared by every transaction of one block scope.
@@ -166,6 +172,35 @@ pub(crate) struct FastpqSourceCaptureAccumulator {
 }
 
 impl FastpqSourceCaptureAccumulator {
+    /// Transfer an exact set of captures with their transcripts before inventory sealing.
+    /// A missing source, sealed scope or sticky failure leaves the accumulator unchanged.
+    pub(crate) fn take_unsealed_sources(
+        &mut self,
+        entry_hashes: &BTreeSet<Hash>,
+    ) -> Result<BTreeMap<Hash, FastpqCapturedTranscriptSource>, FastpqSourceCaptureError> {
+        if let Some(error) = self.error {
+            return Err(error);
+        }
+        if self.sealed {
+            return Err(FastpqSourceCaptureError::CaptureAlreadySealed);
+        }
+        for entry_hash in entry_hashes {
+            if !self.entries.contains_key(entry_hash) {
+                return Err(FastpqSourceCaptureError::MissingSource {
+                    entry_hash: *entry_hash,
+                });
+            }
+        }
+        Ok(entry_hashes
+            .iter()
+            .filter_map(|entry_hash| {
+                self.entries
+                    .remove(entry_hash)
+                    .map(|source| (*entry_hash, source))
+            })
+            .collect())
+    }
+
     /// Seal a healthy capture boundary once, preserving any existing sticky failure.
     /// A repeated seal is an error but does not invalidate an already healthy sealed map.
     pub(crate) fn seal(&mut self) -> Result<(), FastpqSourceCaptureError> {

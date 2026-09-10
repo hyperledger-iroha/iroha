@@ -37,9 +37,9 @@ use std::{
 #[cfg(feature = "telemetry")]
 #[allow(clippy::too_many_lines)]
 fn scheduler_layer_metrics_and_utilization_populated() {
-    let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (alice_id, alice_keypair) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let (carol_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (carol_id, carol_keypair) = iroha_test_samples::gen_account_in("wonderland");
     // World: two accounts + one asset def
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
@@ -84,7 +84,7 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Mint::asset_quantity(10_u32, a_coin.clone())])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    .sign(alice_keypair.private_key());
     let tx2 = TransactionBuilder::new(
         network_id,
         alice_id.clone(),
@@ -95,7 +95,7 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         5_u32,
         bob_id.clone(),
     )])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    .sign(alice_keypair.private_key());
     let tx3 = TransactionBuilder::new(
         network_id,
         carol_id.clone(),
@@ -106,14 +106,14 @@ fn scheduler_layer_metrics_and_utilization_populated() {
         "k".parse().unwrap(),
         iroha_primitives::json::Json::new("v"),
     )])
-    .sign(iroha_test_samples::ALICE_KEYPAIR.private_key());
+    .sign(carol_keypair.private_key());
     let acc: Vec<_> = vec![tx1, tx2, tx3]
         .into_iter()
         .map(|t| iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(t)))
         .collect();
     let new_block = BlockBuilder::new(acc)
         .chain(0, None)
-        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key())
+        .sign(alice_keypair.private_key())
         .unpack(|_| {});
     let mut sb = state.block(new_block.header());
     let vb = ValidBlock::validate_unchecked(new_block.into(), &mut sb).unpack(|_| {});

@@ -4993,6 +4993,11 @@ mod tests {
         snapshot.commit_barriers[0].reservation_owner_hash =
             Hash::new(b"same-count-different-reservation-owner");
         assert!(
+            receipt.binds_reconciliation_snapshot(&snapshot).is_err(),
+            "the owner index and ordered phase must identify the same reservation"
+        );
+        snapshot.ordered_owner_phases[0].key = snapshot.commit_barriers[0];
+        assert!(
             !receipt
                 .binds_reconciliation_snapshot(&snapshot)
                 .expect("validate drifted reconciliation identity"),

@@ -2243,10 +2243,10 @@ pub mod query {
             .unwrap();
             let a1 = AssetId::new(ad.clone(), acc1.clone());
             let a2 = AssetId::new(ad.clone(), acc2.clone());
-            // minting zero yields an asset entry with zero quantity
-            Mint::asset_quantity(Quantity::zero(), a1)
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            // Seed a zero holding directly; a zero-amount mint is not a valid instruction.
+            let (asset_id, value) =
+                iroha_data_model::IntoKeyValue::into_key_value(Asset::new(a1, Quantity::zero()));
+            stx.world.assets.insert(asset_id, value);
             Mint::asset_quantity(1u32, a2)
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2510,13 +2510,14 @@ pub mod query {
                 !recovery_request_matches_current_lineage(&stx, &request, &active)
                     .expect("valid reassigned lineage state")
             );
-            let mut legacy = canonical;
-            legacy.transition_provenance.clear();
-            stx.world.replace_account_rekey_record(legacy);
+            let mut malformed = canonical.clone();
+            malformed.transition_provenance.clear();
+            stx.world.replace_account_rekey_record(malformed);
             assert!(
                 ensure_recovery_request_targets_current_lineage(&stx, &request, &active).is_err(),
-                "legacy unspecified history must remain non-authorizing"
+                "missing transition provenance must remain non-authorizing"
             );
+            stx.world.replace_account_rekey_record(canonical);
             let current_request = AccountRecoveryRequest::new(
                 alias.clone(),
                 active.clone(),

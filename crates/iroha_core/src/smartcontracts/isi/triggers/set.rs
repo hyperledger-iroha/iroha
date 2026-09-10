@@ -976,7 +976,7 @@ mod merge_write_set_tests {
             .expect("SetBlock declaration must remain discoverable");
         let struct_tail = &source[struct_start..];
         let struct_end = struct_tail
-            .find("\n}\n\nfn append_delta_component")
+            .find("\n}")
             .expect("SetBlock declaration terminator must remain discoverable");
         let struct_body = &struct_tail[..struct_end];
         let encoder_start = source

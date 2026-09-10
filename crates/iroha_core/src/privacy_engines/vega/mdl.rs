@@ -1190,7 +1190,7 @@ mod tests {
             .expect("baseline digest");
         assert_eq!(
             hex::encode(baseline.as_bytes()),
-            "9ed6822d1c9f47e11e21ebe20dc7362efecf79d639af9949d78212f408ec2f25"
+            "ff11698510952036300c5969711c688a5fd41a4e54e6fd9abb89fbf0e846e40c"
         );
         let mut challenge = statement.clone();
         challenge.reader_challenge = PrivacyChallengeV1::new([0x41; 32]);
@@ -1285,9 +1285,23 @@ mod tests {
         );
         let mut alternate_genesis = binding(&statement);
         alternate_genesis.genesis_hash[0] ^= 1;
-        assert_ne!(
+        assert_eq!(
             derive_device_authentication_digest_v1(&statement, &alternate_genesis)
-                .expect("genesis digest"),
+                .expect_err("genesis must identify the statement network"),
+            VegaMdlError::NetworkGenesisMismatch
+        );
+        let mut alternate_network = statement.clone();
+        alternate_network.context.network_id =
+            super::super::network_id_from_genesis_hash_bytes(alternate_genesis.genesis_hash);
+        assert_ne!(
+            derive_device_authentication_digest_v1(
+                &alternate_network,
+                &VegaMdlConsensusBindingV1::from_context(
+                    &alternate_network.context,
+                    alternate_genesis.genesis_hash,
+                ),
+            )
+            .expect("another valid network produces its own genesis-bound digest"),
             baseline
         );
     }

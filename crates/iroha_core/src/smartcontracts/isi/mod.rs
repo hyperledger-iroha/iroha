@@ -724,7 +724,11 @@ mod registry_dispatch_tests {
         let registry = iroha_data_model::isi::registry::default();
         let custom_instruction = std::any::type_name::<CustomInstruction>();
         assert!(
-            registry.contains(custom_instruction),
+            registry.contains(
+                registry
+                    .wire_id(custom_instruction)
+                    .expect("canonical CustomInstruction wire id")
+            ),
             "custom instructions must remain decodable for custom executors"
         );
         assert!(
@@ -1388,7 +1392,14 @@ mod tests {
             total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
             total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
-            receipts: Vec::new(),
+            receipts: vec![LaneSettlementReceipt {
+                source_id: [0x42; 32],
+                local_amount: "0.000076".parse().expect("fixture receipt amount"),
+                xor_due: "0.000001".parse().expect("fixture receipt XOR"),
+                xor_after_haircut: "0.000001".parse().expect("fixture receipt XOR"),
+                xor_variance: "0".parse().expect("fixture receipt variance"),
+                timestamp_ms: 0,
+            }],
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
@@ -1471,7 +1482,14 @@ mod tests {
             total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
             total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
-            receipts: Vec::new(),
+            receipts: vec![LaneSettlementReceipt {
+                source_id: [0x42; 32],
+                local_amount: "0.000076".parse().expect("fixture receipt amount"),
+                xor_due: "0.000001".parse().expect("fixture receipt XOR"),
+                xor_after_haircut: "0.000001".parse().expect("fixture receipt XOR"),
+                xor_variance: "0".parse().expect("fixture receipt variance"),
+                timestamp_ms: 0,
+            }],
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
         };
@@ -1553,7 +1571,7 @@ mod tests {
         ));
         Ok(())
     }
-    #[derive(Clone, Copy)]
+    #[derive(Debug, Clone, Copy)]
     enum LaneRelayRejectionCase {
         UnknownLaneId,
         StaleGeometryLaneId,
@@ -1641,11 +1659,11 @@ mod tests {
                 ),
                 Case::StaleFastpqHeight => (
                     "stale proof material height must be rejected",
-                    &["FASTPQ binding failed verification"],
+                    &["FastPQ metadata is invalid"],
                 ),
                 Case::ZeroLikeFastpqDigest => (
                     "zero-like FastPQ digest must be rejected",
-                    &["FASTPQ binding failed verification"],
+                    &["FastPQ metadata is invalid"],
                 ),
                 Case::EnvelopeBlockHeightMismatch => (
                     "envelope block height mismatch must be rejected",
@@ -1720,7 +1738,10 @@ mod tests {
                 ),
                 Case::MissingFinalQcBeforeStateWrite => (
                     "a structurally valid proof without a final QC must not write relay state",
-                    &["lane relay finality authentication failed", "QC missing"],
+                    &[
+                        "lane relay finality authentication failed",
+                        "global finality authority missing",
+                    ],
                 ),
                 Case::MalformedExistingState => {
                     ("malformed existing state must be rejected", &["stored"])
@@ -1788,6 +1809,42 @@ mod tests {
 
     fn run_lane_relay_rejection_case(case: LaneRelayRejectionCase) -> Result<()> {
         use LaneRelayRejectionCase as Case;
+
+        if matches!(case, Case::ConflictingExistingState) {
+            let (state, envelope, proof_blob) =
+                crate::state::finalized_lane_relay_registration_fixture();
+            let mut block = state.block(envelope.block_header.clone());
+            let mut transaction = block.transaction();
+            let key = relay_state_key_for_test(&envelope);
+            let mut conflicting = verified_lane_relay_record_for_test(
+                envelope.clone(),
+                &proof_blob,
+                transaction.block_height(),
+            );
+            conflicting.fastpq_statement_digest[0] ^= 0xFF;
+            let stored = norito::to_bytes(&Json::try_new(conflicting)?)?;
+            transaction
+                .world
+                .smart_contract_state
+                .insert(key.clone(), stored.clone());
+            let error = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+                envelope,
+                proof_blob,
+                effect_proof_blob: None,
+            }
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("a genuine finalized relay must not replace conflicting retained state");
+            assert!(
+                matches!(error, InstructionExecutionError::InvariantViolation(ref message)
+                if message.contains("conflicting verified lane relay")),
+                "{error:?}"
+            );
+            assert_eq!(
+                transaction.world.smart_contract_state.get(&key),
+                Some(&stored)
+            );
+            return Ok(());
+        }
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -1872,10 +1929,7 @@ mod tests {
             Case::LaneDataspaceMismatch => DataSpaceId::new(11),
             _ => dsid,
         };
-        let manifest_root = match case {
-            Case::ZeroManifestRoot => [0; 32],
-            _ => [0x42; 32],
-        };
+        let manifest_root = [0x42; 32];
         let proof_digest = match (&initial_proof_blob, case) {
             (
                 Some(proof_blob),
@@ -2024,6 +2078,9 @@ mod tests {
         };
 
         match case {
+            Case::ZeroManifestRoot => {
+                envelope.manifest_root = Some([0; 32]);
+            }
             Case::EnvelopeBlockHeightMismatch => {
                 envelope.block_height = envelope.block_height.saturating_add(1);
             }
@@ -2118,7 +2175,10 @@ mod tests {
                 "unexpected rejection before the business-effect promotion guard: {err:?}"
             );
         } else {
-            assert!(message_matches);
+            assert!(
+                message_matches,
+                "unexpected rejection for {case:?}: {err:?}"
+            );
         }
 
         match (case, relay_state_key) {
@@ -2338,7 +2398,7 @@ mod tests {
         fn metadata_with_encoded_size(size: usize) -> Metadata {
             let value = Json::new("X".repeat(size.saturating_sub(2)));
             assert_eq!(
-                value.as_ref().len(),
+                value.get().len(),
                 size,
                 "fixture must hit the wire-size boundary"
             );
@@ -2854,7 +2914,8 @@ mod tests {
             ExecuteTrigger::new(trigger_id)
                 .execute(&fake_account_id, &mut state_transaction)
                 .expect_err("Error expected"),
-            Error::InvariantViolation(_)
+            Error::InvalidParameter(InvalidParameterError::SmartContract(message))
+                if message.contains("trigger cannot be executed manually")
         ));
         state_transaction.apply();
         state_block.commit_world_overlay_for_testing().unwrap();

@@ -195,6 +195,7 @@ async fn ordinary_signed_snapshot_rejects_kura_tail_loss_without_mutation() {
         Kura::open_test_kura_with_configured_lane_config(&tail_loss_kura_config, &lane_config)
             .expect("tail-loss Kura init");
     assert_eq!(initial_height, 0);
+    drop(state_factory_with_kura(Arc::clone(&tail_loss_kura)));
     tail_loss_kura
         .store_block(Arc::clone(&block1))
         .expect("persist retained prefix block");
@@ -1358,7 +1359,7 @@ async fn cannot_parse_snapshot_on_read_is_error() {
     ) else {
         panic!("should not be ok")
     };
-    assert_eq!(format!("{error}"), "Error (de)serializing state snapshot");
+    assert!(matches!(error, TryReadError::NonCanonicalSnapshotPayload));
 }
 #[tokio::test]
 async fn checksum_mismatch_rejected() {

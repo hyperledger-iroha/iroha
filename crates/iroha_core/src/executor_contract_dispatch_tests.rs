@@ -448,15 +448,14 @@ fn execute_transaction_rejects_authority_argument_mismatch() {
         ALICE_ID.clone(),
         FeePaymentIntent::authority(Vec::new(), None),
     )
-    .with_executable(Executable::Instructions(Vec::new().into()))
+    .with_instructions([Log::new(Level::INFO, "authority binding".to_owned())])
     .sign(ALICE_KEYPAIR.private_key());
     let mut ivm_cache = IvmCache::new();
     let error = super::Executor::Initial
         .execute_transaction(&mut state_transaction, &BOB_ID, transaction, &mut ivm_cache)
         .expect_err("the call-site authority must match the signed transaction");
     assert!(matches!(error, ValidationFail::InternalError(message) if
-        message.contains("authority argument")
-            && message.contains("signed transaction authority")));
+        message == "signed authority mismatch"));
     assert_eq!(
         state_transaction.last_tx_gas_used, 0,
         "a mismatched authority must fail before execution or fee accounting"

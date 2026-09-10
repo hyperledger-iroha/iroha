@@ -432,6 +432,19 @@ fn hash_only_existing_block_rejects_correlated_unsigned_retained_wire_without_ef
         .expect("persist unsigned retained record");
     kura.force_hash_only_block_for_testing(height)
         .expect("convert canonical height to authenticated hash-only shape");
+    // Preserve the exact committed wire length so the test reaches the signed
+    // finality boundary rather than failing an unrelated zero-length slot.
+    {
+        let mut store = kura.block_store.lock();
+        let wire_len = u64::try_from(canonical.encode_wire().expect("canonical wire").len())
+            .expect("wire length");
+        store
+            .write_block_index(0, EVICTED_BLOCK_START, wire_len)
+            .expect("retain exact evicted wire length");
+        store
+            .publish_commit_marker(1)
+            .expect("publish exact evicted geometry");
+    }
     let mut substituted = canonical.as_ref().clone();
     let substitute_key =
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519).expect("substitute block key");
@@ -1047,6 +1060,9 @@ fn evicted_blocks_survive_restart() {
 fn deep_history_get_block_uses_cached_bytes() {
     const BLOCK_COUNT: usize = 192;
     let temp_dir = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp_dir, nonzero!(16_usize));
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    drop(kura);
     let mut store = new_block_store(&temp_dir);
     store.create_files_if_they_do_not_exist().unwrap();
     let mut blocks = DummyBlocks::new();
@@ -1057,7 +1073,6 @@ fn deep_history_get_block_uses_cached_bytes() {
         store.append_block_to_chain(block.as_ref()).unwrap();
     }
     drop(store);
-    let config = kura_config_for_dir(&temp_dir, nonzero!(16_usize));
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .unwrap();
@@ -1169,6 +1184,7 @@ fn create_blocks(rt: &tokio::runtime::Runtime, temp_dir: &TempDir) -> Vec<Commit
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .unwrap();
     assert_eq!(block_count.0, 0);
+    publish_configured_catalog_baseline(&kura, &LaneCatalog::default());
     let state = State::new(
         World::with([domain, genesis_domain], [account, genesis_account], []),
         Arc::clone(&kura),
@@ -1863,6 +1879,14 @@ fn attach_ok_results_to_block(block: &mut SignedBlock) {
     block
         .set_transaction_results(Vec::new(), &entrypoint_hashes, results)
         .expect("attach deterministic transaction results");
+    let signature = SignatureOf::try_from_hash(
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key(),
+        block.header().hash(),
+    )
+    .expect("sign executed lane fixture header");
+    block
+        .replace_signatures([BlockSignature::new(0, signature)].into_iter().collect())
+        .expect("install executed lane fixture signature");
 }
 fn two_lane_runtime_config() -> RuntimeLaneConfig {
     let lane0 = ModelLaneConfig::default();
@@ -2013,10 +2037,13 @@ impl MarkedLaneBlockFixture<Arc<SignedBlock>> {
 
 impl MarkedLaneBlockFixture<SignedBlock> {
     fn committed() -> Self {
+        Self::committed_at(1)
+    }
+
+    fn committed_at(lane_block_height: u64) -> Self {
         let (temp_dir, config, lane_config) = two_lane_storage_fixture();
         let lane_id = LaneId::from(1);
         let lane_entry = lane_config.entry(lane_id).expect("lane entry").clone();
-        let lane_block_height = 1;
         let mut block = dummy_block_with_lane_payload_ownership(
             lane_id,
             lane_entry.dataspace_id,
@@ -2086,6 +2113,38 @@ fn test_kura_with_default_lane_markers(
         .expect("init Kura test fixture");
     establish_configured_lane_markers_for_test(&kura, lane_config);
     (kura, block_count)
+}
+
+fn reopen_test_kura_with_default_lane_geometry(
+    config: &Config,
+    lane_config: &RuntimeLaneConfig,
+) -> Result<(Arc<Kura>, BlockCount)> {
+    let (kura, count) = Kura::open_test_kura_with_configured_lane_config(config, lane_config)?;
+    let incarnations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| {
+            (
+                entry.lane_id,
+                Hash::new(
+                    format!(
+                        "kura-lane-incarnation:{}:{}",
+                        entry.lane_id.as_u32(),
+                        entry.dataspace_id.as_u64()
+                    )
+                    .as_bytes(),
+                ),
+            )
+        })
+        .collect();
+    let activations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| (entry.lane_id, 0))
+        .collect();
+    kura.recover_lane_geometry_journal(lane_config, &incarnations, &activations)?;
+    kura.finish_restored_lane_segments_with_geometry(lane_config)?;
+    Ok((kura, count))
 }
 
 fn establish_configured_lane_markers_for_test(kura: &Kura, lane_config: &RuntimeLaneConfig) {
@@ -2328,6 +2387,40 @@ fn install_autonomous_lane_marker_for_kura(
     kura.install_lane_incarnation_marker_for_test(entry, descriptor.lane_incarnation, 0)
         .expect("install authoritative autonomous lane marker");
     kura.replace_lane_storage_entries_for_test(lane_config);
+}
+
+fn restore_autonomous_lane_fixture_geometry(
+    kura: &Kura,
+    lane_config: &RuntimeLaneConfig,
+    payload: &LaneExecutablePayloadV1,
+) -> Result<()> {
+    let descriptor = &payload.origin_proposal.descriptor;
+    let incarnations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| {
+            let incarnation = if entry.lane_id == descriptor.lane_id {
+                descriptor.lane_incarnation
+            } else {
+                Hash::new(
+                    format!(
+                        "kura-lane-incarnation:{}:{}",
+                        entry.lane_id.as_u32(),
+                        entry.dataspace_id.as_u64()
+                    )
+                    .as_bytes(),
+                )
+            };
+            (entry.lane_id, incarnation)
+        })
+        .collect();
+    let activations = lane_config
+        .entries()
+        .iter()
+        .map(|entry| (entry.lane_id, 0))
+        .collect();
+    kura.recover_lane_geometry_journal(lane_config, &incarnations, &activations)?;
+    kura.finish_restored_lane_segments_with_geometry(lane_config)
 }
 
 fn rebind_autonomous_lane_payload_for_kura(
@@ -2702,11 +2795,11 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
     let signer = checked_keypair_with_algorithm(Algorithm::BlsNormal);
     let (network_id, epoch, payload) =
         autonomous_lane_payload_for_kura(lane_id, lane_entry.dataspace_id, 1, &signer);
+    let payload = historical_capacity_bound_payload_for_fixture(&payload, &signer);
     let (kura, _) =
         Kura::open_test_kura_with_configured_lane_config(&config, &lane_config).expect("Kura");
     install_autonomous_lane_marker_for_kura(&kura, &lane_config, &payload);
-    kura.persist_lane_executable_payload(&payload, network_id, epoch)
-        .expect("persist payload before READY");
+    persist_historical_capacity_payload_fixture(&kura, &payload, &signer);
     assert!(
         !kura.autonomous_lane_payload_availability_delivered(
             &payload.origin_proposal,
@@ -2806,6 +2899,8 @@ fn autonomous_lane_availability_deliver_is_durable_and_fails_closed() {
     drop(kura);
     let (reopened, _) = Kura::open_test_kura_with_configured_lane_config(&config, &lane_config)
         .expect("reopen Kura");
+    restore_autonomous_lane_fixture_geometry(&reopened, &lane_config, &payload)
+        .expect("restore authenticated secondary lane artifacts");
     assert!(reopened.autonomous_lane_payload_availability_delivered(
         &payload.origin_proposal,
         network_id,
@@ -3193,7 +3288,8 @@ fn consensus_body_read_with_verified_finality_authenticates_pending_and_publishe
         kura.read_block_body_with_verified_finality(height, &other)
             .is_err()
     );
-    let _ = kura.store_v2_finality_artifact(&artifact)
+    let _ = kura
+        .store_v2_finality_artifact(&artifact)
         .expect("publish exact finality");
     assert_eq!(
         kura.read_block_body_with_verified_finality(height, &authority)

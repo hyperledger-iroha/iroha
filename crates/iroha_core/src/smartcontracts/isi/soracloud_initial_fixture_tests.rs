@@ -918,6 +918,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         available_after_height: 0,
         expires_at_height: 0,
     };
+    let sequence_before_mailbox = *stx.world.soracloud_sequence_watermark.get();
     let mailbox_error = isi::RecordSoracloudMailboxMessage {
         message: mailbox_message.clone(),
     }
@@ -943,18 +944,21 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
             if message.contains("source service")
     ));
     assert!(stx.world.soracloud_mailbox_messages.is_empty());
-    isi::RecordSoracloudMailboxMessage {
+    let unavailable_mailbox_error = isi::RecordSoracloudMailboxMessage {
         message: mailbox_message.clone(),
     }
     .execute(&ALICE_ID, &mut stx)
-    .expect("the service manager may enqueue an admitted ordered-mailbox message");
-    let recorded_mailbox_message = stx
-        .world
-        .soracloud_mailbox_messages
-        .iter()
-        .next()
-        .map(|(_message_id, message)| message.clone())
-        .expect("ordered mailbox admission must persist the canonical message");
+    .expect_err("manager authority cannot bypass unavailable ordered-mailbox execution");
+    assert!(matches!(
+        unavailable_mailbox_error,
+        InstructionExecutionError::InvariantViolation(message)
+            if message.contains("ordered mailbox admission and execution are disabled")
+    ));
+    assert!(stx.world.soracloud_mailbox_messages.is_empty());
+    assert_eq!(
+        *stx.world.soracloud_sequence_watermark.get(),
+        sequence_before_mailbox
+    );
     let mut runtime_receipt = SoraRuntimeReceiptV1 {
         schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
         receipt_id: Hash::new(b"cross-service-runtime-receipt"),
@@ -980,12 +984,12 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
         service_version: victim_version.to_owned(),
         handler_name: "update".parse().expect("valid handler"),
         handler_class: SoraServiceHandlerClassV1::Update,
-        request_commitment: recorded_mailbox_message.payload_commitment,
+        request_commitment: mailbox_message.payload_commitment,
         result_commitment: Hash::new(b"mailbox-result"),
         certified_by: SoraCertifiedResponsePolicyV1::None,
         emitted_sequence: 0,
         execution_host: None,
-        mailbox_message_id: Some(recorded_mailbox_message.message_id),
+        mailbox_message_id: Some(Hash::new(b"unadmitted-mailbox-message")),
         journal_artifact_hash: None,
         checkpoint_artifact_hash: None,
     };
@@ -1013,7 +1017,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     assert!(matches!(
         receipt_error,
         InstructionExecutionError::InvariantViolation(message)
-            if message.contains("must carry exact execution_host attribution")
+            if message.contains("validator-attributed runtime receipts must use ApplySoracloudOrderedMailboxResult")
     ));
     assert!(
         stx.world
@@ -1069,7 +1073,7 @@ fn service_runtime_mutations_require_exact_validator_placement() -> Result<(), e
     assert!(matches!(
         attribution_error,
         InstructionExecutionError::InvariantViolation(message)
-            if message.contains("must identify submitting validator")
+            if message.contains("validator-attributed runtime receipts must use ApplySoracloudOrderedMailboxResult")
     ));
     assert!(
         stx.world

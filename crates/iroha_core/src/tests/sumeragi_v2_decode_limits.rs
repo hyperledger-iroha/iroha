@@ -358,8 +358,10 @@ fn sumeragi_v2_manifest_limit_covers_every_supported_norito_layout() {
         .expect("V2 proposal installs decode limits");
         assert_eq!(
             limits.max_sequence_elements(),
-            super::MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS,
-            "control policy must admit every protocol-bounded peer public key"
+            (wire::MAX_DA_CHUNK_COUNT as usize)
+                .max(wire::MAX_CONSENSUS_SIGNATURE_BYTES)
+                .max(super::MAX_SUMERAGI_V2_PUBLIC_KEY_SEQUENCE_ELEMENTS),
+            "control policy must cover bounded manifests, signatures, and peer public keys"
         );
         ncore::decode_from_bytes_with_limits::<NetworkMessage>(&maximum_encoded, limits)
             .unwrap_or_else(|error| {

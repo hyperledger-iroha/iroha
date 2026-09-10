@@ -3595,7 +3595,7 @@ mod tests {
             .active_policy_v1(policy_metadata_v1())
             .expect("active issuer policy");
         let context = statement_context_v1();
-        let genesis_hash = digest(0x42);
+        let genesis_hash = *context.network_id.as_bytes();
         let issuance_store = BootleLanternInMemoryIssuanceStoreV1::new();
         let mut authorization_rng = TestRng::healthy(0x1f83_d9ab_fb41_bd6b);
         let authorization = issuer_authorize_blind_issuance_with_rng_v1(

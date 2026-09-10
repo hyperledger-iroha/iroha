@@ -4,8 +4,8 @@
 //! trust-anchor tree.  A private witness contains the exact 91-byte root SPKI,
 //! a twelve-bit sorted-leaf index, and twelve siblings.  Row zero owns the
 //! occupied-leaf SHA call; rows one through twelve own the height-bound node
-//! calls; rows 13 through 103 serialize the exact root SPKI; the final 24 rows
-//! are canonical zero padding for a log-seven native trace.
+//! calls; rows 13 through 103 serialize the exact root SPKI; the remaining 8,088 rows
+//! are canonical zero padding for a log-thirteen native trace.
 //!
 //! Signed-CRL non-revocation is deliberately absent from this module.  The RFC
 //! adapter parses the complete signed CRL and proves the leaf serial differs
@@ -26,8 +26,8 @@ use super::{
 #[cfg(any(test, feature = "privacy-release-evidence"))]
 use crate::privacy_engines::transparent_stark::GoldilocksFieldV1 as F;
 use thiserror::Error;
-/// Thirteen hash rows plus 91 serialized SPKI bytes, padded to log seven.
-pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1: usize = 128;
+/// Thirteen hash rows plus 91 serialized SPKI bytes, padded to log thirteen for the shared FRI masking margin.
+pub(crate) const ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1: usize = 8_192;
 /// One leaf call followed by twelve compact-tree node calls.
 pub(crate) const ZK_X509_CA_ACCUMULATOR_ACTIVE_ROWS_V1: usize =
     1 + ZK_X509_CA_COMPACT_TREE_DEPTH_V1;
@@ -96,7 +96,7 @@ pub(crate) enum ZkX509CaAccumulatorRowKindV1 {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct ZkX509CaAccumulatorFixedRowV1 {
     /// Native row index.
-    pub(crate) row: u8,
+    pub(crate) row: u16,
     /// Sole legal semantic row kind.
     pub(crate) kind: ZkX509CaAccumulatorRowKindV1,
 }
@@ -244,7 +244,7 @@ impl ZkX509CaAccumulatorTraceV1 {
                 .iter()
                 .all(ZkX509ShaCallWitnessV1::private_is_zeroized_v1)
     }
-    /// Fixed native row count, including 24 canonical inactive rows.
+    /// Fixed native row count, including 8,088 canonical inactive rows.
     #[cfg(test)]
     pub(crate) const fn rows(&self) -> usize {
         ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1
@@ -330,7 +330,7 @@ pub(crate) fn ca_accumulator_fixed_row_v1(
         _ => return Err(ZkX509AccumulatorAirErrorV1::Topology),
     };
     Ok(ZkX509CaAccumulatorFixedRowV1 {
-        row: u8::try_from(index).map_err(|_| ZkX509AccumulatorAirErrorV1::Resource)?,
+        row: u16::try_from(index).map_err(|_| ZkX509AccumulatorAirErrorV1::Resource)?,
         kind,
     })
 }
@@ -689,7 +689,7 @@ mod tests {
         let (statement, witness) = fixture();
         let trace = build_ca_accumulator_trace_v1(statement, witness).expect("trace");
         trace.validate().expect("valid");
-        assert_eq!(trace.rows(), 128);
+        assert_eq!(trace.rows(), 8_192);
         assert_eq!(trace.hash_witnesses.len(), 13);
         assert_eq!(trace.hash_witnesses[0].role, ZkX509ShaCallRoleV1::CaLeaf);
         assert_eq!(trace.hash_witnesses[0].message.len(), 156);

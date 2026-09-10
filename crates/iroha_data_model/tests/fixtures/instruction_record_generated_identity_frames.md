@@ -1,13 +1,14 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for all 292 current `isi!` declarations: 283 nongeneric records and 39 concrete
-instantiations of the nine generic declarations. Its 322 type rows preserve 357
-populated values and 1,428 complete root, vector, option and map frames.
+for all 289 current `isi!` declarations: 280 nongeneric records and 39 concrete
+instantiations of the nine generic declarations. Its 319 type rows preserve 354
+populated values and 1,416 complete root, vector, option and map frames.
 
 The fixture SHA-256 is
-`7e69371c0072539ff3d85952169da3e4185aa66c66580967a33ce697112d95ac`.
-Names and directional hashes come from actual compiler captures before adding
+`4f96c3ba6f71281f3207b8d5a17361965a7454c3ccdb0aaa963e19bcba5723c9`.
+The inventory excludes the three unimplemented citizen-bond operations; all
+remaining captured frame bytes are unchanged. Names and directional hashes come from actual compiler captures before adding
 the independent identity declarations; no physical paths were guessed.
 
 The original instruction capture has SHA-256

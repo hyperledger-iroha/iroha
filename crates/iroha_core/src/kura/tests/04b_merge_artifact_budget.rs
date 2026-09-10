@@ -357,8 +357,7 @@ fn canonical_lane_receipt_preflights_its_exact_unreserved_append_peak() {
         .clone();
     let proposal = lane_block_proposal_from_ownership(&ownership);
     let (mut kura, _) = test_kura_with_default_lane_markers(&config, &lane_config);
-    kura.store_block(Arc::new(block))
-        .expect("store canonical receipt evidence");
+    store_finalized_fixture_block(&kura, Arc::new(block));
     let receipt = kura
         .recover_lane_block_application_receipt_artifact(&proposal)
         .expect("recover canonical receipt fixture");

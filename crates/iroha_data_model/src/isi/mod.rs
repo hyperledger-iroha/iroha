@@ -391,9 +391,6 @@ impl_sorafs_reserve_instruction_box!(
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsPopIssuerPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::CommitSorafsPopCredentialBatch);
 impl_direct_instruction_box!(crate::isi::sorafs::PublishSorafsPopRevocationList);
-impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsCitizenBond);
-impl_direct_instruction_box!(crate::isi::sorafs::RotateSorafsCitizenBondAuthorization);
-impl_direct_instruction_box!(crate::isi::sorafs::RequestSorafsCitizenBondExit);
 impl_direct_instruction_box!(crate::isi::sorafs::SetSorafsModerationPolicy);
 impl_direct_instruction_box!(crate::isi::sorafs::SubmitSorafsModerationAppeal);
 impl_direct_instruction_box!(crate::isi::sorafs::RegisterSorafsModerationJurorEligibility);
@@ -2771,13 +2768,11 @@ pub mod prelude {
             MaintainSorafsOrderbook, MatchSorafsOrderbook, PublishSorafsPopRevocationList,
             RaiseSorafsModerationChallenge, RecordCapacityTelemetry,
             RecordSorafsOrderbookSettlementReceipt, RegisterCapacityDeclaration,
-            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsCitizenBond,
-            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
-            RepaySorafsReserveCredit, RequestSorafsCitizenBondExit, RequestSorafsReserveMovement,
+            RegisterCapacityDispute, RegisterPinManifest, RegisterSorafsModerationJurorEligibility,
+            RegisterSorafsReserveAccount, RepaySorafsReserveCredit, RequestSorafsReserveMovement,
             ResolveSorafsCapacityDispute, ResolveSorafsModerationChallenge, RetirePinManifest,
             ReviseReplicationOrderAssignments, RevokeProviderIngestCompletionAuthority,
-            RotateSorafsCitizenBondAuthorization, SetPricingSchedule,
-            SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
+            SetPricingSchedule, SetProviderIngestCompletionAuthority, SetSorafsModerationPolicy,
             SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
             SetSorafsReputationJournalAuthorityPolicy, SetSorafsReservePolicy,
             SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,

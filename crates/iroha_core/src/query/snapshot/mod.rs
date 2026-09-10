@@ -518,7 +518,7 @@ mod tests {
         let released = Arc::new(AtomicU64::new(0));
         let ordinary_limits = OrdinaryQueryExecutionLimits::try_new(
             3,
-            QueryExecutionBudget::from_weighted_limit(64 * 1_024, 1, 1),
+            QueryExecutionBudget::from_weighted_limit(128 * 1_024, 1, 1),
             16,
             64 * 1_024,
             crate::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES,

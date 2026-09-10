@@ -1045,7 +1045,7 @@ fn state_committed_forgotten_release_is_tombstoned_before_restart_replay_publica
         queue
             .install_lane_reservation_journal(&reservation_path, 1024 * 1024)
             .expect("install Complete-release reservation journal");
-        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction);
+        push_globally_bound_lane_reservation_candidate(&queue, &state, &dir, transaction.clone());
         let key = *queue
             .reserve_transactions_for_lane(
                 &state,
@@ -1058,13 +1058,7 @@ fn state_committed_forgotten_release_is_tombstoned_before_restart_replay_publica
             )
             .expect("reserve the later retired transaction")[0]
             .key();
-        {
-            let mut transactions = state.transactions.block();
-            transactions.insert_block_with_single_tx(hash, nonzero!(1_usize));
-            transactions
-                .commit()
-                .expect("publish the ordinary canonical transaction");
-        }
+        commit_queue_plan_transactions_for_test(&state, vec![transaction.clone()]);
         assert_eq!(
             queue.remove_committed_hashes_preserving_globally_bound_owners([hash], None),
             0,

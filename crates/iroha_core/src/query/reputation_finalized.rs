@@ -10277,7 +10277,7 @@ mod tests {
             .checkpoint
             .journal_prefix_source_heads
             .push(duplicate_head);
-        replace_test_checkpoint_with_recomputed_content_address(
+        replace_test_checkpoint_with_recomputed_checkpoint_digest(
             &archive_root(&duplicate_directory).join(CHECKPOINTS_DIRECTORY),
             duplicate,
         );
@@ -10290,7 +10290,7 @@ mod tests {
         ));
         let (reordered_directory, mut reordered) = archive_with_two_source_checkpoint();
         reordered.checkpoint.journal_prefix_source_heads.swap(0, 1);
-        replace_test_checkpoint_with_recomputed_content_address(
+        replace_test_checkpoint_with_recomputed_checkpoint_digest(
             &archive_root(&reordered_directory).join(CHECKPOINTS_DIRECTORY),
             reordered,
         );
@@ -11044,11 +11044,28 @@ mod tests {
                 event
             })
             .collect();
+        let predecessor = projection.clone();
+        projection.key.height += 1;
+        projection.key.block_hash = [0x72; 32];
+        projection.journal_events.extend((16_u8..32).map(|offset| {
+            let mut event = journal_event(
+                &projection.authority_policy.policy,
+                u64::from(offset) + 1,
+                projection.key.height,
+                projection.key.block_hash,
+                0x20 + offset,
+            );
+            event.event_index = u32::from(offset - 16);
+            event
+        }));
         let (persisted, checkpoint_bytes, anchor_bytes, fence) = {
             let archive = open_archive(&directory, bounds());
             archive
+                .insert(predecessor.clone())
+                .expect("insert many-source predecessor");
+            archive
                 .insert(projection.clone())
-                .expect("insert many-source projection");
+                .expect("insert the bounded successor delta");
             let (persisted, checkpoint_bytes, _) =
                 test_checkpoint_artifact(&archive, &projection.key);
             let fence = archive
@@ -11080,6 +11097,15 @@ mod tests {
         )
         .expect("construct anchor-fitting checkpoint-rejecting bounds");
         assert!(anchor_bytes <= tight_bounds.max_record_bytes());
+        let anchor_path = archive_root(&directory)
+            .join(ANCHORS_DIRECTORY)
+            .join(anchor_file_name(&projection.key).expect("anchor name"));
+        let anchor_wire = fs::read(anchor_path).expect("read retained anchor");
+        decode_from_bytes_with_limits::<PersistedReputationFinalizedAnchorV1>(
+            &anchor_wire,
+            tight_bounds.decode_limits(),
+        )
+        .expect("the retained anchor fits both the wire and allocation ceilings");
         let archive = open_archive(&directory, tight_bounds);
         let kura = Kura::blank_kura_for_testing();
         assert!(matches!(
@@ -11139,7 +11165,14 @@ mod tests {
             fs::read_dir(&archive.anchors)
                 .expect("read retained anchor namespace")
                 .count(),
-            1
+            2,
+            "both retained anchors must survive the rejected checkpoint"
+        );
+        assert_eq!(
+            archive
+                .get_exact(&predecessor.key)
+                .expect("predecessor remains queryable"),
+            Some(predecessor)
         );
         assert_eq!(
             fs::read_dir(&archive.checkpoints)
@@ -12083,7 +12116,7 @@ mod tests {
         assert!(matches!(
             future_prefix.validate(),
             Err(ReputationFinalizedArchiveError::InvalidCheckpoint {
-                reason: "feed prefix terminal cursor crosses or disagrees with its retention-floor anchor",
+                reason: "journal prefix source head lies outside its compacted prefix",
             })
         ));
     }
@@ -12167,7 +12200,7 @@ mod tests {
         ));
     }
     #[test]
-    fn checkpoint_tamper_and_policy_gc_fail_closed() {
+    fn checkpoint_tamper_rejects_and_policy_gc_preserves_predecessor_closure() {
         let tampered_directory = tempdir().expect("create tamper archive directory");
         let projection = sample_projection(7, [0x71; 32]);
         let checkpoint_path = {
@@ -12229,7 +12262,7 @@ mod tests {
             fs::read_dir(&reopened.policies)
                 .expect("read policies after GC")
                 .count(),
-            1
+            2
         );
         assert_eq!(
             reopened.health_generation().expect("stable GC generation"),

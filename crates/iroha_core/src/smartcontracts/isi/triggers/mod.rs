@@ -1715,7 +1715,7 @@ mod tests {
         let error = Register::trigger(trigger.clone())
             .execute(&ALICE_ID, &mut stx)
             .expect_err("genesis must not mint an uncredentialed global trigger");
-        assert!(error.to_string().contains("CanRegisterGlobalDataTrigger"));
+        assert_smart_contract_error_contains(&error, "CanRegisterGlobalDataTrigger");
 
         let capability: Permission =
             iroha_executor_data_model::permission::trigger::CanRegisterGlobalDataTrigger {

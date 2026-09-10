@@ -428,16 +428,22 @@ fn tree_integrity_rejects_tampered_retained_root() {
     let mut state = ZkAssetState::default();
     push_dummy_root(&mut state, 1);
     push_dummy_root(&mut state, 2);
-    state.root_history[0][0] ^= 0x80;
-    let before = state.commitments.clone();
-    let error = state
-        .push_commitment(
-            [3; 32],
-            NonZeroUsize::new(64).expect("non-zero root history cap"),
-        )
-        .expect_err("tampered retained roots must fail closed");
-    assert!(error.contains("root history"));
-    assert_eq!(state.commitments, before);
+    let canonical = norito::json::to_vec(&state).expect("encode authenticated tree");
+    norito::json::from_slice::<ZkAssetState>(&canonical).expect("restore authenticated tree");
+    for index in 0..state.root_history.len() {
+        let mut corrupted = state.clone();
+        corrupted.root_history[index][0] ^= 0x80;
+        let before = corrupted.commitments.clone();
+        let error = corrupted
+            .validate_tree_integrity()
+            .expect_err("tampered retained roots must fail the recovery audit");
+        assert!(error.contains("root history"));
+        assert_eq!(corrupted.commitments, before);
+        let encoded = norito::json::to_vec(&corrupted).expect("encode corrupted tree fixture");
+        let error = norito::json::from_slice::<ZkAssetState>(&encoded)
+            .expect_err("snapshot restore must audit every retained root");
+        assert!(error.to_string().contains("root history"));
+    }
 }
 
 #[test]

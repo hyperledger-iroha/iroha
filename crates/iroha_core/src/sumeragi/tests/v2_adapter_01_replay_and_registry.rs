@@ -3098,7 +3098,7 @@ fn admission_keeps_only_the_exact_locked_commit_vote_beyond_one_rotation() {
                         && certificate.subject() == core_subject
             )
     ));
-    for rejected in [
+    for (index, rejected) in [
         wire::ConsensusMessageV2Payload::Vote(wire::Vote {
             round: wire_round,
             proposal_round: wire_round,
@@ -3117,16 +3117,31 @@ fn admission_keeps_only_the_exact_locked_commit_vote_beyond_one_rotation() {
             signer: 1,
             signature: vec![0xB3],
         }),
-    ] {
+    ].into_iter().enumerate() {
         let (outcome, admission) = adapter
             .admit_authenticated_payload(&rejected)
             .expect("irrelevant historical vote is harmless");
-        assert!(matches!(
-            outcome.map(|outcome| outcome.disposition()),
-            Some(reducer::StepDisposition::Ignored(
-                reducer::IgnoreReason::IrrelevantView
-            ))
-        ));
+        let outcome = outcome.expect("historical vote is handled without progress admission");
+        if index == 0 {
+            assert_eq!(outcome.disposition(), reducer::StepDisposition::Ignored(
+                reducer::IgnoreReason::IrrelevantView,
+            ));
+            assert!(outcome.effects().is_empty());
+        } else {
+            // A conflicting vote cannot erase the retained same-signer evidence,
+            // even when that historical round is no longer progress-eligible.
+            assert_eq!(outcome.disposition(), reducer::StepDisposition::Applied);
+            assert!(matches!(outcome.effects(), [AdapterEffect::ReportEquivocation { .. }]));
+            let (duplicate, duplicate_admission) = adapter
+                .admit_authenticated_payload(&rejected)
+                .expect("repeat conflict is bounded");
+            let duplicate = duplicate.expect("repeat evidence is terminal");
+            assert_eq!(duplicate.disposition(), reducer::StepDisposition::Ignored(
+                reducer::IgnoreReason::Duplicate,
+            ));
+            assert!(duplicate.effects().is_empty());
+            assert!(duplicate_admission.is_none());
+        }
         assert!(admission.is_none());
     }
 }

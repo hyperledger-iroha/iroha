@@ -976,6 +976,9 @@ fn commit_marker_reconciliation_caps_durable_count_to_hash_journal() {
 #[test]
 fn strict_init_prunes_corrupted_index_end_to_end() {
     let temp_dir = TempDir::new().unwrap();
+    let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
+    drop(kura);
     let mut store = new_block_store(&temp_dir);
     store.create_files_if_they_do_not_exist().unwrap();
     let block: SignedBlock = ValidBlock::new_dummy(checked_keypair().private_key()).into();
@@ -983,9 +986,7 @@ fn strict_init_prunes_corrupted_index_end_to_end() {
     let BlockIndex { start, .. } = store.read_block_index(0).unwrap();
     let huge_len = STRICT_INIT_MAX_BLOCK_BYTES + 1;
     store.write_block_index(0, start, huge_len).unwrap();
-    let store_dir = temp_dir.path().to_path_buf();
     drop(store);
-    let config = kura_config_for_path(&store_dir, BLOCKS_IN_MEMORY);
     let (kura, BlockCount(count)) =
         Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
             .unwrap();

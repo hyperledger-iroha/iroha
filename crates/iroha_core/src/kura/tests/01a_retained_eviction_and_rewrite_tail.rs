@@ -2,9 +2,7 @@
 fn finalized_remote_only_block_retains_header_across_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, nonzero!(1_usize));
-    let (kura, _) =
-        Kura::open_test_kura_with_configured_lane_config(&config, &RuntimeLaneConfig::default())
-            .expect("open Kura");
+    let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
     let mut generator = DummyBlocks::new();
     let blocks = (0..4).map(|_| generator.next()).collect::<Vec<_>>();
     for block in &blocks {
@@ -96,7 +94,7 @@ fn eviction_scans_past_an_unfinalized_advertised_height() {
         .store_v2_finality_artifact(&artifact)
         .expect("persist only height-three complete-wire finality");
     let (_, height_two_len) = advertise_unfinalized_required_replicas(&kura, nonzero!(2_usize));
-    let (_, height_three_len) = advertise_unfinalized_required_replicas(&kura, finalized_height);
+    let (_, height_three_len) = advertise_required_replicas(&kura, finalized_height);
     assert_eq!(
         kura.evict_block_bodies(height_three_len)
             .expect("evict the later finalized candidate"),
@@ -208,11 +206,7 @@ fn retained_rewrite_stage_restores_old_canonical_record_after_restart() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let retained_before = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let block = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&block))
             .expect("store canonical block");
@@ -257,11 +251,7 @@ fn ambiguous_old_marker_keeps_retained_and_finality_evidence_for_startup() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let (retained_before, finality_before, original_hash, artifact) = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let original = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&original))
             .expect("store original block");
@@ -341,11 +331,7 @@ fn retained_rewrite_stage_discards_old_record_after_published_crash() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let replacement_hash = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let original = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&original))
             .expect("store original block");
@@ -401,11 +387,7 @@ fn post_publication_rewrite_error_discards_old_evidence_and_restarts_cleanly() {
     let temp_dir = TempDir::new().expect("create Kura root");
     let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
     let replacement_hash = {
-        let (kura, _) = Kura::open_test_kura_with_configured_lane_config(
-            &config,
-            &RuntimeLaneConfig::default(),
-        )
-        .expect("open Kura");
+        let (kura, _) = test_kura_with_default_lane_markers(&config, &RuntimeLaneConfig::default());
         let original = DummyBlocks::new().next();
         kura.store_block(Arc::clone(&original))
             .expect("store original block");

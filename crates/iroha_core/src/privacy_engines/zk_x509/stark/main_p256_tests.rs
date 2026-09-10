@@ -53,7 +53,7 @@ fn main_log19_query_union_handles_wraparound_and_adversarial_residues() {
         schedule
             .indices
             .iter()
-            .all(|index| *index < u64::try_from(common_lde_size).expect("log25 fits u64"))
+            .all(|index| *index < u64::try_from(common_lde_size).expect("log22 fits u64"))
     );
 }
 #[test]
@@ -1305,9 +1305,12 @@ fn main_p256_log16_registration_order_ranges_and_stride_are_exact() {
     );
     assert_eq!(
         source
-            .next_query_index_v1(9, layout.common_lde_size() - 256)
+            .next_query_index_v1(
+                9,
+                layout.common_lde_size() - P256_MAIN_LOG16_NEXT_STRIDE_V1 / 2,
+            )
             .expect("exact wrapping stride"),
-        256
+        P256_MAIN_LOG16_NEXT_STRIDE_V1 / 2
     );
     let window_position = layout
         .registered_segments
@@ -1471,7 +1474,7 @@ fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
                         let query_index = 29 + registration_index;
                         let next_query_index = verifier
                             .next_query_index_v1(registration_index, query_index)
-                            .expect("canonical +512 next coordinate");
+                            .expect("canonical +64 next coordinate");
                         let x = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(query_index as u128));
                         let base = vec![F::ZERO; registration.segment.base_width];
                         let aux = vec![F::ZERO; registration.segment.aux_width];
@@ -1525,7 +1528,7 @@ fn main_p256_log16_borrowed_phases_prover_and_verifier_match() {
                     let query_index = 29;
                     let next_query_index = verifier
                         .next_query_index_v1(0, query_index)
-                        .expect("cached +512 next coordinate");
+                        .expect("cached +64 next coordinate");
                     let x = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(query_index as u128));
                     let base = vec![F::ZERO; registration.segment.base_width];
                     let aux = vec![F::ZERO; registration.segment.aux_width];
@@ -1575,7 +1578,7 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
     let query_index = 7;
     let next_query_index = rejected
         .next_query_index_v1(0, query_index)
-        .expect("canonical +512 next coordinate");
+        .expect("canonical +64 next coordinate");
     assert_eq!(
         next_query_index - query_index,
         P256_MAIN_LOG16_NEXT_STRIDE_V1
@@ -1674,7 +1677,7 @@ fn main_p256_log16_verifier_sampling_is_fixed_exact_and_transactional() {
         let query_index = 17 + registration_index;
         let next_query_index = rejected
             .next_query_index_v1(registration_index, query_index)
-            .expect("canonical +512 next coordinate");
+            .expect("canonical +64 next coordinate");
         evaluate_main_p256_log16_zero_opening_v1(&mut rejected, binding.main, query_index)
             .expect("valid witness-free fixed sampling");
         assert_eq!(rejected.cached_openings_v1(registration_index), Some(2));

@@ -603,8 +603,7 @@ fn halo2_verify_zk1_prof_length_exceeds_cap_rejected() {
     // Build minimal ZK1 with PROF len > MAX_PROOF_LEN. Parser must reject.
     let k = 5u32;
     let params: PastaParams = pasta_params_new(k);
-    let vk_h2 =
-        keygen_vk_cached("halo2/pasta/ipa/tiny-add", &params, &pasta_tiny::Add).expect("vk");
+    let vk_h2 = halo2_backend::keygen_vk(&params, &pasta_tiny::Add).expect("vk");
     let mut vk_env = zk1::wrap_start();
     zk1::wrap_append_ipa_k(&mut vk_env, k);
     zk1::wrap_append_vk_pasta(&mut vk_env, &vk_h2);

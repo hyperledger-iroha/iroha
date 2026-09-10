@@ -109,22 +109,50 @@ fn prepare_certified_bundle_reset_fixture(
         autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 513, 100, &signer);
     let fresh_payload = autonomous_capacity_payload_at(lane_id, lane.dataspace_id, 1, 101, &signer);
     install_autonomous_lane_marker_for_kura(kura, lane_config, &fresh_payload);
-    let (old_slot_session, old_slot_pops) =
-        committed_lane_block_session_for_kura_proposal(&old_slot_payload.origin_proposal, &signer);
-    let old_slot = CertifiedLaneBlockArtifact::new(old_slot_session.clone(), old_slot_pops.clone());
-    kura.persist_committed_lane_block_session(&old_slot_session, &old_slot_pops)
-        .expect("persist occupied pre-reset certified slot");
-    let (old_tip_session, old_tip_pops) =
-        committed_lane_block_session_for_kura_proposal(&old_tip_payload.origin_proposal, &signer);
-    let old_tip = CertifiedLaneBlockArtifact::new(old_tip_session.clone(), old_tip_pops.clone());
-    kura.persist_committed_lane_block_session(&old_tip_session, &old_tip_pops)
-        .expect("persist high pre-reset certified frontier");
+    // Build the fresh READY evidence and old certified history in separate valid
+    // stores, then restore the exact old pairs at the reset validation boundary.
     let prepared = prepare_autonomous_certification_for_capacity_payload(
         kura,
         lane_config,
         &fresh_payload,
         &signer,
     );
+    let old_directory = TempDir::new().expect("old certified history root");
+    let old_config = kura_config_for_dir(&old_directory, BLOCKS_IN_MEMORY);
+    let (old_kura, _) = Kura::open_test_kura_with_configured_lane_config(&old_config, lane_config)
+        .expect("open old certified history store");
+    install_autonomous_lane_marker_for_kura(&old_kura, lane_config, &old_slot_payload);
+    let (old_slot_session, old_slot_pops) =
+        committed_lane_block_session_for_kura_proposal(&old_slot_payload.origin_proposal, &signer);
+    let old_slot = CertifiedLaneBlockArtifact::new(old_slot_session.clone(), old_slot_pops.clone());
+    old_kura
+        .persist_committed_lane_block_session(&old_slot_session, &old_slot_pops)
+        .expect("persist occupied pre-reset certified slot");
+    let (old_tip_session, old_tip_pops) =
+        committed_lane_block_session_for_kura_proposal(&old_tip_payload.origin_proposal, &signer);
+    let old_tip = CertifiedLaneBlockArtifact::new(old_tip_session.clone(), old_tip_pops.clone());
+    old_kura
+        .persist_committed_lane_block_session(&old_tip_session, &old_tip_pops)
+        .expect("persist high pre-reset certified frontier");
+    let (old_data, old_index) =
+        Kura::certified_lane_block_paths_for_entry(lane, old_directory.path());
+    let (restored_data, restored_index) =
+        Kura::certified_lane_block_paths_for_entry(lane, &kura.store_root);
+    fs::copy(old_data, restored_data).expect("restore canonical certified history data");
+    fs::copy(old_index, restored_index).expect("restore canonical certified history index");
+    let (old_frontier, old_build) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, old_directory.path());
+    let (restored_frontier, restored_build) =
+        Kura::latest_certified_lane_block_frontier_paths_for_entry(lane, &kura.store_root);
+    assert!(
+        !old_build.exists(),
+        "the old frontier publication completed"
+    );
+    assert!(
+        !restored_build.exists(),
+        "the READY fixture has no staged frontier"
+    );
+    fs::copy(old_frontier, restored_frontier).expect("restore canonical certified frontier");
     let descriptor = &fresh_payload.origin_proposal.descriptor;
     let authority = crate::state::CertifiedLaneBlockPersistenceAuthority::for_test(
         lane_id,
@@ -627,9 +655,30 @@ fn certified_pair_crash_rebuilds_only_bundle_obligation() {
     let reservation_before = kura.certified_bundle_capacity_reservations.lock().clone();
     kura.rebuild_certified_bundle_capacity_reservations_on_startup()
         .expect("rebuild bundle-only obligation");
+    let expected_rebuilt = reservation_before
+        .iter()
+        .map(|(identity, reservation)| {
+            let mut reservation = reservation.clone();
+            // Startup readback proves the certified pair needs no new allocation.
+            reservation
+                .plan
+                .component_bytes
+                .insert(CertifiedBundleCapacityComponent::CertifiedPair, 0);
+            reservation
+                .plan
+                .component_transient_bytes
+                .insert(CertifiedBundleCapacityComponent::CertifiedPair, 0);
+            (identity.clone(), reservation)
+        })
+        .collect::<BTreeMap<_, _>>();
     assert_eq!(
         *kura.certified_bundle_capacity_reservations.lock(),
-        reservation_before
+        expected_rebuilt.into()
+    );
+    assert_eq!(
+        kura.certified_bundle_capacity_reserved_bytes()
+            .expect("rebuilt bundle-only obligation"),
+        expected
     );
     kura.repair_autonomous_lane_merge_bundles_on_startup()
         .expect("repair missing autonomous bundle");

@@ -1,10 +1,28 @@
+fn ledger_reader_world_for_core_query_tests(mut world: World, authority: &AccountId) -> World {
+    if world.accounts.view().get(authority).is_none() {
+        let (id, account) = iroha_data_model::IntoKeyValue::into_key_value(
+            Account::new(authority.clone()).build(authority),
+        );
+        world.accounts.insert(id, account);
+    }
+    world.account_permissions.insert(
+        authority.clone(),
+        [Permission::from(
+            iroha_executor_data_model::permission::query::CanReadAllLedgerData,
+        )]
+        .into_iter()
+        .collect(),
+    );
+    world
+}
+
 #[test]
 fn execute_query_syscall_returns_norito_response_and_gas() {
-    let world = World::new();
+    let authority: AccountId = fixture_account("alice");
+    let world = ledger_reader_world_for_core_query_tests(World::new(), &authority);
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
-    let authority: AccountId = fixture_account("alice");
     let view = state.view();
     let mut host = CoreHostImpl::new(authority.clone());
     host.set_query_state(&view);
@@ -656,7 +674,7 @@ fn core_query_page_is_bounded_ordered_and_validates_arguments() {
         .iter()
         .map(|id| build_fixture_account(id, &authority))
         .collect::<Vec<_>>();
-    let world = World::with([], accounts, []);
+    let world = ledger_reader_world_for_core_query_tests(World::with([], accounts, []), &authority);
     let state = State::new_for_testing(
         world,
         Kura::blank_kura_for_testing(),

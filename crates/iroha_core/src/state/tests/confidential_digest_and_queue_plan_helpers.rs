@@ -98,8 +98,19 @@ fn new_dummy_block_with_payload(f: impl FnOnce(&mut BlockHeader)) -> CommittedBl
     let_row! { (leader_public_key, leader_private_key) = crate::state::checked_keypair_with_algorithm(iroha_crypto::Algorithm::BlsNormal) .into_parts() };
     let peer_id = PeerId::new(leader_public_key);
     let topology = Topology::new(vec![peer_id]);
-    ValidBlock::new_dummy_and_modify_header(&leader_private_key, f)
-        .commit(&topology)
+    let mut block = ValidBlock::new_dummy_and_modify_header(&leader_private_key, f);
+    block.as_mut().set_transaction_results_with_transcripts(
+        Vec::new(), &[], Vec::new(), BTreeMap::new(), Vec::new(),
+        AxtPolicySnapshot::default(),
+    ).expect("empty fixture block has complete execution metadata");
+    block.as_mut().set_committed_fragment_count(0);
+    let signature = iroha_data_model::block::BlockSignature::new(
+        0,
+        SignatureOf::from_hash(&leader_private_key, block.as_ref().hash()),
+    );
+    block.as_mut().replace_signatures(BTreeSet::from([signature]))
+        .expect("replace signature after completing fixture execution metadata");
+    block.commit(&topology)
         .unpack(|_| {})
         .unwrap()
 }
@@ -313,6 +324,7 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
             Some(durable_tip),
             "committed test state tip must match Kura before carrier synthesis"
         );
+        seed_committed_height_for_state_test(state, committed_height as u64);
         return;
     }
     if durable_count > 0 {
@@ -323,6 +335,7 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
             block_hashes.push_for_tests(hash);
         }
         block_hashes.commit_for_tests();
+        seed_committed_height_for_state_test(state, durable_count as u64);
         let tip_height = NonZeroUsize::new(durable_count).expect("durable tip is non-zero");
         let_row! { tip = state .kura .get_block(tip_height) .expect("durable merge-carrier parent block") };
         state.update_latest_block_header_cache_for_tests(tip.header().clone());
@@ -346,6 +359,7 @@ fn ensure_merge_carrier_parent_for_test(state: &State) {
     let mut block_hashes = state.block_hashes.block();
     block_hashes.push_for_tests(parent_hash);
     block_hashes.commit_for_tests();
+    seed_committed_height_for_state_test(state, 1);
     state.update_latest_block_header_cache_for_tests(parent.as_ref().header().clone());
     seed_empty_transaction_height_for_state_test(state, 1);
     assert_eq!(state.latest_block_hash_fast(), Some(parent_hash));
@@ -455,12 +469,21 @@ fn record_commit_ready_merge_candidate_with_lanes(
     let_row! { registry_entries: Vec<_> = (0..lane_count) .map(|idx| { ( LaneId::new(idx), DataSpaceId::UNIVERSAL, validator_ids.clone(), ) }) .collect() };
     install_lane_manifest_registry(state, &registry_entries);
     let commit_keypairs = configure_commit_topology_preserving_world_peers(state, 1);
-    for idx in 0..lane_count {
-        let_row! { envelope = seed_effect_authenticated_relay_for_merge_test( state, sample_lane_relay_envelope_for_state( state, first_height, LaneId::new(idx), &validator_keypairs, ), ) };
-        state
-            .record_lane_relay(&envelope)
-            .expect("commit-ready relay accepted");
+    let mut envelopes = (0..lane_count)
+        .map(|idx| sample_lane_relay_envelope_for_state(
+            state, first_height, LaneId::new(idx), &validator_keypairs,
+        ))
+        .collect::<Vec<_>>();
+    finalize_lane_relay_batch_for_state_test(
+        state, &mut envelopes.iter_mut().collect::<Vec<_>>(), &validator_keypairs,
+    );
+    for envelope in envelopes {
+        let envelope = seed_effect_authenticated_relay_for_merge_test(state, envelope);
+        state.record_lane_relay(&envelope).expect("commit-ready relay accepted");
     }
+    // Every source header was persisted above. Publish that exact prefix before
+    // selecting the next global carrier, including successive direct-merge fixtures.
+    seed_committed_height_for_state_test(state, first_height);
     ensure_merge_carrier_parent_for_test(state);
     let_row! { candidate = state .merge_entry_candidates_from_lane_relays() .into_iter() .next() .expect("merge candidate from recorded relays") };
     (candidate, commit_keypairs, validator_keypairs)
