@@ -1695,7 +1695,9 @@ impl ProductionTransportFixture {
             directory.path().join("transport-regression-safety.wal"),
             verified,
             local_validator,
-            Generation::new(1),
+            // The real WAL must start with the same canonical seed used by
+            // production cold open. Durable lifecycle tags are never retagged.
+            Generation::INITIAL,
             [0x63; 32],
             AdapterFingerprints {
                 node: Hash::new(b"production transport node"),

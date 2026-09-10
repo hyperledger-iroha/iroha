@@ -627,7 +627,7 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_retained_prepare_appl
     verified: &VerifiedHeightContext,
     original: &LifecycleReplayAuthorityV1,
     keys: &[KeyPair],
-    later_view: bool,
+    after_enter_view: bool,
     corrupt_prepare_signature: bool,
 ) -> ([ReplayCase; 4], wire::QuorumCertificate) {
     let context = super::super::projection::lifecycle_context(verified.context());
@@ -643,7 +643,6 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_retained_prepare_appl
         .expect("real Prepare quorum");
     let mut commit = certificate.clone();
     commit.phase = wire::GlobalPhase::Commit;
-    commit.round.view += u64::from(later_view);
     let preimage = wire::Vote {
         round: commit.round,
         proposal_round: commit.proposal_round,
@@ -680,10 +679,12 @@ pub(in crate::sumeragi::v2_lifecycle_coordinator) fn exact_retained_prepare_appl
         panic!("fixture requires the actual stored body frame")
     };
     let payload = DurablePayloadReference::BodyFrame(frame.durable_reference());
+    // EnterView advances the reducer occurrence, never the certificate's
+    // proposal identity. A delayed Commit still certifies its original round.
     let apply_tag = ReplayEventTagV1::new(
         commit.round.height,
-        commit.round.view,
-        body_source.tag.generation + u64::from(later_view),
+        commit.round.view + u64::from(after_enter_view),
+        body_source.tag.generation + u64::from(after_enter_view),
     );
     let body = LifecycleReplaySourceV1::BodyPipeline(body_source);
     let fetch = replay_case(

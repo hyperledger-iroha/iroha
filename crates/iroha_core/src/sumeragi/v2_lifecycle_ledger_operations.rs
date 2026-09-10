@@ -3570,16 +3570,6 @@ impl AuthenticatedRetainedBodyApplyLineageV1 {
     ) -> bool {
         effect == &self.effect && self.pending_fingerprint.exactly_matches(effect, pending)
     }
-    /// Project only the already authenticated Apply after its move-only pending
-    /// has entered the exact carrier. Returning a candidate grants no execution.
-    pub(in crate::sumeragi) fn project_apply_candidate(
-        &self,
-        effect: &crate::sumeragi::v2::AdapterEffect,
-        pending: &PendingRuntimeEffectBinding,
-    ) -> Option<CandidateAdmission> {
-        self.matches_apply_binding(effect, pending)
-            .then(|| self.candidate.clone())
-    }
     /// Rejoin the installed candidate without exposing its private identity
     /// fields across the lifecycle ownership boundary.
     pub(in crate::sumeragi) fn matches_apply_candidate_census(

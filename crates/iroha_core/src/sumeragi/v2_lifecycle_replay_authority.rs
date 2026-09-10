@@ -112,7 +112,9 @@ impl LifecycleReplayAuthorityV1 {
         )
     }
     /// Select an obsolete ordinary execution without accepting future tags.
-    /// A Decision discards unrelated work even in its current generation. This
+    /// A Decision discards unrelated work even in its current generation. The
+    /// canonical view/generation order accounts for generation resetting when
+    /// a TC advances the view. This
     /// predicate grants no retirement authority: the complete body census must
     /// authenticate the source and immutable frame before its owner is retired.
     pub(super) fn ordinary_body_is_obsolete_for_decision(
@@ -123,15 +125,17 @@ impl LifecycleReplayAuthorityV1 {
         let LifecycleReplaySourceV1::BodyPipeline(source) = &self.source else {
             return false;
         };
+        let original = crate::sumeragi::v2_core::EventTag::new(
+            source.tag.height,
+            source.tag.view,
+            crate::sumeragi::v2_core::Generation::new(source.tag.generation),
+        );
         matches!(
             &source.origin,
             BodyPipelineOriginV1::LocalBody(_)
                 | BodyPipelineOriginV1::Proposal(_)
                 | BodyPipelineOriginV1::Certified { .. }
-        ) && source.tag.height == current.height()
-            && source.tag.view <= current.view()
-            && source.tag.generation <= current.generation().get()
-            && (source.tag.generation < current.generation().get() || !is_decided_body)
+        ) && (current.strictly_advances(original) || (current == original && !is_decided_body))
     }
     /// Return whether this canonical authority is one deterministic invalid-body report.
     pub(super) fn is_invalid_body_report_origin(&self) -> bool {

@@ -3308,6 +3308,10 @@ required|validate_retry_authority|(Some(seal), None) => seal.lifecycle_ordinal()
 required|validate_retry_authority|(None, Some(marker)) => marker.lifecycle_ordinal == Some(lifecycle_ordinal)|live Apply retry preflight stopped matching the exact published Validate marker ordinal
 required|validate_retry_authority|(Some(_), Some(_))|live Apply retry preflight stopped rejecting duplicate retry authorities
 required|validate_retry_authority|(None, None) => false|live Apply retry preflight stopped distinguishing an absent retry authority
+required|live_reconciliation|runtime_decision != Some(decision)|first Apply cleanup must bind the complete authoritative runtime Decision
+required|live_reconciliation|.is_some_and(\pprotected\p protected != decision)|first Apply cleanup must reject a conflicting existing Decision while permitting exact cold initialization
+required|live_reconciliation|if self.protected_decision != Some(decision)|Apply cleanup must publish and recheck exact Decision protection before retaining the executable owner
+order|live_reconciliation|4|runtime_decision != Some(decision)|if let Err(error) = preflight|self.reconcile_decision_work(decision, true, services)|if self.protected_decision != Some(decision)|exact Decision and full authority checks must precede first cleanup and its postcondition
 required|live_reconciliation|let validate_predecessor_ordinal = authority.validate_predecessor_ordinal()|live Apply reconciliation stopped retaining the authenticated Validate predecessor ordinal
 required|live_reconciliation|owner.exactly_precedes_live_apply(&authority)|live Apply reconciliation stopped authenticating its preliminary Validate predecessor
 required|live_reconciliation|validate_predecessor_ordinal >= dispatch_key.lifecycle_ordinal()|live Apply reconciliation stopped rejecting a predecessor outside the exact parent-before-child order
@@ -3840,8 +3844,8 @@ order|released_apply|8|project_apply_candidate(|stage_durable_transaction()|redu
 forbidden|released_apply_post_fsync|?|released-Validate Apply post-fsync tail acquired fallible work
 forbidden|released_apply_post_fsync|return Err|released-Validate Apply post-fsync tail acquired fallible work
 forbidden|released_apply_post_fsync|persist_exact|released-Validate Apply post-fsync tail attempted a second persistence
-region|decision_body_retirement|ledger|from|fn reconcile_recovered_decision_body_generation(|before|/// Stage exactly one standalone recovered Decision Fetch row.
-region|decision_body_startup|ledger|from|pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(|before|fn open_recovered_decision_validate_startup(
+region|decision_body_retirement|ledger|at|fn reconcile_recovered_decision_body_generation(|before|/// Stage exactly one standalone recovered Decision Fetch row.
+region|decision_body_startup|ledger|at|pub(in crate::sumeragi) fn open_recovered_decision_fetch_startup(|before|fn open_recovered_decision_validate_startup(
 required|decision_body_retirement|!projection.is_exact(verified)|body retirement requires authenticated Decision authority
 order|decision_body_retirement|4|authenticate_durable_certified_body_pipeline_startup(verified, body_store)|for index in eligible|census.contains_live_ordinal|Self::cancelled_record|body retirement must authenticate every source before terminalizing its exact live leaves
 forbidden|decision_body_retirement|persist_exact_successor|body retirement staging must not publish separately from its selected successor

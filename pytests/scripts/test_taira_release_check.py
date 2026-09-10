@@ -1103,11 +1103,14 @@ class PureFsmGateTests(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
 
     def test_lifecycle_source_gate_uses_captured_shared_assertions_and_same_locks(self):
-        with patch.object(gate.subprocess, "run", side_effect=self.results()) as run, \
+        results = [subprocess.CompletedProcess([], 0, "", "source asset audit passed")] + self.results()
+        with patch.object(gate.subprocess, "run", side_effect=results) as run, \
              contextlib.redirect_stdout(io.StringIO()) as output:
             gate.run_lifecycle_source_checks(Path("/frozen"), self.env, (77, 88))
+        self.assertEqual(run.call_args_list[0].args[0], [sys.executable, "-I", "-B",
+            "/frozen/scripts/tests/sumeragi_source_contract_asset_compaction_test.py"])
         executable = str(self.target / "taira-consensus-fsm-check/lifecycle-source-tests")
-        self.assertEqual(run.call_args_list[0].args[0], ["/pinned/rustc", "--edition=2024", "--test",
+        self.assertEqual(run.call_args_list[1].args[0], ["/pinned/rustc", "--edition=2024", "--test",
             "/frozen/crates/iroha_core/src/sumeragi/v2_lifecycle_source_contract_harness.rs",
             "-o", executable])
         for call in run.call_args_list:
@@ -1116,6 +1119,28 @@ class PureFsmGateTests(unittest.TestCase):
             self.assertEqual(call.kwargs["cwd"], "/")
         self.assertIn("lifecycle source contracts PASS: 2 listed, 2 passed, 0 ignored", output.getvalue())
         self.assertNotIn("[taira-check] PASS:", output.getvalue())
+
+    def test_asset_audit_failure_stops_before_rust_or_cargo_and_preserves_diagnostic(self):
+        env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}
+        diagnostic = "AssertionError: invalid region edge: from/before\n"
+        with patch.object(gate, "run_pure_fsm_checks"), \
+             patch.object(gate.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, "", diagnostic)) as run, \
+             patch.object(gate, "_run_standalone_checks") as rust, \
+             patch.object(gate, "run_config_checks") as config, \
+             patch.object(gate, "compile_test_harnesses") as libraries, \
+             patch.object(gate, "run_network_checks") as network, \
+             contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as error:
+            with self.assertRaisesRegex(gate.CheckError, "source-asset grammar and inventory audit failed"):
+                gate.run_checks(Path("/frozen"), environment=env, source_commit="a" * 40, lock_fds=(77,))
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.kwargs["pass_fds"], (77,))
+        self.assertEqual(run.call_args.kwargs["timeout"], 120)
+        self.assertEqual(error.getvalue(), diagnostic)
+        rust.assert_not_called()
+        config.assert_not_called()
+        libraries.assert_not_called()
+        network.assert_not_called()
+        self.assertEqual(gate.selected_regression_count(), 328)
 
     def test_lifecycle_failure_stops_before_any_cargo_or_network_work(self):
         env = self.env | {"CARGO": "/pinned/cargo", "CARGO_HOME": "/isolated"}

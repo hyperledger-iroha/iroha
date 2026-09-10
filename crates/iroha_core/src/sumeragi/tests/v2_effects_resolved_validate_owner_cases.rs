@@ -657,6 +657,8 @@ fn resolved_validate_owner_retries_commit_fixture(
             .assert_resolved_validate_owner_retained_for_test(&terminal, &ledger_root, 0);
     }
 
+    let io_before_commit = fixture.planner_io.lifecycle_validate_io_snapshot();
+    assert_eq!(io_before_commit.physical_admissions(), 0);
     if corrupt_terminal {
         fixture
             .owner
@@ -669,7 +671,7 @@ fn resolved_validate_owner_retries_commit_fixture(
     );
     fixture
         .owner
-        .assert_resolved_validate_key_collision_for_test(&terminal, current_tag, &commit);
+        .assert_resolved_validate_decision_identity_for_test(&terminal, current_tag, &commit);
     let message = wire::ConsensusMessageV2::new(
         wire::ConsensusMessageV2Payload::QuorumCertificate(commit.clone()),
     );
@@ -725,6 +727,10 @@ fn resolved_validate_owner_retries_commit_fixture(
             fixture
                 .owner
                 .assert_resolved_validate_owner_retained_for_test(&terminal, &ledger_root, 0);
+            assert_eq!(
+                fixture.planner_io.lifecycle_validate_io_snapshot(),
+                io_before_commit
+            );
             fixture.planner_io.detach(&mut fixture.services);
             return;
         }
@@ -738,6 +744,11 @@ fn resolved_validate_owner_retries_commit_fixture(
     assert!(
         !corrupt_terminal,
         "a different physical outcome digest must fail before any Apply publication"
+    );
+    assert_eq!(
+        fixture.planner_io.lifecycle_validate_io_snapshot(),
+        io_before_commit,
+        "a current Commit must reuse the exact terminal result without physical revalidation"
     );
     let expected_typed_applies = usize::from(!prepare_first);
     let applies = fixture.owner.apply_ordinals_for_retry_test();
@@ -838,6 +849,10 @@ fn resolved_validate_owner_retries_commit_fixture(
     assert_eq!(
         current_services.apply_tasks.len(),
         usize::from(prepare_first)
+    );
+    assert_eq!(
+        fixture.planner_io.lifecycle_validate_io_snapshot(),
+        io_before_commit
     );
     assert_eq!(
         std::fs::read(ledger_root.join("lifecycle-ledger-v1.norito"))
@@ -1001,6 +1016,9 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
                 now,
             )
             .expect("activate the ordinary runtime after authenticated terminal recovery");
+        // Cold startup has no process-local TC output left to retry the body.
+        // Drive the actual periodic occurrence at its configured deadline.
+        now += fixture.transport.executor.runtime.retransmit_interval();
         assert_eq!(
             fixture
                 .planner_io
@@ -1039,9 +1057,12 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
         executor
             .step(now + Duration::from_millis(turn), &mut current_services)
             .expect("retry the exact protected body after its rejected terminal cut");
-        let _settlement = executor
+        let settlement = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle current Prepare/TC output ownership");
+        if settlement.requires_outer_executor_yield() {
+            continue;
+        }
         executor
             .settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle the actual registry handoff");
@@ -1126,9 +1147,12 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
         executor
             .step(now + Duration::from_millis(turn), &mut current_services)
             .expect("consume the later TC and normally retransmit its protected body");
-        executor
+        let settlement = executor
             .settle_pending_lifecycle_output_admissions(&mut fixture.owner, &mut current_services)
             .expect("settle only the actual later timeout output");
+        if settlement.requires_outer_executor_yield() {
+            continue;
+        }
         executor
             .settle_pending_durable_validate_admissions(&mut fixture.owner, &mut current_services)
             .expect("retain the current protected validation occurrence");

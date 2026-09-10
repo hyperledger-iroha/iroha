@@ -2204,10 +2204,31 @@ fn resolved_report_owner_tracks_terminal_and_statement_not_retry_encoding() {
 #[test]
 fn decision_body_retirement_preserves_current_winner_and_rejects_future_tags() {
     let fixture = Fixture::new();
-    let tag = EventTag::new(fixture.tag.height, fixture.tag.view, Generation::new(fixture.tag.generation));
-    let next = EventTag::new(tag.height(), tag.view() + 1, Generation::new(tag.generation().get() + 1));
-    let earlier = EventTag::new(tag.height(), tag.view(), Generation::new(tag.generation().get() - 1));
-    let foreign_height = EventTag::new(tag.height() + 1, tag.view(), Generation::new(tag.generation().get() + 1));
+    let fixture = Fixture::for_record(fixture.context, 1);
+    let tag = EventTag::new(
+        fixture.tag.height,
+        fixture.tag.view,
+        Generation::new(fixture.tag.generation),
+    );
+    let next_generation = EventTag::new(
+        tag.height(),
+        tag.view(),
+        Generation::new(tag.generation().get() + 1),
+    );
+    let next_view = EventTag::new(tag.height(), tag.view() + 1, Generation::INITIAL);
+    let next_view_same_generation = EventTag::new(tag.height(), tag.view() + 1, tag.generation());
+    let earlier = EventTag::new(
+        tag.height(),
+        tag.view(),
+        Generation::new(tag.generation().get() - 1),
+    );
+    let earlier_view_high_generation =
+        EventTag::new(tag.height(), tag.view() - 1, Generation::new(u64::MAX));
+    let foreign_height = EventTag::new(
+        tag.height() + 1,
+        tag.view(),
+        Generation::new(tag.generation().get() + 1),
+    );
     let mut body_sources = 0;
     for case in fixture.cases() {
         let authority = &case.authority;
@@ -2217,14 +2238,31 @@ fn decision_body_retirement_preserves_current_winner_and_rejects_future_tags() {
             || authority.is_certified_body_origin();
         body_sources += usize::from(ordinary);
         assert!(!authority.ordinary_body_is_obsolete_for_decision(tag, true));
-        assert_eq!(authority.ordinary_body_is_obsolete_for_decision(tag, false), ordinary);
-        assert_eq!(authority.ordinary_body_is_obsolete_for_decision(next, true), ordinary);
-        assert_eq!(authority.ordinary_body_is_obsolete_for_decision(next, false), ordinary);
+        assert_eq!(
+            authority.ordinary_body_is_obsolete_for_decision(tag, false),
+            ordinary
+        );
         for decided_body in [false, true] {
+            for later in [next_generation, next_view, next_view_same_generation] {
+                assert_eq!(
+                    authority.ordinary_body_is_obsolete_for_decision(later, decided_body),
+                    ordinary
+                );
+            }
             assert!(!authority.ordinary_body_is_obsolete_for_decision(earlier, decided_body));
-            assert!(!authority.ordinary_body_is_obsolete_for_decision(foreign_height, decided_body));
+            assert!(!authority.ordinary_body_is_obsolete_for_decision(
+                earlier_view_high_generation,
+                decided_body
+            ));
+            assert!(
+                !authority.ordinary_body_is_obsolete_for_decision(foreign_height, decided_body)
+            );
         }
-        assert_eq!(authority.encode(), bytes, "classification cannot rewrite immutable replay authority");
+        assert_eq!(
+            authority.encode(),
+            bytes,
+            "classification cannot rewrite immutable replay authority"
+        );
     }
     assert!(body_sources > 0);
 }

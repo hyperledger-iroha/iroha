@@ -14,16 +14,25 @@ mod certified_body_fence_supersession {
     };
 
     impl V2EffectExecutor<crate::sumeragi::v2_runtime::SerializedV2Runtime> {
-        /// Observe the real recovered Decision without exposing executor internals.
-        pub(in crate::sumeragi) fn assert_decided_subject_for_test(
+        /// Observe cold Decision protection before and after the first Apply publication.
+        pub(in crate::sumeragi) fn assert_cold_decision_protection_for_test(
             &self,
             subject: wire::BlockSubject,
+            apply_published: bool,
         ) {
-            assert_eq!(
-                self.runtime.decided_body().expect("actual recovered Decision")
-                    .map(|decision| decision.2),
-                Some(subject),
-            );
+            let decision = self.runtime.decided_body().expect("actual recovered Decision")
+                .expect("the fixture has an authenticated durable Decision");
+            assert_eq!(decision.2, subject);
+            assert!(self.pending_runner_decision_cleanup.is_none());
+            assert_eq!(self.protected_decision, apply_published.then_some(decision));
+            assert_eq!(self.decision_body_drained, apply_published);
+            assert_eq!(self.live_lifecycle_decision_apply.is_some(), apply_published);
+            if let Some(owner) = self.live_lifecycle_decision_apply.as_ref() {
+                assert_eq!(owner.decision, decision);
+                assert_eq!(owner.subject, subject);
+                assert_eq!(owner.tag, self.runtime.authoritative_tag().expect("current tag"));
+                assert!(self.live_lifecycle_validate_successor.is_none());
+            }
         }
     }
 

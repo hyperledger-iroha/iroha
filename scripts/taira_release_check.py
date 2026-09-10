@@ -940,7 +940,17 @@ def run_pure_fsm_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ..
 
 
 def run_lifecycle_source_checks(root: Path, env: dict[str, str], lock_fds: tuple[int, ...]) -> None:
-    """Check the same lifecycle source contracts before compiling Core dependencies."""
+    """Reject invalid source assets, then run shared contracts before Cargo."""
+    started = time.monotonic()
+    print("[taira-check] start source-asset grammar and inventory audit", flush=True)
+    checked = subprocess.run(
+        [sys.executable, "-I", "-B", str(root / "scripts/tests/sumeragi_source_contract_asset_compaction_test.py")],
+        cwd="/", env=env, stdin=subprocess.DEVNULL, text=True, capture_output=True,
+        check=False, pass_fds=lock_fds, timeout=120)
+    if checked.returncode:
+        sys.stderr.write(checked.stdout + checked.stderr)
+        raise CheckError(f"source-asset grammar and inventory audit failed (exit {checked.returncode})")
+    print(f"[taira-check] source-asset grammar and inventory audit passed in {time.monotonic() - started:.1f}s", flush=True)
     _run_standalone_checks(root, env, lock_fds,
         source="crates/iroha_core/src/sumeragi/v2_lifecycle_source_contract_harness.rs",
         output_name="lifecycle-source-tests", label="lifecycle source contracts",

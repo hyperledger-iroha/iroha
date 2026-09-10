@@ -4131,7 +4131,13 @@ impl V2EffectExecutor<SerializedV2Runtime> {
                 || !(validate_retry_authority_is_exact
                     || (live_apply_owner_already_exact && validate_retry_authority_is_absent))
                 || runtime_decision != Some(decision)
-                || self.protected_decision != Some(decision)
+                // A cold Ready Validate can finish before the first Runtime
+                // turn. Its exact durable Decision is authenticated above;
+                // the cleanup below must establish protection on that first
+                // publication as well as preserve an existing exact owner.
+                || self
+                    .protected_decision
+                    .is_some_and(|protected| protected != decision)
                 || (self.live_lifecycle_decision_apply.is_some() && !live_apply_owner_already_exact)
             {
                 Err(EffectExecutorError::Contract(
@@ -4636,11 +4642,12 @@ impl V2EffectExecutor<SerializedV2Runtime> {
     /// Rebuild an ownerless cold Apply executor's Decision protection from its
     /// real reopened runtime without selecting a new Runtime turn.
     ///
-    /// Production has already crossed this reconciliation before a synchronous
-    /// Ready Validate-to-Apply publication. Focused reopen tests use this seam
-    /// instead of manufacturing a later periodic Apply with a different
-    /// pending-effect identity, and name whether their exact cut already owns
-    /// the preliminary queued-successor fence.
+    /// Focused tests of an already-reconciled cut use this seam instead of
+    /// manufacturing a periodic Apply with a different pending-effect
+    /// identity. Cold Ready Validate may publish before any Runtime turn;
+    /// that path establishes protection in live Apply reconciliation itself.
+    /// Callers name whether their exact cut already owns the preliminary
+    /// queued-successor fence.
     #[cfg(test)]
     pub(in crate::sumeragi) fn reconcile_reopened_decision_for_lifecycle_apply_lineage_test<
         S: V2EffectServices,

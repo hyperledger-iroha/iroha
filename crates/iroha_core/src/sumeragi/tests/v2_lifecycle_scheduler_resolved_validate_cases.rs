@@ -184,8 +184,8 @@ impl ProductionLifecycleOwnerV1 {
 }
 
 impl ProductionLifecycleOwnerV1 {
-    /// Prove the actual later Commit Validate addresses the retained terminal key.
-    pub(in crate::sumeragi) fn assert_resolved_validate_key_collision_for_test(
+    /// Prove Commit validation has its own canonical key beside the immutable Prepare result.
+    pub(in crate::sumeragi) fn assert_resolved_validate_decision_identity_for_test(
         &self,
         snapshot: &ResolvedValidateOwnerSnapshotForTest,
         tag: crate::sumeragi::v2_core::EventTag,
@@ -194,6 +194,11 @@ impl ProductionLifecycleOwnerV1 {
         use crate::sumeragi::v2_runtime::{
             RuntimeEffectOwnership, bind_adapter_effect_batch_ownership,
         };
+        assert_eq!(
+            certificate.phase,
+            iroha_data_model::block::consensus_v2::GlobalPhase::Commit
+        );
+        assert_eq!(snapshot.record.key.phase(), super::LifecyclePhase::Validate);
         let fetch = crate::sumeragi::v2::AdapterEffect::FetchBody {
             tag,
             round: certificate.proposal_round,
@@ -235,12 +240,24 @@ impl ProductionLifecycleOwnerV1 {
         )
         .expect("project the actual later Commit Validate");
         assert_eq!(
-            projected.key, snapshot.record.key,
-            "this regression must cross the real terminal-key collision, not a distinct Validate identity"
+            projected.key.phase(),
+            super::LifecyclePhase::ValidateDecision
         );
+        assert_eq!(projected.work_class, LifecycleWorkClass::Validate);
+        let mut decision_key = snapshot.record.key;
+        decision_key.phase = super::LifecyclePhase::ValidateDecision;
         assert_eq!(
-            self.coordinator.key_index.get(&projected.key),
+            projected.key, decision_key,
+            "the same certified body must differ only by its Prepare or Decision authority phase"
+        );
+        assert_ne!(projected.key, snapshot.record.key);
+        assert_eq!(
+            self.coordinator.key_index.get(&snapshot.record.key),
             Some(&snapshot.record.ordinal)
+        );
+        assert!(
+            !self.coordinator.key_index.contains_key(&projected.key),
+            "replaying the completed Prepare result must not admit a replacement Validate owner"
         );
     }
 }

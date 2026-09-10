@@ -23,7 +23,9 @@ regressions and prove application on all four validators before Linux preparatio
 then finish reset canaries, restart persistence, public cutover and application
 connectivity. Keep one warm build lane and reuse unchanged dependency artifacts;
 source guards must check semantics without freezing unrelated test-file bytes.
-Retain shared lifecycle and production configuration gates before Core compilation.
+Retain source-asset grammar, shared lifecycle and production configuration gates
+before Core compilation. Prove cold Ready Validate can establish exact Decision
+protection before its first Runtime turn and preserve conflict rejection.
 
 ## Architecture and build ownership
 

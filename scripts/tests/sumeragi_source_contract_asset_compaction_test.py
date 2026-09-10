@@ -16,8 +16,8 @@ SUMERAGI_PATH = ROOT / "crates/iroha_core/src/sumeragi"
 EXPECTED_CASE_COUNT = 55
 # Pin the reviewed semantic asset. Historical compaction byte counts and host
 # hashes belong to Git history: current Rust hosts may add independent tests.
-EXPECTED_ASSET_LENGTH = 662_778
-EXPECTED_ASSET_SHA256 = "7c1316210d124f01d6eb47601e037c1c59804cf596c3c1a1b7a70c0e5772511c"
+EXPECTED_ASSET_LENGTH = 663_558
+EXPECTED_ASSET_SHA256 = "cdd396f6fad65a4b48af197ab378482b5c36d06618c75584cf7009f6af74bfd7"
 EXPECTED_CASE_IDS_SHA256 = "56f95aaddfabd9dd1c08286c64f0e8fe2814c308ad86046342622ff42d85a2df"
 
 MIGRATED_TESTS = {
@@ -73,6 +73,27 @@ def sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def validate_region_row(line: str) -> None:
+    """Reject region edges that the Rust source-contract parser cannot accept."""
+
+    fields = line.split("|")
+    if len(fields) != 7:
+        raise AssertionError("region must have exactly seven fields")
+    _, region, source, start_kind, start_token, end_kind, end_token = fields
+    if not re.fullmatch(r"[a-z_][a-z0-9_]*", region) or not source:
+        raise AssertionError("region requires an identifier and source provider")
+    start_valid = (
+        start_kind == "begin" and start_token == "-"
+        or start_kind in {"after", "at", "last"} and start_token not in {"", "-"}
+    )
+    end_valid = (
+        end_kind == "end" and end_token == "-"
+        or end_kind == "before" and end_token not in {"", "-"}
+    )
+    if not start_valid or not end_valid:
+        raise AssertionError(f"invalid region edge: {start_kind}/{end_kind}")
+
+
 def parse_cases(asset: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
     """Parse closed case blocks while retaining their exact row bytes."""
 
@@ -105,6 +126,8 @@ def parse_cases(asset: str) -> tuple[tuple[str, tuple[str, ...]], ...]:
             tag = line.split("|", 1)[0]
             if tag not in {"region", "required", "forbidden", "count", "order"}:
                 raise AssertionError(f"unsupported contract tag {tag!r}")
+            if tag == "region":
+                validate_region_row(line)
             current_rows.append(line)
     if current_id is not None:
         raise AssertionError(f"unclosed case {current_id}")
@@ -340,6 +363,32 @@ class SumeragiSourceContractAssetCompactionTest(unittest.TestCase):
             contracts = [row for row in rows if row.split("|", 1)[0] in {"required", "forbidden", "count", "order"}]
             self.assertEqual(len(contracts), expected_count)
             self.assertEqual(sha256(("\n".join(rows) + "\n").encode()), MIGRATED_CASE_SHA256[case_id])
+
+    def test_region_parser_rejects_unknown_modes_and_invalid_boundary_tokens(self) -> None:
+        for start_kind, start_token, end_kind, end_token in (
+            ("from", "fn boundary(", "before", "next boundary"),
+            ("at", "fn boundary(", "through", "next boundary"),
+            ("begin", "unexpected", "end", "-"),
+            ("at", "-", "end", "-"),
+            ("after", "", "end", "-"),
+            ("last", "fn boundary(", "before", "-"),
+            ("begin", "-", "end", "unexpected"),
+        ):
+            with self.subTest(start=start_kind, end=end_kind):
+                asset = (
+                    "sumeragi-source-contracts-v1\ncase|edge_fixture\n"
+                    f"region|region|ledger|{start_kind}|{start_token}|{end_kind}|{end_token}\n"
+                    "required|region|token|diagnostic\nend\n"
+                )
+                with self.assertRaisesRegex(AssertionError, "invalid region edge"):
+                    parse_cases(asset)
+        for start_kind, start_token in (
+            ("begin", "-"), ("at", "token"), ("after", "token"), ("last", "token")
+        ):
+            for end_kind, end_token in (("end", "-"), ("before", "token")):
+                validate_region_row(
+                    f"region|region|ledger|{start_kind}|{start_token}|{end_kind}|{end_token}"
+                )
 
     @staticmethod
     def source_inventory() -> tuple[dict[str, str], set[str]]:

@@ -5,6 +5,8 @@ fn active_prepare_body_survives_decision_crash_fixture(
     timeout_before_commit: bool,
 ) {
     let mut fixture = ready_body_fixture();
+    let original_tag = fixture.transport.executor.current_tag();
+    assert_eq!(original_tag.generation(), Generation::INITIAL);
     let mut ordinal = fixture.ordinal;
     for next in [LifecycleWorkClass::Store, LifecycleWorkClass::Validate] {
         if cut == LifecycleWorkClass::Fetch
@@ -55,12 +57,15 @@ fn active_prepare_body_survives_decision_crash_fixture(
         let pending_timeout = driver
             .receive_authenticated(authenticated)
             .expect("fsync EnterView before the retained Validate is serviced");
+        let durable_tag = driver.current_tag();
         assert!(
-            fixture
-                .transport
-                .executor
-                .current_tag()
-                .strictly_advances(before_tag)
+            durable_tag.strictly_advances(before_tag),
+            "the fsynced timeout must advance the actual adapter owner"
+        );
+        assert_eq!(
+            fixture.transport.executor.current_tag(),
+            before_tag,
+            "the crash precedes dispatching EnterView into the runtime clocks"
         );
         assert_eq!(
             std::fs::read(&ledger_path).expect("ledger at the timeout crash cut"),
@@ -137,6 +142,7 @@ fn active_prepare_body_survives_decision_crash_fixture(
         std::fs::read(&ledger_path).expect("ledger after owner-preserving cold open"),
         ledger_before
     );
+    assert_eq!(fixture.transport.executor.current_tag(), original_tag);
     fixture
         .owner
         .assert_active_body_owner_after_decision_cold_for_test(&snapshot, cut);
@@ -157,20 +163,14 @@ fn active_prepare_body_survives_decision_crash_fixture(
             now,
         )
         .expect("activate the actual recovered runtime");
-    let mut current_services = FakeServices::default();
-    fixture
-        .transport
-        .executor
-        .reconcile_pending_runner_decision_cleanup(&mut current_services)
-        .expect("retain exact current Decision protection");
-    fixture
-        .transport
-        .executor
-        .acknowledge_runner_decision_cleanup(
-            fixture.transport.executor.current_tag(),
-            Some(fixture.transport.subject),
-        )
-        .expect("acknowledge the fixture's empty process-local Decision handoff");
+    assert!(fixture.transport.executor.protected_decision.is_none());
+    assert!(
+        fixture
+            .transport
+            .executor
+            .pending_runner_decision_cleanup
+            .is_none()
+    );
     let tag = fixture.transport.executor.current_tag();
     let local = usize::try_from(
         fixture
@@ -194,7 +194,9 @@ fn active_prepare_body_survives_decision_crash_fixture(
         let advanced = fixture
             .owner
             .dispatch_completion_for_test(&mut fixture.services, &mut fixture.transport.executor, 0)
-            .expect("continue the preserved physical body owner under actual Commit");
+            .unwrap_or_else(|error| panic!(
+                "continue the preserved {cut:?} crash owner at ordinal {ordinal} to {next:?} under actual Commit: {error:?}"
+            ));
         let ProductionCompletionDispatchV1::BodyStageAdvanced {
             parent_ordinal,
             child_ordinal,
@@ -427,15 +429,8 @@ fn recover_stale_prepare_decision_crash_fixture(
                     now,
                 )
                 .expect("activate exact recovered Decision runtime");
-            executor
-                .reconcile_pending_runner_decision_cleanup(services)
-                .expect("retain recovered Decision protection");
-            executor
-                .acknowledge_runner_decision_cleanup(
-                    executor.current_tag(),
-                    Some(transport.subject),
-                )
-                .expect("acknowledge empty process-local Decision handoff");
+            assert!(executor.protected_decision.is_none());
+            assert!(executor.pending_runner_decision_cleanup.is_none());
             crate::sumeragi::v2_worker::tests::install_active_tag_for_test(
                 services,
                 executor.current_tag(),

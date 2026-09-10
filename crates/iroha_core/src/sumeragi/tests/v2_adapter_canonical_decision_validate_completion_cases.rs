@@ -8,7 +8,6 @@ fn continue_canonical_decision_validate_cold_fixture(
 ) {
     use crate::sumeragi::{
         output_guard::ConsensusOutputGuard,
-        v2_effects::EffectRuntime as _,
         v2_lifecycle_coordinator::{
             LifecycleWorkClass, ProductionCompletionDispatchV1,
             ProductionLifecycleLiveClockActivationPermitV1, ReadyValidateSuccessorDispatchV1,
@@ -85,19 +84,13 @@ fn continue_canonical_decision_validate_cold_fixture(
         &snapshot,
         LifecycleWorkClass::Validate,
     );
-    executor.assert_decided_subject_for_test(expected_subject);
+    executor.assert_cold_decision_protection_for_test(expected_subject, false);
     executor
         .arm_live_clocks(
             ProductionLifecycleLiveClockActivationPermitV1::for_test(),
             Instant::now(),
         )
         .expect("activate canonical recovered runtime");
-    executor
-        .reconcile_pending_runner_decision_cleanup(&mut services)
-        .expect("retain actual recovered Decision protection");
-    executor
-        .acknowledge_runner_decision_cleanup(executor.current_tag(), Some(expected_subject))
-        .expect("acknowledge empty fixture process-local Decision handoff");
     crate::sumeragi::v2_worker::tests::install_active_tag_for_test(
         &mut services,
         executor.current_tag(),
@@ -139,6 +132,7 @@ fn continue_canonical_decision_validate_cold_fixture(
         panic!("actual current Commit must advance Validate to Apply")
     };
     assert_eq!(parent_ordinal, validate);
+    executor.assert_cold_decision_protection_for_test(expected_subject, true);
     assert_eq!(owner.apply_ordinals_for_retry_test(), vec![child_ordinal]);
     let apply = owner
         .active_body_owner_before_decision_cold_for_test(child_ordinal, LifecycleWorkClass::Apply);
