@@ -1795,14 +1795,7 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
         )
         .route(
             "/v1/node/capabilities",
-            get(|| async {
-                crate::utils::respond_with_format(
-                    norito::json!({
-                        "data_model_version": (iroha_data_model::DATA_MODEL_VERSION)
-                    }),
-                    ResponseFormat::Json,
-                )
-            }),
+            get(super::handler_node_capabilities),
         )
         .fallback(super::handler_route_not_found)
         .layer(axum::middleware::from_fn(super::capture_response_format))
@@ -1840,7 +1833,7 @@ async fn transaction_details_http_sdk_preserves_exact_absence_and_authorization(
             transaction_ttl: Duration::from_secs(30),
             transaction_status_timeout: Duration::from_secs(5),
             transaction_add_nonce: false,
-            sorafs_alias_cache: Default::default(),
+            sorafs_alias_cache: iroha::config::AliasCache::default().into_policy(),
             sorafs_anonymity_policy: Default::default(),
             sorafs_rollout_phase: Default::default(),
         };

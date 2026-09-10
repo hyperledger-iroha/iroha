@@ -24307,6 +24307,7 @@ sys.stdout.write(json.dumps(state, ensure_ascii=True, separators=(",", ":")))
             "startup must not repair or replace corrupt durable state"
         );
     }
+    #[cfg(target_os = "linux")]
     fn fetch_taira_inrou_python_health(port: u16) -> std::io::Result<Vec<u8>> {
         let mut stream = TcpStream::connect(("127.0.0.1", port))?;
         stream.set_read_timeout(Some(Duration::from_millis(250)))?;
@@ -29568,14 +29569,14 @@ module.HTTPServer(("127.0.0.1", int(sys.argv[3])), module.HealthHandler).serve_f
                 let client = Client::new(bounded_config).unwrap();
                 let mut substituted = prepared.clone();
                 substituted.wire[0] ^= 1;
-                verify_committed_prepared_soracloud_transaction(
+                let _ = verify_committed_prepared_soracloud_transaction(
                     &client,
                     &substituted,
                     &transaction,
                 )
                 .expect_err("the exact pin proof cannot authorize altered retained bytes");
                 let malformed_server = MockHttpServer::start(malformed_routes);
-                recover_prepared_soracloud_transaction(
+                let _ = recover_prepared_soracloud_transaction(
                     &config,
                     &malformed_server.base_url,
                     Instant::now() + Duration::from_secs(5),

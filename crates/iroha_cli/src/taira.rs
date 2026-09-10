@@ -8205,7 +8205,7 @@ mod tests {
         .expect("Inrou predecessor verification uses the same exact details route");
         let mut substituted_wire = validated.wire().unwrap().to_vec();
         substituted_wire[0] ^= 1;
-        verify_exact_committed_transaction(
+        let _ = verify_exact_committed_transaction(
             &client,
             validated.transaction().unwrap(),
             &substituted_wire,
@@ -8304,7 +8304,7 @@ mod tests {
         assert_eq!(finish_mock(server).len(), 6);
 
         let mut observations = 0;
-        await_predecessor_applied(Instant::now(), Duration::from_millis(1), |_| {
+        let _ = await_predecessor_applied(Instant::now(), Duration::from_millis(1), |_| {
             observations += 1;
             Ok(true)
         })
