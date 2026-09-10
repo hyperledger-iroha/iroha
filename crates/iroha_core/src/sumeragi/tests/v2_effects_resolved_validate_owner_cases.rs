@@ -99,8 +99,16 @@ fn live_validate_retry_fixture() -> (ReadyBodyFixture, u128) {
     (fixture, ordinal)
 }
 
+#[derive(Clone, Copy)]
+enum FixtureValidationReplay {
+    NoMarkers,
+    Validated,
+    Rejected,
+}
+
 fn reopen_body_owner_fixture(
     fixture: ReadyBodyFixture,
+    replay: FixtureValidationReplay,
 ) -> (
     ReadyBodyFixture,
     Arc<crate::sumeragi::serviced_candidate_store::LeaderWireLifecycleStoreGate>,
@@ -135,6 +143,9 @@ fn reopen_body_owner_fixture(
     drop(services);
     drop(owner);
     drop(transport.executor);
+    let expected_body = transport.body.clone();
+    let expected_commitment = transport.canonical_commitment;
+    let mut replayed = 0usize;
     let mut owner = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
         &wal_path,
         directory.path(),
@@ -147,6 +158,28 @@ fn reopen_body_owner_fixture(
             config: Hash::new(b"production transport config"),
         },
         [0x63; 32],
+        |body| {
+            assert_eq!(
+                body.encode_wire().expect("canonical replayed fixture body"),
+                expected_body,
+                "semantic replay must execute the exact originally validated body"
+            );
+            replayed += 1;
+            match replay {
+                FixtureValidationReplay::NoMarkers => {
+                    panic!("an active Validate fixture has no completed marker to replay")
+                }
+                FixtureValidationReplay::Validated => Ok(expected_commitment),
+                FixtureValidationReplay::Rejected => {
+                    Err("deterministic terminal Validate regression rejection".to_owned())
+                }
+            }
+        },
+    );
+    assert_eq!(
+        replayed,
+        usize::from(!matches!(replay, FixtureValidationReplay::NoMarkers)),
+        "cold startup must replay each terminal outcome exactly once"
     );
     let (mut services, _) = crate::sumeragi::v2_worker::tests::fixture();
     services.set_exact_output_admission_hook(|_post, _ticket| Ok(()));
@@ -173,6 +206,74 @@ fn reopen_body_owner_fixture(
     )
 }
 
+/// Exercise the actual ReleasedTerminal startup consumer while the Apply is
+/// still Ready; a generic body-fixture binder cannot consume this pending Apply.
+fn assert_released_apply_owner_cold_reopens(
+    fixture: ReadyBodyFixture,
+    terminal: &crate::sumeragi::v2_lifecycle_coordinator::ResolvedValidateOwnerSnapshotForTest,
+) {
+    let ReadyBodyFixture {
+        transport,
+        owner,
+        planner_io,
+        mut services,
+        _owner_directory: directory,
+        ..
+    } = fixture;
+    let ledger_root = directory.path().join("ledger");
+    let snapshot = owner.released_apply_owner_snapshot_for_test(&ledger_root);
+    let validator = transport
+        .executor
+        .local_validator
+        .expect("same local validator");
+    let verified = VerifiedHeightContext::genesis(
+        transport.context.clone(),
+        transport
+            .validator_keys
+            .iter()
+            .map(|key| iroha_crypto::bls_normal_pop_prove(key.private_key()).expect("frozen PoP"))
+            .collect(),
+    )
+    .expect("authenticate the exact Decision height context");
+    let wal_path = transport
+        ._directory
+        .path()
+        .join("transport-regression-safety.wal");
+    planner_io.detach(&mut services);
+    drop(services);
+    drop(owner);
+    drop(transport.executor);
+    let mut replayed = 0usize;
+    let reopened = SumeragiV2Adapter::reopen_cancelled_body_owner_for_test(
+        &wal_path,
+        directory.path(),
+        verified,
+        validator,
+        &transport.validator_keys[usize::try_from(validator).expect("local index")],
+        AdapterFingerprints {
+            node: Hash::new(b"production transport node"),
+            build: Hash::new(b"production transport build"),
+            config: Hash::new(b"production transport config"),
+        },
+        [0x63; 32],
+        |body| {
+            assert_eq!(
+                body.encode_wire().expect("canonical Decision body"),
+                transport.body,
+                "cold Apply must semantically replay the exact originally validated body",
+            );
+            replayed += 1;
+            Ok(transport.canonical_commitment)
+        },
+    );
+    assert_eq!(
+        replayed, 1,
+        "the retained success requires one semantic replay"
+    );
+    reopened.resolved_validate_cold_snapshot_for_test(terminal, &ledger_root);
+    reopened.assert_released_apply_owner_cold_for_test(&snapshot, &ledger_root);
+}
+
 fn reopen_validate_retry_fixture(
     fixture: ReadyBodyFixture,
     validate_ordinal: u128,
@@ -183,7 +284,7 @@ fn reopen_validate_retry_fixture(
     let expected = fixture
         .owner
         .body_recovery_snapshot_for_test(fixture.ordinal, validate_ordinal);
-    let (fixture, gate) = reopen_body_owner_fixture(fixture);
+    let (fixture, gate) = reopen_body_owner_fixture(fixture, FixtureValidationReplay::NoMarkers);
     fixture
         .owner
         .assert_body_recovery_snapshot_for_test(&expected);
@@ -375,7 +476,8 @@ fn resolved_validate_owner_retries_commit_fixture(
         &ledger_root,
     );
     if origin == ValidateRetryOriginForTest::ColdTerminal {
-        let (reopened, gate) = reopen_body_owner_fixture(fixture);
+        let (reopened, gate) =
+            reopen_body_owner_fixture(fixture, FixtureValidationReplay::Validated);
         fixture = reopened;
         _leader_wire_gate = Some(gate);
         terminal = fixture
@@ -436,6 +538,29 @@ fn resolved_validate_owner_retries_commit_fixture(
             false,
             &mut current_services,
             now + Duration::from_millis(1),
+        );
+        // The split runtime step may first service an older deferred owner.
+        // Drive the already-enqueued TC through ordinary scheduling instead
+        // of treating any Advanced macro-step as its view installation.
+        let expected_view = prior.view().checked_add(1).expect("next fixture view");
+        for turn in 0..32_u64 {
+            let executor = &mut fixture.transport.executor;
+            if executor.current_tag().view() == expected_view {
+                break;
+            }
+            executor
+                .step(now + Duration::from_millis(2 + turn), &mut current_services)
+                .expect("service the queued unprotected TC after older owners");
+            let _settlement = executor
+                .settle_pending_lifecycle_output_admissions(
+                    &mut fixture.owner,
+                    &mut current_services,
+                )
+                .expect("settle preceding control output before TC installation");
+        }
+        assert_eq!(
+            fixture.transport.executor.current_tag().view(),
+            expected_view
         );
         assert!(
             fixture
@@ -722,7 +847,12 @@ fn resolved_validate_owner_retries_commit_fixture(
     assert!(!fixture.transport.executor.output_guard.restart_required());
     assert!(!fixture.transport.executor.status().fail_closed);
     assert!(current_services.closed.is_empty());
-    fixture.planner_io.detach(&mut fixture.services);
+    if expected_typed_applies == 1 {
+        drop(_leader_wire_gate.take());
+        assert_released_apply_owner_cold_reopens(fixture, &terminal);
+    } else {
+        fixture.planner_io.detach(&mut fixture.services);
+    }
 }
 
 #[test]
@@ -854,7 +984,8 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
         &ledger_root,
     );
     if origin == ValidateRetryOriginForTest::ColdTerminal {
-        let (reopened, gate) = reopen_body_owner_fixture(fixture);
+        let (reopened, gate) =
+            reopen_body_owner_fixture(fixture, FixtureValidationReplay::Rejected);
         fixture = reopened;
         _leader_wire_gate = Some(gate);
         terminal = fixture
@@ -985,7 +1116,8 @@ fn resolved_rejected_validate_replays_exact_report_fixture(
             .owner
             .invalid_body_report_snapshot_for_retry_test(reports[0], &ledger_root);
         drop(_leader_wire_gate.take());
-        let (reopened, gate) = reopen_body_owner_fixture(fixture);
+        let (reopened, gate) =
+            reopen_body_owner_fixture(fixture, FixtureValidationReplay::Rejected);
         fixture = reopened;
         _leader_wire_gate = Some(gate);
         fixture

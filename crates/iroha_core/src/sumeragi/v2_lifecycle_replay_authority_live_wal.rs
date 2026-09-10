@@ -53,8 +53,12 @@ pub(in crate::sumeragi) struct SealedLiveWalPersistedEffectV1 {
 enum LiveWalPersistedPendingV1 {
     PayloadFree(PendingRuntimeEffectBinding),
     ValidateSignBound(PendingRuntimeEffectBinding),
-    ApplyPending,
+    ApplyPending(PendingRuntimeEffectBinding),
     ApplyBound(PendingRuntimeEffectBinding),
+}
+enum LiveValidateApplyOwnershipV1 {
+    LinkedValidate,
+    StandaloneDecisionWal,
 }
 impl SealedLiveWalPersistedEffectV1 {
     /// Consume the adapter's one record-checked live continuation cause.
@@ -74,10 +78,11 @@ impl SealedLiveWalPersistedEffectV1 {
             ExactLiveWalPersistedContinuationCause::Apply {
                 wal_identity,
                 effect,
+                pending,
             } => (
                 wal_identity,
                 effect,
-                LiveWalPersistedPendingV1::ApplyPending,
+                LiveWalPersistedPendingV1::ApplyPending(pending),
             ),
         };
         let replay =
@@ -100,7 +105,7 @@ impl SealedLiveWalPersistedEffectV1 {
         subject: wire::BlockSubject,
         execution_commitment: wire::ExecutionCommitment,
     ) -> bool {
-        matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending)
+        matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending(_))
             && matches!(
                 &self.effect,
                 AdapterEffect::Apply {
@@ -506,7 +511,44 @@ impl SealedLiveWalPersistedEffectV1 {
         child_pending: PendingRuntimeEffectBinding,
         receipt: &DurableBodyReceipt,
     ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
-        if !matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending)
+        self.complete_apply_with_owner(
+            predecessor_effect,
+            predecessor_pending,
+            child_pending,
+            receipt,
+            LiveValidateApplyOwnershipV1::LinkedValidate,
+        )
+    }
+    /// Complete a standalone Apply using the actual Decision-WAL owner.
+    /// The exact current Validate relation and body receipt remain mandatory;
+    /// the historical terminal proof is joined independently at publication.
+    #[allow(clippy::result_large_err)]
+    pub(in crate::sumeragi) fn complete_exact_released_apply(
+        self,
+        predecessor_effect: &AdapterEffect,
+        predecessor_pending: &PendingRuntimeEffectBinding,
+        child_pending: PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+    ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
+        self.complete_apply_with_owner(
+            predecessor_effect,
+            predecessor_pending,
+            child_pending,
+            receipt,
+            LiveValidateApplyOwnershipV1::StandaloneDecisionWal,
+        )
+    }
+    #[allow(clippy::result_large_err)]
+    fn complete_apply_with_owner(
+        self,
+        predecessor_effect: &AdapterEffect,
+        predecessor_pending: &PendingRuntimeEffectBinding,
+        child_pending: PendingRuntimeEffectBinding,
+        receipt: &DurableBodyReceipt,
+        ownership: LiveValidateApplyOwnershipV1,
+    ) -> Result<Self, (Self, PendingRuntimeEffectBinding)> {
+        if !self.exactly_matches_effect()
+            || !matches!(&self.pending, LiveWalPersistedPendingV1::ApplyPending(_))
             || !predecessor_pending
                 .project_validate_apply_successor(predecessor_effect, &self.effect)
                 .is_some_and(|expected| expected == child_pending)
@@ -516,7 +558,7 @@ impl SealedLiveWalPersistedEffectV1 {
         let Self {
             effect,
             replay,
-            pending: LiveWalPersistedPendingV1::ApplyPending,
+            pending: LiveWalPersistedPendingV1::ApplyPending(wal_pending),
         } = self
         else {
             unreachable!("preflight admitted only the pending Apply state")
@@ -525,13 +567,16 @@ impl SealedLiveWalPersistedEffectV1 {
             Ok(replay) => Ok(Self {
                 effect,
                 replay,
-                pending: LiveWalPersistedPendingV1::ApplyBound(child_pending),
+                pending: LiveWalPersistedPendingV1::ApplyBound(match ownership {
+                    LiveValidateApplyOwnershipV1::LinkedValidate => child_pending,
+                    LiveValidateApplyOwnershipV1::StandaloneDecisionWal => wal_pending,
+                }),
             }),
             Err(replay) => Err((
                 Self {
                     effect,
                     replay,
-                    pending: LiveWalPersistedPendingV1::ApplyPending,
+                    pending: LiveWalPersistedPendingV1::ApplyPending(wal_pending),
                 },
                 child_pending,
             )),
@@ -551,8 +596,9 @@ impl SealedLiveWalPersistedEffectV1 {
                         .replay
                         .exactly_matches_payload_free_effect(&self.effect)
             }
-            LiveWalPersistedPendingV1::ApplyPending => {
-                self.replay.exactly_matches_persisted_effect(&self.effect)
+            LiveWalPersistedPendingV1::ApplyPending(pending) => {
+                pending.exactly_binds_adapter_effect(&self.effect)
+                    && self.replay.exactly_matches_persisted_effect(&self.effect)
             }
             LiveWalPersistedPendingV1::ApplyBound(_) => false,
         }

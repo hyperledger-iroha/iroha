@@ -2235,6 +2235,13 @@ pub(crate) trait EffectRuntime {
     ) -> Result<Option<wire::QuorumCertificate>, String> {
         Ok(None)
     }
+    /// Return the full durable current Prepare before its body is validated.
+    /// This authority permits body work, and grants no vote or voting lock.
+    fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        Ok(None)
+    }
     /// Reserve an exact body completion without exposing it to the reducer.
     fn reserve_body_available(
         &mut self,
@@ -2640,6 +2647,12 @@ impl EffectRuntime for SerializedV2Runtime {
         &self,
     ) -> Result<Option<wire::QuorumCertificate>, String> {
         self.replayed_body_authority_certificate()
+            .map_err(|error| error.to_string())
+    }
+    fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, String> {
+        SerializedV2Runtime::current_prepare_authority_certificate(self)
             .map_err(|error| error.to_string())
     }
     fn reserve_body_available(
@@ -7495,9 +7508,18 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Store retry lost its durable receipt".to_owned(),
                     )
                 })?;
-                marker
-                    .project_store_retry(receipt, effect, evidence)
-                    .map_err(EffectExecutorError::Contract)?;
+                let replay_resolved_store = marker.resolved_outcome.is_some()
+                    && current_protected_body_occurrence(effect, evidence, frontier)
+                        .map_err(EffectExecutorError::Contract)?;
+                if replay_resolved_store {
+                    marker
+                        .project_resolved_store_retry(receipt, effect, evidence)
+                        .map_err(EffectExecutorError::Contract)?;
+                } else {
+                    marker
+                        .project_store_retry(receipt, effect, evidence)
+                        .map_err(EffectExecutorError::Contract)?;
+                }
                 let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
                     EffectExecutorError::Contract(
                         "published lifecycle Store retry omitted its candidate identity".to_owned(),
@@ -7541,7 +7563,9 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                         "published lifecycle Store retry failed candidate refinement".to_owned(),
                     )
                 })?;
-                retain_effect.push(false);
+                // No new Store task is created: dispatch reuses the exact
+                // durable receipt and queues this incarnation's BodyStored.
+                retain_effect.push(replay_resolved_store);
                 continue;
             }
             if let AdapterEffect::ValidateBody {
@@ -7561,8 +7585,8 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     .project_retry(effect, evidence)
                     .map_err(EffectExecutorError::Contract)?;
                 let key = (*round, *subject);
-                let readmit_protected_decision = marker.resolved_outcome.is_some()
-                    && current_protected_validate_occurrence(effect, evidence, frontier)
+                let readmit_protected_body = marker.resolved_outcome.is_some()
+                    && current_protected_body_occurrence(effect, evidence, frontier)
                         .map_err(EffectExecutorError::Contract)?;
                 let identity = evidence.candidate_semantic_identity().ok_or_else(|| {
                     EffectExecutorError::Contract(
@@ -7609,7 +7633,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     )
                 })?;
                 retained_published_validate_retry_markers.insert(key, projected);
-                retain_effect.push(readmit_protected_decision);
+                retain_effect.push(readmit_protected_body);
                 continue;
             }
             if let AdapterEffect::ValidateBody { round, subject, .. } = effect
@@ -7627,7 +7651,7 @@ impl<R: EffectRuntime> V2EffectExecutor<R> {
                     ));
                 }
                 retain_effect.push(
-                    current_protected_validate_occurrence(effect, evidence, frontier)
+                    current_protected_body_occurrence(effect, evidence, frontier)
                         .map_err(EffectExecutorError::Contract)?,
                 );
                 continue;

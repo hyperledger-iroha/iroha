@@ -54,6 +54,8 @@ pub(in crate::sumeragi) use replay_authority::InstalledAuthenticatedGenesisRepla
 #[path = "v2_lifecycle_scheduler_inputs.rs"]
 #[cfg_attr(not(test), allow(dead_code))]
 mod scheduler_inputs;
+#[cfg(test)]
+pub(in crate::sumeragi) use scheduler_inputs::ResolvedValidateOwnerSnapshotForTest;
 /// Pure lifecycle schema and value definitions.
 #[path = "v2_lifecycle_schema.rs"]
 mod schema;

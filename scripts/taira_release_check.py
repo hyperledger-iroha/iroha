@@ -357,6 +357,7 @@ CORE_STAGES += (("resolved validation and exact application ownership", (
     "sumeragi::v2_effects::tests::certified_body_fence_supersession::same_view_resolved_validation_publishes_commit_sign_and_cold_reopens_exact_owner",
     "sumeragi::v2_effects::tests::certified_body_fence_supersession::resolved_validate_survives_unprotected_view_until_current_commit",
     "sumeragi::v2_lifecycle_coordinator::work_registry::tests::cold_ready_validate_retry_census_is_complete_inert_and_installed_before_live_clocks",
+    "sumeragi::v2_effects::tests::current_prepare_body_replay_requires_exact_current_durable_authority",
     "sumeragi::v2_effects::tests::active_validate_retry_owners_preserve_single_admission",
     "sumeragi::v2_effects::tests::bound_validate_retry_rejects_stale_and_conflicting_authority",
     "sumeragi::v2_effects::tests::validate_retry_lifecycle_transitions_require_exact_owner",

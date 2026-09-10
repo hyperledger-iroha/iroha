@@ -15,10 +15,11 @@ migration shims. Approved focused crate additions and coherent manifest/lock
 refreshes serve real ownership boundaries. Keep mandatory protocol capabilities
 assembled in every node; do not feature-gate deterministic consensus semantics.
 
-Taira rollout is blocked by public QueuePlan application after successful
-four-validator startup and genesis. Complete the source-first audit of admission,
-publication fencing and public contract producer/SDK/route/fixture contracts,
-then qualify those fixes in one native batch before Linux compilation. Prove
+Taira rollout is blocked by resolved-validation ownership and recovery failures
+in the native integration gate. Complete the source-first audit of retained
+terminal results, current Prepare and Decision authority, publication fencing
+and cold replay, then qualify the combined corrections in one native batch
+before Linux compilation. Prove
 exact application on all four validators, reset canaries, restart persistence,
 public cutover and application connectivity. Keep concurrent development in
 separate stable Cargo lanes and execute immutable copies of selected artifacts.

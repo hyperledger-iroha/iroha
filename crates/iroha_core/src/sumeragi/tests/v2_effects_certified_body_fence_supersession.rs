@@ -533,6 +533,7 @@ mod certified_body_fence_supersession {
                 config: Hash::new(b"production transport config"),
             },
             [0x63; 32],
+            |_| panic!("the cancelled active-body fixture has no completed validation marker"),
         );
         recovered.assert_body_recovery_snapshot_for_test(&expected);
         assert!(recovered.exact_recovered_body_pipeline_join_for_test());

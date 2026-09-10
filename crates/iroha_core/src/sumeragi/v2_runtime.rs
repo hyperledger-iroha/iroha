@@ -2880,9 +2880,9 @@ impl PendingRuntimeEffectBinding {
     /// Mint the unique pending owner of one exact payload-free live-WAL continuation.
     ///
     /// The causal key is derived from the non-decodable post-fsync frame seal
-    /// and complete effect identity. `Apply` is deliberately excluded because
-    /// its pending owner must instead project from the retained Validate
-    /// predecessor after the durable body receipt joins the WAL source.
+    /// and complete effect identity. `Apply` uses the separate Decision body
+    /// join below; its payload-bound publication selects either the linked
+    /// Validate owner or the independently retained Decision-WAL owner.
     pub(super) fn from_exact_live_wal_append(
         wal_identity: &LiveWalFrameIdentity,
         effect: &AdapterEffect,
@@ -2901,6 +2901,58 @@ impl PendingRuntimeEffectBinding {
             return None;
         }
         Self::from_exact_wal_locator(wal_identity.persisted_locator(), effect)
+    }
+    /// Retain the canonical Decision owner for a later standalone Apply.
+    ///
+    /// Cold Decision recovery projects Fetch, Store, Validate, and Apply from
+    /// the exact Decision-Fetch WAL root. Derive that same root here from the
+    /// sealed append and frozen roster, without scheduling a synthetic Fetch
+    /// or borrowing a completed body's runtime owner. The body receipt still
+    /// has to join this source-only seal before lifecycle admission.
+    pub(super) fn from_exact_live_wal_decision_apply(
+        wal_identity: &LiveWalFrameIdentity,
+        effect: &AdapterEffect,
+        context: &wire::HeightContext,
+    ) -> Option<Self> {
+        let AdapterEffect::Apply {
+            tag,
+            subject,
+            certificate,
+        } = effect
+        else {
+            return None;
+        };
+        if !wal_identity.is_exact()
+            || certificate.phase != wire::GlobalPhase::Commit
+            || certificate.round.context_id != context.id()
+            || certificate.round.height != context.height
+            || certificate.proposal_round.context_id != context.id()
+            || certificate.proposal_round.height != context.height
+            || tag.height() != context.height
+            || certificate.subject != *subject
+        {
+            return None;
+        }
+        let fetch = AdapterEffect::FetchBody {
+            tag: *tag,
+            round: certificate.proposal_round,
+            subject: *subject,
+            manifest: None,
+            certified_sources: context
+                .roster
+                .iter()
+                .map(|entry| entry.validator.clone())
+                .collect(),
+            certificate: Some(certificate.clone()),
+        };
+        let fetch_pending = Self::from_exact_wal_locator(wal_identity.persisted_locator(), &fetch)?;
+        let candidate = production_adapter_effect_candidate_binding(effect, None).ok()??;
+        let pending = Self::from_effect_candidate(
+            *fetch_pending.causal_lifecycle_key(),
+            effect,
+            Some(&candidate),
+        );
+        pending.validate_exact(effect).then_some(pending)
     }
     /// Mint the unique pending owner of one recovered Proposal/Timeout control Sign.
     ///
@@ -18108,6 +18160,12 @@ impl SerializedV2Runtime<SumeragiV2Adapter> {
         AdapterError,
     > {
         self.driver.replayed_decision_key()
+    }
+    /// Return the full durable current Prepare independently of the voting lock.
+    pub(crate) fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, AdapterError> {
+        self.driver.current_prepare_authority_certificate()
     }
     /// Return the complete durable Prepare/Commit authority for the retained body.
     pub(crate) fn replayed_body_authority_certificate(

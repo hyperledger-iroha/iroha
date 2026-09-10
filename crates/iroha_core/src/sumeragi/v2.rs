@@ -3053,6 +3053,8 @@ pub(super) enum ExactLiveWalPersistedContinuationCause {
         wal_identity: LiveWalFrameIdentity,
         /// Exact converted `Apply` proved against the retained Decision record.
         effect: AdapterEffect,
+        /// Canonical Decision-WAL owner retained for a standalone released Apply.
+        pending: PendingRuntimeEffectBinding,
     },
 }
 /// One-shot adapter/runtime handoff for an initial local Proposal Sign.
@@ -11214,6 +11216,26 @@ impl SumeragiV2Adapter {
             })
             .transpose()
     }
+    /// Return the full current-view Prepare observed durably before validation
+    /// can promote it to the voting lock. Historical highs cannot use this path.
+    pub(crate) fn current_prepare_authority_certificate(
+        &self,
+    ) -> Result<Option<wire::QuorumCertificate>, AdapterError> {
+        let durable = self.reducer.durable_state();
+        if durable.decision().is_some() {
+            return Ok(None);
+        }
+        let Some(certificate) = durable
+            .highest_prepare()
+            .filter(|certificate| certificate.round().view() == durable.current_view())
+        else {
+            return Ok(None);
+        };
+        let mut registry = self.registry.clone();
+        registry
+            .qc_to_wire(certificate, self.aggregator.as_ref())
+            .map(Some)
+    }
     /// Return the strongest complete body certificate retained by durable reducer state.
     ///
     /// A body stage may be physically retained from an authenticated Proposal
@@ -18459,17 +18481,30 @@ impl SumeragiV2Adapter {
                         if direct_apply_count == 0 {
                             // The body is not yet validated, so its source-only
                             // Decision-WAL seal must wait for the exact Ready
-                            // Validate completion to bind the durable frame and
-                            // predecessor-derived Apply owner. When this same
+                            // Validate result to bind the durable frame. Linked
+                            // publication inherits that Validate owner; released
+                            // publication retains the canonical Decision owner.
+                            // When this same
                             // persisted continuation emits the exact Apply,
                             // its authenticated Decision owner is already the
                             // complete direct handoff and no deferred seal may
                             // remain stranded in the adapter.
+                            let Some(pending) =
+                                PendingRuntimeEffectBinding::from_exact_live_wal_decision_apply(
+                                    &wal_identity,
+                                    &apply,
+                                    &self.wire_context,
+                                )
+                            else {
+                                self.fail_closed = true;
+                                return Err(AdapterError::LiveWalReplayCauseMismatch);
+                            };
                             let Some(sealed) =
                                 SealedLiveWalPersistedEffectV1::from_exact_live_append(
                                     ExactLiveWalPersistedContinuationCause::Apply {
                                         wal_identity,
                                         effect: apply,
+                                        pending,
                                     },
                                 )
                             else {
